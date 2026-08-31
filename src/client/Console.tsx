@@ -169,6 +169,10 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: {
   const [run, setRun] = useState<TryRunResult | 'running' | null>(null)
   const dirty = useRef(false)
 
+  // A deep link mounts the editor before the roster arrives; adopt the row
+  // once it does, unless the person already started typing.
+  useEffect(() => { if (row && !dirty.current) setSpec(initial) }, [row, initial])
+
   useEffect(() => { if (!spec.model && catalog?.defaultModel) setSpec(s => ({ ...s, model: catalog.defaultModel })) }, [catalog?.defaultModel, spec.model])
 
   // live yml preview, debounced

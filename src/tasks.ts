@@ -14,103 +14,11 @@ import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-// ── shapes ──────────────────────────────────────────────────────────────
+// ── shapes + fold live in ./fold.ts (pure, shared with the browser) ──────
 
-export type Trigger = { kind: 'once' } | { kind: 'cron'; expr: string }
-
-export interface Participant {
-  agentId: string
-  /** This participant's share of the work, appended to the brief. */
-  brief?: string
-}
-
-export interface TaskSpec {
-  id: string
-  title: string
-  /** Frozen at creation — every leg reads it verbatim. */
-  brief: string
-  trigger: Trigger
-  participants: Participant[]
-  cwd: string
-  timeoutSec: number
-  onFail: 'stop' | 'retry'
-  maxTries: number
-  enabled: boolean
-  createdAt: string
-}
-
-export type LegStatus = 'queued' | 'running' | 'blocked' | 'done' | 'failed' | 'timed_out' | 'lost' | 'cancelled'
-
-export interface Leg {
-  agentId: string
-  status: LegStatus
-  tries: number
-  sessionId?: string
-  startedAt?: string
-  endedAt?: string
-  /** The last assistant text of the leg — what the next leg receives. */
-  handoff?: string
-  /** Set while the agent waits on ask_user_question. */
-  question?: string
-  error?: string
-}
-
-export interface Run {
-  id: string
-  taskId: string
-  firedAt: string
-  by: 'cron' | 'manual' | 'retry'
-  legs: Leg[]
-  settled?: { at: string; outcome: 'done' | 'failed' | 'cancelled' }
-}
-
-export type Event =
-  | { t: 'task/created'; at: string; task: TaskSpec }
-  | { t: 'task/enabled'; at: string; taskId: string; enabled: boolean }
-  | { t: 'task/deleted'; at: string; taskId: string }
-  | { t: 'run/fired'; at: string; run: { id: string; taskId: string; by: Run['by']; legs: string[] } }
-  | { t: 'leg/spawned'; at: string; runId: string; leg: number; sessionId: string; tries: number }
-  | { t: 'leg/blocked'; at: string; runId: string; leg: number; question: string }
-  | { t: 'leg/resumed'; at: string; runId: string; leg: number }
-  | { t: 'leg/done'; at: string; runId: string; leg: number; handoff: string }
-  | { t: 'leg/failed' | 'leg/timed_out' | 'leg/lost' | 'leg/cancelled'; at: string; runId: string; leg: number; error?: string }
-  | { t: 'run/settled'; at: string; runId: string; outcome: 'done' | 'failed' | 'cancelled' }
-
-export interface State {
-  tasks: Map<string, TaskSpec>
-  runs: Map<string, Run>
-}
-
-export function fold(events: Event[]): State {
-  const tasks = new Map<string, TaskSpec>()
-  const runs = new Map<string, Run>()
-  for (const e of events) {
-    switch (e.t) {
-      case 'task/created': tasks.set(e.task.id, e.task); break
-      case 'task/enabled': { const t = tasks.get(e.taskId); if (t) tasks.set(t.id, { ...t, enabled: e.enabled }); break }
-      case 'task/deleted': tasks.delete(e.taskId); for (const r of [...runs.values()]) if (r.taskId === e.taskId) runs.delete(r.id); break
-      case 'run/fired': runs.set(e.run.id, { id: e.run.id, taskId: e.run.taskId, firedAt: e.at, by: e.run.by, legs: e.run.legs.map(agentId => ({ agentId, status: 'queued', tries: 0 })) }); break
-      case 'run/settled': { const r = runs.get(e.runId); if (r) r.settled = { at: e.at, outcome: e.outcome }; break }
-      default: {
-        const r = runs.get(e.runId); const l = r?.legs[e.leg]; if (!l) break
-        if (e.t === 'leg/spawned') Object.assign(l, { status: 'running', sessionId: e.sessionId, startedAt: e.at, tries: e.tries, question: undefined, error: undefined, endedAt: undefined })
-        else if (e.t === 'leg/blocked') Object.assign(l, { status: 'blocked', question: e.question })
-        else if (e.t === 'leg/resumed') Object.assign(l, { status: 'running', question: undefined })
-        else if (e.t === 'leg/done') Object.assign(l, { status: 'done', handoff: e.handoff, endedAt: e.at, question: undefined })
-        else Object.assign(l, { status: e.t.slice(4) as LegStatus, endedAt: e.at, error: e.error, question: undefined })
-      }
-    }
-  }
-  return { tasks, runs }
-}
-
-export function runStatus(r: Run): 'run' | 'park' | 'done' | 'bad' {
-  if (r.legs.some(l => l.status === 'blocked')) return 'park'
-  if (r.legs.some(l => l.status === 'running')) return 'run'
-  if (r.settled?.outcome === 'done' || r.legs.every(l => l.status === 'done')) return 'done'
-  if (r.settled || r.legs.some(l => ['failed', 'timed_out', 'lost', 'cancelled'].includes(l.status))) return 'bad'
-  return 'run'
-}
+export { actorOf, describe, fold, foldTurns, runStatus } from './fold.ts'
+export type { Event, Leg, LegStatus, Participant, Run, State, TaskSpec, ToolRow, StepRow, TurnRow, TurnLedger, Trigger } from './fold.ts'
+import { fold, type Event, type Run, type State, type TaskSpec, type Trigger, type Participant } from './fold.ts'
 
 // ── store ───────────────────────────────────────────────────────────────
 

@@ -7,10 +7,11 @@
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { AgentRow, AgentSpec, Catalog, Preview, Run, TaskEvent, TaskSpec, TryRunResult } from '../wire.ts'
+import type { AgentRow, AgentSpec, Catalog, Preview, Run, TaskEvent, TaskSpec, TryRunResult, TurnLedger } from '../wire.ts'
 import { Console, HASH_PREFIX, go, readRoute, type Api } from './Console.tsx'
 import { CONSOLE_REMOTE, unwrap } from './remote.ts'
 import { installStyles } from './styles.ts'
+import { SessionLedgerTab } from './TurnLedger.tsx'
 
 export const name = 'dsh-task-console'
 export const inject = ['slots', 'remote', 'sessions', 'inputTriggers']
@@ -40,6 +41,7 @@ export async function apply(ctx: any): Promise<void> {
     taskEvents: (id: string) => call<TaskEvent[]>('taskEvents', { id }),
     startAgentSession: (agentId: string, text?: string, cwd?: string) => call<{ sessionId: string; name: string }>('startAgentSession', { agentId, text, cwd }),
     openSession: (sessionId: string) => openWhenListed(ctx, sessionId),
+    sessionTurns: (sessionId: string) => call<TurnLedger>('sessionTurns', { sessionId }),
   }
 
   // `@巡检员 …` in the composer: pick an agent, type the ask, Enter starts a
@@ -94,6 +96,15 @@ export async function apply(ctx: any): Promise<void> {
     order: 30,
     inject: () => ({ api }),
   }, FooterEntry))
+
+  // 「回合」beside Chat / Trajectory: this session's MCP / skill / model work, turn by turn.
+  ctx.slots.inject('conversation.view', () => ctx.slots.register({
+    name: 'conversation.view',
+    id: 'task-console-turns',
+    order: 25,
+    label: () => '回合',
+    inject: (sessionId: string) => ({ api, sessionId }),
+  }, SessionLedgerTab))
 }
 
 /** The workspace path of the session the composer belongs to, when knowable. */
@@ -129,8 +140,11 @@ function FooterEntry({ api, wide }: { api: Api; wide?: boolean }) {
   const narrow = wide === false
   return (
     <>
-      <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务台" aria-label="任务台" onClick={() => go('agents')}>
-        <span className="ic">▦</span>{narrow ? null : <span>任务台</span>}
+      <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}>
+        <span className="ic">◎</span>{narrow ? null : <span>Agent</span>}
+      </button>
+      <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务" aria-label="任务" onClick={() => go('tasks')}>
+        <span className="ic">▦</span>{narrow ? null : <span>任务</span>}
       </button>
       {open ? createPortal(<Console api={api} />, document.body) : null}
     </>

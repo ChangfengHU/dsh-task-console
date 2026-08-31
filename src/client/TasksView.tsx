@@ -6,8 +6,9 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { cronHuman, nextFire, parseCron } from '../cron.ts'
+import { runStatus } from '../fold.ts'
 import type { AgentRow, Run, TaskEvent, TaskSpec } from '../wire.ts'
-import { closeConsole, go } from './Console.tsx'
+import { go } from './Console.tsx'
 
 export interface TasksApi {
   tasks: () => Promise<{ tasks: (TaskSpec & { nextFire: string | null })[]; runs: Run[] }>
@@ -18,6 +19,7 @@ export interface TasksApi {
   cancelRun: (runId: string) => Promise<void>
   taskEvents: (id: string) => Promise<TaskEvent[]>
   openSession: (sessionId: string) => Promise<void>
+  sessionTurns: (sessionId: string) => Promise<import('../wire.ts').TurnLedger>
 }
 
 type TaskRow = TaskSpec & { nextFire: string | null }
@@ -27,13 +29,7 @@ const dur = (a?: string, b?: string) => { if (!a) return ''; const s = Math.max(
 const BY: Record<Run['by'], string> = { cron: '时间表', manual: '手动', retry: '重试' }
 const LEG: Record<string, string> = { queued: '排队', running: '进行中', blocked: '停车等人', done: '完成', failed: '失败', timed_out: '超时', lost: '丢失', cancelled: '取消' }
 
-export function runStatus(r: Run): 'run' | 'park' | 'done' | 'bad' {
-  if (r.legs.some(l => l.status === 'blocked')) return 'park'
-  if (r.legs.some(l => l.status === 'running')) return 'run'
-  if (r.settled?.outcome === 'done' || r.legs.every(l => l.status === 'done')) return 'done'
-  if (r.settled || r.legs.some(l => ['failed', 'timed_out', 'lost', 'cancelled'].includes(l.status))) return 'bad'
-  return 'run'
-}
+export { runStatus }
 const stPill = (st: ReturnType<typeof runStatus>) => ({ run: <span className="dtc-pill dtc-p-acc">进行中</span>, park: <span className="dtc-pill dtc-p-park">停车等人</span>, done: <span className="dtc-pill dtc-p-ok">完成</span>, bad: <span className="dtc-pill dtc-p-bad">失败</span> })[st]
 const legDot = (status: string) => <span className={`dtc-dot dtc-dot-${status}`} title={LEG[status] ?? status} />
 
@@ -104,74 +100,6 @@ function RunCard({ r, t, agents, onRetry }: { r: Run; t: TaskSpec; agents: Agent
       {st === 'park' ? <div className="q">? {cur.question}</div> : <div className="l">{st === 'run' ? <span className="dtc-live" /> : null}{line}</div>}
       <div className="l dtc-faint">{fmt(r.firedAt)} · {BY[r.by]}</div>
       {st === 'bad' ? <div className="act"><button className="dtc-btn sm" onClick={e => { e.stopPropagation(); onRetry() }}>重试</button></div> : null}
-    </div>
-  )
-}
-
-// ── detail ───────────────────────────────────────────────────────────────
-
-export function TaskDetail({ api, agents, id, runId, toast }: { api: TasksApi; agents: AgentRow[]; id: string; runId?: string; toast: (m: string) => void }) {
-  const { tasks, runs, reload, error } = useTasks(api)
-  const [events, setEvents] = useState<TaskEvent[]>([])
-  useEffect(() => { const load = () => api.taskEvents(id).then(setEvents).catch(() => undefined); load(); const t = window.setInterval(load, 4000); return () => window.clearInterval(t) }, [api, id])
-  const t = tasks.find(x => x.id === id)
-  if (!t) return <div className="dtc-empty">{error || (tasks.length ? '没有这个任务' : <><span className="dtc-spin" /> 读取…</>)}</div>
-  const mine = runs.filter(r => r.taskId === id)
-  const sel = mine.find(r => r.id === runId) ?? mine[0]
-  return (
-    <>
-      <div className="dtc-crumb"><a onClick={() => go('tasks')}>任务</a><span>/</span><span className="dtc-mono">{t.id}</span></div>
-      <div className="dtc-h1">{t.title}
-        {t.trigger.kind === 'cron' ? <span className="dtc-pill dtc-p-warn">{cronHuman(t.trigger.expr)}</span> : <span className="dtc-pill dtc-p-grey">单次</span>}
-        {!t.enabled ? <span className="dtc-pill dtc-p-bad">已停用</span> : null}
-        <span className="dtc-acts">
-          <button className="dtc-btn pri" onClick={async () => { await api.fireTask(t.id); toast('已触发'); await reload() }}>▶ 立即运行</button>
-          {t.trigger.kind === 'cron' ? <button className="dtc-btn" onClick={async () => { await api.setTaskEnabled(t.id, !t.enabled); await reload() }}>{t.enabled ? '停用' : '启用'}</button> : null}
-          <button className="dtc-btn danger" onClick={async () => { if (!window.confirm('删除任务和它的运行记录?会话本身不删。')) return; await api.deleteTask(t.id); toast('已删除'); go('tasks') }}>删除</button>
-        </span></div>
-      <div className="dtc-two">
-        <div>
-          <div className="dtc-panel"><h3>任务书 <span className="dtc-faint" style={{ fontWeight: 400 }}>建卡即写死,每段原文收到</span></h3><div style={{ whiteSpace: 'pre-wrap' }}>{t.brief}</div></div>
-          <div className="dtc-panel"><h3>运行 · {mine.length} 次</h3>
-            {mine.length ? <table className="dtc-runs"><thead><tr><th>运行</th><th>触发</th><th>开始</th><th>耗时</th><th>结果</th><th>各段</th></tr></thead><tbody>
-              {mine.map(r => { const first = r.legs.find(l => l.startedAt); const last = [...r.legs].reverse().find(l => l.endedAt); return (
-                <tr key={r.id} className={`row ${sel?.id === r.id ? 'sel' : ''}`} onClick={() => go(`tasks/${t.id}/runs/${r.id}`)}><td className="dtc-mono">{r.id}</td><td>{BY[r.by]}</td><td>{fmt(r.firedAt)}</td><td>{dur(first?.startedAt, last?.endedAt ?? (r.settled?.at))}</td><td>{stPill(runStatus(r))}</td><td>{r.legs.map((l, i) => <span key={i}>{legDot(l.status)} </span>)}</td></tr>) })}
-            </tbody></table> : <div className="dtc-empty">还没跑过。点「立即运行」。</div>}
-          </div>
-          {sel ? <RunPanel r={sel} t={t} agents={agents} api={api} onCancel={async () => { await api.cancelRun(sel.id); toast('已取消'); await reload() }} /> : null}
-        </div>
-        <div>
-          <div className="dtc-panel"><h3>定义</h3><div className="dtc-kv">
-            <span className="k">参与</span><span>{pipe(t, agents)}</span>
-            {t.participants.filter(p => p.brief).map((p, i) => <span key={i} style={{ gridColumn: '1 / -1' }} className="dtc-muted">{agentName(agents, p.agentId)}分工:{p.brief}</span>)}
-            <span className="k">触发</span><span>{t.trigger.kind === 'cron' ? <><span className="dtc-mono">{t.trigger.expr}</span> · {cronHuman(t.trigger.expr)}{t.enabled && t.nextFire ? ` · 下次 ${fmt(t.nextFire)}` : ''}</> : '单次'}</span>
-            <span className="k">工作目录</span><span className="dtc-mono">{t.cwd}</span>
-            <span className="k">超时</span><span>{Math.round(t.timeoutSec / 60)} 分钟 / 段</span>
-            <span className="k">失败后</span><span>{t.onFail === 'retry' ? `自动重试,最多 ${t.maxTries} 次` : '停下,人来重试'}</span>
-          </div></div>
-          <div className="dtc-panel"><h3>事件流 <span className="dtc-faint" style={{ fontWeight: 400 }}>只追加;左边一切由它重放</span></h3>
-            <div className="dtc-evlog">{[...events].reverse().map((e, i) => <div key={i}><span className="ts dtc-mono">{fmt(e.at)}</span><span><span className="dtc-mono">{e.t}</span> {(e as any).runId ?? (e as any).run?.id ?? ''} {typeof (e as any).leg === 'number' ? `#${(e as any).leg + 1}` : ''} {(e as any).error ?? (e as any).question ?? ''}</span></div>)}</div>
-          </div>
-        </div>
-      </div>
-    </>
-  )
-}
-
-function RunPanel({ r, t, agents, onCancel, api }: { r: Run; t: TaskSpec; agents: AgentRow[]; onCancel: () => void; api: TasksApi }) {
-  const st = runStatus(r)
-  return (
-    <div className="dtc-panel"><h3>运行 <span className="dtc-mono">{r.id}</span> {stPill(st)}<span className="sp" /><span className="dtc-faint" style={{ fontWeight: 400 }}>一次运行 = {r.legs.filter(l => l.sessionId).length} 个真实会话</span>{st === 'run' || st === 'park' ? <button className="dtc-btn sm danger" onClick={onCancel}>取消</button> : null}</h3>
-      <div className="dtc-legs">{r.legs.map((l, i) => (
-        <div key={i} className="dtc-leg">
-          <div className="lh"><span className="dtc-faint">第 {i + 1} 段</span><b>{agentName(agents, l.agentId)}</b>{legDot(l.status)}<span className="dtc-muted">{LEG[l.status]}{l.tries > 1 ? ` · 第 ${l.tries} 次` : ''}</span><span className="sp" />
-            {l.startedAt ? <span className="dtc-muted dtc-mono">{fmt(l.startedAt)} · {dur(l.startedAt, l.endedAt)}</span> : null}
-            {l.sessionId ? <button className="dtc-btn sm" onClick={() => { closeConsole(); void api.openSession(l.sessionId!) }}>打开会话</button> : null}</div>
-          {i > 0 && r.legs[i - 1].handoff && l.status !== 'queued' ? <div className="dtc-faint" style={{ fontSize: 12, marginBottom: 4 }}>收到上游 {agentName(agents, r.legs[i - 1].agentId)} 的交接单 ↓ 已注入</div> : null}
-          {l.status === 'blocked' ? <div className="dtc-ask"><b>? {l.question}</b><div className="dtc-note">它在等你回答。这一版在会话里答:点「打开会话」,回答后这里自动继续。</div></div> : null}
-          {l.error ? <div className="dtc-err" style={{ margin: '6px 0' }}>{l.error}</div> : null}
-          {l.handoff ? <><div className="dtc-faint" style={{ fontSize: 12, margin: '6px 0 4px' }}>交接单(最后一条回复)</div><div className="dtc-hand">{l.handoff}</div></> : null}
-        </div>))}</div>
     </div>
   )
 }

@@ -42,7 +42,7 @@ function descriptor(method: string, argc: 0 | 1) {
 /** Every method the console calls, in the order the service defines them. */
 export const METHODS = [
   ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
-  ['startAgentSession', 1],
+  ['startAgentSession', 1], ['sessionTurns', 1],
   ['tasks', 0], ['createTask', 1], ['setTaskEnabled', 1], ['deleteTask', 1], ['fireTask', 1], ['cancelRun', 1], ['taskEvents', 1],
 ] as const
 
@@ -135,4 +135,4 @@ export interface TryRunResult {
 }
 
 // ── tasks (types live beside the fold; type-only import keeps node out of the client) ──
-export type { Event as TaskEvent, Leg, LegStatus, Participant, Run, TaskSpec, Trigger } from './tasks.ts'
+export type { Event as TaskEvent, Leg, LegStatus, Participant, Run, TaskSpec, Trigger, TurnLedger, TurnRow, StepRow, ToolRow } from './fold.ts'

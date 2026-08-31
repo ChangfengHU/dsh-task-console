@@ -20,7 +20,7 @@ import {
   type HostMcp,
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
-import { EventStore, nextFire, parseCron, validateTask } from './tasks.ts'
+import { EventStore, foldTurns, nextFire, parseCron, validateTask } from './tasks.ts'
 import { NAMESPACE } from './wire.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
 
@@ -261,6 +261,23 @@ export class TaskConsoleService extends TypertRemoteService {
     } catch { /* cosmetic */ }
     if (text && text.trim()) handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: text.trim() }], source: { kind: 'user' } })
     return JSON.stringify({ sessionId, agentPreset: preset.id, name })
+  }
+
+  // ── turn ledger ────────────────────────────────────────────────────────
+
+  /** Fold one session's own log into turns → steps → tool calls (live or cold). */
+  async sessionTurns(payload: string): Promise<string> {
+    const { sessionId } = JSON.parse(payload) as { sessionId: string }
+    const persistence = (this.ctx as any).get('sessionPersistence')
+    let events: any[] = []; let agentPreset: string | undefined
+    if (persistence?.inspect) {
+      const insp = await persistence.inspect(sessionId)
+      events = insp.events ?? []; agentPreset = insp.header?.agentPreset
+    } else {
+      const live = (this.ctx as any).get('sessions')?.get?.(sessionId)
+      events = live?.events ?? []; agentPreset = live?.header?.agentPreset
+    }
+    return JSON.stringify(foldTurns(sessionId, events, agentPreset))
   }
 
   // ── tasks ──────────────────────────────────────────────────────────────

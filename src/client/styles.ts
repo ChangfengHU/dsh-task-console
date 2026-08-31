@@ -168,6 +168,47 @@ body[data-ds-dark-theme] .dtc-tcard .q { color:#a794e0 }
 .dtc-p-park { background:rgba(91,70,160,.14); color:#5b46a0 }
 body[data-ds-dark-theme] .dtc-p-park { color:#a794e0 }
 
+/* ── turn ledger ── */
+.dtc-tab { padding:16px 20px; background:transparent; color:inherit }
+.dtc-tab.dtc-root { background:transparent }
+.dtc-totals { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:8px; margin-bottom:14px }
+.dtc-tot { background:var(--dtc-surface); border:1px solid var(--dtc-line); border-radius:6px; padding:8px 10px; display:flex; flex-direction:column; gap:2px }
+.dtc-tot b { font-size:18px; font-variant-numeric:tabular-nums } .dtc-tot span { font-size:11.5px; color:var(--dtc-muted) }
+.dtc-tot.acc b { color:var(--dtc-accent) } .dtc-tot.warn b { color:var(--dtc-warn) } .dtc-tot.park b { color:#5b46a0 }
+body[data-ds-dark-theme] .dtc-tot.park b { color:#a794e0 }
+.dtc-tot.wide { grid-column:1 / -1; flex-direction:row; align-items:center; gap:10px }
+.dtc-turn { border:1px solid var(--dtc-line); border-radius:8px; background:var(--dtc-surface); padding:10px 14px; margin-bottom:10px }
+.dtc-turn-head { display:flex; align-items:center; gap:10px; font-size:13px; margin-bottom:6px } .dtc-turn-head .sp { flex:1 }
+.dtc-user { font-size:12.5px; color:var(--dtc-muted); border-left:3px solid var(--dtc-line); padding:4px 10px; margin:4px 0 8px; white-space:pre-wrap }
+.dtc-step-row { border-top:1px dashed var(--dtc-line-soft); padding:6px 0 }
+.dtc-step-head { display:flex; align-items:center; gap:10px; font-size:12.5px; flex-wrap:wrap } .dtc-step-head .sp { flex:1 }
+.dtc-toolrow { margin:4px 0 4px 12px; border:1px solid var(--dtc-line-soft); border-radius:5px; font-size:12.5px }
+.dtc-toolrow.bad { border-color:var(--dtc-bad) }
+.dtc-toolhead { display:flex; align-items:center; gap:8px; padding:5px 8px; cursor:pointer } .dtc-toolhead .sp { flex:1 }
+.dtc-toolhead .name { font-weight:500; white-space:nowrap } .dtc-toolhead .args { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:46% }
+.dtc-toolbody { padding:0 10px 8px } .dtc-toolbody pre { margin:2px 0 6px; background:var(--dtc-surface-2); border-radius:4px; padding:6px 8px; white-space:pre-wrap; word-break:break-all; font-size:11.5px; max-height:220px; overflow:auto }
+
+/* ── replay ── */
+.dtc-replay { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(300px,1fr); gap:14px; align-items:start }
+@media (max-width:1000px) { .dtc-replay { grid-template-columns:1fr } }
+.dtc-evlist { max-height:420px; overflow:auto; border:1px solid var(--dtc-line-soft); border-radius:6px }
+.dtc-ev { display:grid; grid-template-columns:34px 66px 52px 110px 1fr; gap:8px; align-items:center; padding:5px 8px; font-size:12.5px; border-bottom:1px solid var(--dtc-line-soft); cursor:pointer }
+.dtc-ev.off { opacity:.35 } .dtc-ev.cur { background:var(--dtc-accent-bg) } .dtc-ev:hover { background:var(--dtc-surface-2) }
+.dtc-ev .n, .dtc-ev .ts { color:var(--dtc-faint) } .dtc-ev .t { color:var(--dtc-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .dtc-ev .d { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.dtc-scrub { display:flex; align-items:center; gap:6px; margin-top:10px; flex-wrap:wrap } .dtc-scrub input[type=range] { flex:1; min-width:160px; width:auto; padding:0 }
+.dtc-chain { display:flex; flex-direction:column; gap:0; margin:6px 0 }
+.dtc-node { position:relative; border:1px solid var(--dtc-line); border-left:4px solid var(--dtc-faint); border-radius:6px; padding:8px 12px; background:var(--dtc-surface); margin-bottom:18px }
+.dtc-node .who { font-weight:600 } .dtc-node .st { font-size:12.5px; color:var(--dtc-muted) } .dtc-node .q { font-size:12.5px; color:#5b46a0; margin-top:4px }
+body[data-ds-dark-theme] .dtc-node .q { color:#a794e0 }
+.dtc-node.s-running { border-left-color:var(--dtc-accent) } .dtc-node.s-blocked { border-left-color:#5b46a0 } .dtc-node.s-done { border-left-color:var(--dtc-ok) } .dtc-node.s-failed, .dtc-node.s-timed_out, .dtc-node.s-lost { border-left-color:var(--dtc-bad) }
+.dtc-node .edge { position:absolute; left:24px; bottom:-18px; width:3px; height:18px; background:#5b46a0 } .dtc-node .edge.open { background:var(--dtc-ok) }
+.dtc-legdetail { padding:8px 4px 4px }
+.dtc-roles { display:flex; flex-direction:column; gap:8px }
+.dtc-role { border:1px solid var(--dtc-line-soft); border-radius:6px; padding:8px 10px; font-size:12.5px }
+.dtc-role .h { display:flex; align-items:center; gap:8px } .dtc-role .h .sp { flex:1 } .dtc-role .h a { color:var(--dtc-accent); cursor:pointer }
+.dtc-role .ord { width:18px; height:18px; border-radius:50%; background:var(--dtc-accent); color:var(--dtc-accent-ink); display:grid; place-items:center; font-size:11px }
+.dtc-role .b { display:grid; grid-template-columns:auto 1fr; gap:2px 10px; margin-top:6px } .dtc-role .b > div { display:contents } .dtc-role .k { color:var(--dtc-muted) }
+
 /* sidebar footer entry */
 .dtc-foot { display:flex; align-items:center; gap:10px; width:100%; padding:8px 10px; border-radius:6px; font-size:13.5px; text-align:left; color:inherit }
 .dtc-foot:hover { background:rgba(127,127,127,.12) }

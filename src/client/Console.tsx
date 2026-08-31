@@ -7,7 +7,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wire.ts'
-import { NewTask, TaskBoard, TaskDetail, type TasksApi } from './TasksView.tsx'
+import { NewTask, TaskBoard, type TasksApi } from './TasksView.tsx'
+import { TaskReplay } from './TaskReplay.tsx'
 
 export interface Api extends TasksApi {
   catalog: () => Promise<Catalog>
@@ -18,6 +19,7 @@ export interface Api extends TasksApi {
   tryRun: (id: string) => Promise<TryRunResult>
   startAgentSession: (agentId: string, text?: string, cwd?: string) => Promise<{ sessionId: string; name: string }>
   openSession: (sessionId: string) => Promise<void>
+  sessionTurns: (sessionId: string) => Promise<import('../wire.ts').TurnLedger>
 }
 
 export const HASH_PREFIX = '#/tc'
@@ -83,7 +85,7 @@ export function Console({ api }: { api: Api }) {
   if (tab === 'tasks') {
     if (!agents || !catalog) page = <div className="dtc-empty"><span className="dtc-spin" /> 读取…</div>
     else if (route[1] === 'new') page = <NewTask api={api} agents={agents} toast={showToast} workspaces={catalog.workspaces} />
-    else if (route[1]) page = <TaskDetail api={api} agents={agents} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} toast={showToast} />
+    else if (route[1]) page = <TaskReplay api={api} agents={agents} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} toast={showToast} />
     else page = <TaskBoard api={api} agents={agents} toast={showToast} />
   } else if (route[1]) {
     const id = route[1] === 'new' ? null : route[1]

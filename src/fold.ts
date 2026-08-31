@@ -61,6 +61,10 @@ export interface Run {
   question?: string
   blockKind?: BlockKind
   error?: string
+  /** Structured completion data supplied by the worker. */
+  metadata?: Record<string, unknown>
+  sessionCreatedAt?: string
+  promptDispatchedAt?: string
   nudges: number
 }
 
@@ -83,6 +87,8 @@ export interface Card {
   lastBlockReason?: string
   /** The summary of the run that finished this card. */
   summary?: string
+  /** Why the previous review submission was returned. */
+  reviewNote?: string
   error?: string
   startedAt?: string
   endedAt?: string
@@ -97,6 +103,26 @@ export interface Batch {
   settled?: { at: string; outcome: 'done' | 'failed' | 'cancelled' }
 }
 
+/** A file explicitly delivered by a run (or safely discovered from an old handoff). */
+export interface Artifact {
+  id: string
+  taskId: string
+  batchId: string
+  cardId: string
+  runId: string
+  sessionId: string
+  name: string
+  mime: string
+  size: number
+  sha256: string
+  createdAt: string
+  originalPath: string
+  /** Host-only location of the immutable snapshot. Legacy rows point at the original file. */
+  storagePath: string
+  legacy?: boolean
+  publicUrl?: string
+}
+
 export type Event =
   | { t: 'task/created'; at: string; taskId: string; task: TaskSpec }
   | { t: 'task/enabled'; at: string; taskId: string; enabled: boolean }
@@ -104,14 +130,20 @@ export type Event =
   | { t: 'batch/fired'; at: string; taskId: string; batch: { id: string; by: Batch['by']; cards: { id: string; agentId: string; brief?: string; deps: string[] }[] } }
   | { t: 'card/ready'; at: string; taskId: string; cardId: string }
   | { t: 'run/claimed'; at: string; taskId: string; cardId: string; runId: string; sessionId: string; attempt: number }
+  | { t: 'run/session_created'; at: string; taskId: string; runId: string; sessionId: string }
+  | { t: 'run/prompt_dispatched'; at: string; taskId: string; runId: string; messageId: string }
   | { t: 'run/blocked'; at: string; taskId: string; runId: string; kind: BlockKind; reason: string }
   | { t: 'run/resumed'; at: string; taskId: string; runId: string }
   | { t: 'run/nudged'; at: string; taskId: string; runId: string }
-  | { t: 'run/completed'; at: string; taskId: string; runId: string; summary: string }
-  | { t: 'run/review_requested'; at: string; taskId: string; runId: string; summary: string }
+  | { t: 'run/completed'; at: string; taskId: string; runId: string; summary: string; metadata?: Record<string, unknown> }
+  | { t: 'run/review_requested'; at: string; taskId: string; runId: string; summary: string; metadata?: Record<string, unknown> }
   | { t: 'run/failed' | 'run/timed_out' | 'run/crashed' | 'run/cancelled'; at: string; taskId: string; runId: string; outcome?: RunOutcome; error?: string }
+  | { t: 'card/review_approved'; at: string; taskId: string; cardId: string; runId: string; note?: string }
+  | { t: 'card/changes_requested'; at: string; taskId: string; cardId: string; runId: string; note: string }
   | { t: 'card/gave_up'; at: string; taskId: string; cardId: string; error: string }
   | { t: 'card/cancelled'; at: string; taskId: string; cardId: string }
+  | { t: 'artifact/registered'; at: string; taskId: string; artifact: Artifact }
+  | { t: 'artifact/published'; at: string; taskId: string; artifactId: string; publicUrl: string }
   | { t: 'batch/settled'; at: string; taskId: string; batchId: string; outcome: 'done' | 'failed' | 'cancelled' }
 
 export interface State {
@@ -119,13 +151,14 @@ export interface State {
   batches: Map<string, Batch>
   cards: Map<string, Card>
   runs: Map<string, Run>
+  artifacts: Map<string, Artifact>
 }
 
 /** How many times the same block reason may recur on one card before it gives up (hermes BLOCK_RECURRENCE_LIMIT). */
 export const BLOCK_RECURRENCE_LIMIT = 3
 
 export function fold(events: Event[]): State {
-  const s: State = { tasks: new Map(), batches: new Map(), cards: new Map(), runs: new Map() }
+  const s: State = { tasks: new Map(), batches: new Map(), cards: new Map(), runs: new Map(), artifacts: new Map() }
   const finishRun = (r: Run, status: RunStatus, outcome: RunOutcome, at: string, error?: string) => {
     r.status = status; r.outcome = outcome; r.endedAt = at; if (error) r.error = error
     const c = s.cards.get(r.cardId); if (c && c.currentRunId === r.id) c.currentRunId = undefined
@@ -140,6 +173,7 @@ export function fold(events: Event[]): State {
         for (const b of [...s.batches.values()]) if (b.taskId === e.taskId) s.batches.delete(b.id)
         for (const c of [...s.cards.values()]) if (c.taskId === e.taskId) s.cards.delete(c.id)
         for (const r of [...s.runs.values()]) if (r.taskId === e.taskId) s.runs.delete(r.id)
+        for (const a of [...s.artifacts.values()]) if (a.taskId === e.taskId) s.artifacts.delete(a.id)
         break
       }
       case 'batch/fired': {
@@ -154,6 +188,8 @@ export function fold(events: Event[]): State {
         c.runIds.push(e.runId); c.currentRunId = e.runId; c.status = 'running'; c.startedAt ??= e.at; c.error = undefined
         break
       }
+      case 'run/session_created': { const r = s.runs.get(e.runId); if (r) { r.sessionId = e.sessionId; r.sessionCreatedAt = e.at } break }
+      case 'run/prompt_dispatched': { const r = s.runs.get(e.runId); if (r) r.promptDispatchedAt = e.at; break }
       case 'run/blocked': {
         const r = s.runs.get(e.runId); if (!r) break
         r.status = 'blocked'; r.blockKind = e.kind; r.question = e.reason
@@ -167,9 +203,19 @@ export function fold(events: Event[]): State {
       case 'run/nudged': { const r = s.runs.get(e.runId); if (r) r.nudges++; break }
       case 'run/completed': case 'run/review_requested': {
         const r = s.runs.get(e.runId); if (!r) break
-        r.summary = e.summary
+        r.summary = e.summary; r.metadata = e.metadata
         const c = finishRun(r, 'done', e.t === 'run/completed' ? 'completed' : 'review', e.at)
         if (c) { c.status = e.t === 'run/completed' ? 'done' : 'review'; c.summary = e.summary; c.endedAt = e.at; c.consecutiveFailures = 0; c.blockRecurrences = 0 }
+        break
+      }
+      case 'card/review_approved': {
+        const c = s.cards.get(e.cardId)
+        if (c && c.status === 'review') { c.status = 'done'; c.reviewNote = e.note; c.endedAt = e.at }
+        break
+      }
+      case 'card/changes_requested': {
+        const c = s.cards.get(e.cardId)
+        if (c && c.status === 'review') { c.status = 'ready'; c.reviewNote = e.note; c.endedAt = undefined }
         break
       }
       case 'run/failed': case 'run/timed_out': case 'run/crashed': case 'run/cancelled': {
@@ -185,6 +231,8 @@ export function fold(events: Event[]): State {
       }
       case 'card/gave_up': { const c = s.cards.get(e.cardId); if (c) { c.status = 'failed'; c.error = e.error; c.endedAt = e.at } break }
       case 'card/cancelled': { const c = s.cards.get(e.cardId); if (c && c.status !== 'done') { c.status = 'cancelled'; c.endedAt = e.at } break }
+      case 'artifact/registered': s.artifacts.set(e.artifact.id, e.artifact); break
+      case 'artifact/published': { const a = s.artifacts.get(e.artifactId); if (a) a.publicUrl = e.publicUrl; break }
       case 'batch/settled': { const b = s.batches.get(e.batchId); if (b) b.settled = { at: e.at, outcome: e.outcome }; break }
     }
   }
@@ -196,19 +244,20 @@ export function readyCards(s: State): Card[] {
   const out: Card[] = []
   for (const c of s.cards.values()) {
     if (c.status !== 'todo' && c.status !== 'ready') continue
-    if (c.deps.every(d => { const p = s.cards.get(d); return p && (p.status === 'done' || p.status === 'review') })) out.push(c)
+    if (c.deps.every(d => s.cards.get(d)?.status === 'done')) out.push(c)
   }
   return out
 }
 
-export type BatchStatus = 'run' | 'park' | 'done' | 'bad'
+export type BatchStatus = 'run' | 'park' | 'review' | 'done' | 'bad'
 
 export function batchStatus(s: State, b: Batch): BatchStatus {
   const cards = b.cardIds.map(id => s.cards.get(id)).filter(Boolean) as Card[]
   if (cards.some(c => c.status === 'blocked')) return 'park'
   if (b.settled) return b.settled.outcome === 'done' ? 'done' : 'bad'
   if (cards.some(c => c.status === 'failed' || c.status === 'cancelled')) return 'bad'
-  if (cards.length && cards.every(c => c.status === 'done' || c.status === 'review')) return 'done'
+  if (cards.some(c => c.status === 'review')) return 'review'
+  if (cards.length && cards.every(c => c.status === 'done')) return 'done'
   return 'run'
 }
 
@@ -220,9 +269,9 @@ export function cardRun(s: State, c: Card): Run | undefined {
 /** Who moved: the host dispatcher, the agent itself, a person, or the clock. */
 export function actorOf(e: Event, batches?: Map<string, Batch>): 'dispatcher' | 'agent' | 'person' | 'clock' {
   switch (e.t) {
-    case 'task/created': case 'task/enabled': case 'task/deleted': return 'person'
+    case 'task/created': case 'task/enabled': case 'task/deleted': case 'card/review_approved': case 'card/changes_requested': case 'artifact/published': return 'person'
     case 'batch/fired': return e.batch.by === 'cron' ? 'clock' : 'person'
-    case 'run/blocked': case 'run/completed': case 'run/review_requested': return 'agent'
+    case 'run/blocked': case 'run/completed': case 'run/review_requested': case 'artifact/registered': return 'agent'
     case 'run/resumed': return 'person'
     case 'run/cancelled': return 'person'
     default: return 'dispatcher'
@@ -240,17 +289,23 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
     case 'batch/fired': return `${({ cron: '到点', manual: '手动', retry: '重试' })[e.batch.by]}触发,${e.batch.cards.length} 张卡排好队`
     case 'card/ready': return `${card(e.cardId)} 可以开始了(上一位已交卷)`
     case 'run/claimed': return `${card(e.cardId)} 开工${e.attempt > 1 ? `(第 ${e.attempt} 次)` : ''}`
+    case 'run/session_created': return `${who(e.runId)} 的会话已创建:${e.sessionId}`
+    case 'run/prompt_dispatched': return `任务书已发给 ${who(e.runId)}`
     case 'run/blocked': return `${who(e.runId)} 停下来${e.kind === 'needs_input' ? '问' : '等'}:${e.reason}`
     case 'run/resumed': return `${who(e.runId)} 收到回答,继续`
     case 'run/nudged': return `${who(e.runId)} 没交卷就停了,催一次`
     case 'run/completed': return `${who(e.runId)} 交卷(${e.summary.length} 字交接单)`
     case 'run/review_requested': return `${who(e.runId)} 提交验收(${e.summary.length} 字)`
+    case 'card/review_approved': return `${card(e.cardId)} 验收通过${e.note ? ':' + e.note : ''}`
+    case 'card/changes_requested': return `${card(e.cardId)} 被退回修改:${e.note}`
     case 'run/failed': return `${who(e.runId)} 失败${e.outcome === 'protocol_violation' ? '(没按协议交卷)' : ''}${e.error ? ':' + e.error : ''}`
     case 'run/timed_out': return `${who(e.runId)} 超时${e.error ? ':' + e.error : ''}`
     case 'run/crashed': return `${who(e.runId)} 进程没了${e.error ? ':' + e.error : ''}`
     case 'run/cancelled': return `${who(e.runId)} 取消`
     case 'card/gave_up': return `${card(e.cardId)} 连续失败,放弃:${e.error}`
     case 'card/cancelled': return `${card(e.cardId)} 未开始,取消`
+    case 'artifact/registered': return `${card(e.artifact.cardId)} 登记产物:${e.artifact.name}`
+    case 'artifact/published': return `产物已发布:${s.artifacts.get(e.artifactId)?.name ?? e.artifactId}`
     case 'batch/settled': return ({ done: '这次运行完成', failed: '这次运行失败', cancelled: '这次运行取消' })[e.outcome]
   }
 }

@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { cronHuman, nextFire, parseCron } from '../cron.ts'
-import type { AgentRow, LegacyRun as Run, TaskEvent, TaskSpec } from '../wire.ts'
+import type { AgentRow, ArtifactView, LegacyRun as Run, TaskEvent, TaskSpec } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
 
 export interface TasksApi {
@@ -17,6 +17,10 @@ export interface TasksApi {
   fireTask: (id: string, by?: 'manual' | 'retry') => Promise<{ runId: string }>
   cancelRun: (runId: string) => Promise<void>
   taskEvents: (id: string) => Promise<TaskEvent[]>
+  taskArtifacts: (id: string, batchId?: string) => Promise<ArtifactView[]>
+  artifactContent: (id: string, artifactId: string, batchId?: string) => Promise<{ artifact: ArtifactView; base64: string }>
+  publishArtifact: (id: string, artifactId: string) => Promise<{ publicUrl: string }>
+  reviewCard: (cardId: string, decision: 'approve' | 'changes', note?: string) => Promise<void>
   openSession: (sessionId: string) => Promise<void>
   sessionTurns: (sessionId: string) => Promise<import('../wire.ts').TurnLedger>
 }
@@ -27,16 +31,17 @@ const fmt = (iso?: string) => iso ? new Date(iso).toTimeString().slice(0, 8) : '
 const dur = (a?: string, b?: string) => { if (!a) return ''; const s = Math.max(0, Math.round(((b ? +new Date(b) : Date.now()) - +new Date(a)) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` }
 const BY: Record<Run['by'], string> = { cron: '时间表', manual: '手动', retry: '重试' }
 const ago = (iso: string) => { const s = Math.round((Date.now() - +new Date(iso)) / 1000); if (s < 60) return '刚刚'; if (s < 3600) return `${Math.floor(s / 60)} 分钟前`; if (s < 86400) return `${Math.floor(s / 3600)} 小时前`; return `${Math.floor(s / 86400)} 天前` }
-const LEG: Record<string, string> = { queued: '排队', running: '进行中', blocked: '停车等人', done: '完成', failed: '失败', timed_out: '超时', lost: '丢失', cancelled: '取消' }
+const LEG: Record<string, string> = { queued: '排队', running: '进行中', blocked: '停车等人', review: '待验收', done: '完成', failed: '失败', timed_out: '超时', lost: '丢失', cancelled: '取消' }
 
-export function runStatus(r: Run): 'run' | 'park' | 'done' | 'bad' {
+export function runStatus(r: Run): 'run' | 'park' | 'review' | 'done' | 'bad' {
   if (r.legs.some(l => l.status === 'blocked')) return 'park'
+  if (r.legs.some(l => l.status === 'review')) return 'review'
   if (r.legs.some(l => l.status === 'running')) return 'run'
   if (r.settled?.outcome === 'done' || r.legs.every(l => l.status === 'done')) return 'done'
   if (r.settled || r.legs.some(l => ['failed', 'timed_out', 'lost', 'cancelled'].includes(l.status))) return 'bad'
   return 'run'
 }
-const stPill = (st: ReturnType<typeof runStatus>) => ({ run: <span className="dtc-pill dtc-p-acc">进行中</span>, park: <span className="dtc-pill dtc-p-park">停车等人</span>, done: <span className="dtc-pill dtc-p-ok">完成</span>, bad: <span className="dtc-pill dtc-p-bad">失败</span> })[st]
+const stPill = (st: ReturnType<typeof runStatus>) => ({ run: <span className="dtc-pill dtc-p-acc">进行中</span>, park: <span className="dtc-pill dtc-p-park">停车等人</span>, review: <span className="dtc-pill dtc-p-warn">待验收</span>, done: <span className="dtc-pill dtc-p-ok">完成</span>, bad: <span className="dtc-pill dtc-p-bad">失败</span> })[st]
 const legDot = (status: string) => <span className={`dtc-dot dtc-dot-${status}`} title={LEG[status] ?? status} />
 
 /** Poll the board while mounted; 2.5s is fast enough to feel live. */
@@ -56,7 +61,7 @@ const agentName = (agents: AgentRow[], id: string) => agents.find(a => a.id === 
 export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: AgentRow[]; toast: (m: string) => void }) {
   const { tasks, runs, reload, error, loaded } = useTasks(api)
   const cols = useMemo(() => {
-    const c: Record<'todo' | 'run' | 'park' | 'done' | 'bad', JSX.Element[]> = { todo: [], run: [], park: [], done: [], bad: [] }
+    const c: Record<'todo' | 'run' | 'park' | 'review' | 'done' | 'bad', JSX.Element[]> = { todo: [], run: [], park: [], review: [], done: [], bad: [] }
     for (const t of tasks.filter(t => t.trigger.kind === 'cron')) c.todo.push(<CronCard key={t.id} t={t} agents={agents} onToggle={async () => { await api.setTaskEnabled(t.id, !t.enabled); toast(t.enabled ? '已停用' : '已启用'); await reload() }} />)
     for (const r of runs) { const t = tasks.find(x => x.id === r.taskId); if (!t) continue; c[runStatus(r)].push(<RunCard key={r.id} r={r} t={t} agents={agents} api={api} onRetry={async () => { await api.fireTask(t.id, 'retry'); toast('已重试'); await reload() }} />) }
     return c
@@ -70,7 +75,7 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
       </div>
       {error ? <div className="dtc-err">{error}</div> : null}
       <div style={{ overflowX: 'auto' }}><div className="dtc-cols">
-        {([['todo', '待触发'], ['run', '进行中'], ['park', '停车等人'], ['done', '完成'], ['bad', '失败']] as const).map(([k, n]) => (
+        {([['todo', '待触发'], ['run', '进行中'], ['park', '停车等人'], ['review', '待验收'], ['done', '完成'], ['bad', '失败']] as const).map(([k, n]) => (
           <div key={k} className="dtc-col"><div className="dtc-colh"><span>{n}</span><span>{cols[k].length}</span></div>{cols[k].length ? cols[k] : <div className="dtc-empty" style={{ padding: 20 }}>{loaded ? '空' : <span className="dtc-spin" />}</div>}</div>
         ))}
       </div></div>
@@ -103,6 +108,7 @@ function RunCard({ r, t, agents, onRetry, api }: { r: Run; t: TaskSpec; agents: 
   let line = ''
   if (st === 'run') line = `${agentName(agents, cur.agentId)}在做 · 第 ${idx + 1}/${r.legs.length} 棒 · ${dur(cur.startedAt)}`
   if (st === 'done') line = `${r.legs.length > 1 ? `${r.legs.length} 棒全部交卷` : '完成'} · ${dur(r.legs[0].startedAt, r.legs[r.legs.length - 1].endedAt)}`
+  if (st === 'review') line = `${agentName(agents, cur.agentId)}已提交，等待人工验收`
   if (st === 'bad') line = `${agentName(agents, cur.agentId)} · ${LEG[cur.status] ?? cur.status}${cur.error ? ' · ' + cur.error.slice(0, 40) : ''}`
   return (
     <div className={`dtc-tcard s-${st}`} onClick={() => go(`tasks/${t.id}/runs/${r.id}`)}>

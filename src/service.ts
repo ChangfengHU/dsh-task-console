@@ -15,13 +15,15 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { discoverLegacyArtifacts, publishHtml, readArtifact } from './artifacts.ts'
 import {
   NATIVE_TOOLS, mask, readSpec, removePreset, renderComposition, scanSkills, userPresetRoot, validateSpec, writePreset,
   type HostMcp,
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
 import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask } from './tasks.ts'
-import type { BoardView } from './wire.ts'
+import type { Artifact } from './tasks.ts'
+import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
 
@@ -308,7 +310,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const runs = [...st.batches.values()].sort((a, b) => b.firedAt.localeCompare(a.firedAt)).map(b => {
       const legs = b.cardIds.map(id => st.cards.get(id)).filter(Boolean).map(c => {
         const r = cardRun(st, c!)
-        const status = c!.status === 'done' || c!.status === 'review' ? 'done' : c!.status === 'running' ? 'running' : c!.status === 'blocked' ? 'blocked' : c!.status === 'failed' ? (r?.status === 'timed_out' ? 'timed_out' : r?.status === 'crashed' ? 'lost' : 'failed') : c!.status === 'cancelled' ? 'cancelled' : 'queued'
+        const status = c!.status === 'done' ? 'done' : c!.status === 'review' ? 'review' : c!.status === 'running' ? 'running' : c!.status === 'blocked' ? 'blocked' : c!.status === 'failed' ? (r?.status === 'timed_out' ? 'timed_out' : r?.status === 'crashed' ? 'lost' : 'failed') : c!.status === 'cancelled' ? 'cancelled' : 'queued'
         return { agentId: c!.agentId, status, tries: c!.runIds.length, sessionId: r?.sessionId || undefined, startedAt: c!.startedAt, endedAt: c!.endedAt, handoff: c!.summary, question: r?.status === 'blocked' ? r.question : undefined, error: c!.error }
       })
       const bs = batchStatus(st, b)
@@ -358,7 +360,61 @@ export class TaskConsoleService extends TypertRemoteService {
 
   async taskEvents(payload: string): Promise<string> {
     const { id } = JSON.parse(payload) as { id: string }
-    return JSON.stringify(this.runner.store.all().filter((e: any) => e.taskId === id).slice(-200))
+    // The browser folds this stream, so task/created and batch/fired may never be truncated.
+    return JSON.stringify(this.runner.store.all().filter((e: any) => e.taskId === id).map((e: any) => e.t === 'artifact/registered' ? { ...e, artifact: this.artifactView(e.artifact) } : e))
+  }
+
+  private artifactView(a: Artifact): ArtifactView {
+    const { storagePath: _storagePath, ...view } = a
+    return view
+  }
+
+  private async artifactsFor(taskId: string, batchId?: string): Promise<Artifact[]> {
+    const task = this.runner.store.s.tasks.get(taskId)
+    if (!task) throw new Error('没有这个任务')
+    const registered = [...this.runner.store.s.artifacts.values()].filter(a => a.taskId === taskId && (!batchId || a.batchId === batchId))
+    const runs = [...this.runner.store.s.runs.values()].filter(r => r.taskId === taskId && (!batchId || r.batchId === batchId))
+    const legacy = await discoverLegacyArtifacts(task, runs, new Set(registered.map(a => a.originalPath)))
+    return [...registered, ...legacy].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+  }
+
+  async taskArtifacts(payload: string): Promise<string> {
+    const { id, batchId } = JSON.parse(payload) as { id: string; batchId?: string }
+    return JSON.stringify((await this.artifactsFor(id, batchId)).map(a => this.artifactView(a)))
+  }
+
+  async artifactContent(payload: string): Promise<string> {
+    const { id, batchId, artifactId } = JSON.parse(payload) as { id: string; batchId?: string; artifactId: string }
+    const task = this.runner.store.s.tasks.get(id)
+    if (!task) throw new Error('没有这个任务')
+    const artifact = (await this.artifactsFor(id, batchId)).find(a => a.id === artifactId)
+    if (!artifact) throw new Error('没有这个产物')
+    const data = await readArtifact(this.runner.store.root, task, artifact)
+    return JSON.stringify({ artifact: this.artifactView(artifact), base64: data.toString('base64') })
+  }
+
+  async publishArtifact(payload: string): Promise<string> {
+    const { id, artifactId } = JSON.parse(payload) as { id: string; artifactId: string }
+    const task = this.runner.store.s.tasks.get(id)
+    const artifact = this.runner.store.s.artifacts.get(artifactId)
+    if (!task || !artifact || artifact.taskId !== id) throw new Error('只能发布已登记并保存快照的产物')
+    const token = process.env.DSH_TASK_CONSOLE_UPLOAD_TOKEN ?? process.env.UPLOAD_R2_TOKEN ?? ''
+    if (!token) throw new Error('宿主未配置 DSH_TASK_CONSOLE_UPLOAD_TOKEN,不能发布公网链接')
+    const data = await readArtifact(this.runner.store.root, task, artifact)
+    const publicUrl = await publishHtml({
+      endpoint: process.env.DSH_TASK_CONSOLE_UPLOAD_URL ?? process.env.UPLOAD_R2_URL ?? 'https://upload-r2.vyibc.com',
+      domain: process.env.DSH_TASK_CONSOLE_PUBLIC_DOMAIN ?? process.env.UPLOAD_R2_DOMAIN ?? 'https://resource.vyibc.com',
+      token,
+    }, artifact, data)
+    await this.runner.store.append({ t: 'artifact/published', at: new Date().toISOString(), taskId: id, artifactId, publicUrl })
+    return JSON.stringify({ publicUrl })
+  }
+
+  async reviewCard(payload: string): Promise<string> {
+    const { cardId, decision, note } = JSON.parse(payload) as { cardId: string; decision: 'approve' | 'changes'; note?: string }
+    if (decision !== 'approve' && decision !== 'changes') throw new Error('不支持的验收决定')
+    await this.runner.reviewCard(cardId, decision, note)
+    return JSON.stringify({ ok: true })
   }
 
   /** What one agent has been doing: cards, last run, tasks it takes part in. */
@@ -369,7 +425,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const runs = cards.flatMap(c => c.runIds.map(id => st.runs.get(id)).filter(Boolean)) as any[]
     const last = runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]
     const tasks = [...st.tasks.values()].filter(t => t.participants.some(p => p.agentId === agentId)).map(t => ({ id: t.id, title: t.title }))
-    const done = cards.filter(c => c.status === 'done' || c.status === 'review').length
+    const done = cards.filter(c => c.status === 'done').length
     const failed = cards.filter(c => c.status === 'failed').length
     return JSON.stringify({ cards: cards.length, done, failed, runs: runs.length, lastRunAt: last?.startedAt ?? null, lastOutcome: last?.outcome ?? last?.status ?? null, tasks })
   }

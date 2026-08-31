@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-console",
-  "version": "0.5.6",
+  "version": "0.6.2",
   "description": "Task console for DeepSeek Harness: author agents as real presets (capability-level tool fence), prove them with a live try-run; tasks and schedules follow.",
   "license": "MIT",
   "type": "module",
@@ -15,7 +15,7 @@
   "files": ["lib", "src", "cordis.patch.yml", "README.md", "LICENSE"],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test test/*.test.ts"
+    "test": "NODE_ENV=test tsx --test test/*.test.ts"
   },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },
@@ -36,6 +36,7 @@
   },
   "devDependencies": {
     "@deepseek-ai/schemastery": "^3.18.1",
-    "esbuild": "^0.25.12"
+    "esbuild": "^0.25.12",
+    "tsx": "^4.23.13"
   }
 }

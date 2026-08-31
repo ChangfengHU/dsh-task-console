@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { fold, migrate, type Card, type Event, type Participant, type State, type TaskSpec, type Trigger } from './fold.ts'
 
 export { actorOf, batchStatus, cardRun, describe, fold, foldTurns, migrate, readyCards, BLOCK_RECURRENCE_LIMIT } from './fold.ts'
-export type { Batch, BlockKind, Card, CardStatus, Event, Participant, Run, RunOutcome, RunStatus, State, StepRow, TaskSpec, ToolRow, Trigger, TurnLedger, TurnRow } from './fold.ts'
+export type { Artifact, Batch, BlockKind, Card, CardStatus, Event, Participant, Run, RunOutcome, RunStatus, State, StepRow, TaskSpec, ToolRow, Trigger, TurnLedger, TurnRow } from './fold.ts'
 export { cronHuman, cronMatches, nextFire, parseCron, type Cron } from './cron.ts'
 import { parseCron } from './cron.ts'
 
@@ -31,6 +31,7 @@ export class EventStore {
   constructor(dir = storeDir()) { this.dir = dir }
 
   get file(): string { return join(this.dir, 'events.jsonl') }
+  get root(): string { return this.dir }
 
   async load(): Promise<void> {
     await mkdir(this.dir, { recursive: true, mode: 0o700 })
@@ -64,8 +65,11 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   const lines = [`# 任务:${task.title} · ${batchId} · 第 ${card.index + 1}/${task.participants.length} 张卡`, '', '[TASK]', task.brief.trim()]
   if (card.brief?.trim()) lines.push('', '[YOUR PART]', card.brief.trim())
   for (const u of upstream) lines.push('', `[UPSTREAM HANDOFF from ${u.agentName}]`, u.summary.trim() || '(上游没有留下交接单)')
+  if (card.reviewNote?.trim()) lines.push('', '[REVIEW CHANGES]', card.reviewNote.trim())
   lines.push('', '[CONTRACT]',
-    '做完后必须调用 task_complete(summary) 交卷;summary 写「产物 / 干了什么 / 下游注意」,它会原样交给下一张卡。',
+    '做完后必须调用 task_complete(summary, artifacts, metadata) 交卷;summary 写「产物 / 干了什么 / 下游注意」,它会原样交给下一张卡。',
+    '生成了文件时,必须把文件路径放进 artifacts 数组;系统会保存不可变副本并让浏览器直接预览或下载。',
+    '做完但需要人工验收时调用 task_request_review(summary, artifacts, metadata);验收通过前不会启动下游或判定整批完成。',
     '拿不准且不可逆的事:能用 ask_user_question 就问;否则 task_block(reason, kind="needs_input")。',
     '缺工具或权限做不了:task_block(reason, kind="capability")。',
     '不要在没有调用 task_complete 或 task_block 的情况下结束。')
@@ -73,7 +77,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
 }
 
 /** The single nudge a run gets when it stops without a terminal tool (hermes' stop-guard). */
-export const NUDGE = '你停下来了,但没有交卷。请现在调用 task_complete(summary) 交卷,或 task_block(reason, kind) 说明为什么做不下去。'
+export const NUDGE = '你停下来了,但没有交卷。请现在调用 task_complete(summary, artifacts) 交卷,或 task_block(reason, kind) 说明为什么做不下去。'
 
 export function validateTask(raw: unknown, agentIds: Set<string>): TaskSpec {
   const s = (raw ?? {}) as Partial<TaskSpec>

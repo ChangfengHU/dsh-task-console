@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -49,16 +49,22 @@ async function setup(taskPatch: Partial<TaskSpec> = {}) {
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
 
-test('runner: a 3-card chain runs in order, each card gets the upstream summary, batch settles done', async () => {
-  const { host, store, runner } = await setup()
+test('runner: a 3-card chain records process boundaries and snapshots declared artifacts', async () => {
+  const { host, store, runner, root } = await setup()
+  await writeFile(join(root, 'result.html'), '<h1>done</h1>')
   const batch = await runner.fire('T', 'manual')
   const s1 = [...host.sessions.keys()][0]
   assert.equal(host.sessions.size, 1, 'only the first card starts; the rest wait on deps')
   assert.ok(host.sessions.get(s1)!.tools.map(t => t.name).includes('task_complete'), 'terminators registered on the agent scope')
   assert.match(host.sessions.get(s1)!.followups[0].content[0].text, /\[CONTRACT\]/)
   host.consumeFirst(s1)
-  await host.callTool(s1, 'task_complete', { summary: 'A 交接单' }); host.endTurn(s1); await tick()
+  const types = store.all().filter((e: any) => e.runId === `${batch.id}#0#1`).map(e => e.t)
+  assert.deepEqual(types.slice(0, 3), ['run/claimed', 'run/session_created', 'run/prompt_dispatched'])
+  await host.callTool(s1, 'task_complete', { summary: 'A 交接单', artifacts: ['result.html'], metadata: { checked: true } }); host.endTurn(s1); await tick()
   assert.equal(store.s.cards.get(`${batch.id}#0`)!.status, 'done'); assert.equal(store.s.cards.get(`${batch.id}#0`)!.summary, 'A 交接单')
+  const artifact = [...store.s.artifacts.values()][0]
+  assert.equal(artifact.name, 'result.html'); assert.equal(artifact.mime, 'text/html'); assert.equal(await readFile(artifact.storagePath, 'utf8'), '<h1>done</h1>')
+  assert.deepEqual(store.s.runs.get(`${batch.id}#0#1`)!.metadata, { checked: true })
   assert.equal(host.sessions.get(s1)!.disposed, true)
   const s2 = [...host.sessions.keys()][1]; assert.ok(s2, 'second card started after the first completed')
   assert.match(host.sessions.get(s2)!.followups[0].content[0].text, /\[UPSTREAM HANDOFF from A\]\nA 交接单/)
@@ -66,6 +72,20 @@ test('runner: a 3-card chain runs in order, each card gets the upstream summary,
   const s3 = [...host.sessions.keys()][2]; host.consumeFirst(s3); await host.callTool(s3, 'task_complete', { summary: 'C' }); host.endTurn(s3); await tick()
   assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')
   assert.deepEqual(store.all().filter(e => e.t === 'run/completed').length, 3)
+  runner.stop()
+})
+
+test('runner: request_review cannot settle until a person approves it', async () => {
+  const { host, store, runner } = await setup({ participants: [{ agentId: 'a' }] })
+  const batch = await runner.fire('T', 'manual')
+  const session = [...host.sessions.keys()][0]; host.consumeFirst(session)
+  await host.callTool(session, 'task_request_review', { summary: '请验收' }); host.endTurn(session); await tick()
+  const cardId = `${batch.id}#0`
+  assert.equal(store.s.cards.get(cardId)!.status, 'review')
+  assert.equal(store.s.batches.get(batch.id)!.settled, undefined)
+  await runner.reviewCard(cardId, 'approve', '通过')
+  assert.equal(store.s.cards.get(cardId)!.status, 'done')
+  assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')
   runner.stop()
 })
 

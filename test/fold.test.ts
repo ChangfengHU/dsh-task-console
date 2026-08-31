@@ -39,6 +39,23 @@ test('fold: failures count toward the breaker; gave_up marks the card failed; sa
   const s2 = fold(ev2); assert.equal(s2.cards.get('b1#0')!.blockRecurrences, 1); assert.equal(s2.cards.get('b1#0')!.lastBlockReason, 'B')
 })
 
+test('review is a real gate: downstream waits until approval, and changes return the card to ready', () => {
+  const base: Event[] = [{ t: 'task/created', at: '1', taskId: 'T-1', task }, fired,
+    { t: 'run/claimed', at: '3', taskId: 'T-1', cardId: 'b1#0', runId: 'r1', sessionId: 's1', attempt: 1 },
+    { t: 'run/review_requested', at: '4', taskId: 'T-1', runId: 'r1', summary: '请验收' }]
+  let s = fold(base)
+  assert.equal(s.cards.get('b1#0')!.status, 'review')
+  assert.deepEqual(readyCards(s).map(c => c.id), [], 'review does not satisfy dependencies')
+  assert.equal(batchStatus(s, s.batches.get('b1')!), 'review')
+
+  s = fold([...base, { t: 'card/changes_requested', at: '5', taskId: 'T-1', cardId: 'b1#0', runId: 'r1', note: '缺截图' }])
+  assert.equal(s.cards.get('b1#0')!.status, 'ready'); assert.equal(s.cards.get('b1#0')!.reviewNote, '缺截图')
+
+  s = fold([...base, { t: 'card/review_approved', at: '5', taskId: 'T-1', cardId: 'b1#0', runId: 'r1' }])
+  assert.equal(s.cards.get('b1#0')!.status, 'done')
+  assert.deepEqual(readyCards(s).map(c => c.id), ['b1#1'])
+})
+
 test('migrate: a 0.4 leg/* stream folds to the same picture', () => {
   const old = [
     { t: 'task/created', at: '1', task },

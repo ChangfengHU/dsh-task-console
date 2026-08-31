@@ -13,6 +13,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
+import { captureArtifacts } from './artifacts.ts'
 import { readSpec } from './presets.ts'
 import { BLOCK_RECURRENCE_LIMIT, EventStore, NUDGE, cardMessage, cronMatches, parseCron, readyCards, type Batch, type BlockKind, type Card, type Run, type TaskSpec } from './tasks.ts'
 import { registerWorkerTools } from './worker-tools.ts'
@@ -28,7 +29,7 @@ interface Flight {
   disposeTools?: () => void
   lastText: string
   /** Set by a terminator tool; the turn's end then finalizes the run. */
-  terminal?: { kind: 'completed' | 'review' | 'blocked'; summary?: string; reason?: string; blockKind?: BlockKind }
+  terminal?: { kind: 'completed' | 'review' | 'blocked'; summary?: string; reason?: string; blockKind?: BlockKind; metadata?: Record<string, unknown> }
   pendingAsk?: string
   timer?: ReturnType<typeof setTimeout>
   timeoutSec: number
@@ -134,7 +135,7 @@ export class TaskRunner {
         if (!stillLive) await this.append({ t: 'batch/settled', taskId: b.taskId, batchId: b.id, outcome: dead.some(c => c.status === 'failed') ? 'failed' : 'cancelled' })
         continue
       }
-      if (cards.every(c => c.status === 'done' || c.status === 'review')) await this.append({ t: 'batch/settled', taskId: b.taskId, batchId: b.id, outcome: 'done' })
+      if (cards.every(c => c.status === 'done')) await this.append({ t: 'batch/settled', taskId: b.taskId, batchId: b.id, outcome: 'done' })
     }
   }
 
@@ -191,21 +192,30 @@ export class TaskRunner {
     const flight: Flight = { runId, cardId: card.id, taskId: task.id, sessionId, messageId, consumed: false, handle: undefined, lastText: '', timeoutSec: task.timeoutSec }
     this.flights.set(sessionId, flight)
     try {
+      // Claim is durable before a process/session is created; later events make each boundary observable.
+      await this.append({ t: 'run/claimed', taskId: task.id, cardId: card.id, runId, sessionId, attempt })
       flight.handle = await (this.ctx as any).agents.create({
         sessionId,
         ...(selection ? { agentOptions: selection } : {}),
         meta: { cwd: task.cwd, agentPreset: preset.id },
         setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
       })
+      await this.append({ t: 'run/session_created', taskId: task.id, runId, sessionId })
       // The terminators live on this agent's scope only.
       try {
-        flight.disposeTools = registerWorkerTools(flight.handle.agent.ctx, {
-          complete: async summary => { flight.terminal = { kind: 'completed', summary } },
-          requestReview: async summary => { flight.terminal = { kind: 'review', summary } },
+        const submit = async (kind: 'completed' | 'review', summary: string, paths: string[], metadata?: Record<string, unknown>) => {
+          if (flight.terminal) throw new Error('这次运行已经提交了终态')
+          const at = this.now()
+          const captured = await captureArtifacts({ root: this.store.root, task, batchId: batch.id, cardId: card.id, runId, sessionId, at }, paths)
+          for (const artifact of captured) await this.append({ t: 'artifact/registered', at, taskId: task.id, artifact })
+          flight.terminal = { kind, summary, metadata }
+        }
+        flight.disposeTools = await registerWorkerTools(flight.handle.agent.ctx, {
+          complete: async (summary, artifacts, metadata) => submit('completed', summary, artifacts, metadata),
+          requestReview: async (summary, artifacts, metadata) => submit('review', summary, artifacts, metadata),
           block: async (reason, kind) => { flight.terminal = { kind: 'blocked', reason, blockKind: kind }; if (kind === 'needs_input') this.disarm(flight); await this.append({ t: 'run/blocked', taskId: task.id, runId, kind, reason }) },
         })
       } catch (error) { console.warn('[task-console] worker tools not registered:', error) }
-      await this.append({ t: 'run/claimed', taskId: task.id, cardId: card.id, runId, sessionId, attempt })
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }
       try {
         const registry = (this.ctx as any).get('workspaceRegistry')
@@ -213,6 +223,7 @@ export class TaskRunner {
         await ws?.attachSession?.(sessionId)
       } catch { /* cosmetic */ }
       flight.handle.agent.followup({ id: messageId, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
+      await this.append({ t: 'run/prompt_dispatched', taskId: task.id, runId, messageId })
       this.arm(flight)
     } catch (error) {
       this.flights.delete(sessionId)
@@ -282,8 +293,8 @@ export class TaskRunner {
     if (!this.flights.has(f.sessionId)) return
     if (reason && reason.kind !== 'completed') { await this.finish(f, 'run/failed', 'failed', JSON.stringify(reason)); return }
     const t = f.terminal
-    if (t?.kind === 'completed') { await this.finish(f, 'run/completed', 'completed', undefined, t.summary); return }
-    if (t?.kind === 'review') { await this.finish(f, 'run/review_requested', 'review', undefined, t.summary); return }
+    if (t?.kind === 'completed') { await this.finish(f, 'run/completed', 'completed', undefined, t.summary, false, t.metadata); return }
+    if (t?.kind === 'review') { await this.finish(f, 'run/review_requested', 'review', undefined, t.summary, false, t.metadata); return }
     if (t?.kind === 'blocked') {
       if (t.blockKind === 'needs_input') return   // stay parked; the person's next message resumes it
       const card = this.store.s.cards.get(f.cardId)
@@ -301,14 +312,14 @@ export class TaskRunner {
     await this.finish(f, 'run/failed', 'protocol_violation', '停了两次都没有调用 task_complete / task_block')
   }
 
-  private async finish(f: Flight, t: 'run/completed' | 'run/review_requested' | 'run/failed' | 'run/timed_out' | 'run/cancelled', outcome: string, error?: string, summary?: string, giveUpNow = false): Promise<void> {
+  private async finish(f: Flight, t: 'run/completed' | 'run/review_requested' | 'run/failed' | 'run/timed_out' | 'run/cancelled', outcome: string, error?: string, summary?: string, giveUpNow = false, metadata?: Record<string, unknown>): Promise<void> {
     if (!this.flights.has(f.sessionId)) return
     this.flights.delete(f.sessionId)
     if (f.timer) clearTimeout(f.timer)
     f.disposeTools?.()
     try { await f.handle?.dispose?.() } catch { /* already gone */ }
     if (t === 'run/completed' || t === 'run/review_requested') {
-      await this.append({ t, taskId: f.taskId, runId: f.runId, summary: summary ?? f.lastText })
+      await this.append({ t, taskId: f.taskId, runId: f.runId, summary: summary ?? f.lastText, ...(metadata ? { metadata } : {}) })
     } else {
       await this.append({ t, taskId: f.taskId, runId: f.runId, outcome, error })
       if (giveUpNow) { const c = this.store.s.cards.get(f.cardId); if (c && c.status !== 'failed') await this.append({ t: 'card/gave_up', taskId: f.taskId, cardId: f.cardId, error: error ?? outcome }) }
@@ -319,8 +330,21 @@ export class TaskRunner {
   async cancelBatch(batchId: string): Promise<void> {
     const b = this.store.s.batches.get(batchId); if (!b) return
     for (const f of [...this.flights.values()]) { const r = this.store.s.runs.get(f.runId); if (r?.batchId === batchId) await this.finish(f, 'run/cancelled', 'cancelled', '人工取消') }
-    for (const id of b.cardIds) { const c = this.store.s.cards.get(id); if (c && (c.status === 'todo' || c.status === 'ready')) await this.append({ t: 'card/cancelled', taskId: b.taskId, cardId: id }) }
+    for (const id of b.cardIds) { const c = this.store.s.cards.get(id); if (c && (c.status === 'todo' || c.status === 'ready' || c.status === 'review')) await this.append({ t: 'card/cancelled', taskId: b.taskId, cardId: id }) }
     if (!this.store.s.batches.get(batchId)?.settled) await this.append({ t: 'batch/settled', taskId: b.taskId, batchId, outcome: 'cancelled' })
+  }
+
+  /** Resolve the explicit human review gate for one card. */
+  async reviewCard(cardId: string, decision: 'approve' | 'changes', note = ''): Promise<void> {
+    const card = this.store.s.cards.get(cardId)
+    if (!card || card.status !== 'review' || !card.currentRunId && !card.runIds.length) throw new Error('这张卡不在待验收状态')
+    const runId = card.runIds[card.runIds.length - 1]
+    if (decision === 'approve') await this.append({ t: 'card/review_approved', taskId: card.taskId, cardId, runId, ...(note.trim() ? { note: note.trim() } : {}) })
+    else {
+      if (!note.trim()) throw new Error('退回修改时必须写明原因')
+      await this.append({ t: 'card/changes_requested', taskId: card.taskId, cardId, runId, note: note.trim() })
+    }
+    await this.tick()
   }
 
   /** Remember display names so upstream handoffs read "from 巡检员", not "from inspector". */

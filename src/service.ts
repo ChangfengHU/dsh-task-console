@@ -222,6 +222,47 @@ export class TaskConsoleService extends TypertRemoteService {
     return JSON.stringify(result)
   }
 
+  // ── chat with an agent ─────────────────────────────────────────────────
+
+  /** Live handles for sessions started from the composer; disposing them would kill the chat. */
+  private readonly chats = new Map<string, any>()
+
+  /**
+   * Start a root session on an agent's preset, pin a readable title, file it
+   * under the workspace, and (optionally) submit the first message. The UI
+   * then opens the session; the person keeps talking to it there.
+   */
+  async startAgentSession(payload: string): Promise<string> {
+    const { agentId, text, cwd } = JSON.parse(payload) as { agentId: string; text?: string; cwd?: string }
+    const presets = (this.ctx as any).get('agentPresets')
+    if (!presets) throw new Error('这个部署没有 preset 服务')
+    const preset = await presets.resolve(agentId)
+    if (preset.broken) throw new Error(`preset 坏了:${preset.broken}`)
+    const spec = await readSpec(dirname(String(preset.path)))
+    const name = spec?.name ?? preset.name ?? preset.id
+    let selection = this.defaultModel()
+    if (spec?.model?.includes('/')) { const [provider, ...rest] = spec.model.split('/'); selection = { provider, model: rest.join('/'), ...(spec.effort ? { reasoningEffort: spec.effort } : {}) } }
+    const workspaces = this.workspaces()
+    const dir = cwd && cwd.trim() ? cwd.trim() : (workspaces[0]?.path ?? homedir())
+    const sessionId = `agent-${agentId}-${Date.now().toString(36)}`
+    const handle = await (this.ctx as any).agents.create({
+      sessionId,
+      ...(selection ? { agentOptions: selection } : {}),
+      meta: { cwd: dir, agentPreset: preset.id },
+      setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
+    })
+    this.chats.set(sessionId, handle)
+    const head = (text ?? '').trim().replace(/\s+/g, ' ').slice(0, 28)
+    try { (this.ctx as any).get('sessionTitle')?.rename?.(handle.agent.session, head ? `${name} · ${head}` : `${name} · 新会话`) } catch { /* cosmetic */ }
+    try {
+      const registry = (this.ctx as any).get('workspaceRegistry')
+      const ws = registry ? (await registry.resolveByPath(dir).catch(() => undefined)) ?? (await registry.create(dir).catch(() => undefined)) : undefined
+      await ws?.attachSession?.(sessionId)
+    } catch { /* cosmetic */ }
+    if (text && text.trim()) handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: text.trim() }], source: { kind: 'user' } })
+    return JSON.stringify({ sessionId, agentPreset: preset.id, name })
+  }
+
   // ── tasks ──────────────────────────────────────────────────────────────
 
   /** Every task with its runs, plus the next cron fire time; one payload for the board. */

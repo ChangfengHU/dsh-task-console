@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { cronHuman, nextFire, parseCron } from '../cron.ts'
 import type { AgentRow, Run, TaskEvent, TaskSpec } from '../wire.ts'
-import { go } from './Console.tsx'
+import { closeConsole, go } from './Console.tsx'
 
 export interface TasksApi {
   tasks: () => Promise<{ tasks: (TaskSpec & { nextFire: string | null })[]; runs: Run[] }>
@@ -17,6 +17,7 @@ export interface TasksApi {
   fireTask: (id: string, by?: 'manual' | 'retry') => Promise<{ runId: string }>
   cancelRun: (runId: string) => Promise<void>
   taskEvents: (id: string) => Promise<TaskEvent[]>
+  openSession: (sessionId: string) => Promise<void>
 }
 
 type TaskRow = TaskSpec & { nextFire: string | null }
@@ -137,7 +138,7 @@ export function TaskDetail({ api, agents, id, runId, toast }: { api: TasksApi; a
                 <tr key={r.id} className={`row ${sel?.id === r.id ? 'sel' : ''}`} onClick={() => go(`tasks/${t.id}/runs/${r.id}`)}><td className="dtc-mono">{r.id}</td><td>{BY[r.by]}</td><td>{fmt(r.firedAt)}</td><td>{dur(first?.startedAt, last?.endedAt ?? (r.settled?.at))}</td><td>{stPill(runStatus(r))}</td><td>{r.legs.map((l, i) => <span key={i}>{legDot(l.status)} </span>)}</td></tr>) })}
             </tbody></table> : <div className="dtc-empty">还没跑过。点「立即运行」。</div>}
           </div>
-          {sel ? <RunPanel r={sel} t={t} agents={agents} onCancel={async () => { await api.cancelRun(sel.id); toast('已取消'); await reload() }} /> : null}
+          {sel ? <RunPanel r={sel} t={t} agents={agents} api={api} onCancel={async () => { await api.cancelRun(sel.id); toast('已取消'); await reload() }} /> : null}
         </div>
         <div>
           <div className="dtc-panel"><h3>定义</h3><div className="dtc-kv">
@@ -157,7 +158,7 @@ export function TaskDetail({ api, agents, id, runId, toast }: { api: TasksApi; a
   )
 }
 
-function RunPanel({ r, t, agents, onCancel }: { r: Run; t: TaskSpec; agents: AgentRow[]; onCancel: () => void }) {
+function RunPanel({ r, t, agents, onCancel, api }: { r: Run; t: TaskSpec; agents: AgentRow[]; onCancel: () => void; api: TasksApi }) {
   const st = runStatus(r)
   return (
     <div className="dtc-panel"><h3>运行 <span className="dtc-mono">{r.id}</span> {stPill(st)}<span className="sp" /><span className="dtc-faint" style={{ fontWeight: 400 }}>一次运行 = {r.legs.filter(l => l.sessionId).length} 个真实会话</span>{st === 'run' || st === 'park' ? <button className="dtc-btn sm danger" onClick={onCancel}>取消</button> : null}</h3>
@@ -165,7 +166,7 @@ function RunPanel({ r, t, agents, onCancel }: { r: Run; t: TaskSpec; agents: Age
         <div key={i} className="dtc-leg">
           <div className="lh"><span className="dtc-faint">第 {i + 1} 段</span><b>{agentName(agents, l.agentId)}</b>{legDot(l.status)}<span className="dtc-muted">{LEG[l.status]}{l.tries > 1 ? ` · 第 ${l.tries} 次` : ''}</span><span className="sp" />
             {l.startedAt ? <span className="dtc-muted dtc-mono">{fmt(l.startedAt)} · {dur(l.startedAt, l.endedAt)}</span> : null}
-            {l.sessionId ? <button className="dtc-btn sm" onClick={() => openSession(`task: ${t.title} · ${r.id} · ${agentName(agents, l.agentId)}`)}>打开会话</button> : null}</div>
+            {l.sessionId ? <button className="dtc-btn sm" onClick={() => { closeConsole(); void api.openSession(l.sessionId!) }}>打开会话</button> : null}</div>
           {i > 0 && r.legs[i - 1].handoff && l.status !== 'queued' ? <div className="dtc-faint" style={{ fontSize: 12, marginBottom: 4 }}>收到上游 {agentName(agents, r.legs[i - 1].agentId)} 的交接单 ↓ 已注入</div> : null}
           {l.status === 'blocked' ? <div className="dtc-ask"><b>? {l.question}</b><div className="dtc-note">它在等你回答。这一版在会话里答:点「打开会话」,回答后这里自动继续。</div></div> : null}
           {l.error ? <div className="dtc-err" style={{ margin: '6px 0' }}>{l.error}</div> : null}
@@ -173,18 +174,6 @@ function RunPanel({ r, t, agents, onCancel }: { r: Run; t: TaskSpec; agents: Age
         </div>))}</div>
     </div>
   )
-}
-
-/** Close the console and click the sidebar row whose title we pinned. */
-export function openSession(title: string): void {
-  history.pushState('', document.title, window.location.pathname + window.location.search)
-  window.dispatchEvent(new HashChangeEvent('hashchange'))
-  const tryClick = (left: number) => {
-    const el = Array.from(document.querySelectorAll<HTMLElement>('button,[role=button],a,li,div')).find(e => e.children.length < 6 && (e.innerText ?? '').trim().startsWith(title.slice(0, 24)) && e.offsetParent !== null)
-    if (el) { el.click(); return }
-    if (left > 0) window.setTimeout(() => tryClick(left - 1), 300)
-  }
-  window.setTimeout(() => tryClick(10), 200)
 }
 
 // ── new task ─────────────────────────────────────────────────────────────

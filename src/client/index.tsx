@@ -13,7 +13,7 @@ import { CONSOLE_REMOTE, unwrap } from './remote.ts'
 import { installStyles } from './styles.ts'
 
 export const name = 'dsh-task-console'
-export const inject = ['slots', 'remote']
+export const inject = ['slots', 'remote', 'sessions', 'inputTriggers']
 
 export async function apply(ctx: any): Promise<void> {
   ctx.effect(() => installStyles(), 'task-console: stylesheet')
@@ -38,7 +38,55 @@ export async function apply(ctx: any): Promise<void> {
     fireTask: (id: string, by?: 'manual' | 'retry') => call<{ runId: string }>('fireTask', { id, by }),
     cancelRun: async (runId: string) => { await call('cancelRun', { runId }) },
     taskEvents: (id: string) => call<TaskEvent[]>('taskEvents', { id }),
+    startAgentSession: (agentId: string, text?: string, cwd?: string) => call<{ sessionId: string; name: string }>('startAgentSession', { agentId, text, cwd }),
+    openSession: (sessionId: string) => openWhenListed(ctx, sessionId),
   }
+
+  // `@巡检员 …` in the composer: pick an agent, type the ask, Enter starts a
+  // session on that agent's preset with the ask as its first message.
+  let roster: AgentRow[] = []
+  const refreshRoster = () => api.agents().then(a => { roster = a.filter(x => !x.broken) }).catch(() => undefined)
+  void refreshRoster()
+  const claimFor = (agent: AgentRow, prefix: string) => ({
+    claim: {
+      token: prefix,
+      hint: `要 ${agent.name} 做什么`,
+      images: false,
+      submit: async (args: string, actx: any) => {
+        try {
+          const cwd = currentCwd(ctx, actx)
+          const { sessionId } = await api.startAgentSession(agent.id, args, cwd)
+          await openWhenListed(ctx, sessionId)
+          return { kind: 'success' as const }
+        } catch (e) { return { kind: 'error' as const, text: e instanceof Error ? e.message : String(e) } }
+      },
+    },
+  })
+  const source = {
+    trigger: '@' as const,
+    name: 'Agent',
+    order: -10,
+    warm: () => { void refreshRoster() },
+    candidates: async (_session: unknown, req: { query: string }) => {
+      if (!roster.length) await refreshRoster()
+      const q = (req.query ?? '').toLowerCase()
+      return roster.filter(a => !q || a.name.toLowerCase().includes(q) || a.id.includes(q)).map(a => ({
+        name: a.name, description: a.description || a.id, hint: '开一个它的会话', value: a.id, section: 'Agent',
+      }))
+    },
+    onPick: (pick: { candidate: { value?: string } }) => {
+      const agent = roster.find(a => a.id === pick.candidate.value)
+      return agent ? claimFor(agent, `@${agent.name} `) : undefined
+    },
+    matchEnter: async (_session: unknown, line: string) => {
+      const m = /^@(\S+)\s*([\s\S]*)$/.exec(line.trim())
+      if (!m) return undefined
+      if (!roster.length) await refreshRoster()
+      const agent = roster.find(a => a.name === m[1] || a.id === m[1])
+      return agent ? claimFor(agent, `@${m[1]} `) : undefined
+    },
+  }
+  try { ctx.effect(() => ctx.inputTriggers.registerSource(source), 'task-console: @agent trigger') } catch (e) { console.warn('[task-console] @agent trigger not registered:', e) }
 
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
     name: 'sidebar.footer.action',
@@ -46,6 +94,27 @@ export async function apply(ctx: any): Promise<void> {
     order: 30,
     inject: () => ({ api }),
   }, FooterEntry))
+}
+
+/** The workspace path of the session the composer belongs to, when knowable. */
+function currentCwd(ctx: any, actx: any): string | undefined {
+  try {
+    const id = actx?.session?.id ?? actx?.sessionId
+    const snap = ctx.sessions?.list?.getSnapshot?.()
+    const cwd = id && snap?.byId?.[id]?.cwd
+    if (typeof cwd === 'string' && cwd) return cwd
+    const cur = snap?.current && snap.byId?.[snap.current]?.cwd
+    return typeof cur === 'string' && cur ? cur : undefined
+  } catch { return undefined }
+}
+
+/** Open a session once the client's list mirror has learned about it (the host announces it over the socket). */
+async function openWhenListed(ctx: any, sessionId: string): Promise<void> {
+  for (let i = 0; i < 40; i++) {
+    try { ctx.sessions.open(sessionId); return } catch { /* not listed yet */ }
+    await new Promise(r => setTimeout(r, 250))
+  }
+  throw new Error('会话已建好,但列表还没刷出来;在左侧找一下')
 }
 
 /** The sidebar button plus the overlay it opens (portaled to body). */

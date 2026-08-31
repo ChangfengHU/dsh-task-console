@@ -5,7 +5,7 @@
  * `#/tc/agents/new`, `#/tc/tasks`) so any screen can be copied and reopened.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wire.ts'
 import { NewTask, TaskBoard, TaskDetail, type TasksApi } from './TasksView.tsx'
 
@@ -16,6 +16,8 @@ export interface Api extends TasksApi {
   saveAgent: (spec: AgentSpec) => Promise<{ path: string; preview: Preview }>
   deleteAgent: (id: string) => Promise<void>
   tryRun: (id: string) => Promise<TryRunResult>
+  startAgentSession: (agentId: string, text?: string, cwd?: string) => Promise<{ sessionId: string; name: string }>
+  openSession: (sessionId: string) => Promise<void>
 }
 
 export const HASH_PREFIX = '#/tc'
@@ -90,7 +92,7 @@ export function Console({ api }: { api: Api }) {
     page = agents && catalog
       ? <AgentEditor key={id ?? 'new'} api={api} catalog={catalog} agents={agents} id={id} onSaved={reload} toast={showToast} />
       : <div className="dtc-empty"><span className="dtc-spin" /> 读取 preset 名册…</div>
-  } else page = <AgentList agents={agents} catalog={catalog} />
+  } else page = <AgentList agents={agents} catalog={catalog} api={api} toast={showToast} />
 
   return (
     <div className="dtc-root dtc-overlay">
@@ -112,7 +114,8 @@ export function Console({ api }: { api: Api }) {
   )
 }
 
-function AgentList({ agents, catalog }: { agents: AgentRow[] | null; catalog: Catalog | null }) {
+function AgentList({ agents, catalog, api, toast }: { agents: AgentRow[] | null; catalog: Catalog | null; api: Api; toast: (m: string) => void }) {
+  const chat = async (e: React.MouseEvent, a: AgentRow) => { e.stopPropagation(); try { const { sessionId } = await api.startAgentSession(a.id); toast(`已开 ${a.name} 的会话`); closeConsole(); await api.openSession(sessionId) } catch (err) { toast(String((err as Error).message ?? err)) } }
   if (!agents) return <div className="dtc-empty"><span className="dtc-spin" /> 读取 preset 名册…</div>
   return (
     <>
@@ -132,6 +135,7 @@ function AgentList({ agents, catalog }: { agents: AgentRow[] | null; catalog: Ca
               </div>
               <div className="d">{a.broken ?? a.description}</div>
               {a.spec ? <div className="m"><span>{a.spec.tools.length} 工具</span><span>{a.spec.mcp.length} MCP</span><span>{a.spec.skills.length} skill</span><span className="dtc-mono">{a.spec.model.split('/')[1] ?? ''}</span></div> : <div className="m"><span className="dtc-faint">不是任务台写的,看得到选不了字段</span></div>}
+              {!a.broken ? <div className="m" style={{ marginTop: 4 }}><span className="dtc-btn sm" role="button" onClick={e => chat(e, a)}>💬 开新会话</span><span className="dtc-faint">或在输入框打 @{a.name}</span></div> : null}
             </button>
           )
         })}

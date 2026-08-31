@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wire.ts'
+import type { AgentRow, AgentSpec, Catalog, Preview, Run, TaskEvent, TaskSpec, TryRunResult } from '../wire.ts'
 import { Console, HASH_PREFIX, go, readRoute, type Api } from './Console.tsx'
 import { CONSOLE_REMOTE, unwrap } from './remote.ts'
 import { installStyles } from './styles.ts'
@@ -31,6 +31,13 @@ export async function apply(ctx: any): Promise<void> {
     saveAgent: (spec: AgentSpec) => call<{ path: string; preview: Preview }>('saveAgent', spec),
     deleteAgent: async (id: string) => { await call('deleteAgent', { id }) },
     tryRun: (id: string) => call<TryRunResult>('tryRun', { id }),
+    tasks: () => call<{ tasks: (TaskSpec & { nextFire: string | null })[]; runs: Run[] }>('tasks'),
+    createTask: (spec: Partial<TaskSpec>) => call<{ id: string }>('createTask', spec),
+    setTaskEnabled: async (id: string, enabled: boolean) => { await call('setTaskEnabled', { id, enabled }) },
+    deleteTask: async (id: string) => { await call('deleteTask', { id }) },
+    fireTask: (id: string, by?: 'manual' | 'retry') => call<{ runId: string }>('fireTask', { id, by }),
+    cancelRun: async (runId: string) => { await call('cancelRun', { runId }) },
+    taskEvents: (id: string) => call<TaskEvent[]>('taskEvents', { id }),
   }
 
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({

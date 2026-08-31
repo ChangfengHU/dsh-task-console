@@ -19,6 +19,8 @@ import {
   NATIVE_TOOLS, mask, readSpec, removePreset, renderComposition, scanSkills, userPresetRoot, validateSpec, writePreset,
   type HostMcp,
 } from './presets.ts'
+import { TaskRunner } from './runner.ts'
+import { EventStore, nextFire, parseCron, validateTask } from './tasks.ts'
 import { NAMESPACE } from './wire.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
 
@@ -35,8 +37,12 @@ const KNOWN_MODELS = [
 export class TaskConsoleService extends TypertRemoteService {
   static inject = ['loader', 'tools', 'agents']
 
+  readonly runner: TaskRunner
+
   constructor(ctx: Context) {
     super(ctx, NAMESPACE)
+    this.runner = new TaskRunner(ctx, new EventStore())
+    void this.runner.start().catch(err => console.error('[task-console] runner failed to start:', err))
   }
 
   // ── facts ──────────────────────────────────────────────────────────────
@@ -205,5 +211,60 @@ export class TaskConsoleService extends TypertRemoteService {
     }
     result.elapsedMs = Date.now() - started
     return JSON.stringify(result)
+  }
+
+  // ── tasks ──────────────────────────────────────────────────────────────
+
+  /** Every task with its runs, plus the next cron fire time; one payload for the board. */
+  async tasks(): Promise<string> {
+    const store = this.runner.store
+    const tasks = [...store.tasks.values()].map(t => ({
+      ...t,
+      nextFire: t.trigger.kind === 'cron' && t.enabled ? (nextFire(parseCron(t.trigger.expr)!)?.toISOString() ?? null) : null,
+    }))
+    const runs = [...store.runs.values()].sort((a, b) => b.firedAt.localeCompare(a.firedAt))
+    return JSON.stringify({ tasks, runs })
+  }
+
+  async createTask(payload: string): Promise<string> {
+    const presets = (this.ctx as any).get('agentPresets')
+    const ids = new Set<string>(presets ? (await presets.list() as any[]).filter(p => !p.broken).map(p => String(p.id)) : [])
+    const task = validateTask(JSON.parse(payload), ids)
+    await this.runner.store.append({ t: 'task/created', at: task.createdAt, task })
+    if (task.trigger.kind === 'once') await this.runner.fire(task.id, 'manual')
+    return JSON.stringify({ id: task.id })
+  }
+
+  async setTaskEnabled(payload: string): Promise<string> {
+    const { id, enabled } = JSON.parse(payload) as { id: string; enabled: boolean }
+    if (!this.runner.store.tasks.has(id)) throw new Error('没有这个任务')
+    await this.runner.store.append({ t: 'task/enabled', at: new Date().toISOString(), taskId: id, enabled: !!enabled })
+    return JSON.stringify({ ok: true })
+  }
+
+  async deleteTask(payload: string): Promise<string> {
+    const { id } = JSON.parse(payload) as { id: string }
+    for (const r of this.runner.store.runs.values()) if (r.taskId === id && !r.settled) await this.runner.cancel(r.id)
+    await this.runner.store.append({ t: 'task/deleted', at: new Date().toISOString(), taskId: id })
+    return JSON.stringify({ ok: true })
+  }
+
+  async fireTask(payload: string): Promise<string> {
+    const { id, by } = JSON.parse(payload) as { id: string; by?: 'manual' | 'retry' }
+    const run = await this.runner.fire(id, by === 'retry' ? 'retry' : 'manual')
+    return JSON.stringify({ runId: run.id })
+  }
+
+  async cancelRun(payload: string): Promise<string> {
+    const { runId } = JSON.parse(payload) as { runId: string }
+    await this.runner.cancel(runId)
+    return JSON.stringify({ ok: true })
+  }
+
+  async taskEvents(payload: string): Promise<string> {
+    const { id } = JSON.parse(payload) as { id: string }
+    const runIds = new Set([...this.runner.store.runs.values()].filter(r => r.taskId === id).map(r => r.id))
+    const events = this.runner.store.all().filter((e: any) => e.taskId === id || e.task?.id === id || runIds.has(e.runId) || runIds.has(e.run?.id)).slice(-60)
+    return JSON.stringify(events)
   }
 }

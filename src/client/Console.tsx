@@ -7,8 +7,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wire.ts'
+import { NewTask, TaskBoard, TaskDetail, type TasksApi } from './TasksView.tsx'
 
-export interface Api {
+export interface Api extends TasksApi {
   catalog: () => Promise<Catalog>
   agents: () => Promise<AgentRow[]>
   previewAgent: (spec: AgentSpec) => Promise<Preview>
@@ -77,8 +78,12 @@ export function Console({ api }: { api: Api }) {
   const url = `${HASH_PREFIX}/${route.join('/')}`
 
   let page: JSX.Element
-  if (tab === 'tasks') page = <TasksPlaceholder />
-  else if (route[1]) {
+  if (tab === 'tasks') {
+    if (!agents || !catalog) page = <div className="dtc-empty"><span className="dtc-spin" /> 读取…</div>
+    else if (route[1] === 'new') page = <NewTask api={api} agents={agents} toast={showToast} defaultCwd={catalog.userRoot ? catalog.userRoot.replace(/\/\.dsh\/\.agent-presets$/, '') : ''} />
+    else if (route[1]) page = <TaskDetail api={api} agents={agents} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} toast={showToast} />
+    else page = <TaskBoard api={api} agents={agents} toast={showToast} />
+  } else if (route[1]) {
     const id = route[1] === 'new' ? null : route[1]
     // The editor seeds its form from the roster row; mounting it before the
     // roster arrives would let a fast typist start on an empty id.
@@ -93,7 +98,7 @@ export function Console({ api }: { api: Api }) {
         <div className="dtc-ttl"><i />任务台</div>
         <div className="dtc-tabs">
           <button className={`dtc-tab ${tab === 'agents' ? 'on' : ''}`} onClick={() => go('agents')}>Agent<span className="n">{agents?.length ?? ''}</span></button>
-          <button className={`dtc-tab ${tab === 'tasks' ? 'on' : ''}`} onClick={() => go('tasks')}>任务<span className="n">二期</span></button>
+          <button className={`dtc-tab ${tab === 'tasks' ? 'on' : ''}`} onClick={() => go('tasks')}>任务</button>
         </div>
         <span className="dtc-url dtc-mono">{url}</span>
         <button className="dtc-close" title="关闭" onClick={closeConsole}>×</button>
@@ -103,16 +108,6 @@ export function Console({ api }: { api: Api }) {
         {page}
       </div>
       {toast ? <div className="dtc-toast">{toast}</div> : null}
-    </div>
-  )
-}
-
-function TasksPlaceholder() {
-  return (
-    <div className="dtc-empty">
-      <p><b>任务与定时是第二期。</b></p>
-      <p>这一版先把「Agent = 真 preset」做实:编辑器写出来的目录就是 dsh 挂载的目录,试跑给出的工具清单来自 <span className="dtc-mono">request/header</span>,不是模型自述。</p>
-      <p>接下来:任务书 + 有序参与者 + 单次 / cron 触发 → 运行台账 → 看板;停车等人在看板上回答。</p>
     </div>
   )
 }

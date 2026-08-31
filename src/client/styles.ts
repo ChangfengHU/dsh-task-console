@@ -113,6 +113,61 @@ body[data-ds-dark-theme] .dtc-root {
 .dtc-empty { color:var(--dtc-faint); font-size:13px; text-align:center; padding:40px 20px }
 .dtc-empty b { color:var(--dtc-ink) }
 
+/* ── tasks ── */
+.dtc-cols { display:grid; grid-template-columns:repeat(5, minmax(200px, 1fr)); gap:12px; min-width:1020px }
+.dtc-col { background:var(--dtc-surface-2); border-radius:8px; padding:10px; min-height:360px; display:flex; flex-direction:column; gap:8px }
+.dtc-colh { display:flex; justify-content:space-between; font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--dtc-muted); padding:2px 4px 6px }
+.dtc-tcard { background:var(--dtc-surface); border:1px solid var(--dtc-line); border-left:3px solid var(--dtc-faint); border-radius:6px; padding:10px 12px; cursor:pointer; display:flex; flex-direction:column; gap:3px; font-size:13px; color:var(--dtc-ink) }
+.dtc-tcard:hover { border-color:var(--dtc-accent) }
+.dtc-tcard.s-run { border-left-color:var(--dtc-accent) } .dtc-tcard.s-park { border-left-color:#5b46a0 } .dtc-tcard.s-done { border-left-color:var(--dtc-ok) } .dtc-tcard.s-bad { border-left-color:var(--dtc-bad) } .dtc-tcard.s-cron { border-left-color:var(--dtc-warn) }
+.dtc-tcard .t { font-weight:600; display:flex; justify-content:space-between; gap:8px }
+.dtc-tcard .t .id { font-weight:400; color:var(--dtc-faint); font-size:11.5px }
+.dtc-tcard .l { color:var(--dtc-muted); font-size:12.5px; display:flex; gap:6px; align-items:center; flex-wrap:wrap }
+.dtc-tcard .q { color:#5b46a0; font-size:12.5px }
+body[data-ds-dark-theme] .dtc-tcard .q { color:#a794e0 }
+.dtc-tcard .act { display:flex; gap:6px; margin-top:4px }
+.dtc-live { width:7px; height:7px; border-radius:50%; background:var(--dtc-accent); display:inline-block; animation:dtc-blink 1.2s infinite }
+@keyframes dtc-blink { 50% { opacity:.25 } }
+@media (prefers-reduced-motion:reduce) { .dtc-live { animation:none } }
+.dtc-tog { width:30px; height:16px; border-radius:999px; background:var(--dtc-line); position:relative; display:inline-block; vertical-align:middle; cursor:pointer; flex:0 0 auto }
+.dtc-tog::after { content:""; position:absolute; top:2px; left:2px; width:12px; height:12px; border-radius:50%; background:var(--dtc-surface); transition:left .15s }
+.dtc-tog.on { background:var(--dtc-ok) } .dtc-tog.on::after { left:16px }
+.dtc-pipe { display:inline-flex; align-items:center; gap:6px; flex-wrap:wrap }
+.dtc-pipe .ag { border:1px solid var(--dtc-line); border-radius:5px; padding:1px 8px; font-size:12px; background:var(--dtc-surface-2) }
+.dtc-pipe .ar { color:var(--dtc-faint); margin-right:6px }
+.dtc-runs { width:100%; border-collapse:collapse; font-size:13px; font-variant-numeric:tabular-nums }
+.dtc-runs th, .dtc-runs td { padding:8px 10px; border-bottom:1px solid var(--dtc-line-soft); text-align:left; vertical-align:top }
+.dtc-runs th { font-size:12px; color:var(--dtc-muted); font-weight:500 }
+.dtc-runs tr.row { cursor:pointer } .dtc-runs tr.row:hover td { background:var(--dtc-surface-2) } .dtc-runs tr.sel td { background:var(--dtc-accent-bg) }
+.dtc-dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--dtc-faint) }
+.dtc-dot-running { background:var(--dtc-accent) } .dtc-dot-blocked { background:#5b46a0 } .dtc-dot-done { background:var(--dtc-ok) } .dtc-dot-failed, .dtc-dot-timed_out, .dtc-dot-lost { background:var(--dtc-bad) }
+.dtc-legs { display:flex; flex-direction:column; gap:10px }
+.dtc-leg { border:1px solid var(--dtc-line); border-radius:6px; padding:10px 12px; font-size:13px }
+.dtc-leg .lh { display:flex; align-items:center; gap:8px; margin-bottom:6px; flex-wrap:wrap } .dtc-leg .lh .sp { flex:1 }
+.dtc-hand { white-space:pre-wrap; background:var(--dtc-surface-2); border-radius:5px; padding:8px 10px; font-size:12.5px; line-height:1.55; max-height:320px; overflow:auto }
+.dtc-ask { border-left:3px solid #5b46a0; background:rgba(91,70,160,.12); border-radius:5px; padding:8px 12px; margin-top:6px }
+.dtc-evlog { font-size:12px; line-height:1.7; max-height:300px; overflow:auto }
+.dtc-evlog > div { display:grid; grid-template-columns:62px 1fr; gap:10px } .dtc-evlog .ts { color:var(--dtc-faint) }
+.dtc-wiz { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:14px; align-items:start }
+@media (max-width:900px) { .dtc-wiz { grid-template-columns:1fr } }
+.dtc-step { background:var(--dtc-surface); border:1px solid var(--dtc-line); border-radius:8px; padding:16px 18px; margin-bottom:12px }
+.dtc-step h3 { margin:0 0 4px; font-size:14px; display:flex; gap:10px; align-items:baseline } .dtc-step h3 .no { color:var(--dtc-accent); font-weight:600 }
+.dtc-step .sub { font-size:12.5px; color:var(--dtc-muted); margin-bottom:10px }
+.dtc-pick { display:grid; grid-template-columns:repeat(auto-fill, minmax(210px, 1fr)); gap:8px }
+.dtc-pk { border:1px solid var(--dtc-line); border-radius:6px; padding:8px 10px; cursor:pointer; font-size:13px; display:flex; gap:8px; align-items:flex-start }
+.dtc-pk.on { border-color:var(--dtc-accent); background:var(--dtc-accent-bg) }
+.dtc-pk .pn { font-weight:600 } .dtc-pk .pd { color:var(--dtc-muted); font-size:12px }
+.dtc-pk .ord, .dtc-oi .ord { width:20px; height:20px; border-radius:50%; background:var(--dtc-accent); color:var(--dtc-accent-ink); display:grid; place-items:center; font-size:11.5px; flex:0 0 auto }
+.dtc-pk .ord.off { background:var(--dtc-surface-2); color:var(--dtc-faint) }
+.dtc-order { display:flex; flex-direction:column; gap:6px; margin-top:10px }
+.dtc-oi { display:flex; align-items:center; gap:8px; border:1px solid var(--dtc-line-soft); border-radius:5px; padding:6px 10px; font-size:13px }
+.dtc-oi input { flex:1; width:auto; font-size:12.5px; padding:4px 8px }
+.dtc-radio { display:flex; gap:10px; flex-wrap:wrap }
+.dtc-rd { border:1px solid var(--dtc-line); border-radius:6px; padding:8px 12px; cursor:pointer; font-size:13px }
+.dtc-rd.on { border-color:var(--dtc-accent); background:var(--dtc-accent-bg) }
+.dtc-p-park { background:rgba(91,70,160,.14); color:#5b46a0 }
+body[data-ds-dark-theme] .dtc-p-park { color:#a794e0 }
+
 /* sidebar footer entry */
 .dtc-foot { display:flex; align-items:center; gap:10px; width:100%; padding:8px 10px; border-radius:6px; font-size:13.5px; text-align:left; color:inherit }
 .dtc-foot:hover { background:rgba(127,127,127,.12) }

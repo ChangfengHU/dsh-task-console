@@ -39,12 +39,13 @@ const stPill = (st: ReturnType<typeof runStatus>) => ({ run: <span className="dt
 const legDot = (status: string) => <span className={`dtc-dot dtc-dot-${status}`} title={LEG[status] ?? status} />
 
 /** Poll the board while mounted; 2.5s is fast enough to feel live. */
-export function useTasks(api: TasksApi): { tasks: TaskRow[]; runs: Run[]; reload: () => Promise<void>; error: string } {
+export function useTasks(api: TasksApi): { tasks: TaskRow[]; runs: Run[]; reload: () => Promise<void>; error: string; loaded: boolean } {
   const [data, setData] = useState<{ tasks: TaskRow[]; runs: Run[] }>({ tasks: [], runs: [] })
+  const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
-  const reload = async () => { try { setData(await api.tasks()); setError('') } catch (e) { setError(String((e as Error).message ?? e)) } }
+  const reload = async () => { try { setData(await api.tasks()); setError(''); setLoaded(true) } catch (e) { setError(String((e as Error).message ?? e)) } }
   useEffect(() => { void reload(); const t = window.setInterval(() => { void reload() }, 2500); return () => window.clearInterval(t) }, [api])
-  return { ...data, reload, error }
+  return { ...data, reload, error, loaded }
 }
 
 const agentName = (agents: AgentRow[], id: string) => agents.find(a => a.id === id)?.name ?? id
@@ -52,7 +53,7 @@ const agentName = (agents: AgentRow[], id: string) => agents.find(a => a.id === 
 // ── board ────────────────────────────────────────────────────────────────
 
 export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: AgentRow[]; toast: (m: string) => void }) {
-  const { tasks, runs, reload, error } = useTasks(api)
+  const { tasks, runs, reload, error, loaded } = useTasks(api)
   const cols = useMemo(() => {
     const c: Record<'todo' | 'run' | 'park' | 'done' | 'bad', JSX.Element[]> = { todo: [], run: [], park: [], done: [], bad: [] }
     for (const t of tasks.filter(t => t.trigger.kind === 'cron')) c.todo.push(<CronCard key={t.id} t={t} agents={agents} onToggle={async () => { await api.setTaskEnabled(t.id, !t.enabled); toast(t.enabled ? '已停用' : '已启用'); await reload() }} />)
@@ -69,7 +70,7 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
       {error ? <div className="dtc-err">{error}</div> : null}
       <div style={{ overflowX: 'auto' }}><div className="dtc-cols">
         {([['todo', '待触发'], ['run', '进行中'], ['park', '停车等人'], ['done', '完成'], ['bad', '失败']] as const).map(([k, n]) => (
-          <div key={k} className="dtc-col"><div className="dtc-colh"><span>{n}</span><span>{cols[k].length}</span></div>{cols[k].length ? cols[k] : <div className="dtc-empty" style={{ padding: 20 }}>空</div>}</div>
+          <div key={k} className="dtc-col"><div className="dtc-colh"><span>{n}</span><span>{cols[k].length}</span></div>{cols[k].length ? cols[k] : <div className="dtc-empty" style={{ padding: 20 }}>{loaded ? '空' : <span className="dtc-spin" />}</div>}</div>
         ))}
       </div></div>
     </>
@@ -135,6 +136,7 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
   const toggle = (id: string) => setParts(p => p.some(x => x.agentId === id) ? p.filter(x => x.agentId !== id) : [...p, { agentId: id }])
   const move = (i: number, d: number) => setParts(p => { const n = [...p]; const [x] = n.splice(i, 1); n.splice(i + d, 0, x); return n })
   const noAsk = parts.some(p => { const a = agents.find(x => x.id === p.agentId); return a?.spec && !a.spec.tools.includes('ask-user') })
+  const claudeOnes = parts.map(p => agents.find(x => x.id === p.agentId)).filter(a => a?.spec?.model.startsWith('claude-local')).map(a => a!.name)
   const submit = async () => {
     setBusy(true); setErr('')
     try {
@@ -155,6 +157,7 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
           <div className="dtc-pick">{usable.map(a => { const i = parts.findIndex(p => p.agentId === a.id); return (
             <div key={a.id} className={`dtc-pk ${i >= 0 ? 'on' : ''}`} onClick={() => toggle(a.id)}><span className={`ord ${i >= 0 ? '' : 'off'}`}>{i >= 0 ? i + 1 : '+'}</span><div><div className="pn">{a.name} <span className="dtc-mono dtc-faint" style={{ fontSize: 11 }}>{a.id}</span></div><div className="pd">{a.description}</div></div></div>) })}</div>
           {parts.length ? <div className="dtc-order">{parts.map((p, i) => <div key={p.agentId} className="dtc-oi"><span className="ord">{i + 1}</span><b>{agentName(agents, p.agentId)}</b><input placeholder="它的分工(可选)" value={p.brief ?? ''} onChange={e => setParts(ps => ps.map((x, j) => j === i ? { ...x, brief: e.target.value } : x))} /><button className="dtc-btn sm" disabled={i === 0} onClick={() => move(i, -1)}>↑</button><button className="dtc-btn sm" disabled={i === parts.length - 1} onClick={() => move(i, 1)}>↓</button></div>)}</div> : null}
+          {claudeOnes.length ? <div className="dtc-warn">{claudeOnes.join('、')} 挂在 claude-local 上:这条路上 dsh 的工具都是延迟工具,它交不了卷(task_complete),会被催一次后判「没按协议交卷」。换成 codex-local 或 API 型模型再参与任务。</div> : null}
           {noAsk ? <div className="dtc-warn">有参与者没勾 ask_user_question,它遇到拿不准的事只能失败,不会停下来问。</div> : null}
         </div>
         <div className="dtc-step"><h3><span className="no">3</span>触发</h3><div className="sub">单次任务提交后立刻进「进行中」;时间表任务进「待触发」,到点各生一张运行卡。</div>

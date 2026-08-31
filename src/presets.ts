@@ -159,7 +159,7 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[]): Preview 
     parts.push(`# skills/ 随 preset 走;baseUrl 是 preset 自己的目录\n- id: skill-filesystem\n  name: '@deepseek-ai/dsh-skill-filesystem'\n  config:\n    providerName: preset-${spec.id}\n    includeDefaultRoots: false\n    customSkillDirs:\n      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"\n- id: tool-skill\n  name: '@deepseek-ai/dsh-tool-skill'`)
   }
 
-  return { yml: parts.join('\n\n') + '\n', renamed, permission: permissionOf(spec, () => false) }
+  return { yml: parts.join('\n\n') + '\n', renamed, permission: permissionOf(spec, () => true) }
 }
 
 /** The spec file we keep beside the composition. */

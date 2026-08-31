@@ -27,7 +27,7 @@ test('renderComposition lists only chosen rows and renames a live host MCP', () 
   assert.match(out.yml, /customSkillDirs/)
   assert.match(out.yml, /!!js/)
   assert.match(out.yml, /text: \|-\n {6}你是巡检员。\n {6}只读。/)
-  assert.equal(out.permission, 'read-only')
+  assert.equal(out.permission, 'limited-write')
 })
 
 test('permission is derived from tools, not declared', () => {

@@ -42,6 +42,7 @@ export async function apply(ctx: any): Promise<void> {
     startAgentSession: (agentId: string, text?: string, cwd?: string) => call<{ sessionId: string; name: string }>('startAgentSession', { agentId, text, cwd }),
     openSession: (sessionId: string) => openWhenListed(ctx, sessionId),
     sessionTurns: (sessionId: string) => call<TurnLedger>('sessionTurns', { sessionId }),
+    agentActivity: (agentId: string) => call<any>('agentActivity', { agentId }),
   }
 
   // `@巡检员 …` in the composer: pick an agent, type the ask, Enter starts a
@@ -140,12 +141,14 @@ function FooterEntry({ api, wide }: { api: Api; wide?: boolean }) {
   const narrow = wide === false
   return (
     <>
-      <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}>
-        <span className="ic">◎</span>{narrow ? null : <span>Agent</span>}
-      </button>
-      <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务" aria-label="任务" onClick={() => go('tasks')}>
-        <span className="ic">▦</span>{narrow ? null : <span>任务</span>}
-      </button>
+      <div className="dtc-footstack">
+        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}>
+          <span className="ic">◎</span>{narrow ? null : <span>Agent</span>}
+        </button>
+        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务" aria-label="任务" onClick={() => go('tasks')}>
+          <span className="ic">▦</span>{narrow ? null : <span>任务</span>}
+        </button>
+      </div>
       {open ? createPortal(<Console api={api} />, document.body) : null}
     </>
   )

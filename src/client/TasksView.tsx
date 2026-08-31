@@ -7,7 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { cronHuman, nextFire, parseCron } from '../cron.ts'
 import type { AgentRow, LegacyRun as Run, TaskEvent, TaskSpec } from '../wire.ts'
-import { go } from './Console.tsx'
+import { closeConsole, go } from './Console.tsx'
 
 export interface TasksApi {
   tasks: () => Promise<{ tasks: (TaskSpec & { nextFire: string | null })[]; runs: Run[] }>
@@ -56,7 +56,7 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
   const cols = useMemo(() => {
     const c: Record<'todo' | 'run' | 'park' | 'done' | 'bad', JSX.Element[]> = { todo: [], run: [], park: [], done: [], bad: [] }
     for (const t of tasks.filter(t => t.trigger.kind === 'cron')) c.todo.push(<CronCard key={t.id} t={t} agents={agents} onToggle={async () => { await api.setTaskEnabled(t.id, !t.enabled); toast(t.enabled ? '已停用' : '已启用'); await reload() }} />)
-    for (const r of runs) { const t = tasks.find(x => x.id === r.taskId); if (!t) continue; c[runStatus(r)].push(<RunCard key={r.id} r={r} t={t} agents={agents} onRetry={async () => { await api.fireTask(t.id, 'retry'); toast('已重试'); await reload() }} />) }
+    for (const r of runs) { const t = tasks.find(x => x.id === r.taskId); if (!t) continue; c[runStatus(r)].push(<RunCard key={r.id} r={r} t={t} agents={agents} api={api} onRetry={async () => { await api.fireTask(t.id, 'retry'); toast('已重试'); await reload() }} />) }
     return c
   }, [tasks, runs, agents])
   const running = runs.filter(r => runStatus(r) === 'run').length, parked = runs.filter(r => runStatus(r) === 'park').length
@@ -64,7 +64,7 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
     <>
       <div className="dtc-bar">
         <span><b style={{ color: 'var(--dtc-ink)' }}>{running}</b> 在跑</span><span><b style={{ color: 'var(--dtc-ink)' }}>{parked}</b> 停车等人</span><span><b style={{ color: 'var(--dtc-ink)' }}>{tasks.filter(t => t.trigger.kind === 'cron' && t.enabled).length}</b> 条时间表</span>
-        <span className="sp" /><button className="dtc-btn pri" onClick={() => go('tasks/new')}>＋ 新建任务</button>
+        <span className="sp" />
       </div>
       {error ? <div className="dtc-err">{error}</div> : null}
       <div style={{ overflowX: 'auto' }}><div className="dtc-cols">
@@ -77,7 +77,10 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
 }
 
 function pipe(t: TaskSpec, agents: AgentRow[]) {
-  return <span className="dtc-pipe">{t.participants.map((p, i) => <span key={i}>{i ? <span className="ar">→</span> : null}<span className="ag">{agentName(agents, p.agentId)}</span></span>)}</span>
+  return <span className="dtc-flow">{t.participants.map((p, i) => <span key={i}>{i ? <span className="ar">→</span> : null}<span className="dot" /><span className="nm">{agentName(agents, p.agentId)}</span></span>)}</span>
+}
+function flowOf(r: Run, agents: AgentRow[]) {
+  return <span className="dtc-flow">{r.legs.map((l, i) => <span key={i}>{i ? <span className="ar">→</span> : null}<span className={`dot ${l.status}`} /><span className="nm">{agentName(agents, l.agentId)}</span></span>)}</span>
 }
 
 function CronCard({ t, agents, onToggle }: { t: TaskRow; agents: AgentRow[]; onToggle: () => void }) {
@@ -91,20 +94,23 @@ function CronCard({ t, agents, onToggle }: { t: TaskRow; agents: AgentRow[]; onT
   )
 }
 
-function RunCard({ r, t, agents, onRetry }: { r: Run; t: TaskSpec; agents: AgentRow[]; onRetry: () => void }) {
+function RunCard({ r, t, agents, onRetry, api }: { r: Run; t: TaskSpec; agents: AgentRow[]; onRetry: () => void; api: TasksApi }) {
   const st = runStatus(r)
   const cur = r.legs.find(l => l.status === 'running' || l.status === 'blocked') ?? [...r.legs].reverse().find(l => l.status !== 'queued') ?? r.legs[0]
   const idx = r.legs.indexOf(cur)
   let line = ''
-  if (st === 'run') line = `${agentName(agents, cur.agentId)} · 第 ${idx + 1}/${r.legs.length} 段 · ${dur(cur.startedAt)}`
-  if (st === 'done') line = `${r.legs.length} 段全部完成 · ${dur(r.legs[0].startedAt, r.legs[r.legs.length - 1].endedAt)}`
+  if (st === 'run') line = `${agentName(agents, cur.agentId)} · 第 ${idx + 1}/${r.legs.length} 张 · ${dur(cur.startedAt)}`
+  if (st === 'done') line = `${r.legs.length} 张全部完成 · ${dur(r.legs[0].startedAt, r.legs[r.legs.length - 1].endedAt)}`
   if (st === 'bad') line = `${agentName(agents, cur.agentId)} · ${LEG[cur.status] ?? cur.status}${cur.error ? ' · ' + cur.error.slice(0, 40) : ''}`
   return (
     <div className={`dtc-tcard s-${st}`} onClick={() => go(`tasks/${t.id}/runs/${r.id}`)}>
       <div className="t"><span>{t.title}</span><span className="id dtc-mono">{r.id}</span></div>
+      {flowOf(r, agents)}
       {st === 'park' ? <div className="q">? {cur.question}</div> : <div className="l">{st === 'run' ? <span className="dtc-live" /> : null}{line}</div>}
-      <div className="l dtc-faint">{fmt(r.firedAt)} · {BY[r.by]}</div>
-      {st === 'bad' ? <div className="act"><button className="dtc-btn sm" onClick={e => { e.stopPropagation(); onRetry() }}>重试</button></div> : null}
+      <div className="foot"><span>{fmt(r.firedAt)} · {BY[r.by]}</span>
+        {st === 'bad' ? <button className="dtc-btn sm" onClick={e => { e.stopPropagation(); onRetry() }}>重试</button> : null}
+        {st === 'park' && cur.sessionId ? <button className="dtc-btn sm pri" onClick={e => { e.stopPropagation(); closeConsole(); void api.openSession(cur.sessionId!) }}>去回答</button> : null}
+      </div>
     </div>
   )
 }

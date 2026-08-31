@@ -8,18 +8,18 @@ const STYLE_ID = 'dsh-task-console-styles'
 
 const CSS = `
 .dtc-root {
-  --dtc-ground:#f2f4f6; --dtc-surface:#fff; --dtc-surface-2:#e9edf1; --dtc-line:#cfd6dd; --dtc-line-soft:#e1e6eb;
-  --dtc-ink:#171d24; --dtc-muted:#586472; --dtc-faint:#8a95a1;
-  --dtc-accent:#2a5d86; --dtc-accent-ink:#fff; --dtc-accent-bg:#e3edf6;
-  --dtc-ok:#2a6b49; --dtc-ok-bg:#e1efe7; --dtc-warn:#8a5a0a; --dtc-warn-bg:#f6ecd8; --dtc-bad:#a32c30; --dtc-bad-bg:#f7e2e3;
-  --dtc-code-bg:#1d2530; --dtc-code-ink:#dfe6ee;
+  --dtc-ground:#f3f5f6; --dtc-surface:#fff; --dtc-surface-2:#eaeef0; --dtc-line:#d9dfe3; --dtc-line-soft:#e6ebee;
+  --dtc-ink:#161b1e; --dtc-muted:#5f6b73; --dtc-faint:#8e99a1;
+  --dtc-accent:#1f6f78; --dtc-accent-ink:#fff; --dtc-accent-bg:#e2f0f1;
+  --dtc-ok:#1f7a4d; --dtc-ok-bg:#e2f1e8; --dtc-warn:#b26a00; --dtc-warn-bg:#f7ecd9; --dtc-bad:#b3362f; --dtc-bad-bg:#f8e3e1;
+  --dtc-code-bg:#1b2126; --dtc-code-ink:#dbe3e8;
   color:var(--dtc-ink); background:var(--dtc-ground);
-  font: 14px/1.6 "PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Microsoft YaHei",system-ui,sans-serif;
+  font: 14px/1.55 "IBM Plex Sans","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC","Microsoft YaHei",system-ui,sans-serif;
 }
 body[data-ds-dark-theme] .dtc-root {
   --dtc-ground:#0f1317; --dtc-surface:#161b21; --dtc-surface-2:#1d242c; --dtc-line:#2c353f; --dtc-line-soft:#242c35;
   --dtc-ink:#e4e9ee; --dtc-muted:#9aa5b1; --dtc-faint:#6f7a86;
-  --dtc-accent:#7db3dc; --dtc-accent-ink:#0f1317; --dtc-accent-bg:#1a2c3b;
+  --dtc-accent:#7cc3c9; --dtc-accent-ink:#0f1317; --dtc-accent-bg:#1a2c2e;
   --dtc-ok:#63b88d; --dtc-ok-bg:#15301f; --dtc-warn:#e2b25d; --dtc-warn-bg:#352a14; --dtc-bad:#e08b8e; --dtc-bad-bg:#3a1e1f;
   --dtc-code-bg:#0b0f14; --dtc-code-ink:#d7dfe7;
 }
@@ -48,13 +48,15 @@ body[data-ds-dark-theme] .dtc-root {
 .dtc-h1 { font-size:20px; font-weight:600; margin:0 0 14px; display:flex; align-items:center; gap:10px; flex-wrap:wrap }
 .dtc-h1 .dtc-acts { margin-left:auto; display:flex; gap:6px }
 
-.dtc-btn { display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:5px; border:1px solid var(--dtc-line); background:var(--dtc-surface); color:var(--dtc-ink); font-size:13px; white-space:nowrap }
+.dtc-btn { display:inline-flex; align-items:center; gap:6px; padding:7px 13px; border-radius:7px; font-weight:500; border:1px solid var(--dtc-line); background:var(--dtc-surface); color:var(--dtc-ink); font-size:13px; white-space:nowrap }
 .dtc-btn:hover { border-color:var(--dtc-accent) }
 .dtc-btn.pri { background:var(--dtc-accent); color:var(--dtc-accent-ink); border-color:var(--dtc-accent) }
 .dtc-btn.danger { color:var(--dtc-bad) }
 .dtc-btn[disabled] { opacity:.45; cursor:not-allowed }
 .dtc-btn.sm { padding:3px 9px; font-size:12px }
-.dtc-pill { display:inline-block; font-size:11.5px; padding:1px 8px; border-radius:999px; font-weight:500; white-space:nowrap }
+.dtc-pill { display:inline-flex; align-items:center; gap:5px; font-size:11.5px; padding:2px 9px; border-radius:999px; font-weight:500; white-space:nowrap }
+.dtc-pill::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor }
+.dtc-pill.dtc-p-grey::before { display:none }
 .dtc-p-ok { background:var(--dtc-ok-bg); color:var(--dtc-ok) } .dtc-p-warn { background:var(--dtc-warn-bg); color:var(--dtc-warn) }
 .dtc-p-bad { background:var(--dtc-bad-bg); color:var(--dtc-bad) } .dtc-p-grey { background:var(--dtc-surface-2); color:var(--dtc-muted) } .dtc-p-acc { background:var(--dtc-accent-bg); color:var(--dtc-accent) }
 
@@ -73,8 +75,9 @@ body[data-ds-dark-theme] .dtc-root {
 
 .dtc-two { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:14px; align-items:start }
 @media (max-width:1000px) { .dtc-two { grid-template-columns:1fr } }
-.dtc-panel { background:var(--dtc-surface); border:1px solid var(--dtc-line); border-radius:8px; padding:16px 18px; margin-bottom:14px }
-.dtc-panel h3 { margin:0 0 10px; font-size:14px; font-weight:600; display:flex; align-items:center; gap:10px }
+.dtc-panel { background:var(--dtc-surface); border:1px solid var(--dtc-line); border-radius:12px; padding:18px 20px; margin-bottom:14px }
+.dtc-panel h3 { margin:0 0 12px; font-size:12.5px; font-weight:600; letter-spacing:.03em; text-transform:uppercase; color:var(--dtc-muted); display:flex; align-items:center; gap:10px }
+.dtc-panel h3 .dtc-faint { text-transform:none; letter-spacing:0 }
 .dtc-panel h3 .sp { flex:1 }
 .dtc-fields { display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:10px }
 .dtc-fields label { display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:var(--dtc-muted) }
@@ -255,6 +258,52 @@ body[data-ds-dark-theme] .dtc-node .q { color:#a794e0 }
 .dtc-scrub { display:flex; align-items:center; gap:8px; padding:10px 26px; border-top:1px solid var(--dtc-line-soft); flex-wrap:wrap } .dtc-scrub input[type=range] { flex:1; min-width:200px; width:auto; padding:0 }
 .dtc-ask { border-left:3px solid #6b4fbb; background:rgba(107,79,187,.12); border-radius:5px; padding:8px 12px; margin-top:6px }
 .dtc-body { padding-bottom:80px }
+
+/* ── sidebar: two stacked entries ── */
+.dtc-footstack { display:flex; flex-direction:column; gap:2px; width:100% }
+.dtc-foot .ic { background:var(--dtc-accent-bg, #e2f0f1); color:#1f6f78 }
+
+/* ── agents master-detail ── */
+.dtc-agents { display:grid; grid-template-columns:280px minmax(0,1fr); height:calc(100% - 52px); min-height:0 }
+.dtc-alist { border-right:1px solid var(--dtc-line); background:var(--dtc-surface); display:flex; flex-direction:column; min-height:0 }
+.dtc-alist .search { padding:12px 14px; border-bottom:1px solid var(--dtc-line-soft) }
+.dtc-alist .items { overflow:auto; flex:1 }
+.dtc-alist .newbtn { margin:12px 14px; justify-content:center }
+.dtc-aitem { display:grid; grid-template-columns:34px 1fr auto; gap:10px; align-items:center; padding:10px 14px; cursor:pointer; border-left:3px solid transparent; min-width:0 }
+.dtc-aitem:hover { background:var(--dtc-surface-2) } .dtc-aitem.on { background:var(--dtc-accent-bg); border-left-color:var(--dtc-accent) }
+.dtc-aitem .av { width:34px; height:34px; border-radius:10px; display:grid; place-items:center; color:#fff; font-weight:600 }
+.dtc-aitem .nm { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis } .dtc-aitem .d { font-size:11.5px; color:var(--dtc-muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+.dtc-aitem .perm { width:8px; height:8px; border-radius:50% }
+.perm.ro { background:var(--dtc-ok) } .perm.lw { background:var(--dtc-warn) } .perm.w { background:var(--dtc-bad) } .perm.sys { background:var(--dtc-faint) } .perm.bad { background:var(--dtc-bad); outline:2px solid var(--dtc-bad-bg) }
+.dtc-adetail { overflow:auto; padding:24px 30px 60px; min-height:0 }
+.dtc-ahead { display:flex; align-items:flex-start; gap:16px; margin-bottom:22px }
+.dtc-ahead .av { width:56px; height:56px; border-radius:16px; display:grid; place-items:center; color:#fff; font-weight:600; font-size:22px; flex:0 0 auto }
+.dtc-ahead .name { font-size:22px; font-weight:600; letter-spacing:-.01em; display:flex; align-items:center; gap:10px; flex-wrap:wrap }
+.dtc-ahead .desc { color:var(--dtc-muted); margin-top:2px }
+.dtc-ahead .acts { margin-left:auto; display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end }
+.dtc-agrid { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:16px; align-items:start }
+@media (max-width:1100px) { .dtc-agrid { grid-template-columns:1fr } }
+.dtc-rail { display:flex; flex-direction:column; gap:12px; position:sticky; top:0 }
+.dtc-matrix { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:8px }
+.dtc-cap { border:1px solid var(--dtc-line-soft); border-radius:8px; padding:8px 10px; font-size:12.5px; display:flex; gap:8px; align-items:flex-start; color:var(--dtc-faint); cursor:pointer; background:var(--dtc-surface) }
+.dtc-cap.on { border-color:var(--dtc-accent); background:var(--dtc-accent-bg); color:var(--dtc-ink) }
+.dtc-cap input { width:auto; margin-top:3px }
+.dtc-cap .nm { font-weight:500 } .dtc-cap .w { font-size:10.5px; color:var(--dtc-bad); margin-left:4px } .dtc-cap .d { display:block; font-size:11px; color:var(--dtc-faint) }
+.dtc-mcprow { display:flex; align-items:center; gap:12px; padding:10px 12px; border:1px solid var(--dtc-line-soft); border-radius:8px; margin-bottom:8px; cursor:pointer; background:var(--dtc-surface) }
+.dtc-mcprow.on { border-color:var(--dtc-accent) } .dtc-mcprow input { width:auto }
+.dtc-mcprow .nm { font-weight:600 } .dtc-mcprow .url { font-size:11.5px; color:var(--dtc-faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .dtc-mcprow .cnt { margin-left:auto; font-size:12px; color:var(--dtc-muted); white-space:nowrap }
+.dtc-disc { border:1px solid var(--dtc-line); border-radius:10px; overflow:hidden; background:var(--dtc-surface) }
+.dtc-disc .sum { width:100%; text-align:left; padding:10px 14px; font-size:13px; font-weight:500; display:flex; align-items:center; gap:8px }
+.dtc-disc .dtc-yml { border-radius:0; max-height:420px }
+.dtc-flow { display:inline-flex; align-items:center; gap:4px; flex-wrap:wrap; font-size:11.5px; color:var(--dtc-muted) }
+.dtc-flow .dot { width:9px; height:9px; border-radius:50%; background:var(--dtc-line); display:inline-block; margin-right:4px }
+.dtc-flow .dot.done { background:var(--dtc-ok) } .dtc-flow .dot.running { background:var(--dtc-accent); animation:dtc-blink 1.2s infinite } .dtc-flow .dot.blocked { background:#6b4fbb } .dtc-flow .dot.failed, .dtc-flow .dot.timed_out, .dtc-flow .dot.lost { background:var(--dtc-bad) }
+.dtc-flow .ar { color:var(--dtc-faint); margin:0 4px }
+.dtc-tcard { border-radius:10px; padding:12px 14px; border-left-width:1px }
+.dtc-tcard .foot { display:flex; align-items:center; gap:8px; font-size:11.5px; color:var(--dtc-faint) } .dtc-tcard .foot .dtc-btn { margin-left:auto }
+.dtc-tcard .q { background:rgba(107,79,187,.12); border-radius:6px; padding:4px 8px }
+.dtc-colh .cnt, .dtc-colh span:last-child { background:var(--dtc-surface); border-radius:999px; padding:0 8px; font-weight:600; color:var(--dtc-ink) }
+.dtc-col { border-radius:12px }
 
 /* sidebar footer entry */
 .dtc-foot { display:flex; align-items:center; gap:10px; width:100%; padding:8px 10px; border-radius:6px; font-size:13.5px; text-align:left; color:inherit }

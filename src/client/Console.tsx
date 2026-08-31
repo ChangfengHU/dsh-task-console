@@ -57,6 +57,13 @@ function useToast(): [string, (m: string) => void] {
   return [msg, show]
 }
 
+/** A render error inside one page must not take the whole sidebar slot down. */
+class Boundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error) { return { error } }
+  render() { return this.state.error ? <div className="dtc-err">页面出错:{this.state.error.message}<br /><button className="dtc-btn sm" style={{ marginTop: 8 }} onClick={() => this.setState({ error: null })}>重试</button></div> : this.props.children }
+}
+
 export function Console({ api }: { api: Api }) {
   const [route, setRoute] = useState<string[]>(readRoute())
   const [catalog, setCatalog] = useState<Catalog | null>(null)
@@ -109,7 +116,7 @@ export function Console({ api }: { api: Api }) {
       </div>
       <div className="dtc-body">
         {error ? <div className="dtc-err">{error}</div> : null}
-        {page}
+        <Boundary key={url}>{page}</Boundary>
       </div>
       {toast ? <div className="dtc-toast">{toast}</div> : null}
     </div>

@@ -13,7 +13,7 @@ const fmt = (iso?: string) => iso ? new Date(iso).toTimeString().slice(0, 8) : '
 const ms = (n: number) => n < 1000 ? `${n}ms` : n < 60000 ? `${(n / 1000).toFixed(1)}s` : `${Math.floor(n / 60000)}m${String(Math.round((n % 60000) / 1000)).padStart(2, '0')}s`
 const tok = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
 const KIND: Record<ToolRow['kind'], { label: string; cls: string }> = {
-  mcp: { label: 'MCP', cls: 'dtc-p-acc' }, skill: { label: 'Skill', cls: 'dtc-p-warn' }, native: { label: '原生', cls: 'dtc-p-grey' }, ask: { label: '问人', cls: 'dtc-p-park' },
+  mcp: { label: 'MCP', cls: 'dtc-p-acc' }, skill: { label: 'Skill', cls: 'dtc-p-warn' }, native: { label: '原生', cls: 'dtc-p-grey' }, ask: { label: '问人', cls: 'dtc-p-park' }, task: { label: '交卷', cls: 'dtc-p-ok' },
 }
 
 /** Fetch + poll a session's ledger; `live` keeps polling. */
@@ -42,6 +42,7 @@ export function LedgerTotals({ ledger }: { ledger: Ledger }) {
       <div className="dtc-tot warn"><b>{t.skill}</b><span>Skill 加载</span></div>
       <div className="dtc-tot"><b>{t.native}</b><span>原生工具</span></div>
       <div className="dtc-tot park"><b>{t.ask}</b><span>问人</span></div>
+      {t.task ? <div className="dtc-tot"><b>{t.task}</b><span>交卷</span></div> : null}
       <div className="dtc-tot"><b>{tok(t.input)}</b><span>输入 tok</span></div>
       <div className="dtc-tot"><b>{tok(t.output)}</b><span>输出 tok</span></div>
       <div className="dtc-tot"><b>{ms(t.ms)}</b><span>模型在跑</span></div>
@@ -53,7 +54,7 @@ export function LedgerTotals({ ledger }: { ledger: Ledger }) {
 
 function Tool({ r }: { r: ToolRow }) {
   const [open, setOpen] = useState(false)
-  const k = KIND[r.kind]
+  const k = KIND[r.kind] ?? KIND.native
   return (
     <div className={`dtc-toolrow ${r.ok ? '' : 'bad'}`}>
       <div className="dtc-toolhead" onClick={() => setOpen(o => !o)}>

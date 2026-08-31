@@ -1,7 +1,7 @@
 {
   "name": "dsh-task-console",
-  "version": "0.6.2",
-  "description": "Task console for DeepSeek Harness: author agents as real presets (capability-level tool fence), prove them with a live try-run; tasks and schedules follow.",
+  "version": "0.7.0",
+  "description": "Agent and task console for DeepSeek Harness with a Hermes-inspired D1 coordination kernel and host-safe public HTML delivery.",
   "license": "MIT",
   "type": "module",
   "main": "./lib/index.js",
@@ -12,10 +12,15 @@
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
-  "files": ["lib", "src", "cordis.patch.yml", "README.md", "LICENSE"],
+  "files": [
+    "lib", "src", "prototype", "cordis.patch.yml", "README.md", "LICENSE",
+    "cloudflare/README.md", "cloudflare/migrations", "cloudflare/src", "cloudflare/package.json",
+    "cloudflare/package-lock.json", "cloudflare/tsconfig.json", "cloudflare/wrangler.jsonc"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "NODE_ENV=test tsx --test test/*.test.ts"
+    "test": "NODE_ENV=test tsx --test test/*.test.ts",
+    "kernel:check": "npm --prefix cloudflare run check"
   },
   "dsh": {
     "bundle": { "patch": "./cordis.patch.yml" },

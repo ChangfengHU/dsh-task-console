@@ -4,6 +4,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { copyFile, mkdir, readFile, realpath, stat } from 'node:fs/promises'
 import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { Artifact, Run, TaskSpec } from './fold.ts'
+import { uploadPublicHtml, type PublicUploadConfig } from './public-upload.ts'
 
 const MAX_CAPTURE_BYTES = 20 * 1024 * 1024
 export const MAX_BROWSER_BYTES = 8 * 1024 * 1024
@@ -114,27 +115,14 @@ export async function readArtifact(root: string, task: TaskSpec, artifact: Artif
   return readFile(file)
 }
 
-export interface PublishConfig { endpoint: string; domain: string; token: string }
+export type PublishConfig = PublicUploadConfig
 
 /** Upload only one explicitly selected HTML snapshot; the credential remains on the host. */
 export async function publishHtml(config: PublishConfig, artifact: Artifact, data: Buffer): Promise<string> {
   if (artifact.mime !== 'text/html' && !/\.html?$/i.test(artifact.name)) throw new Error('目前只允许把 HTML 产物发布到公网')
-  const form = new FormData()
-  form.append('file', new Blob([data], { type: 'text/html' }), artifact.name)
-  form.append('domain', config.domain)
-  form.append('name', artifact.name)
-  form.append('path', `dsh-task-console/${safePart(artifact.taskId)}/${safePart(artifact.batchId)}`)
-  const response = await fetch(config.endpoint, { method: 'POST', headers: { Authorization: `Bearer ${config.token}` }, body: form })
-  const body = await response.text()
-  if (!response.ok) throw new Error(`发布服务返回 ${response.status}`)
-  let url = ''
-  try {
-    const parsed = JSON.parse(body)
-    url = String(parsed.url ?? parsed.data?.url ?? parsed.result?.url ?? '')
-  } catch { url = body.trim() }
-  if (!/^https:\/\//.test(url)) {
-    const base = config.domain.replace(/\/$/, '')
-    url = `${base}/dsh-task-console/${safePart(artifact.taskId)}/${safePart(artifact.batchId)}/${encodeURIComponent(artifact.name)}`
-  }
-  return url
+  return uploadPublicHtml(config, {
+    name: artifact.name,
+    data,
+    path: `dsh-task-console/${safePart(artifact.taskId)}/${safePart(artifact.batchId)}`,
+  })
 }

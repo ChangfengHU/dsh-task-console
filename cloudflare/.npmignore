@@ -1,4 +1,4 @@
 node_modules/
 .wrangler/
-*.tgz
-pnpm-lock.yaml
+.dev.vars
+.env*

@@ -10,6 +10,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { TaskConsoleService } from './service.ts'
+import { registerPublicHtmlTool } from './public-upload.ts'
 
 export const name = 'task-console'
 export const inject = ['loader', 'tools', 'agents']
@@ -24,4 +25,5 @@ export type { AgentRow, AgentSpec, Catalog, McpServer, NativeTool, Preview, Skil
 
 export async function apply(ctx: Context): Promise<void> {
   await ctx.plugin(TaskConsoleService)
+  ctx.effect(() => registerPublicHtmlTool(ctx), 'task-console: public HTML publisher')
 }

@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "dsh-task-kernel",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-31",
+  "observability": {
+    "enabled": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "dsh-task-kernel",
+      "database_id": "8f166833-1f95-4b7f-8da6-554cd83e9194",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

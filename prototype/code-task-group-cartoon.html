@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>DSH 代码事项组 · 卡通交互原型</title>
+  <style>
+    :root{--ink:#29243c;--muted:#756f8a;--paper:#fffdf8;--lav:#7868e6;--lav2:#a99cff;--peach:#ff9c7a;--mint:#4fc8a1;--yellow:#ffd66b;--red:#ee6b76;--line:#d9d2e9;--shadow:0 6px 0 #29243c;--soft:0 12px 36px #4a3f7820}
+    *{box-sizing:border-box} body{margin:0;background:#f5f0ff;color:var(--ink);font:14px/1.45 ui-rounded,"SF Pro Rounded","PingFang SC",system-ui,sans-serif;min-height:100vh;overflow-x:hidden}
+    body:before{content:"";position:fixed;inset:0;pointer-events:none;background:radial-gradient(circle at 12% 8%,#ffe5bb 0 7%,transparent 7.2%),radial-gradient(circle at 91% 18%,#ccefe6 0 9%,transparent 9.2%),linear-gradient(115deg,transparent 47%,#ffffff50 47% 52%,transparent 52%);opacity:.7}
+    button{font:inherit;color:inherit}.app{position:relative;max-width:1540px;margin:auto;padding:18px}
+    .topbar{background:var(--paper);border:2px solid var(--ink);border-radius:24px;box-shadow:var(--shadow);padding:14px 18px;display:flex;align-items:center;gap:16px;position:sticky;top:12px;z-index:20}
+    .brand{display:flex;align-items:center;gap:11px;min-width:255px}.logo{width:46px;height:46px;border:2px solid var(--ink);border-radius:15px;background:var(--yellow);display:grid;place-items:center;font-size:25px;transform:rotate(-3deg)}
+    h1{font-size:18px;margin:0;line-height:1.1}.eyebrow{color:var(--lav);font-size:11px;font-weight:900;letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px}
+    .crumb{flex:1;display:flex;align-items:center;gap:8px;color:var(--muted);white-space:nowrap;overflow:hidden}.crumb b{color:var(--ink)}
+    .live{display:flex;gap:7px;align-items:center;background:#e8fbf3;border:1.5px solid #92d9c1;padding:7px 10px;border-radius:999px;font-weight:800;font-size:12px}.live i{width:8px;height:8px;background:var(--mint);border-radius:50%;box-shadow:0 0 0 5px #4fc8a128;animation:pulse 1.6s infinite}
+    .actions{display:flex;gap:8px}.btn{border:2px solid var(--ink);border-radius:12px;background:#fff;padding:8px 12px;font-weight:850;cursor:pointer;box-shadow:0 3px 0 var(--ink);transition:.15s}.btn:hover{transform:translateY(-1px)}.btn:active{transform:translateY(3px);box-shadow:none}.btn.primary{background:var(--lav);color:white}.btn.icon{width:39px;padding:8px}
+    .summary{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:10px;margin:22px 0 12px}.metric{background:#ffffffb8;border:1.5px solid var(--line);border-radius:17px;padding:12px 14px;box-shadow:var(--soft)}.metric span{color:var(--muted);font-size:11px;font-weight:750}.metric strong{display:block;font-size:20px;margin-top:3px}.metric em{font-style:normal;font-size:10px;color:var(--mint);font-weight:800}.progress{height:7px;background:#e8e2f2;border-radius:9px;margin-top:6px;overflow:hidden}.progress i{display:block;height:100%;background:var(--lav);width:0;transition:.45s}
+    .layout{display:grid;grid-template-columns:245px minmax(570px,1fr) 340px;gap:12px;align-items:start}.panel{background:var(--paper);border:2px solid var(--ink);border-radius:20px;box-shadow:var(--shadow);overflow:hidden}.panel-head{padding:13px 14px;border-bottom:1.5px dashed var(--line);display:flex;align-items:center;justify-content:space-between}.panel-title{font-size:13px;font-weight:950}.panel-sub{font-size:10px;color:var(--muted);margin-top:2px}.tag{font-size:10px;font-weight:850;padding:4px 7px;border-radius:8px;background:#ece8ff;color:#5949c8}
+    .roles{padding:10px}.role{display:grid;grid-template-columns:45px 1fr auto;gap:9px;align-items:center;padding:10px;border:1.5px solid transparent;border-radius:14px;cursor:pointer;transition:.18s}.role:hover,.role.selected{border-color:var(--ink);background:#f7f3ff;transform:rotate(-.3deg)}.avatar{height:43px;width:43px;border:2px solid var(--ink);border-radius:50% 50% 44% 46%;display:grid;place-items:center;font-size:22px;position:relative}.avatar:after{content:"";position:absolute;bottom:-4px;width:12px;height:5px;background:var(--ink);border-radius:50%;opacity:.15}.role b{display:block;font-size:12px}.role small{color:var(--muted);font-size:10px}.state-dot{width:10px;height:10px;border:1.5px solid var(--ink);border-radius:50%}.state-dot.running{background:var(--yellow);animation:pulse 1s infinite}.state-dot.done{background:var(--mint)}.state-dot.waiting{background:#ddd5ed}.state-dot.review{background:var(--peach)}
+    .legend{margin:4px 10px 12px;padding:11px;background:#f7f3ff;border-radius:12px;color:var(--muted);font-size:10px}.legend b{color:var(--ink)}
+    .workspace{min-height:670px}.workspace-head{padding:13px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1.5px dashed var(--line)}.run-pill{display:flex;align-items:center;gap:8px;font-size:10px;color:var(--muted)}.run-pill code{background:#2e2943;color:#e7ddff;padding:5px 8px;border-radius:7px}.canvas{padding:18px;background-image:radial-gradient(#bfb5dc 1px,transparent 1px);background-size:20px 20px;min-height:520px}
+    .flow{max-width:710px;margin:auto;display:grid;grid-template-columns:1fr 70px 1fr;grid-template-areas:"a a a" "split split split" "b mid c" "merge merge merge" "d d d";gap:12px;align-items:center}.node{background:white;border:2px solid var(--ink);border-radius:18px;padding:13px 14px;box-shadow:0 4px 0 var(--ink);cursor:pointer;transition:.2s;position:relative;min-height:112px}.node:hover,.node.selected{transform:translateY(-2px) rotate(-.3deg);box-shadow:0 7px 0 var(--ink)}.node.selected{outline:4px solid #a99cff55}.node[data-id="a"]{grid-area:a;max-width:330px;justify-self:center}.node[data-id="b"]{grid-area:b}.node[data-id="c"]{grid-area:c}.node[data-id="d"]{grid-area:d;max-width:360px;justify-self:center}.node.waiting{filter:saturate(.35);background:#f4f1f7}.node.running{background:#fff7d9}.node.done{background:#eafbf5}.node.review{background:#fff0ea}.node-top{display:flex;align-items:center;gap:8px}.task-icon{width:35px;height:35px;border:2px solid var(--ink);border-radius:11px;background:var(--yellow);display:grid;place-items:center;font-size:18px}.node h3{font-size:13px;margin:0;flex:1}.status{font-size:9px;font-weight:950;padding:4px 7px;border:1.5px solid currentColor;border-radius:999px;text-transform:uppercase}.status.ready{color:#5a49ca}.status.waiting{color:#827c91}.status.running{color:#a66b00}.status.done{color:#198968}.status.review{color:#cf5b3b}.node p{font-size:10px;color:var(--muted);margin:9px 0}.chips{display:flex;gap:5px;flex-wrap:wrap}.chip{font-size:9px;background:#eee9fb;padding:3px 6px;border-radius:6px;font-weight:750}.lock{position:absolute;right:-7px;top:-9px;background:white;border:1.5px solid var(--ink);padding:3px 6px;border-radius:8px;font-size:10px;transform:rotate(4deg)}
+    .connector{height:28px;position:relative;color:var(--muted);font-size:9px;text-align:center;font-weight:800}.connector:before{content:"";position:absolute;left:50%;top:0;height:17px;border-left:2px dashed #8d82ad}.connector:after{content:"▼";position:absolute;left:calc(50% - 6px);bottom:-2px;color:var(--lav)}.split{grid-area:split}.merge{grid-area:merge}.mid{grid-area:mid;text-align:center;color:var(--muted);font-size:10px;font-weight:850}.mid span{display:block;font-size:24px;color:var(--lav)}
+    .stepbar{margin-top:16px;background:white;border:1.5px solid var(--line);border-radius:15px;padding:11px;display:flex;align-items:center;gap:10px}.stepbar b{font-size:11px;white-space:nowrap}.track{height:8px;flex:1;background:#e9e4f0;border-radius:8px;overflow:hidden}.track i{display:block;height:100%;background:linear-gradient(90deg,var(--lav),var(--peach));width:0;transition:.45s}.steptext{font-size:10px;color:var(--muted);width:190px;text-align:right}
+    .stream{height:604px;display:flex;flex-direction:column}.event-tools{padding:9px 12px;border-bottom:1.5px dashed var(--line);display:flex;gap:6px}.mini{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 7px;font-size:9px;font-weight:800;cursor:pointer}.mini.active{background:var(--ink);color:#fff}.events{padding:10px 12px;overflow:auto;flex:1}.event{display:grid;grid-template-columns:18px 1fr;gap:8px;position:relative;padding-bottom:13px;animation:pop .25s ease}.event:before{content:"";position:absolute;left:8px;top:17px;bottom:0;border-left:1.5px dashed var(--line)}.event:last-child:before{display:none}.evdot{width:17px;height:17px;border:1.5px solid var(--ink);border-radius:6px;background:#e8e3fa;z-index:1;display:grid;place-items:center;font-size:8px}.event.claimed .evdot{background:var(--yellow)}.event.completed .evdot,.event.gate_approved .evdot{background:#a9ead4}.event.review_requested .evdot{background:#ffc2ad}.event b{font:750 10px ui-monospace,monospace}.event p{font-size:10px;margin:2px 0;color:var(--muted)}.event time{font-size:8px;color:#aaa3b5}.empty{padding:38px 15px;text-align:center;color:var(--muted)}
+    .drawer{margin-top:13px;display:grid;grid-template-columns:270px 1fr;min-height:190px}.drawer-list{border-right:1.5px dashed var(--line);padding:14px}.selected-title{display:flex;gap:10px;align-items:center}.selected-title h2{font-size:15px;margin:0}.selected-title p{font-size:10px;color:var(--muted);margin:3px 0}.facts{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:13px}.fact{background:#f4f0fa;border-radius:9px;padding:7px}.fact span{font-size:8px;color:var(--muted);display:block}.fact b{font-size:10px}.drawer-main{padding:13px 16px}.tabs{display:flex;gap:5px;margin-bottom:10px}.tab{border:0;background:transparent;border-radius:8px;padding:6px 10px;font-size:10px;font-weight:850;cursor:pointer}.tab.active{background:var(--ink);color:#fff}.tabview{display:none}.tabview.active{display:block;animation:pop .2s ease}.note{border:1.5px solid var(--line);border-radius:12px;padding:10px 12px;background:#fff}.note h4{font-size:10px;margin:0 0 5px}.note p,.note li{font-size:10px;color:var(--muted)}.note ul{margin:4px 0;padding-left:17px}.code{font:9px/1.55 ui-monospace,monospace;background:#2e2943;color:#e8e2ff;padding:10px;border-radius:10px;overflow:auto}.gatebox{display:flex;gap:10px;align-items:center;background:#fff2dd;border:1.5px solid #e8b95e;border-radius:12px;padding:10px}.gatebox .seal{font-size:27px}.gate-actions{margin-left:auto;display:flex;gap:6px}
+    .toast{position:fixed;right:22px;bottom:22px;background:var(--ink);color:white;border:2px solid white;border-radius:14px;padding:11px 14px;box-shadow:0 5px 0 #8678b8;z-index:50;transform:translateY(120px);opacity:0;transition:.25s;max-width:330px;font-size:11px}.toast.show{transform:none;opacity:1}
+    @keyframes pulse{50%{transform:scale(.75);opacity:.65}}@keyframes pop{from{opacity:0;transform:translateY(6px)}}
+    @media(max-width:1120px){.layout{grid-template-columns:220px 1fr}.stream{grid-column:1/-1;height:360px}.events{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}.summary{grid-template-columns:repeat(3,1fr)}}
+    @media(max-width:760px){.app{padding:9px}.topbar{position:relative;top:0;flex-wrap:wrap}.brand{min-width:0}.crumb,.live{display:none}.actions{width:100%}.actions .btn{flex:1}.summary{grid-template-columns:1fr 1fr}.summary .metric:last-child{display:none}.layout{display:block}.roles{display:grid;grid-template-columns:1fr 1fr}.panel{margin-bottom:11px}.flow{grid-template-columns:1fr;grid-template-areas:"a" "split" "b" "mid" "c" "merge" "d"}.mid span{transform:rotate(90deg)}.node[data-id]{max-width:none;width:100%}.events{display:block}.drawer{grid-template-columns:1fr}.drawer-list{border-right:0;border-bottom:1.5px dashed var(--line)}.steptext{display:none}}
+  </style>
+</head>
+<body>
+<main class="app">
+  <header class="topbar">
+    <div class="brand"><div class="logo">🛠️</div><div><div class="eyebrow">DSH Task Studio</div><h1>代码事项组委员会</h1></div></div>
+    <div class="crumb"><span>工作台</span><b>›</b><span>事项组</span><b>›</b><b>登录模块重构 #CG-024</b></div>
+    <div class="live"><i></i>D1 事件内核在线</div>
+    <div class="actions"><button class="btn" id="casBtn">🔐 模拟双机抢锁</button><button class="btn" id="stepBtn">单步执行</button><button class="btn primary" id="playBtn">▶ 运行演示</button><button class="btn icon" id="resetBtn" title="重置">↺</button></div>
+  </header>
+
+  <section class="summary">
+    <div class="metric"><span>事项组进度</span><strong id="progressText">0 / 4</strong><div class="progress"><i id="progressBar"></i></div></div>
+    <div class="metric"><span>活跃角色</span><strong id="activeCount">0</strong><em>4 个常驻 Agent</em></div>
+    <div class="metric"><span>依赖边</span><strong>4</strong><em>DAG 无环</em></div>
+    <div class="metric"><span>CAS 冲突</span><strong id="casCount">0</strong><em>冲突不会双启动</em></div>
+    <div class="metric"><span>待过闸门</span><strong id="gateCount">1</strong><em>人工验收</em></div>
+  </section>
+
+  <section class="layout">
+    <aside class="panel">
+      <div class="panel-head"><div><div class="panel-title">角色与状态</div><div class="panel-sub">不是历史 sub-agent 列表</div></div><span class="tag">PRESENCE</span></div>
+      <div class="roles" id="roles"></div>
+      <div class="legend"><b>角色状态来自内核</b><br>claim → running；block / review 单独表达；任务结算后归还 idle。</div>
+    </aside>
+
+    <section class="panel workspace">
+      <div class="workspace-head"><div><div class="panel-title">任务依赖图</div><div class="panel-sub">父 run 的交接单在 claim 时固化，不读取会漂移的“最新文本”</div></div><div class="run-pill">RUN <code id="runCode">尚未创建</code></div></div>
+      <div class="canvas">
+        <div class="flow" id="flow"></div>
+        <div class="stepbar"><b id="stepNo">00 / 09</b><div class="track"><i id="stepTrack"></i></div><div class="steptext" id="stepText">等待调度：只有入口任务可领取</div></div>
+      </div>
+    </section>
+
+    <aside class="panel stream">
+      <div class="panel-head"><div><div class="panel-title">事件流原语</div><div class="panel-sub">append-only · 可回放 · 可审计</div></div><span class="tag" id="eventTotal">5 EVENTS</span></div>
+      <div class="event-tools"><button class="mini active" data-filter="all">全部</button><button class="mini" data-filter="process">进程</button><button class="mini" data-filter="control">控制</button><button class="mini" data-filter="result">结果</button></div>
+      <div class="events" id="events"></div>
+    </aside>
+  </section>
+
+  <section class="panel drawer">
+    <div class="drawer-list" id="selectedCard"></div>
+    <div class="drawer-main">
+      <div class="tabs"><button class="tab active" data-tab="handoff">交接 Handoff</button><button class="tab" data-tab="lease">CAS 租约</button><button class="tab" data-tab="gate">闸门 Gate</button><button class="tab" data-tab="evidence">产物证据</button></div>
+      <div class="tabview active" id="tab-handoff"></div>
+      <div class="tabview" id="tab-lease"></div>
+      <div class="tabview" id="tab-gate"></div>
+      <div class="tabview" id="tab-evidence"></div>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+  const roles=[
+    {id:'architect',name:'架构师阿圆',role:'Architect',avatar:'🦊',color:'#ffd66b'},
+    {id:'backend',name:'后端小熊',role:'Kernel Builder',avatar:'🐻',color:'#a9ead4'},
+    {id:'frontend',name:'前端兔子',role:'UI Builder',avatar:'🐰',color:'#ffc2d2'},
+    {id:'reviewer',name:'验收猫猫',role:'Reviewer',avatar:'🐱',color:'#cfc5ff'}
+  ];
+  const tasks=[
+    {id:'a',icon:'🧭',title:'定义登录契约',agent:'architect',desc:'梳理 API、异常边界与验收条件',deps:[],area:'a'},
+    {id:'b',icon:'⚙️',title:'实现 D1 任务内核',agent:'backend',desc:'CAS claim、租约、事件与 handoff',deps:['a'],area:'b'},
+    {id:'c',icon:'🎨',title:'制作卡通交互面板',agent:'frontend',desc:'角色、依赖、事件与详情交互',deps:['a'],area:'c'},
+    {id:'d',icon:'🚪',title:'合并并人工验收',agent:'reviewer',desc:'读取两份父交接单，通过后发布',deps:['b','c'],area:'d',gate:true}
+  ];
+  const descriptions=[
+    '等待调度：只有入口任务可领取','架构师获得 CAS 锁，其他机器不能重复启动','真实运行原语出现：worker → session → prompt','架构完成；后端与前端同时被依赖解锁','两个角色各自领取任务，任务与 run 一一绑定','心跳续租中；角色状态是 running，不是假动画','两个产物完成；验收任务收到两份固定 handoff','验收角色领取合并任务并读取上游证据','提交人工闸门：下游与整组都不能提前完成','闸门批准；事项组完成，所有角色回到 idle'
+  ];
+  const eventSteps=[
+    [
+      ['task_created','control','a','入口任务创建'],['task_created','control','b','后端任务创建'],['task_created','control','c','前端任务创建'],['task_created','control','d','验收任务创建'],['dependency_linked','control','group','4 条依赖边通过无环校验']
+    ],
+    [['claimed','control','a','node-152 赢得 version=1 的条件更新']],
+    [['worker_started','process','a','worker-421 启动'],['session_created','process','a','session-arch-01 已登记'],['prompt_dispatched','process','a','prompt-01 已派发']],
+    [['completed','result','a','架构交接单已封存'],['promoted','control','b','依赖满足 → ready'],['promoted','control','c','依赖满足 → ready']],
+    [['claimed','control','b','node-152 claim 成功'],['claimed','control','c','node-84 claim 成功']],
+    [['worker_started','process','b','D1 worker 已启动'],['session_created','process','c','UI session 已创建'],['heartbeat','process','b','租约延长 120 秒'],['prompt_dispatched','process','c','原型提示已派发']],
+    [['artifact_registered','result','b','kernel-schema.sql'],['completed','result','b','内核通过 CAS 测试'],['artifact_registered','result','c','cartoon-board.html'],['completed','result','c','交互原型完成'],['promoted','control','d','两个父任务均完成 → ready']],
+    [['claimed','control','d','验收 run 固化 2 条 handoff 输入'],['session_created','process','d','review-session-01']],
+    [['review_requested','control','d','人工闸门进入 pending']],
+    [['gate_approved','control','d','负责人批准交付'],['completed','result','d','事项组 CG-024 完成']]
+  ];
+  const state={step:0,selected:'a',filter:'all',playing:false,timer:null,cas:0,role:null};
+
+  function statusAt(task,step){
+    if(task.id==='a') return step<1?'ready':step<3?'running':'done';
+    if(task.id==='b'||task.id==='c') return step<3?'waiting':step<4?'ready':step<6?'running':'done';
+    if(task.id==='d') return step<6?'waiting':step<7?'ready':step<8?'running':step<9?'review':'done';
+  }
+  function roleStatus(role){const own=tasks.find(t=>t.agent===role.id);return statusAt(own,state.step)}
+  function label(s){return {ready:'READY',waiting:'WAITING',running:'RUNNING',done:'DONE',review:'REVIEW'}[s]}
+  function roleLabel(s){return {ready:'待命',waiting:'等待依赖',running:'运行中',done:'空闲',review:'等待验收'}[s]}
+
+  function renderRoles(){
+    rolesEl.innerHTML=roles.map(r=>{const s=roleStatus(r);return `<div class="role ${state.role===r.id?'selected':''}" data-role="${r.id}"><div class="avatar" style="background:${r.color}">${r.avatar}</div><div><b>${r.name}</b><small>${r.role} · ${roleLabel(s)}</small></div><i class="state-dot ${s}"></i></div>`}).join('');
+    rolesEl.querySelectorAll('.role').forEach(el=>el.onclick=()=>{state.role=state.role===el.dataset.role?null:el.dataset.role;render()});
+  }
+  function node(t){const s=statusAt(t,state.step),r=roles.find(x=>x.id===t.agent),muted=state.role&&state.role!==t.agent;return `<article class="node ${s} ${state.selected===t.id?'selected':''}" data-id="${t.id}" style="${muted?'opacity:.35':''}">${s==='running'?'<div class="lock">🔒 CAS lease</div>':''}<div class="node-top"><div class="task-icon" style="background:${r.color}">${t.icon}</div><h3>${t.title}</h3><span class="status ${s}">${label(s)}</span></div><p>${t.desc}</p><div class="chips"><span class="chip">${r.avatar} ${r.name}</span>${t.deps.map(d=>`<span class="chip">← ${d.toUpperCase()}</span>`).join('')}${t.gate?'<span class="chip">🚪 human gate</span>':''}</div></article>`}
+  function renderFlow(){flow.innerHTML=`${node(tasks[0])}<div class="connector split">handoff snapshot</div>${node(tasks[1])}<div class="mid"><span>⚡</span>可并行</div>${node(tasks[2])}<div class="connector merge">join: all parents done</div>${node(tasks[3])}`;flow.querySelectorAll('.node').forEach(el=>el.onclick=()=>{state.selected=el.dataset.id;renderDetails();flow.querySelectorAll('.node').forEach(n=>n.classList.toggle('selected',n.dataset.id===state.selected))})}
+  function visibleEvents(){return eventSteps.slice(0,state.step+1).flat().map((e,i)=>({kind:e[0],group:e[1],actor:e[2],text:e[3],i})).filter(e=>state.filter==='all'||e.group===state.filter)}
+  function renderEvents(){const list=visibleEvents();eventTotal.textContent=`${eventSteps.slice(0,state.step+1).flat().length} EVENTS`;eventsEl.innerHTML=list.length?list.map(e=>`<div class="event ${e.kind}"><span class="evdot">${e.group==='process'?'›':e.group==='result'?'✓':'•'}</span><div><b>${e.kind}</b><p><strong>${e.actor.toUpperCase()}</strong> · ${e.text}</p><time>+${String(e.i*3+2).padStart(2,'0')}.0s · event #${1041+e.i}</time></div></div>`).join(''):'<div class="empty">这个筛选下还没有事件</div>';eventsEl.scrollTop=eventsEl.scrollHeight}
+  function renderDetails(){
+    const t=tasks.find(x=>x.id===state.selected),r=roles.find(x=>x.id===t.agent),s=statusAt(t,state.step);
+    selectedCard.innerHTML=`<div class="selected-title"><div class="task-icon" style="background:${r.color}">${t.icon}</div><div><h2>${t.title}</h2><p>${r.avatar} ${r.name} · ${roleLabel(s)}</p></div></div><div class="facts"><div class="fact"><span>TASK ID</span><b>task-${t.id}-024</b></div><div class="fact"><span>VERSION</span><b>v${state.step+1}</b></div><div class="fact"><span>ATTEMPT</span><b>${['running','review','done'].includes(s)?1:0} / 3</b></div><div class="fact"><span>PARENTS</span><b>${t.deps.length}</b></div></div>`;
+    const parentNotes=t.deps.length?t.deps.map(d=>`<li><b>${tasks.find(x=>x.id===d).title}</b> · run-${d}-001 的 immutable summary</li>`).join(''):'<li>入口任务没有父交接单，直接读取事项组 brief。</li>';
+    handoff.innerHTML=`<div class="note"><h4>📮 此 run 的输入快照</h4><p>claim 成功的同一事务中写入 <code>run_handoff_inputs</code>。父任务后来重跑，也不会悄悄改变本次输入。</p><ul>${parentNotes}</ul></div>`;
+    lease.innerHTML=`<div class="code">UPDATE tasks\nSET status='running', version=version+1,\n    current_run_id=:run, claim_token=:secret\nWHERE id='task-${t.id}-024'\n  AND status='ready' AND version=:expected\nRETURNING id, version, current_run_id;</div>`;
+    gate.innerHTML=`<div class="gatebox"><div class="seal">${t.gate?'🚪':'🪁'}</div><div><b>${t.gate?'人工交付闸门':'此任务没有完成闸门'}</b><div class="panel-sub">${t.gate?(s==='review'?'等待负责人决定':s==='done'?'已批准，可结算':'工作完成后才出现'):'不阻塞执行'}</div></div>${t.gate&&s==='review'?'<div class="gate-actions"><button class="mini" onclick="toast(\'已请求修改；旧 run 封存，任务返回 ready\')">退回</button><button class="btn primary" onclick="approveGate()">批准</button></div>':''}</div>`;
+    evidence.innerHTML=`<div class="note"><h4>🧾 可追溯证据</h4><ul><li>run 完整 summary 与 metadata 保存在 D1，不塞进事件预览。</li><li>HTML 由宿主工具上传；Bearer 不进入浏览器或 agent 输出。</li><li>${s==='done'?'本任务产物已登记，可打开公网 URL。':'任务完成后才产生不可变产物记录。'}</li></ul></div>`;
+  }
+  function renderMetrics(){const done=tasks.filter(t=>statusAt(t,state.step)==='done').length,active=roles.filter(r=>['running','review'].includes(roleStatus(r))).length;progressText.textContent=`${done} / 4`;progressBar.style.width=`${done*25}%`;activeCount.textContent=active;gateCount.textContent=state.step<9?'1':'0';casCount.textContent=state.cas;stepNo.textContent=`${String(state.step).padStart(2,'0')} / 09`;stepTrack.style.width=`${state.step/9*100}%`;stepText.textContent=descriptions[state.step];runCode.textContent=state.step?`run-${state.step<4?'arch':state.step<7?'parallel':'review'}-00${Math.max(1,state.step-2)}`:'尚未创建'}
+  function render(){renderRoles();renderFlow();renderEvents();renderDetails();renderMetrics()}
+  function advance(){if(state.step>=9){stop();toast('演示已完成；点击 ↺ 可以重放');return}state.step++;render()}
+  function play(){if(state.playing){stop();return}state.playing=true;playBtn.textContent='Ⅱ 暂停演示';state.timer=setInterval(advance,900)}
+  function stop(){state.playing=false;clearInterval(state.timer);state.timer=null;playBtn.textContent='▶ 运行演示'}
+  function reset(){stop();state.step=0;state.selected='a';state.cas=0;state.role=null;render()}
+  function toast(message){toastEl.textContent=message;toastEl.classList.add('show');clearTimeout(toastEl.t);toastEl.t=setTimeout(()=>toastEl.classList.remove('show'),2800)}
+  function casDemo(){state.cas++;renderMetrics();toast('node-152 → 200 claimed；node-84 → 409 CAS lost。数据库只创建 1 个 run。')}
+  function approveGate(){state.step=9;render();toast('gate_approved：验收 run 与事项组已原子结算')}
+
+  const rolesEl=document.getElementById('roles'),flow=document.getElementById('flow'),eventsEl=document.getElementById('events'),eventTotal=document.getElementById('eventTotal'),selectedCard=document.getElementById('selectedCard'),handoff=document.getElementById('tab-handoff'),lease=document.getElementById('tab-lease'),gate=document.getElementById('tab-gate'),evidence=document.getElementById('tab-evidence'),progressText=document.getElementById('progressText'),progressBar=document.getElementById('progressBar'),activeCount=document.getElementById('activeCount'),casCount=document.getElementById('casCount'),gateCount=document.getElementById('gateCount'),stepNo=document.getElementById('stepNo'),stepTrack=document.getElementById('stepTrack'),stepText=document.getElementById('stepText'),runCode=document.getElementById('runCode'),toastEl=document.getElementById('toast'),playBtn=document.getElementById('playBtn');
+  document.getElementById('stepBtn').onclick=advance;playBtn.onclick=play;document.getElementById('resetBtn').onclick=reset;document.getElementById('casBtn').onclick=casDemo;
+  document.querySelectorAll('.mini[data-filter]').forEach(b=>b.onclick=()=>{state.filter=b.dataset.filter;document.querySelectorAll('.mini[data-filter]').forEach(x=>x.classList.toggle('active',x===b));renderEvents()});
+  document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.tabview').forEach(x=>x.classList.toggle('active',x.id===`tab-${b.dataset.tab}`))});
+  render();
+</script>
+</body>
+</html>

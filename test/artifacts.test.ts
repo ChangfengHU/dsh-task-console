@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { captureArtifacts, discoverLegacyArtifacts, publishHtml, readArtifact } from '../src/artifacts.ts'
+import { readPublishableHtml, safeUploadPart } from '../src/public-upload.ts'
 import type { Run, TaskSpec } from '../src/fold.ts'
 
 const taskAt = (cwd: string): TaskSpec => ({ id: 'T', title: 't', brief: 'make result', trigger: { kind: 'once' }, participants: [{ agentId: 'a' }], cwd, timeoutSec: 60, onFail: 'stop', maxTries: 1, enabled: true, createdAt: 'x' })
@@ -40,4 +41,23 @@ test('artifacts: public publishing is explicit, HTML-only, and returns the servi
     assert.equal(url, 'https://resource.example/result.html')
     await assert.rejects(() => publishHtml({ endpoint: 'https://upload.example', domain: 'https://resource.example', token: 'test-token' }, { ...artifact, name: 'x.txt', mime: 'text/plain' }, Buffer.from('x')), /只允许.*HTML/)
   } finally { globalThis.fetch = oldFetch }
+})
+
+test('public tool: only reads HTML below the configured workspace roots', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tc-public-'))
+  const workspace = join(root, 'workspace'); await mkdir(workspace)
+  const page = join(workspace, '原型 page.html'); const outside = join(root, 'outside.html')
+  await writeFile(page, '<button>ok</button>'); await writeFile(outside, '<p>no</p>')
+  const oldRoots = process.env.DSH_TASK_CONSOLE_PUBLISH_ROOTS
+  process.env.DSH_TASK_CONSOLE_PUBLISH_ROOTS = workspace
+  try {
+    const file = await readPublishableHtml(page)
+    assert.equal(file.data.toString(), '<button>ok</button>')
+    assert.equal(safeUploadPart(file.name), '原型-page.html')
+    await assert.rejects(() => readPublishableHtml(outside), /允许的工作区/)
+    await assert.rejects(() => readPublishableHtml(join(workspace, 'missing.html')), /ENOENT/)
+  } finally {
+    if (oldRoots === undefined) delete process.env.DSH_TASK_CONSOLE_PUBLISH_ROOTS
+    else process.env.DSH_TASK_CONSOLE_PUBLISH_ROOTS = oldRoots
+  }
 })

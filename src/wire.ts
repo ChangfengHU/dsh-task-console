@@ -1,0 +1,131 @@
+/**
+ * Wire contract for the `taskConsole` Remote namespace — one frozen
+ * descriptor list shared by the host TYPERT manifest and the client Remote
+ * contribution, so the two faces cannot drift.
+ *
+ * Every method is string-in / string-out carrying JSON (Typert's only codec
+ * mode is `strict`, and a JSON string keeps that to one `z.string()` per
+ * side while the surface is still moving).
+ *
+ * @module dsh-task-console/wire
+ */
+
+import { z } from 'zod'
+
+export const PKG = 'dsh-task-console'
+export const NAMESPACE = 'taskConsole'
+
+function jsonParam(name: string) {
+  return Object.freeze({
+    name,
+    wire: name,
+    source: 'json',
+    codec: Object.freeze({ mode: 'strict', typeSymbol: `${PKG}/types#Json`, schema: z.string() }),
+  })
+}
+
+const JSON_RESULT = Object.freeze({ mode: 'strict', typeSymbol: `${PKG}/types#Json`, schema: z.string() })
+
+function descriptor(method: string, argc: 0 | 1) {
+  return Object.freeze({
+    id: `${PKG}#${NAMESPACE}/${method}`,
+    service: NAMESPACE,
+    namespace: NAMESPACE,
+    method,
+    invocation: Object.freeze({ kind: 'direct' }),
+    parameters: Object.freeze(argc === 1 ? [jsonParam('payload')] : []),
+    result: JSON_RESULT,
+    sourceLocation: Object.freeze({ file: 'src/wire.ts', line: 1, column: 1 }),
+  })
+}
+
+/** Every method the console calls, in the order the service defines them. */
+export const METHODS = [
+  ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
+] as const
+
+export const CONSOLE_INVOCATIONS = Object.freeze(METHODS.map(([method, argc]) => descriptor(method, argc)))
+
+// ── shapes both faces read ─────────────────────────────────────────────
+
+/** One native tool the editor can put in a preset. */
+export interface NativeTool {
+  id: string
+  label: string
+  group: string
+  description: string
+  /** Whether the tool can change anything — drives the derived permission. */
+  writes: boolean
+}
+
+/** One MCP server the host composition currently runs. */
+export interface McpServer {
+  entryId: string
+  serverName: string
+  /** URL or command line, credentials hidden. */
+  target: string
+  /** Tools it registered right now (public `mcp__<server>__<tool>` names, prefix stripped). */
+  tools: string[]
+  disabled: boolean
+}
+
+/** One skill directory the editor can copy into a preset. */
+export interface SkillEntry {
+  name: string
+  dir: string
+  description: string
+  root: string
+}
+
+export interface Catalog {
+  tools: NativeTool[]
+  mcp: McpServer[]
+  skills: SkillEntry[]
+  models: string[]
+  defaultModel: string
+  /** Where authored presets land; null when no root accepts writes. */
+  userRoot: string | null
+}
+
+/** What the editor authors; persisted beside the composition as task-console.json. */
+export interface AgentSpec {
+  id: string
+  name: string
+  description: string
+  persona: string
+  /** `provider/model`. */
+  model: string
+  effort: 'low' | 'medium' | 'high' | ''
+  tools: string[]
+  mcp: string[]
+  skills: string[]
+}
+
+/** One roster row, enriched with our spec when we authored it. */
+export interface AgentRow {
+  id: string
+  name: string
+  description: string
+  trust: 'system' | 'user'
+  broken?: string
+  path: string
+  spec: AgentSpec | null
+}
+
+export interface Preview {
+  yml: string
+  /** MCP servers renamed because the host still runs one with the same name. */
+  renamed: { from: string; to: string }[]
+  permission: 'read-only' | 'limited-write' | 'write'
+}
+
+export interface TryRunResult {
+  sessionId: string
+  provider: string
+  model: string
+  elapsedMs: number
+  /** Exactly what dsh handed the model on the first request. */
+  tools: string[]
+  answer: string
+  error?: string
+}

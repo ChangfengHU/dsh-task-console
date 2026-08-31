@@ -1,0 +1,41 @@
+{
+  "name": "dsh-task-console",
+  "version": "0.1.0",
+  "description": "Task console for DeepSeek Harness: author agents as real presets (capability-level tool fence), prove them with a live try-run; tasks and schedules follow.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./typert": { "default": "./lib/typert.host.js" },
+    "./client": { "default": "./lib/client.js" },
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": ["lib", "src", "cordis.patch.yml", "README.md", "LICENSE"],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.ts"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  },
+  "keywords": ["dsh-plugin", "deepseek-harness", "agent-preset", "task-console"],
+  "repository": { "type": "git", "url": "https://github.com/ChangfengHU/dsh-task-console" },
+  "dependencies": {
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "esbuild": "^0.25.12"
+  }
+}

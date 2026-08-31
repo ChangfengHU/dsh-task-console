@@ -47,7 +47,7 @@ async function setup(taskPatch: Partial<TaskSpec> = {}) {
   await store.append({ t: 'task/created', at: 'x', taskId: task.id, task })
   return { host, store, runner, task, root }
 }
-const tick = () => new Promise(r => setTimeout(r, 20))
+const tick = () => new Promise(r => setTimeout(r, 80))
 
 test('runner: a 3-card chain runs in order, each card gets the upstream summary, batch settles done', async () => {
   const { host, store, runner } = await setup()

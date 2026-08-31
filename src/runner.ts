@@ -31,6 +31,7 @@ interface Flight {
   terminal?: { kind: 'completed' | 'review' | 'blocked'; summary?: string; reason?: string; blockKind?: BlockKind }
   pendingAsk?: string
   timer?: ReturnType<typeof setTimeout>
+  timeoutSec: number
 }
 
 export interface RunnerOptions {
@@ -187,7 +188,7 @@ export class TaskRunner {
     for (const d of card.deps.map(x => this.store.s.cards.get(x)).filter(Boolean) as Card[]) upstream.push({ agentName: await this.displayName(d.agentId), summary: d.summary ?? '' })
     const text = cardMessage(task, card, batch.id, upstream)
     const messageId = randomUUID()
-    const flight: Flight = { runId, cardId: card.id, taskId: task.id, sessionId, messageId, consumed: false, handle: undefined, lastText: '' }
+    const flight: Flight = { runId, cardId: card.id, taskId: task.id, sessionId, messageId, consumed: false, handle: undefined, lastText: '', timeoutSec: task.timeoutSec }
     this.flights.set(sessionId, flight)
     try {
       flight.handle = await (this.ctx as any).agents.create({
@@ -201,7 +202,7 @@ export class TaskRunner {
         flight.disposeTools = registerWorkerTools(flight.handle.agent.ctx, {
           complete: async summary => { flight.terminal = { kind: 'completed', summary } },
           requestReview: async summary => { flight.terminal = { kind: 'review', summary } },
-          block: async (reason, kind) => { flight.terminal = { kind: 'blocked', reason, blockKind: kind }; await this.append({ t: 'run/blocked', taskId: task.id, runId, kind, reason }) },
+          block: async (reason, kind) => { flight.terminal = { kind: 'blocked', reason, blockKind: kind }; if (kind === 'needs_input') this.disarm(flight); await this.append({ t: 'run/blocked', taskId: task.id, runId, kind, reason }) },
         })
       } catch (error) { console.warn('[task-console] worker tools not registered:', error) }
       await this.append({ t: 'run/claimed', taskId: task.id, cardId: card.id, runId, sessionId, attempt })
@@ -212,14 +213,21 @@ export class TaskRunner {
         await ws?.attachSession?.(sessionId)
       } catch { /* cosmetic */ }
       flight.handle.agent.followup({ id: messageId, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
-      flight.timer = setTimeout(() => { void this.finish(flight, 'run/timed_out', 'timed_out', `${task.timeoutSec} 秒没交卷`) }, task.timeoutSec * 1000)
-      ;(flight.timer as any).unref?.()
+      this.arm(flight)
     } catch (error) {
       this.flights.delete(sessionId)
       if (!this.store.s.runs.has(runId)) await this.append({ t: 'run/claimed', taskId: task.id, cardId: card.id, runId, sessionId, attempt })
       await this.append({ t: 'run/failed', taskId: task.id, runId, error: error instanceof Error ? error.message : String(error) })
     }
   }
+
+  /** The watchdog counts working time only: it pauses while a person is being waited on. */
+  private arm(f: Flight): void {
+    if (f.timer) clearTimeout(f.timer)
+    f.timer = setTimeout(() => { void this.finish(f, 'run/timed_out', 'timed_out', `${f.timeoutSec} 秒没交卷`) }, f.timeoutSec * 1000)
+    ;(f.timer as any).unref?.()
+  }
+  private disarm(f: Flight): void { if (f.timer) { clearTimeout(f.timer); f.timer = undefined } }
 
   private nameCache = new Map<string, string>()
   private async displayName(id: string): Promise<string> {
@@ -238,6 +246,7 @@ export class TaskRunner {
         else if (run?.status === 'blocked' && event.data?.source?.kind === 'user' && f.terminal?.kind === 'blocked') {
           // A person answered in the session: the block is over, the run continues.
           f.terminal = undefined
+          this.arm(f)
           void this.append({ t: 'run/resumed', taskId: f.taskId, runId: f.runId })
         }
         break
@@ -246,12 +255,14 @@ export class TaskRunner {
           let q = ''
           try { const a = JSON.parse(event.data.arguments ?? '{}'); q = a.questions?.[0]?.question ?? a.question ?? JSON.stringify(a).slice(0, 200) } catch { q = String(event.data.arguments ?? '').slice(0, 200) }
           f.pendingAsk = event.data.callId
+          this.disarm(f)
           void this.append({ t: 'run/blocked', taskId: f.taskId, runId: f.runId, kind: 'needs_input', reason: q })
         }
         break
       case 'tool/result':
         if (f.pendingAsk && event.data?.message?.source?.callId === f.pendingAsk) {
           f.pendingAsk = undefined
+          this.arm(f)
           void this.append({ t: 'run/resumed', taskId: f.taskId, runId: f.runId })
         }
         break

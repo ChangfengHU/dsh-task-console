@@ -10,7 +10,11 @@
 dsh plugin --profile web add github:ChangfengHU/dsh-task-console
 ```
 
-Opens from the sidebar footer button 「任务台」; screens live in the URL hash (`#/tc/agents`, `#/tc/agents/<id>`).
+Opens from the sidebar footer button 「任务台」; screens live in the URL hash (`#/tc/agents`, `#/tc/agents/<id>`, `#/tc/tasks`, `#/tc/tasks/<id>`).
+
+**Talk to an agent from the composer:** type `@` in any composer, pick an agent, type the ask, Enter. That starts a new session on the agent's preset (a session's preset is fixed at creation in dsh, so "@agent" means "a fresh session with that agent") with your text as the first message, pins a readable title, files it under the current workspace, and switches to it. Agent cards also have 「开新会话」.
+
+**Tasks (0.2+):** a task = a brief + ordered participants + a trigger (once / cron). The host dispatcher runs each participant as its own root session on its own preset, hands the previous participant's last reply to the next one, and writes every transition to `~/.dsh/task-console/events.jsonl`; the board is a fold of that stream.
 
 ## Known limits
 

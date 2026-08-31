@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-console",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "Task console for DeepSeek Harness: author agents as real presets (capability-level tool fence), prove them with a live try-run; tasks and schedules follow.",
   "license": "MIT",
   "type": "module",

@@ -64,7 +64,7 @@ test('describe / actorOf read as one line with the right hand', () => {
   const name = (id: string) => ({ installer: '装机员', inspector: '巡检员' })[id] ?? id
   const e: Event = { t: 'run/blocked', at: '4', taskId: 'T-1', runId: 'r1', kind: 'needs_input', reason: '改 5901?' }
   assert.equal(describe(e, s, name), '装机员 停下来问:改 5901?'); assert.equal(actorOf(e), 'agent')
-  assert.equal(actorOf(fired), 'person'); assert.equal(describe(fired, s, name), '手动触发,2 张卡入队')
+  assert.equal(actorOf(fired), 'person'); assert.equal(describe(fired, s, name), '手动触发,2 张卡排好队')
   assert.equal(describe({ t: 'run/failed', at: '5', taskId: 'T-1', runId: 'r1', outcome: 'protocol_violation' }, s, name), '装机员 失败(没按协议交卷)')
 })
 

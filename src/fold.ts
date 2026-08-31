@@ -237,9 +237,9 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
     case 'task/created': return `建卡「${e.task.title}」,${e.task.participants.map(p => agentName(p.agentId)).join(' → ')}`
     case 'task/enabled': return e.enabled ? '启用时间表' : '停用时间表'
     case 'task/deleted': return '删除任务'
-    case 'batch/fired': return `${({ cron: '到点', manual: '手动', retry: '重试' })[e.batch.by]}触发,${e.batch.cards.length} 张卡入队`
-    case 'card/ready': return `${card(e.cardId)} 就绪(上游已完成)`
-    case 'run/claimed': return `${card(e.cardId)} 开工${e.attempt > 1 ? `(第 ${e.attempt} 次)` : ''},会话 ${e.sessionId}`
+    case 'batch/fired': return `${({ cron: '到点', manual: '手动', retry: '重试' })[e.batch.by]}触发,${e.batch.cards.length} 张卡排好队`
+    case 'card/ready': return `${card(e.cardId)} 可以开始了(上一位已交卷)`
+    case 'run/claimed': return `${card(e.cardId)} 开工${e.attempt > 1 ? `(第 ${e.attempt} 次)` : ''}`
     case 'run/blocked': return `${who(e.runId)} 停下来${e.kind === 'needs_input' ? '问' : '等'}:${e.reason}`
     case 'run/resumed': return `${who(e.runId)} 收到回答,继续`
     case 'run/nudged': return `${who(e.runId)} 没交卷就停了,催一次`

@@ -26,6 +26,7 @@ type TaskRow = TaskSpec & { nextFire: string | null }
 const fmt = (iso?: string) => iso ? new Date(iso).toTimeString().slice(0, 8) : ''
 const dur = (a?: string, b?: string) => { if (!a) return ''; const s = Math.max(0, Math.round(((b ? +new Date(b) : Date.now()) - +new Date(a)) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` }
 const BY: Record<Run['by'], string> = { cron: '时间表', manual: '手动', retry: '重试' }
+const ago = (iso: string) => { const s = Math.round((Date.now() - +new Date(iso)) / 1000); if (s < 60) return '刚刚'; if (s < 3600) return `${Math.floor(s / 60)} 分钟前`; if (s < 86400) return `${Math.floor(s / 3600)} 小时前`; return `${Math.floor(s / 86400)} 天前` }
 const LEG: Record<string, string> = { queued: '排队', running: '进行中', blocked: '停车等人', done: '完成', failed: '失败', timed_out: '超时', lost: '丢失', cancelled: '取消' }
 
 export function runStatus(r: Run): 'run' | 'park' | 'done' | 'bad' {
@@ -100,15 +101,15 @@ function RunCard({ r, t, agents, onRetry, api }: { r: Run; t: TaskSpec; agents: 
   const cur = r.legs.find(l => l.status === 'running' || l.status === 'blocked') ?? [...r.legs].reverse().find(l => l.status !== 'queued') ?? r.legs[0]
   const idx = r.legs.indexOf(cur)
   let line = ''
-  if (st === 'run') line = `${agentName(agents, cur.agentId)} · 第 ${idx + 1}/${r.legs.length} 张 · ${dur(cur.startedAt)}`
-  if (st === 'done') line = `${r.legs.length} 张全部完成 · ${dur(r.legs[0].startedAt, r.legs[r.legs.length - 1].endedAt)}`
+  if (st === 'run') line = `${agentName(agents, cur.agentId)}在做 · 第 ${idx + 1}/${r.legs.length} 棒 · ${dur(cur.startedAt)}`
+  if (st === 'done') line = `${r.legs.length > 1 ? `${r.legs.length} 棒全部交卷` : '完成'} · ${dur(r.legs[0].startedAt, r.legs[r.legs.length - 1].endedAt)}`
   if (st === 'bad') line = `${agentName(agents, cur.agentId)} · ${LEG[cur.status] ?? cur.status}${cur.error ? ' · ' + cur.error.slice(0, 40) : ''}`
   return (
     <div className={`dtc-tcard s-${st}`} onClick={() => go(`tasks/${t.id}/runs/${r.id}`)}>
-      <div className="t"><span>{t.title}</span><span className="id dtc-mono">{r.id}</span></div>
+      <div className="t" title={r.id}><span>{t.title}</span></div>
       {flowOf(r, agents)}
       {st === 'park' ? <div className="q">? {cur.question}</div> : <div className="l">{st === 'run' ? <span className="dtc-live" /> : null}{line}</div>}
-      <div className="foot"><span>{fmt(r.firedAt)} · {BY[r.by]}</span>
+      <div className="foot"><span className="when" title={fmt(r.firedAt)}>{ago(r.firedAt)} · {BY[r.by]}</span>
         {st === 'bad' ? <button className="dtc-btn sm" onClick={e => { e.stopPropagation(); onRetry() }}>重试</button> : null}
         {st === 'park' && cur.sessionId ? <button className="dtc-btn sm pri" onClick={e => { e.stopPropagation(); closeConsole(); void api.openSession(cur.sessionId!) }}>去回答</button> : null}
       </div>

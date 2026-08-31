@@ -78,9 +78,13 @@ export function Console({ api }: { api: Api }) {
 
   let page: JSX.Element
   if (tab === 'tasks') page = <TasksPlaceholder />
-  else if (route[1] === 'new' || (route[1] && route[1] !== 'new')) {
+  else if (route[1]) {
     const id = route[1] === 'new' ? null : route[1]
-    page = <AgentEditor key={id ?? 'new'} api={api} catalog={catalog} agents={agents ?? []} id={id} onSaved={reload} toast={showToast} />
+    // The editor seeds its form from the roster row; mounting it before the
+    // roster arrives would let a fast typist start on an empty id.
+    page = agents && catalog
+      ? <AgentEditor key={id ?? 'new'} api={api} catalog={catalog} agents={agents} id={id} onSaved={reload} toast={showToast} />
+      : <div className="dtc-empty"><span className="dtc-spin" /> 读取 preset 名册…</div>
   } else page = <AgentList agents={agents} catalog={catalog} />
 
   return (

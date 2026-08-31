@@ -70,6 +70,14 @@ export class TaskConsoleService extends TypertRemoteService {
     return rows
   }
 
+  /** Registered workspaces in sidebar order; empty when the registry is not composed. */
+  private workspaces(): { id: string; path: string; title: string }[] {
+    try {
+      const reg = (this.ctx as any).get('workspaceRegistry')
+      return (reg?.list?.() ?? []).map((w: any) => ({ id: String(w.id), path: String(w.path), title: String(w.title ?? w.path.split('/').pop() ?? w.path) }))
+    } catch { return [] }
+  }
+
   private defaultModel(): { provider: string; model: string; reasoningEffort?: string } | undefined {
     const defaults = (this.ctx as any).get('agentDefaultModel')
     try {
@@ -91,6 +99,7 @@ export class TaskConsoleService extends TypertRemoteService {
       models,
       defaultModel,
       userRoot: presets?.authorable === false ? null : userPresetRoot(),
+      workspaces: this.workspaces(),
     }
     return JSON.stringify(out)
   }

@@ -86,6 +86,8 @@ export interface Catalog {
   defaultModel: string
   /** Where authored presets land; null when no root accepts writes. */
   userRoot: string | null
+  /** Registered workspaces, in sidebar order — where a task's sessions land. */
+  workspaces: { id: string; path: string; title: string }[]
 }
 
 /** What the editor authors; persisted beside the composition as task-console.json. */

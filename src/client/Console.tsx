@@ -80,7 +80,7 @@ export function Console({ api }: { api: Api }) {
   let page: JSX.Element
   if (tab === 'tasks') {
     if (!agents || !catalog) page = <div className="dtc-empty"><span className="dtc-spin" /> 读取…</div>
-    else if (route[1] === 'new') page = <NewTask api={api} agents={agents} toast={showToast} defaultCwd={catalog.userRoot ? catalog.userRoot.replace(/\/\.dsh\/\.agent-presets$/, '') : ''} />
+    else if (route[1] === 'new') page = <NewTask api={api} agents={agents} toast={showToast} workspaces={catalog.workspaces} />
     else if (route[1]) page = <TaskDetail api={api} agents={agents} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} toast={showToast} />
     else page = <TaskBoard api={api} agents={agents} toast={showToast} />
   } else if (route[1]) {

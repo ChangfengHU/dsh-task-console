@@ -191,12 +191,12 @@ export function openSession(title: string): void {
 
 const CRON_PRESETS: [string, string][] = [['*/10 * * * *', '每 10 分钟'], ['0 * * * *', '每小时'], ['0 3 * * *', '每天 03:00'], ['0 9 * * 1-5', '工作日 09:00'], ['0 9 * * 1', '每周一 09:00']]
 
-export function NewTask({ api, agents, toast, defaultCwd }: { api: TasksApi; agents: AgentRow[]; toast: (m: string) => void; defaultCwd: string }) {
+export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; agents: AgentRow[]; toast: (m: string) => void; workspaces: { id: string; path: string; title: string }[] }) {
   const [brief, setBrief] = useState('')
   const [parts, setParts] = useState<{ agentId: string; brief?: string }[]>([])
   const [kind, setKind] = useState<'once' | 'cron'>('once')
   const [expr, setExpr] = useState('*/10 * * * *')
-  const [cwd, setCwd] = useState(defaultCwd)
+  const [cwd, setCwd] = useState(workspaces[0]?.path ?? '')
   const [timeout, setTimeoutMin] = useState(30)
   const [onFail, setOnFail] = useState<'stop' | 'retry'>('stop')
   const [tries, setTries] = useState(2)
@@ -236,7 +236,7 @@ export function NewTask({ api, agents, toast, defaultCwd }: { api: TasksApi; age
         </div>
         <div className="dtc-step"><h3><span className="no">4</span>边界</h3><div className="sub">默认值一般不用动。</div>
           <div className="dtc-fields">
-            <label>工作目录<input className="dtc-mono" value={cwd} onChange={e => setCwd(e.target.value)} /></label>
+            <label>工作区(会话落在哪个分组)<select value={cwd} onChange={e => setCwd(e.target.value)}>{workspaces.map(w => <option key={w.id} value={w.path}>{w.title} · {w.path}</option>)}{!workspaces.some(w => w.path === cwd) && cwd ? <option value={cwd}>{cwd}</option> : null}</select></label>
             <label>每段超时(分钟)<input type="number" value={timeout} onChange={e => setTimeoutMin(+e.target.value)} /></label>
             <label>失败后<select value={onFail} onChange={e => setOnFail(e.target.value as 'stop' | 'retry')}><option value="stop">停下,人来重试</option><option value="retry">自动重试</option></select></label>
             {onFail === 'retry' ? <label>最多重试<input type="number" value={tries} onChange={e => setTries(+e.target.value)} /></label> : null}

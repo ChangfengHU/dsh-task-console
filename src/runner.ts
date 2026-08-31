@@ -124,6 +124,12 @@ export class TaskRunner {
       })
       await this.store.append({ t: 'leg/spawned', at: now(), runId, leg, sessionId, tries })
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${runId} · ${agentName}`) } catch { /* title is cosmetic */ }
+      // A cwd-only session stays "Ungrouped" in the sidebar; file it under the workspace so a person can find it.
+      try {
+        const registry = (this.ctx as any).get('workspaceRegistry')
+        const workspace = registry ? (await registry.resolveByPath(task.cwd).catch(() => undefined)) ?? (await registry.create(task.cwd).catch(() => undefined)) : undefined
+        await workspace?.attachSession?.(sessionId)
+      } catch { /* grouping is cosmetic */ }
       flight.handle.agent.followup({ id: messageId, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
       flight.timer = setTimeout(() => { void this.finish(flight, 'timed_out', `${task.timeoutSec} 秒没交卷`) }, task.timeoutSec * 1000)
     } catch (error) {

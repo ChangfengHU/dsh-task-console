@@ -43,7 +43,7 @@ function descriptor(method: string, argc: 0 | 1) {
 export const METHODS = [
   ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
   ['startAgentSession', 1], ['sessionTurns', 1],
-  ['tasks', 0], ['createTask', 1], ['setTaskEnabled', 1], ['deleteTask', 1], ['fireTask', 1], ['cancelRun', 1], ['taskEvents', 1],
+  ['board', 0], ['tasks', 0], ['createTask', 1], ['setTaskEnabled', 1], ['deleteTask', 1], ['fireTask', 1], ['cancelRun', 1], ['taskEvents', 1], ['agentActivity', 1],
 ] as const
 
 export const CONSOLE_INVOCATIONS = Object.freeze(METHODS.map(([method, argc]) => descriptor(method, argc)))
@@ -135,4 +135,17 @@ export interface TryRunResult {
 }
 
 // ── tasks (types live beside the fold; type-only import keeps node out of the client) ──
-export type { Event as TaskEvent, Leg, LegStatus, Participant, Run, TaskSpec, Trigger, TurnLedger, TurnRow, StepRow, ToolRow } from './fold.ts'
+export type { Batch, BlockKind, Card, CardStatus, Event as TaskEvent, Participant, Run, RunOutcome, RunStatus, TaskSpec, Trigger, TurnLedger, TurnRow, StepRow, ToolRow } from './fold.ts'
+
+/** The board payload: every map as arrays, plus next cron fire per task. */
+export interface BoardView {
+  tasks: (TaskSpec & { nextFire: string | null })[]
+  batches: Batch[]
+  cards: Card[]
+  runs: Run[]
+}
+
+
+/** Legacy 0.4 projection served by `tasks()` until the 0.5 pages land. */
+export interface LegacyLeg { agentId: string; status: string; tries: number; sessionId?: string; startedAt?: string; endedAt?: string; handoff?: string; question?: string; error?: string }
+export interface LegacyRun { id: string; taskId: string; firedAt: string; by: 'cron' | 'manual' | 'retry'; legs: LegacyLeg[]; settled?: { at: string; outcome: 'done' | 'failed' | 'cancelled' } }

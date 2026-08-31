@@ -1,11 +1,6 @@
 /**
- * Tasks, runs, and the event stream they are folded from.
- *
- * The board is never stored: `events.jsonl` is append-only and every
- * screen is `fold(events)`. A run is one firing of a task; each participant
- * gets one leg, and a leg is one real session on that agent's preset. The
- * only two things a leg receives are the task brief and the upstream leg's
- * handoff — no shared memory, no peeking at other legs.
+ * Store, validation, and the message a card receives. The model itself
+ * lives in ./fold.ts (pure, shared with the browser).
  *
  * @module dsh-task-console/tasks
  */
@@ -13,12 +8,12 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { fold, migrate, type Card, type Event, type Participant, type State, type TaskSpec, type Trigger } from './fold.ts'
 
-// ── shapes + fold live in ./fold.ts (pure, shared with the browser) ──────
-
-export { actorOf, describe, fold, foldTurns, runStatus } from './fold.ts'
-export type { Event, Leg, LegStatus, Participant, Run, State, TaskSpec, ToolRow, StepRow, TurnRow, TurnLedger, Trigger } from './fold.ts'
-import { fold, type Event, type Run, type State, type TaskSpec, type Trigger, type Participant } from './fold.ts'
+export { actorOf, batchStatus, cardRun, describe, fold, foldTurns, migrate, readyCards, BLOCK_RECURRENCE_LIMIT } from './fold.ts'
+export type { Batch, BlockKind, Card, CardStatus, Event, Participant, Run, RunOutcome, RunStatus, State, StepRow, TaskSpec, ToolRow, Trigger, TurnLedger, TurnRow } from './fold.ts'
+export { cronHuman, cronMatches, nextFire, parseCron, type Cron } from './cron.ts'
+import { parseCron } from './cron.ts'
 
 // ── store ───────────────────────────────────────────────────────────────
 
@@ -26,12 +21,11 @@ export function storeDir(home = homedir()): string {
   return join(process.env.DSH_HOME ?? join(home, '.dsh'), 'task-console')
 }
 
-/** Append-only JSONL with the fold kept in memory. */
+/** Append-only JSONL with the fold kept in memory. Old-shape files are migrated on read, never rewritten. */
 export class EventStore {
   private events: Event[] = []
-  private state: State = { tasks: new Map(), runs: new Map() }
+  private state: State = fold([])
   private queue: Promise<void> = Promise.resolve()
-
   private readonly dir: string
 
   constructor(dir = storeDir()) { this.dir = dir }
@@ -42,13 +36,14 @@ export class EventStore {
     await mkdir(this.dir, { recursive: true, mode: 0o700 })
     let text = ''
     try { text = await readFile(this.file, 'utf8') } catch { /* first run */ }
-    this.events = text.split('\n').filter(Boolean).flatMap(l => { try { return [JSON.parse(l) as Event] } catch { return [] } })
+    const raw = text.split('\n').filter(Boolean).flatMap(l => { try { return [JSON.parse(l)] } catch { return [] } })
+    this.events = migrate(raw)
     this.state = fold(this.events)
   }
 
   all(): Event[] { return this.events }
+  get s(): State { return this.state }
   get tasks(): Map<string, TaskSpec> { return this.state.tasks }
-  get runs(): Map<string, Run> { return this.state.runs }
 
   /** Serialized append: the fold is updated only after the line is on disk. */
   append(e: Event): Promise<void> {
@@ -62,22 +57,23 @@ export class EventStore {
   }
 }
 
-// ── cron (shared with the client) ──────────────────────────────────────
+// ── the message a card receives ─────────────────────────────────────────
 
-export { cronHuman, cronMatches, nextFire, parseCron, type Cron } from './cron.ts'
-import { parseCron } from './cron.ts'
-
-// ── the message a leg receives ───────────────────────────────────────────
-
-/** The one user message a leg gets: brief, its part, the upstream handoff. */
-export function legMessage(task: TaskSpec, run: Run, leg: number, upstream?: { agentName: string; handoff: string }): string {
-  const p = task.participants[leg]
-  const lines = [`# 任务:${task.title} · ${run.id} · 第 ${leg + 1}/${task.participants.length} 段`, '', '[TASK]', task.brief.trim()]
-  if (p?.brief?.trim()) lines.push('', '[YOUR PART]', p.brief.trim())
-  if (upstream) lines.push('', `[UPSTREAM HANDOFF from ${upstream.agentName}]`, upstream.handoff.trim() || '(上游没有留下交接单)')
-  lines.push('', '交卷:把「产物 / 干了什么 / 下游注意」写在你的最后一条回复里,它会原样交给下一段。拿不准且不可逆的事,用 ask_user_question 停下来问。')
+/** The one user message a card's session gets: brief, its part, the upstream handoffs, and the contract. */
+export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstream: { agentName: string; summary: string }[]): string {
+  const lines = [`# 任务:${task.title} · ${batchId} · 第 ${card.index + 1}/${task.participants.length} 张卡`, '', '[TASK]', task.brief.trim()]
+  if (card.brief?.trim()) lines.push('', '[YOUR PART]', card.brief.trim())
+  for (const u of upstream) lines.push('', `[UPSTREAM HANDOFF from ${u.agentName}]`, u.summary.trim() || '(上游没有留下交接单)')
+  lines.push('', '[CONTRACT]',
+    '做完后必须调用 task_complete(summary) 交卷;summary 写「产物 / 干了什么 / 下游注意」,它会原样交给下一张卡。',
+    '拿不准且不可逆的事:能用 ask_user_question 就问;否则 task_block(reason, kind="needs_input")。',
+    '缺工具或权限做不了:task_block(reason, kind="capability")。',
+    '不要在没有调用 task_complete 或 task_block 的情况下结束。')
   return lines.join('\n')
 }
+
+/** The single nudge a run gets when it stops without a terminal tool (hermes' stop-guard). */
+export const NUDGE = '你停下来了,但没有交卷。请现在调用 task_complete(summary) 交卷,或 task_block(reason, kind) 说明为什么做不下去。'
 
 export function validateTask(raw: unknown, agentIds: Set<string>): TaskSpec {
   const s = (raw ?? {}) as Partial<TaskSpec>

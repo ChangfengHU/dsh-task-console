@@ -6,8 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { cronHuman, nextFire, parseCron } from '../cron.ts'
-import { runStatus } from '../fold.ts'
-import type { AgentRow, Run, TaskEvent, TaskSpec } from '../wire.ts'
+import type { AgentRow, LegacyRun as Run, TaskEvent, TaskSpec } from '../wire.ts'
 import { go } from './Console.tsx'
 
 export interface TasksApi {
@@ -29,7 +28,13 @@ const dur = (a?: string, b?: string) => { if (!a) return ''; const s = Math.max(
 const BY: Record<Run['by'], string> = { cron: '时间表', manual: '手动', retry: '重试' }
 const LEG: Record<string, string> = { queued: '排队', running: '进行中', blocked: '停车等人', done: '完成', failed: '失败', timed_out: '超时', lost: '丢失', cancelled: '取消' }
 
-export { runStatus }
+export function runStatus(r: Run): 'run' | 'park' | 'done' | 'bad' {
+  if (r.legs.some(l => l.status === 'blocked')) return 'park'
+  if (r.legs.some(l => l.status === 'running')) return 'run'
+  if (r.settled?.outcome === 'done' || r.legs.every(l => l.status === 'done')) return 'done'
+  if (r.settled || r.legs.some(l => ['failed', 'timed_out', 'lost', 'cancelled'].includes(l.status))) return 'bad'
+  return 'run'
+}
 const stPill = (st: ReturnType<typeof runStatus>) => ({ run: <span className="dtc-pill dtc-p-acc">进行中</span>, park: <span className="dtc-pill dtc-p-park">停车等人</span>, done: <span className="dtc-pill dtc-p-ok">完成</span>, bad: <span className="dtc-pill dtc-p-bad">失败</span> })[st]
 const legDot = (status: string) => <span className={`dtc-dot dtc-dot-${status}`} title={LEG[status] ?? status} />
 

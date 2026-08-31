@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { AgentRow, AgentSpec, Catalog, Preview, Run, TaskEvent, TaskSpec, TryRunResult, TurnLedger } from '../wire.ts'
+import type { AgentRow, AgentSpec, Catalog, Preview, LegacyRun as Run, TaskEvent, TaskSpec, TryRunResult, TurnLedger } from '../wire.ts'
 import { Console, HASH_PREFIX, go, readRoute, type Api } from './Console.tsx'
 import { CONSOLE_REMOTE, unwrap } from './remote.ts'
 import { installStyles } from './styles.ts'

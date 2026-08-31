@@ -20,7 +20,8 @@ import {
   type HostMcp,
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
-import { EventStore, foldTurns, nextFire, parseCron, validateTask } from './tasks.ts'
+import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask } from './tasks.ts'
+import type { BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
 
@@ -282,22 +283,47 @@ export class TaskConsoleService extends TypertRemoteService {
 
   // ── tasks ──────────────────────────────────────────────────────────────
 
-  /** Every task with its runs, plus the next cron fire time; one payload for the board. */
+  private withNext(t: any) {
+    return { ...t, nextFire: t.trigger.kind === 'cron' && t.enabled ? (nextFire(parseCron(t.trigger.expr)!)?.toISOString() ?? null) : null }
+  }
+
+  /** Every map as arrays — one payload for the board and the detail page. */
+  async board(): Promise<string> {
+    const st = this.runner.store.s
+    const out: BoardView = {
+      tasks: [...st.tasks.values()].map(t => this.withNext(t)),
+      batches: [...st.batches.values()].sort((a, b) => b.firedAt.localeCompare(a.firedAt)),
+      cards: [...st.cards.values()],
+      runs: [...st.runs.values()],
+    }
+    return JSON.stringify(out)
+  }
+
+  /**
+   * Legacy projection for the 0.4 UI: a batch rendered as the old Run
+   * with `legs`. Kept until the 0.5 pages land; then removed.
+   */
   async tasks(): Promise<string> {
-    const store = this.runner.store
-    const tasks = [...store.tasks.values()].map(t => ({
-      ...t,
-      nextFire: t.trigger.kind === 'cron' && t.enabled ? (nextFire(parseCron(t.trigger.expr)!)?.toISOString() ?? null) : null,
-    }))
-    const runs = [...store.runs.values()].sort((a, b) => b.firedAt.localeCompare(a.firedAt))
-    return JSON.stringify({ tasks, runs })
+    const st = this.runner.store.s
+    const runs = [...st.batches.values()].sort((a, b) => b.firedAt.localeCompare(a.firedAt)).map(b => {
+      const legs = b.cardIds.map(id => st.cards.get(id)).filter(Boolean).map(c => {
+        const r = cardRun(st, c!)
+        const status = c!.status === 'done' || c!.status === 'review' ? 'done' : c!.status === 'running' ? 'running' : c!.status === 'blocked' ? 'blocked' : c!.status === 'failed' ? (r?.status === 'timed_out' ? 'timed_out' : r?.status === 'crashed' ? 'lost' : 'failed') : c!.status === 'cancelled' ? 'cancelled' : 'queued'
+        return { agentId: c!.agentId, status, tries: c!.runIds.length, sessionId: r?.sessionId || undefined, startedAt: c!.startedAt, endedAt: c!.endedAt, handoff: c!.summary, question: r?.status === 'blocked' ? r.question : undefined, error: c!.error }
+      })
+      const bs = batchStatus(st, b)
+      return { id: b.id, taskId: b.taskId, firedAt: b.firedAt, by: b.by, legs, ...(b.settled ? { settled: b.settled } : bs === 'done' ? { settled: { at: b.firedAt, outcome: 'done' } } : {}) }
+    })
+    return JSON.stringify({ tasks: [...st.tasks.values()].map(t => this.withNext(t)), runs })
   }
 
   async createTask(payload: string): Promise<string> {
     const presets = (this.ctx as any).get('agentPresets')
-    const ids = new Set<string>(presets ? (await presets.list() as any[]).filter(p => !p.broken).map(p => String(p.id)) : [])
+    const rows = presets ? (await presets.list() as any[]) : []
+    const ids = new Set<string>(rows.filter(p => !p.broken).map(p => String(p.id)))
     const task = validateTask(JSON.parse(payload), ids)
-    await this.runner.store.append({ t: 'task/created', at: task.createdAt, task })
+    for (const p of rows) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
+    await this.runner.store.append({ t: 'task/created', at: task.createdAt, taskId: task.id, task })
     if (task.trigger.kind === 'once') await this.runner.fire(task.id, 'manual')
     return JSON.stringify({ id: task.id })
   }
@@ -311,27 +337,40 @@ export class TaskConsoleService extends TypertRemoteService {
 
   async deleteTask(payload: string): Promise<string> {
     const { id } = JSON.parse(payload) as { id: string }
-    for (const r of this.runner.store.runs.values()) if (r.taskId === id && !r.settled) await this.runner.cancel(r.id)
+    for (const b of this.runner.store.s.batches.values()) if (b.taskId === id && !b.settled) await this.runner.cancelBatch(b.id)
     await this.runner.store.append({ t: 'task/deleted', at: new Date().toISOString(), taskId: id })
     return JSON.stringify({ ok: true })
   }
 
   async fireTask(payload: string): Promise<string> {
     const { id, by } = JSON.parse(payload) as { id: string; by?: 'manual' | 'retry' }
-    const run = await this.runner.fire(id, by === 'retry' ? 'retry' : 'manual')
-    return JSON.stringify({ runId: run.id })
+    const presets = (this.ctx as any).get('agentPresets')
+    for (const p of presets ? (await presets.list() as any[]) : []) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
+    const batch = await this.runner.fire(id, by === 'retry' ? 'retry' : 'manual')
+    return JSON.stringify({ runId: batch.id, batchId: batch.id })
   }
 
   async cancelRun(payload: string): Promise<string> {
-    const { runId } = JSON.parse(payload) as { runId: string }
-    await this.runner.cancel(runId)
+    const { runId, batchId } = JSON.parse(payload) as { runId?: string; batchId?: string }
+    await this.runner.cancelBatch(batchId ?? runId ?? '')
     return JSON.stringify({ ok: true })
   }
 
   async taskEvents(payload: string): Promise<string> {
     const { id } = JSON.parse(payload) as { id: string }
-    const runIds = new Set([...this.runner.store.runs.values()].filter(r => r.taskId === id).map(r => r.id))
-    const events = this.runner.store.all().filter((e: any) => e.taskId === id || e.task?.id === id || runIds.has(e.runId) || runIds.has(e.run?.id)).slice(-60)
-    return JSON.stringify(events)
+    return JSON.stringify(this.runner.store.all().filter((e: any) => e.taskId === id).slice(-200))
+  }
+
+  /** What one agent has been doing: cards, last run, tasks it takes part in. */
+  async agentActivity(payload: string): Promise<string> {
+    const { agentId } = JSON.parse(payload) as { agentId: string }
+    const st = this.runner.store.s
+    const cards = [...st.cards.values()].filter(c => c.agentId === agentId)
+    const runs = cards.flatMap(c => c.runIds.map(id => st.runs.get(id)).filter(Boolean)) as any[]
+    const last = runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]
+    const tasks = [...st.tasks.values()].filter(t => t.participants.some(p => p.agentId === agentId)).map(t => ({ id: t.id, title: t.title }))
+    const done = cards.filter(c => c.status === 'done' || c.status === 'review').length
+    const failed = cards.filter(c => c.status === 'failed').length
+    return JSON.stringify({ cards: cards.length, done, failed, runs: runs.length, lastRunAt: last?.startedAt ?? null, lastOutcome: last?.outcome ?? last?.status ?? null, tasks })
   }
 }

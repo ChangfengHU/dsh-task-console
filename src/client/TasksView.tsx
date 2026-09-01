@@ -41,8 +41,6 @@ export function runStatus(r: Run): 'run' | 'park' | 'review' | 'done' | 'bad' {
   if (r.settled || r.legs.some(l => ['failed', 'timed_out', 'lost', 'cancelled'].includes(l.status))) return 'bad'
   return 'run'
 }
-const stPill = (st: ReturnType<typeof runStatus>) => ({ run: <span className="dtc-pill dtc-p-acc">进行中</span>, park: <span className="dtc-pill dtc-p-park">停车等人</span>, review: <span className="dtc-pill dtc-p-warn">待验收</span>, done: <span className="dtc-pill dtc-p-ok">完成</span>, bad: <span className="dtc-pill dtc-p-bad">失败</span> })[st]
-const legDot = (status: string) => <span className={`dtc-dot dtc-dot-${status}`} title={LEG[status] ?? status} />
 
 /** Poll the board while mounted; 2.5s is fast enough to feel live. */
 export function useTasks(api: TasksApi): { tasks: TaskRow[]; runs: Run[]; reload: () => Promise<void>; error: string; loaded: boolean } {
@@ -56,30 +54,68 @@ export function useTasks(api: TasksApi): { tasks: TaskRow[]; runs: Run[]; reload
 
 const agentName = (agents: AgentRow[], id: string) => agents.find(a => a.id === id)?.name ?? id
 
-// ── board ────────────────────────────────────────────────────────────────
+// ── task home ────────────────────────────────────────────────────────────
+
+type TaskFilter = 'all' | 'active' | 'attention' | 'done' | 'schedule'
+
+function taskState(task: TaskRow, latest?: Run): ReturnType<typeof runStatus> | 'schedule' | 'idle' {
+  if (latest) return runStatus(latest)
+  return task.trigger.kind === 'cron' ? 'schedule' : 'idle'
+}
+
+const STATE_ORDER: Record<ReturnType<typeof taskState>, number> = { park: 0, review: 1, bad: 2, run: 3, schedule: 4, idle: 5, done: 6 }
+const FILTERS: { id: TaskFilter; label: string }[] = [
+  { id: 'all', label: '全部' }, { id: 'active', label: '进行中' }, { id: 'attention', label: '需要处理' }, { id: 'done', label: '已完成' }, { id: 'schedule', label: '时间表' },
+]
 
 export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: AgentRow[]; toast: (m: string) => void }) {
   const { tasks, runs, reload, error, loaded } = useTasks(api)
-  const cols = useMemo(() => {
-    const c: Record<'todo' | 'run' | 'park' | 'review' | 'done' | 'bad', JSX.Element[]> = { todo: [], run: [], park: [], review: [], done: [], bad: [] }
-    for (const t of tasks.filter(t => t.trigger.kind === 'cron')) c.todo.push(<CronCard key={t.id} t={t} agents={agents} onToggle={async () => { await api.setTaskEnabled(t.id, !t.enabled); toast(t.enabled ? '已停用' : '已启用'); await reload() }} />)
-    for (const r of runs) { const t = tasks.find(x => x.id === r.taskId); if (!t) continue; c[runStatus(r)].push(<RunCard key={r.id} r={r} t={t} agents={agents} api={api} onRetry={async () => { await api.fireTask(t.id, 'retry'); toast('已重试'); await reload() }} />) }
-    return c
+  const [filter, setFilter] = useState<TaskFilter>('all')
+  const [query, setQuery] = useState('')
+  const rows = useMemo(() => {
+    const history = new Map<string, Run[]>()
+    for (const run of runs) history.set(run.taskId, [...(history.get(run.taskId) ?? []), run])
+    return tasks.map(task => {
+      const taskRuns = (history.get(task.id) ?? []).sort((a, b) => b.firedAt.localeCompare(a.firedAt))
+      const latest = taskRuns[0]
+      return { task, latest, history: taskRuns.length, state: taskState(task, latest) }
+    }).sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || (b.latest?.firedAt ?? b.task.createdAt).localeCompare(a.latest?.firedAt ?? a.task.createdAt))
   }, [tasks, runs, agents])
-  const running = runs.filter(r => runStatus(r) === 'run').length, parked = runs.filter(r => runStatus(r) === 'park').length
+  const visible = rows.filter(row => {
+    const q = query.trim().toLowerCase()
+    if (q && !`${row.task.title} ${row.task.brief} ${row.task.participants.map(p => agentName(agents, p.agentId)).join(' ')}`.toLowerCase().includes(q)) return false
+    if (filter === 'active') return row.state === 'run'
+    if (filter === 'attention') return row.state === 'park' || row.state === 'review' || row.state === 'bad'
+    if (filter === 'done') return row.state === 'done'
+    if (filter === 'schedule') return row.task.trigger.kind === 'cron'
+    return true
+  })
+  const active = rows.filter(row => row.state === 'run').length
+  const attention = rows.filter(row => row.state === 'park' || row.state === 'review' || row.state === 'bad').length
+  const schedules = tasks.filter(task => task.trigger.kind === 'cron' && task.enabled).length
   return (
-    <>
-      <div className="dtc-bar">
-        <span><b style={{ color: 'var(--dtc-ink)' }}>{running}</b> 在跑</span><span><b style={{ color: 'var(--dtc-ink)' }}>{parked}</b> 停车等人</span><span><b style={{ color: 'var(--dtc-ink)' }}>{tasks.filter(t => t.trigger.kind === 'cron' && t.enabled).length}</b> 条时间表</span>
-        <span className="sp" />
+    <div className="dtc-taskhome">
+      <section className="dtc-taskintro">
+        <div>
+          <div className="dtc-eyebrow">TASK ORCHESTRATION</div>
+          <h1>任务中心</h1>
+          <p>用预置 Agent 组成执行链，集中查看依赖、验收、交接和最终产物。</p>
+        </div>
+        <div className="dtc-storage"><span className="db">▤</span><div><b>本地 SQLite</b><span>任务数据保存在这台 DSH</span></div><i>已连接</i></div>
+      </section>
+      <section className="dtc-taskmetrics">
+        <div><span>任务组</span><b>{tasks.length}</b><small>可重复运行的目标</small></div>
+        <div><span>正在执行</span><b className="acc">{active}</b><small>当前活跃任务</small></div>
+        <div><span>需要处理</span><b className={attention ? 'warn' : ''}>{attention}</b><small>等待回答、验收或重试</small></div>
+        <div><span>已启用时间表</span><b>{schedules}</b><small>按计划自动触发</small></div>
+      </section>
+      <div className="dtc-tasktools">
+        <div className="dtc-taskfilters">{FILTERS.map(item => <button key={item.id} className={filter === item.id ? 'on' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>)}</div>
+        <label className="dtc-tasksearch"><span>⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务或 Agent" /></label>
       </div>
       {error ? <div className="dtc-err">{error}</div> : null}
-      <div style={{ overflowX: 'auto' }}><div className="dtc-cols">
-        {([['todo', '待触发'], ['run', '进行中'], ['park', '停车等人'], ['review', '待验收'], ['done', '完成'], ['bad', '失败']] as const).map(([k, n]) => (
-          <div key={k} className="dtc-col"><div className="dtc-colh"><span>{n}</span><span>{cols[k].length}</span></div>{cols[k].length ? cols[k] : <div className="dtc-empty" style={{ padding: 20 }}>{loaded ? '空' : <span className="dtc-spin" />}</div>}</div>
-        ))}
-      </div></div>
-    </>
+      {!loaded ? <div className="dtc-empty"><span className="dtc-spin" /> 读取任务…</div> : visible.length ? <div className="dtc-taskgrid">{visible.map(row => <TaskGroupCard key={row.task.id} {...row} agents={agents} api={api} reload={reload} toast={toast} />)}</div> : <div className="dtc-taskempty"><span>▦</span><b>{query ? '没有匹配的任务' : '这个视图还没有任务'}</b><p>{query ? '换一个关键词试试。' : '新建任务后，角色、依赖和运行状态会显示在这里。'}</p>{!query ? <button className="dtc-btn pri" onClick={() => go('tasks/new')}>＋ 新建任务</button> : null}</div>}
+    </div>
   )
 }
 
@@ -90,34 +126,33 @@ function flowOf(r: Run, agents: AgentRow[]) {
   return <span className="dtc-flow">{r.legs.map((l, i) => <span key={i}>{i ? <span className="ar">→</span> : null}<span className={`dot ${l.status}`} /><span className="nm">{agentName(agents, l.agentId)}</span></span>)}</span>
 }
 
-function CronCard({ t, agents, onToggle }: { t: TaskRow; agents: AgentRow[]; onToggle: () => void }) {
+function TaskGroupCard({ task, latest, history, state, agents, api, reload, toast }: {
+  task: TaskRow; latest?: Run; history: number; state: ReturnType<typeof taskState>; agents: AgentRow[]; api: TasksApi; reload: () => Promise<void>; toast: (m: string) => void
+}) {
+  const current = latest?.legs.find(leg => leg.status === 'running' || leg.status === 'blocked' || leg.status === 'review') ?? latest?.legs.at(-1)
+  const done = latest?.legs.filter(leg => leg.status === 'done').length ?? 0
+  const total = latest?.legs.length ?? task.participants.length
+  const status = ({ run: ['进行中', 'dtc-p-acc'], park: ['等待回答', 'dtc-p-park'], review: ['待验收', 'dtc-p-warn'], done: ['已完成', 'dtc-p-ok'], bad: ['执行失败', 'dtc-p-bad'], schedule: [task.enabled ? '等待触发' : '已停用', 'dtc-p-grey'], idle: ['尚未运行', 'dtc-p-grey'] } as const)[state]
+  const progress = total ? Math.round(done / total * 100) : 0
+  const toggleSchedule = async () => { await api.setTaskEnabled(task.id, !task.enabled); toast(task.enabled ? '已停用时间表' : '已启用时间表'); await reload() }
+  const retry = async () => { await api.fireTask(task.id, 'retry'); toast('已创建重试运行'); await reload() }
   return (
-    <div className="dtc-tcard s-cron" onClick={() => go(`tasks/${t.id}`)}>
-      <div className="t"><span>{t.title}</span><span className="id dtc-mono">{t.id}</span></div>
-      <div className="l dtc-mono">{cronHuman(t.trigger.kind === 'cron' ? t.trigger.expr : '')}</div>
-      <div className="l">{t.enabled && t.nextFire ? `下次 ${fmt(t.nextFire)}` : '已停用'} <span className={`dtc-tog ${t.enabled ? 'on' : ''}`} onClick={e => { e.stopPropagation(); onToggle() }} /></div>
-      <div className="l">{pipe(t, agents)}</div>
-    </div>
-  )
-}
-
-function RunCard({ r, t, agents, onRetry, api }: { r: Run; t: TaskSpec; agents: AgentRow[]; onRetry: () => void; api: TasksApi }) {
-  const st = runStatus(r)
-  const cur = r.legs.find(l => l.status === 'running' || l.status === 'blocked') ?? [...r.legs].reverse().find(l => l.status !== 'queued') ?? r.legs[0]
-  const idx = r.legs.indexOf(cur)
-  let line = ''
-  if (st === 'run') line = `${agentName(agents, cur.agentId)}在做 · 第 ${idx + 1}/${r.legs.length} 棒 · ${dur(cur.startedAt)}`
-  if (st === 'done') line = `${r.legs.length > 1 ? `${r.legs.length} 棒全部交卷` : '完成'} · ${dur(r.legs[0].startedAt, r.legs[r.legs.length - 1].endedAt)}`
-  if (st === 'review') line = `${agentName(agents, cur.agentId)}已提交，等待人工验收`
-  if (st === 'bad') line = `${agentName(agents, cur.agentId)} · ${LEG[cur.status] ?? cur.status}${cur.error ? ' · ' + cur.error.slice(0, 40) : ''}`
-  return (
-    <div className={`dtc-tcard s-${st}`} onClick={() => go(`tasks/${t.id}/runs/${r.id}`)}>
-      <div className="t" title={r.id}><span>{t.title}</span></div>
-      {flowOf(r, agents)}
-      {st === 'park' ? <div className="q">? {cur.question}</div> : <div className="l">{st === 'run' ? <span className="dtc-live" /> : null}{line}</div>}
-      <div className="foot"><span className="when" title={fmt(r.firedAt)}>{ago(r.firedAt)} · {BY[r.by]}</span>
-        {st === 'bad' ? <button className="dtc-btn sm" onClick={e => { e.stopPropagation(); onRetry() }}>重试</button> : null}
-        {st === 'park' && cur.sessionId ? <button className="dtc-btn sm pri" onClick={e => { e.stopPropagation(); closeConsole(); void api.openSession(cur.sessionId!) }}>去回答</button> : null}
+    <div className={`dtc-taskgroup s-${state}`} role="button" tabIndex={0} data-task-id={task.id} onClick={() => go(`tasks/${task.id}`)} onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) go(`tasks/${task.id}`) }}>
+      <div className="dtc-taskgroup-head"><div className="mark">{task.title.trim().charAt(0) || '任'}</div><div className="copy"><h2>{task.title}</h2><span className="dtc-mono">{task.id}</span></div><span className={`dtc-pill ${status[1]}`}>{status[0]}</span></div>
+      <p className="brief">{task.brief}</p>
+      <div className="dtc-taskgroup-flow">{latest ? flowOf(latest, agents) : pipe(task, agents)}</div>
+      {latest ? <div className="dtc-taskprogress"><div><span>最近一次进度</span><b>{done}/{total}</b></div><div className="track"><i style={{ width: `${progress}%` }} /></div></div> : null}
+      {state === 'park' && current?.question ? <div className="dtc-tasknotice ask"><b>{agentName(agents, current.agentId)} 正在等你</b><span>{current.question}</span></div> : null}
+      {state === 'review' && current ? <div className="dtc-tasknotice review"><b>{agentName(agents, current.agentId)} 已提交</b><span>验收通过后才会启动下游任务。</span></div> : null}
+      {state === 'bad' && current ? <div className="dtc-tasknotice bad"><b>{agentName(agents, current.agentId)} 执行失败</b><span>{current.error || LEG[current.status] || current.status}</span></div> : null}
+      <div className="dtc-taskgroup-foot"><div>
+        {task.trigger.kind === 'cron' ? <><span className="dtc-mono">{cronHuman(task.trigger.expr)}</span><span>{task.enabled && task.nextFire ? `下次 ${fmt(task.nextFire)}` : '时间表已停用'}</span></> : latest ? <><span>{ago(latest.firedAt)} · {BY[latest.by]}</span><span>{history} 次运行</span></> : <span>单次任务</span>}
+        </div><div className="acts">
+          {task.trigger.kind === 'cron' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void toggleSchedule() }}>{task.enabled ? '停用' : '启用'}</button> : null}
+          {state === 'bad' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void retry() }}>重试</button> : null}
+          {state === 'park' && current?.sessionId ? <button className="dtc-btn sm pri" onClick={event => { event.stopPropagation(); closeConsole(); void api.openSession(current.sessionId!) }}>去回答</button> : null}
+          <span className="open">查看详情 →</span>
+        </div>
       </div>
     </div>
   )

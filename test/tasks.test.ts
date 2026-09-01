@@ -37,7 +37,7 @@ test('validateTask fills defaults and rejects unknown agents', () => {
   assert.equal(t.title, '给 84.8.217.46 装 clash'); assert.equal(t.maxTries, 5); assert.equal(t.timeoutSec, 1800); assert.equal(t.trigger.kind, 'once')
 })
 
-test('EventStore migrates an old-shape file on load and appends new-shape events', async () => {
+test('EventStore imports old JSONL into SQLite once and appends there', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tc-store-'))
   const old = [
     { t: 'task/created', at: '1', task },
@@ -52,5 +52,8 @@ test('EventStore migrates an old-shape file on load and appends new-shape events
   await store.append({ t: 'card/ready', at: '7', taskId: 'T-1', cardId: 'r-9#1' })
   assert.equal(store.s.cards.get('r-9#1')!.status, 'ready')
   const lines = (await readFile(join(dir, 'events.jsonl'), 'utf8')).trim().split('\n')
-  assert.equal(lines.length, 5); assert.match(lines[0], /leg|task/)   // old lines untouched, new line appended
+  assert.equal(lines.length, 4); assert.match(lines[0], /leg|task/)   // old log stays untouched
+  assert.equal((await readFile(join(dir, 'task.db'))).subarray(0, 16).toString(), 'SQLite format 3\u0000')
+  const reloaded = new EventStore(dir); await reloaded.load()
+  assert.equal(reloaded.all().length, 5); assert.equal(reloaded.s.cards.get('r-9#1')!.status, 'ready')
 })

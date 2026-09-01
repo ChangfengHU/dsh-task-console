@@ -1,7 +1,7 @@
 {
   "name": "dsh-task-console",
-  "version": "0.7.0",
-  "description": "Agent and task console for DeepSeek Harness with a Hermes-inspired D1 coordination kernel and host-safe public HTML delivery.",
+  "version": "0.8.2",
+  "description": "Local-first Agent presets and task orchestration for DeepSeek Harness, backed by SQLite.",
   "license": "MIT",
   "type": "module",
   "main": "./lib/index.js",
@@ -36,6 +36,7 @@
   "keywords": ["dsh-plugin", "deepseek-harness", "agent-preset", "task-console"],
   "repository": { "type": "git", "url": "https://github.com/ChangfengHU/dsh-task-console" },
   "dependencies": {
+    "sql.js": "1.14.2",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },

@@ -2,7 +2,7 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.12):** adds a topology-driven execution DAG above the 0.11 local SQLite kernel. Role tasks, reviewers, startup/handoff/review gates, and terminal state are first-class nodes; durable dependencies always point forward, while historical rework is rendered as a separate feedback overlay. Selecting any node synchronizes the evidence inspector, and the event stream is now a collapsible replay surface instead of a competing second dashboard.
+**This release (0.13):** unrolls upstream rework into explicit rounds. Every durable Planner, Executor, and Reviewer Run appears once in `Plannerₙ → Gateₙ → Executorₙ → Reviewerₙ → Decisionₙ`; a rejected decision points forward to a new Planner node instead of drawing a confusing loop back to an old node. Round lanes, exact-Run inspection, gate-specific evidence, and event playback now show how a multi-round task actually converged while keeping the execution graph acyclic.
 
 The plugin remains local-first: `~/.dsh/task-console/task.db` is the only runtime database, and no Cloudflare account or network database is required. An existing `events.jsonl` or pre-0.11 SQLite event table is imported once and retained for rollback and audit. The D1 experiment remains in the source repository for research only and is excluded from the npm package.
 

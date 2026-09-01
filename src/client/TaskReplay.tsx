@@ -77,7 +77,6 @@ function TaskDag({ graph, cards, selected, onSelect }: { graph: PositionedTaskGr
   const [zoom, setZoom] = useState(.9)
   const viewport = useRef<HTMLDivElement | null>(null)
   const cardById = new Map(cards.map(card => [card.id, card]))
-  const nodeById = new Map(graph.nodes.map(node => [node.id, node]))
   const nodeWidth = 184
   const nodeHeight = 96
   const flowPath = (from: string, to: string) => {
@@ -92,6 +91,12 @@ function TaskDag({ graph, cards, selected, onSelect }: { graph: PositionedTaskGr
     const sx = a.x + nodeWidth / 2; const sy = a.y + nodeHeight; const tx = b.x + nodeWidth / 2; const ty = b.y + nodeHeight; const floor = graph.height - 30 - index * 16
     return `M ${sx} ${sy} C ${sx} ${floor}, ${tx} ${floor}, ${tx} ${ty}`
   }
+  const reworkPath = (from: string, to: string) => {
+    const a = graph.positions.get(from); const b = graph.positions.get(to)
+    if (!a || !b) return ''
+    const sx = a.x + nodeWidth / 2; const sy = a.y + nodeHeight; const tx = b.x; const ty = b.y + nodeHeight / 2; const lane = Math.round((sy + b.y) / 2)
+    return `M ${sx} ${sy} L ${sx} ${lane} L ${tx - 32} ${lane} L ${tx - 32} ${ty} L ${tx} ${ty}`
+  }
   const icon = (node: TaskGraphNode) => {
     if (node.kind === 'gate') return '◇'
     if (node.kind === 'reviewer') return '🦉'
@@ -101,19 +106,23 @@ function TaskDag({ graph, cards, selected, onSelect }: { graph: PositionedTaskGr
     return ROLE_ICONS[(card?.index ?? 0) % ROLE_ICONS.length]
   }
   const feedback = graph.edges.filter(edge => edge.kind === 'feedback')
+  const reworks = graph.edges.filter(edge => edge.kind === 'rework')
+  const rounds = [...new Set(graph.nodes.flatMap(node => node.round ? [node.round] : []))]
   const fitGraph = () => {
     const width = viewport.current?.clientWidth ?? graph.width
     const height = viewport.current?.clientHeight ?? graph.height
     setZoom(Math.max(.35, Math.min(1.15, +Math.min((width - 24) / graph.width, (height - 24) / graph.height).toFixed(2))))
   }
   return <div className="dtc-dag-wrap">
-    <div className="dtc-dag-tools"><div className="dtc-dag-legend"><span><i className="role" />角色任务</span><span><i className="reviewer" />评估者</span><span><i className="gate" />控制闸门</span><span><i className="feedback" />历史返工</span></div><div className="dtc-dag-zoom"><button title="缩小" onClick={() => setZoom(value => Math.max(.35, +(value - .1).toFixed(2)))} disabled={zoom <= .35}>−</button><b>{Math.round(zoom * 100)}%</b><button title="放大" onClick={() => setZoom(value => Math.min(1.15, +(value + .1).toFixed(2)))} disabled={zoom >= 1.15}>＋</button><button title="完整显示全部节点" onClick={fitGraph}>全图</button></div></div>
+    <div className="dtc-dag-tools"><div className="dtc-dag-legend"><span><i className="role" />角色 Run</span><span><i className="reviewer" />评估者</span><span><i className="gate" />控制闸门</span>{graph.mode === 'rounds' ? <span><i className="rework" />进入下一轮</span> : <span><i className="feedback" />历史返工</span>}</div><div className="dtc-dag-zoom"><button title="缩小" onClick={() => setZoom(value => Math.max(.35, +(value - .1).toFixed(2)))} disabled={zoom <= .35}>−</button><b>{Math.round(zoom * 100)}%</b><button title="放大" onClick={() => setZoom(value => Math.min(1.15, +(value + .1).toFixed(2)))} disabled={zoom >= 1.15}>＋</button><button title="完整显示全部节点" onClick={fitGraph}>全图</button></div></div>
     <div className="dtc-dag-viewport" ref={viewport}>
       <div className="dtc-dag-scaled" style={{ width: graph.width * zoom, height: graph.height * zoom }}>
         <div className="dtc-dag-surface" style={{ width: graph.width, height: graph.height, transform: `scale(${zoom})` }}>
+          {rounds.map(round => <div key={round} className="dtc-dag-round-band" style={{ top: 39 + (round - 1) * 166 }}><b>ROUND {String(round).padStart(2, '0')}</b><span>{graph.nodes.find(node => node.round === round && node.gateType === 'decision')?.status === 'changes' ? '已退回，已生成下一轮' : graph.nodes.find(node => node.round === round && node.gateType === 'decision')?.status === 'approved' ? '验收通过' : '运行 / 等待决策'}</span></div>)}
           <svg className="dtc-dag-edges" width={graph.width} height={graph.height} viewBox={`0 0 ${graph.width} ${graph.height}`} aria-hidden="true">
-            <defs><marker id="dtc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker><marker id="dtc-feedback-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>
-            {graph.edges.filter(edge => edge.kind !== 'feedback').map(edge => { const a = graph.positions.get(edge.from); const b = graph.positions.get(edge.to); if (!a || !b) return null; const sx = a.x + nodeWidth; const tx = b.x; const sy = a.y + nodeHeight / 2; const ty = b.y + nodeHeight / 2; return <g key={edge.id} className={`dtc-dag-edge ${edge.kind}`}><path d={flowPath(edge.from, edge.to)} markerEnd="url(#dtc-arrow)" />{edge.label ? <text x={(sx + tx) / 2} y={(sy + ty) / 2 - 8}>{edge.label}</text> : null}</g> })}
+            <defs><marker id="dtc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker><marker id="dtc-rework-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker><marker id="dtc-feedback-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>
+            {graph.edges.filter(edge => edge.kind !== 'feedback' && edge.kind !== 'rework').map(edge => { const a = graph.positions.get(edge.from); const b = graph.positions.get(edge.to); if (!a || !b) return null; const sx = a.x + nodeWidth; const tx = b.x; const sy = a.y + nodeHeight / 2; const ty = b.y + nodeHeight / 2; return <g key={edge.id} className={`dtc-dag-edge ${edge.kind}`}><path d={flowPath(edge.from, edge.to)} markerEnd="url(#dtc-arrow)" />{edge.label ? <text x={(sx + tx) / 2} y={(sy + ty) / 2 - 8}>{edge.label}</text> : null}</g> })}
+            {reworks.map(edge => { const a = graph.positions.get(edge.from); const b = graph.positions.get(edge.to); if (!a || !b) return null; const lane = Math.round((a.y + nodeHeight + b.y) / 2); return <g key={edge.id} className="dtc-dag-edge rework"><path d={reworkPath(edge.from, edge.to)} markerEnd="url(#dtc-rework-arrow)" /><text x={(a.x + b.x + nodeWidth) / 2} y={lane - 7}>{edge.label}</text></g> })}
             {feedback.map((edge, index) => { const a = graph.positions.get(edge.from); const b = graph.positions.get(edge.to); if (!a || !b) return null; const floor = graph.height - 30 - index * 16; return <g key={edge.id} className="dtc-dag-edge feedback"><path d={feedbackPath(edge.from, edge.to, index)} markerEnd="url(#dtc-feedback-arrow)" /><text x={(a.x + b.x) / 2 + nodeWidth / 2} y={floor - 7}>{edge.label}</text></g> })}
           </svg>
           {graph.nodes.map(node => { const pos = graph.positions.get(node.id); if (!pos) return null; const card = node.cardId ? cardById.get(node.cardId) : undefined; return <button type="button" key={node.id} data-node-id={node.id} className={`dtc-dag-node k-${node.kind} s-${node.status} ${selected === node.id ? 'selected' : ''}`} style={{ left: pos.x, top: pos.y }} onClick={() => onSelect(node)}>
@@ -122,7 +131,7 @@ function TaskDag({ graph, cards, selected, onSelect }: { graph: PositionedTaskGr
         </div>
       </div>
     </div>
-    {feedback.length ? <div className="dtc-dag-feedback-note"><b>↩ {feedback.length} 条返工反馈边</b><span>红色虚线只表示历史退回，不参与 DAG 拓扑排序。</span></div> : null}
+    {reworks.length ? <div className="dtc-dag-feedback-note real"><b>↳ {reworks.length} 次真实返工</b><span>每次退回都生成下一轮新角色 Run；旧轮次保持只读，因此整张图仍是有向无环图。</span></div> : feedback.length ? <div className="dtc-dag-feedback-note"><b>↩ {feedback.length} 条返工反馈边</b><span>红色虚线只表示历史退回，不参与 DAG 拓扑排序。</span></div> : null}
   </div>
 }
 
@@ -212,11 +221,11 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
   const metricCards = cursor === null ? cardsFull : cardsNow
   const doneCount = metricCards.filter(card => card.status === 'done').length
   const activeCount = metricCards.filter(card => card.status === 'running' || card.status === 'blocked' || card.status === 'review').length
-  const dependencyCount = cardsFull.reduce((sum, card) => sum + card.deps.length, 0)
   const claimCount = batchEvents.filter(({ e }) => e.t === 'run/claimed').length
   const progress = metricCards.length ? Math.round(doneCount / metricCards.length * 100) : 0
   const graph = layoutTaskGraph(buildTaskGraph(cardsNow, now, reviewCycles, agentName))
-  const selectedNode = graph.nodes.find(node => node.id === selectedGraphNode) ?? (selected ? graph.nodes.find(node => node.id === `role:${selected.id}`) : undefined)
+  const directedEdgeCount = graph.edges.filter(edge => edge.kind !== 'feedback').length
+  const selectedNode = graph.nodes.find(node => node.id === selectedGraphNode) ?? (selected ? [...graph.nodes].reverse().find(node => node.cardId === selected.id && (node.kind === 'role' || node.kind === 'reviewer')) : undefined)
   const currentBatchEvent = eventStep ? batchEvents[eventStep - 1] : undefined
 
   const seekBatchStep = (step: number) => {
@@ -253,13 +262,13 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
       <section className="dtc-cartoon-summary dtc-dag-summary">
         <div><span>事项组进度</span><strong>{doneCount} / {metricCards.length}</strong><div className="track"><i style={{ width: `${progress}%` }} /></div></div>
         <div><span>当前状态</span><strong>{bst ? BS[bst].label : '未运行'}</strong><em>{activeCount ? `${activeCount} 个角色等待处理` : total ? `总耗时 ${total}` : '等待首次调度'}</em></div>
-        <div><span>DAG 结构</span><strong>{graph.nodes.length} 节点</strong><em>{dependencyCount} 条依赖 · {graph.nodes.filter(node => node.kind === 'gate').length} 个闸门</em></div>
+        <div><span>DAG 结构</span><strong>{graph.nodes.length} 节点</strong><em>{directedEdgeCount} 条有向边 · {graph.nodes.filter(node => node.kind === 'gate').length} 个闸门</em></div>
         <div><span>运行证据</span><strong>{claimCount} Runs</strong><em>{reviewCycles.length} 次评审 · {reworkCycles.length} 次返工</em></div>
       </section>
 
       <section className="dtc-dag-cockpit">
         <main className="dtc-cpanel dtc-dag-panel">
-          <div className="dtc-cpanel-head"><div><b>执行依赖 DAG</b><small>实线是可调度依赖；闸门是一等控制节点；红色虚线是历史返工反馈</small></div><code>{batchFull?.id ?? '尚未创建'}</code></div>
+          <div className="dtc-cpanel-head"><div><b>执行依赖 DAG</b><small>{graph.mode === 'rounds' ? '每轮都是独立 Run；橙色返工边进入下一轮新规划者，不回指旧节点' : '实线是可调度依赖；闸门是一等控制节点；红色虚线是历史返工反馈'}</small></div><code>{batchFull?.id ?? '尚未创建'}</code></div>
           {cardsNow.length ? <TaskDag graph={graph} cards={cardsNow} selected={selectedNode?.id ?? null} onSelect={selectNode} /> : <div className="dtc-empty">这个时刻还没有运行。</div>}
           <div className={`dtc-replaybar ${playing ? 'playing' : ''}`} aria-label="任务运行回放">
             <div className="dtc-replay-now"><span>{playing ? '正在自动回放' : cursor === null ? '实时状态' : eventStep ? `事件 ${eventStep}` : '运行起点'}</span><b>{String(eventStep).padStart(2, '0')} / {String(batchEvents.length).padStart(2, '0')}</b><small>{currentBatchEvent ? `${fmt(currentBatchEvent.e.at)} · ${describe(currentBatchEvent.e, now, agentName)}` : '等待调度器触发这个批次'}</small></div>
@@ -276,7 +285,7 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
 
         <aside className="dtc-cpanel dtc-dag-inspector">
           <div className="dtc-cpanel-head"><div><b>节点检查器</b><small>点击图中角色或闸门，右侧证据同步切换</small></div>{selectedNode ? <span>{selectedNode.kind.toUpperCase()}</span> : null}</div>
-          {selectedNode?.cardId && selected ? <CardEvidence focus={selectedNode.kind === 'gate' ? 'gate' : selectedNode.kind === 'reviewer' || selectedNode.kind === 'human' ? 'claim' : 'handoff'} preferredProfileId={selectedNode.agentId} api={api} taskId={id} batchId={batchFull?.id} card={selected} parents={selected.deps.map(dep => full.cards.get(dep)).filter(Boolean) as Card[]} reworkTargets={cardsFull.filter(card => card.index <= selected.index)} gates={reviewCycles.filter(cycle => cycle.cardId === selected.id)} runs={selected.runIds.map(rid => full.runs.get(rid)).filter(Boolean) as Run[]} artifacts={artifacts.filter(a => a.cardId === selected.id)} agentName={agentName(selected.agentId)} labelOf={agentName} toast={toast} refreshArtifacts={refreshArtifacts} /> : <div className="dtc-dag-terminal"><span>{selectedNode?.id === 'terminal:finish' ? '✓' : '▶'}</span><b>{selectedNode?.title ?? '选择一个节点'}</b><p>{selectedNode?.subtitle ?? '查看角色、闸门、Run 和交付证据。'}</p></div>}
+          {selectedNode?.cardId && selected ? <CardEvidence focus={selectedNode.kind === 'gate' ? 'gate' : selectedNode.kind === 'reviewer' || selectedNode.kind === 'human' ? 'claim' : 'handoff'} preferredProfileId={selectedNode.agentId} preferredRunId={selectedNode.runId} preferredGateRound={selectedNode.round} gateType={selectedNode.gateType} api={api} taskId={id} batchId={batchFull?.id} card={selected} parents={selected.deps.map(dep => full.cards.get(dep)).filter(Boolean) as Card[]} reworkTargets={cardsFull.filter(card => card.index <= selected.index)} gates={reviewCycles.filter(cycle => cycle.cardId === selected.id)} runs={selected.runIds.map(rid => full.runs.get(rid)).filter(Boolean) as Run[]} artifacts={artifacts.filter(a => a.cardId === selected.id)} agentName={agentName(selected.agentId)} labelOf={agentName} toast={toast} refreshArtifacts={refreshArtifacts} /> : <div className="dtc-dag-terminal"><span>{selectedNode?.id === 'terminal:finish' ? '✓' : '▶'}</span><b>{selectedNode?.title ?? '选择一个节点'}</b><p>{selectedNode?.subtitle ?? '查看角色、闸门、Run 和交付证据。'}</p></div>}
         </aside>
       </section>
 
@@ -307,17 +316,18 @@ function ResultPanel({ api, taskId, batchId, status, summary, metadata, artifact
 
 type EvidenceTab = 'handoff' | 'claim' | 'ledger' | 'gate' | 'artifacts'
 
-function CardEvidence({ api, taskId, batchId, card, parents, reworkTargets, gates, runs, artifacts, agentName, labelOf, toast, refreshArtifacts, focus = 'handoff', preferredProfileId }: { api: TasksApi & LedgerApi; taskId: string; batchId?: string; card: Card; parents: Card[]; reworkTargets: Card[]; gates: ReviewGateCycle[]; runs: Run[]; artifacts: ArtifactView[]; agentName: string; labelOf: (id: string) => string; toast: (m: string) => void; refreshArtifacts: () => Promise<void>; focus?: EvidenceTab; preferredProfileId?: string }) {
-  const latest = (preferredProfileId ? [...runs].reverse().find(run => run.profileId === preferredProfileId) : undefined) ?? runs[runs.length - 1]
+function CardEvidence({ api, taskId, batchId, card, parents, reworkTargets, gates, runs, artifacts, agentName, labelOf, toast, refreshArtifacts, focus = 'handoff', preferredProfileId, preferredRunId, preferredGateRound, gateType }: { api: TasksApi & LedgerApi; taskId: string; batchId?: string; card: Card; parents: Card[]; reworkTargets: Card[]; gates: ReviewGateCycle[]; runs: Run[]; artifacts: ArtifactView[]; agentName: string; labelOf: (id: string) => string; toast: (m: string) => void; refreshArtifacts: () => Promise<void>; focus?: EvidenceTab; preferredProfileId?: string; preferredRunId?: string; preferredGateRound?: number; gateType?: 'release' | 'decision' }) {
+  const latest = (preferredRunId ? runs.find(run => run.id === preferredRunId) : undefined) ?? (preferredProfileId ? [...runs].reverse().find(run => run.profileId === preferredProfileId) : undefined) ?? runs[runs.length - 1]
   const [runId, setRunId] = useState<string | undefined>(latest?.id)
   const [tab, setTab] = useState<EvidenceTab>(focus)
   const [reviewNote, setReviewNote] = useState('')
   const [reworkTarget, setReworkTarget] = useState(card.deps[0] ?? card.id)
   const [busy, setBusy] = useState(false)
   const run = runs.find(r => r.id === runId) ?? latest
-  const latestGate = gates[gates.length - 1]
-  const humanReviewPending = card.status === 'review' && latestGate?.mode !== 'agent'
-  useEffect(() => { setRunId(latest?.id) }, [card.id, runs.length, preferredProfileId])
+  const currentGate = gates[gates.length - 1]
+  const latestGate = (preferredGateRound ? gates.find(gate => gate.round === preferredGateRound) : undefined) ?? currentGate
+  const humanReviewPending = gateType !== 'release' && card.status === 'review' && latestGate === currentGate && latestGate?.status === 'pending' && latestGate.mode !== 'agent'
+  useEffect(() => { setRunId(latest?.id) }, [card.id, runs.length, preferredProfileId, preferredRunId])
   useEffect(() => { setTab(focus) }, [card.id, focus])
   useEffect(() => { setReworkTarget(card.deps[0] ?? card.id) }, [card.id])
   const { ledger, error } = useLedger(api, tab === 'ledger' ? run?.sessionId : undefined, run?.status === 'running' || run?.status === 'blocked')
@@ -346,7 +356,7 @@ function CardEvidence({ api, taskId, batchId, card, parents, reworkTargets, gate
     {tab === 'claim' ? <div className="dtc-tabbody"><div className="dtc-cartoon-note"><h4>🔐 真实领取记录</h4><p>Hermes 兼容内核使用 SQLite 事务和 CAS claim；每次执行、评审和返工都有独立 Run，并保留锁与 Session 的绑定。</p></div><div className="dtc-kv dtc-runfacts"><span className="k">Run</span><span className="dtc-mono">{run?.id || '—'}</span><span className="k">执行 Preset</span><span>{run ? labelOf(run.profileId ?? card.agentId) : '—'}</span><span className="k">尝试</span><span>{run?.attempt ?? 0} / {card.runIds.length || 1}</span><span className="k">领取</span><span>{fmt(run?.startedAt) || '—'}</span><span className="k">会话创建</span><span>{fmt(run?.sessionCreatedAt) || '等待中'}</span><span className="k">提示词发送</span><span>{fmt(run?.promptDispatchedAt) || '等待中'}</span><span className="k">Session</span><span className="dtc-mono">{run?.sessionId || '—'}</span></div></div> : null}
     {tab === 'ledger' ? <div className="dtc-tabbody">{error ? <div className="dtc-err">{error}</div> : ledger ? <TurnLedgerView ledger={ledger} compact /> : run?.sessionId ? <div className="dtc-empty"><span className="dtc-spin" /> 折叠会话日志…</div> : <div className="dtc-empty">没有会话。</div>}</div> : null}
     {tab === 'gate' ? <div className="dtc-tabbody">
-      <div className={`dtc-cartoon-gate ${card.status === 'review' ? 'pending' : latestGate?.status ?? ''}`}><span>{card.status === 'review' ? '🚪' : latestGate?.status === 'approved' ? '✅' : latestGate?.status === 'changes' ? '↩' : '🪁'}</span><div><b>{humanReviewPending ? '正在等待人工验收' : card.status === 'review' && latestGate?.mode === 'agent' ? `等待 ${labelOf(latestGate.reviewerId ?? '')} 评审` : latestGate?.status === 'approved' ? `${latestGate.mode === 'agent' ? 'Agent 评审' : '人工闸门'}已批准` : latestGate?.status === 'changes' ? `已退回 ${labelOf(reworkTargets.find(target => target.id === latestGate.targetCardId)?.agentId ?? '')}` : '这个角色还没有创建评审闸门'}</b><p>{humanReviewPending ? '批准前不会放行下游，也不会结算整个任务组。退回时可选择从哪个上游角色重新开始。' : card.status === 'review' && latestGate?.mode === 'agent' ? '评估者将通过 CAS 领取同一张卡；通过或退回都会写入独立 Run。' : latestGate?.status === 'approved' ? '评审事件已写入事件流，下游可以继续。' : latestGate?.status === 'changes' ? latestGate.note : 'Agent 调用 task_request_review 后才会创建控制节点。'}</p></div></div>
+      {gateType === 'release' ? <div className={`dtc-cartoon-gate ${run?.status === 'done' && run.outcome === 'completed' ? 'approved' : 'pending'}`}><span>{run?.status === 'done' && run.outcome === 'completed' ? '🔓' : '🔒'}</span><div><b>第 {preferredGateRound ?? 1} 轮执行闸门{run?.status === 'done' && run.outcome === 'completed' ? '已放开' : '正在等待规划者'}</b><p>{run?.status === 'done' && run.outcome === 'completed' ? '规划 Run 已完成并写入 Handoff，执行者依赖满足后才能 CAS 领取。' : '规划者完成本轮计划前，执行者和评估者都保持等待，不会提前领取。'}</p></div></div> : <div className={`dtc-cartoon-gate ${latestGate?.status ?? 'pending'}`}><span>{latestGate?.status === 'pending' ? '🚪' : latestGate?.status === 'approved' ? '✅' : latestGate?.status === 'changes' ? '↩' : '🪁'}</span><div><b>{humanReviewPending ? '正在等待人工验收' : latestGate?.status === 'pending' && latestGate.mode === 'agent' ? `等待 ${labelOf(latestGate.reviewerId ?? '')} 评审` : latestGate?.status === 'approved' ? `${latestGate.mode === 'agent' ? 'Agent 评审' : '人工闸门'}已批准` : latestGate?.status === 'changes' ? `已退回 ${labelOf(reworkTargets.find(target => target.id === latestGate.targetCardId)?.agentId ?? '')}` : '这个角色还没有创建评审闸门'}</b><p>{humanReviewPending ? '批准前不会放行下游，也不会结算整个任务组。退回时可选择从哪个上游角色重新开始。' : latestGate?.status === 'pending' && latestGate.mode === 'agent' ? '评估者将通过 CAS 领取同一张卡；通过或退回都会写入独立 Run。' : latestGate?.status === 'approved' ? '评审事件已写入事件流，下游可以继续。' : latestGate?.status === 'changes' ? latestGate.note : 'Agent 调用 task_request_review 后才会创建控制节点。'}</p></div></div>}
       {gates.length ? <div className="dtc-gate-history"><h4>闸门历史</h4>{gates.map(gate => <div key={gate.runId}><span>Gate #{gate.round} · {gate.mode === 'agent' ? labelOf(gate.reviewerId ?? '') : '人工'}</span><b>{gate.status === 'pending' ? '等待决策' : gate.status === 'approved' ? '通过' : `退回 ${labelOf(reworkTargets.find(target => target.id === gate.targetCardId)?.agentId ?? '')}`}</b><small>{fmt(gate.requestedAt)}{gate.note ? ` · ${gate.note}` : ''}</small></div>)}</div> : null}
       {humanReviewPending ? <div className="dtc-review"><textarea value={reviewNote} onChange={e => setReviewNote(e.target.value)} placeholder="验收意见；退回修改时必填" /><label className="dtc-rework-target">退回到<select value={reworkTarget} onChange={e => setReworkTarget(e.target.value)}>{reworkTargets.map(target => <option value={target.id} key={target.id}>{target.index + 1}. {labelOf(target.agentId)}{target.id === card.deps[0] ? '（默认）' : ''}</option>)}</select></label><div className="dtc-chips"><button className="dtc-btn pri" disabled={busy} onClick={() => decide('approve')}>通过并放行</button><button className="dtc-btn danger" disabled={busy || !reviewNote.trim()} onClick={() => decide('changes')}>退回并开启返工轮次</button></div></div> : null}
     </div> : null}

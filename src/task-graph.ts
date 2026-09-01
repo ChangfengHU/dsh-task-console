@@ -1,4 +1,4 @@
-import type { Card, State } from './fold.ts'
+import type { Card, Run, State } from './fold.ts'
 
 export interface GraphReviewCycle {
   cardId: string
@@ -8,10 +8,13 @@ export interface GraphReviewCycle {
   reviewerId?: string
   targetCardId?: string
   note?: string
+  runId?: string
+  requestedAt?: string
+  decidedAt?: string
 }
 
 export type TaskGraphNodeKind = 'terminal' | 'role' | 'reviewer' | 'human' | 'gate'
-export type TaskGraphEdgeKind = 'flow' | 'dependency' | 'feedback'
+export type TaskGraphEdgeKind = 'flow' | 'dependency' | 'rework' | 'feedback'
 
 export interface TaskGraphNode {
   id: string
@@ -21,6 +24,9 @@ export interface TaskGraphNode {
   status: string
   cardId?: string
   agentId?: string
+  runId?: string
+  round?: number
+  gateType?: 'release' | 'decision'
   meta?: string
 }
 
@@ -35,6 +41,7 @@ export interface TaskGraphEdge {
 export interface TaskGraph {
   nodes: TaskGraphNode[]
   edges: TaskGraphEdge[]
+  mode?: 'generic' | 'rounds'
 }
 
 export interface PositionedTaskGraph extends TaskGraph {
@@ -45,12 +52,89 @@ export interface PositionedTaskGraph extends TaskGraph {
 
 const finished = (card?: Card) => card?.status === 'done'
 
+const strictThreeRoleChain = (cards: Card[]) => cards.length === 3
+  && cards[0].deps.length === 0
+  && cards[1].deps.length === 1 && cards[1].deps[0] === cards[0].id
+  && cards[2].deps.length === 1 && cards[2].deps[0] === cards[1].id
+
+function buildRoundGraph(cards: Card[], state: State, cycles: GraphReviewCycle[], agentName: (id: string) => string): TaskGraph | undefined {
+  if (!strictThreeRoleChain(cards)) return
+  const [planner, executor, reviewer] = cards
+  const decisions = cycles.filter(cycle => cycle.cardId === reviewer.id)
+  if (!decisions.length || decisions.some(cycle => cycle.status === 'changes' && cycle.targetCardId !== planner.id)) return
+
+  const changes = decisions.filter(cycle => cycle.status === 'changes' && cycle.decidedAt).sort((a, b) => (a.decidedAt ?? '').localeCompare(b.decidedAt ?? ''))
+  // Core claims are timestamped to whole seconds, while browser decisions keep
+  // milliseconds. A claim made immediately after a decision can therefore
+  // look a few milliseconds older; comparing epoch seconds preserves the
+  // durable event order at that transition boundary.
+  const second = (iso: string) => Math.floor(+new Date(iso) / 1000)
+  const roundOf = (startedAt: string) => 1 + changes.filter(cycle => second(cycle.decidedAt ?? '') <= second(startedAt)).length
+  const runsByRound = new Map<string, Map<number, Run>>()
+  for (const card of cards) {
+    const grouped = new Map<number, Run>()
+    for (const runId of card.runIds) {
+      const run = state.runs.get(runId)
+      if (!run || (run.profileId ?? card.agentId) !== card.agentId) continue
+      grouped.set(roundOf(run.startedAt), run)
+    }
+    runsByRound.set(card.id, grouped)
+  }
+  const runAt = (card: Card, round: number) => runsByRound.get(card.id)?.get(round)
+  const latestRunRound = Math.max(1, ...[...runsByRound.values()].flatMap(rows => [...rows.keys()]))
+  const roundCount = Math.max(latestRunRound, changes.length + 1)
+  const finalDecision = decisions.find(cycle => cycle.round === roundCount)
+  const allDone = cards.every(finished) && finalDecision?.status === 'approved'
+  const nodes: TaskGraphNode[] = [
+    { id: 'terminal:start', kind: 'terminal', title: 'START', subtitle: '调度器触发', status: 'open' },
+    { id: 'terminal:finish', kind: 'terminal', title: 'DONE', subtitle: allDone ? '第三轮验收通过' : '等待当前轮收敛', status: allDone ? 'done' : 'waiting' },
+  ]
+  const edges: TaskGraphEdge[] = []
+
+  for (let round = 1; round <= roundCount; round++) {
+    const plannerRun = runAt(planner, round)
+    const executorRun = runAt(executor, round)
+    const reviewerRun = runAt(reviewer, round)
+    const decision = decisions.find(cycle => cycle.round === round)
+    const plannerDone = plannerRun?.status === 'done' && plannerRun.outcome === 'completed'
+    const roleStatus = (card: Card, run: typeof plannerRun) => run?.status ?? (round === roundCount ? card.status : 'waiting')
+    const plannerId = `round:${round}:role:${planner.id}`
+    const releaseId = `round:${round}:gate:release`
+    const executorId = `round:${round}:role:${executor.id}`
+    const reviewerId = `round:${round}:role:${reviewer.id}`
+    const decisionId = `round:${round}:gate:decision`
+
+    nodes.push(
+      { id: plannerId, kind: 'role', title: agentName(planner.agentId), subtitle: `规划者 · 第 ${round} 轮`, status: roleStatus(planner, plannerRun), cardId: planner.id, agentId: planner.agentId, runId: plannerRun?.id, round, meta: plannerRun ? `RUN ${plannerRun.attempt}` : '等待领取' },
+      { id: releaseId, kind: 'gate', title: `执行闸门 G${round}`, subtitle: plannerDone ? '规划完成，已统一放开' : '等待规划者放开', status: plannerDone ? 'open' : 'waiting', cardId: planner.id, runId: plannerRun?.id, round, gateType: 'release', meta: plannerDone ? 'OPEN' : 'WAIT' },
+      { id: executorId, kind: 'role', title: agentName(executor.agentId), subtitle: `执行者 · 第 ${round} 轮`, status: roleStatus(executor, executorRun), cardId: executor.id, agentId: executor.agentId, runId: executorRun?.id, round, meta: executorRun ? `RUN ${executorRun.attempt}` : '依赖闸门' },
+      { id: reviewerId, kind: 'reviewer', title: agentName(reviewer.agentId), subtitle: `评估者 · 第 ${round} 轮`, status: roleStatus(reviewer, reviewerRun), cardId: reviewer.id, agentId: reviewer.agentId, runId: reviewerRun?.id, round, meta: reviewerRun ? `RUN ${reviewerRun.attempt}` : '等待执行交接' },
+      { id: decisionId, kind: 'gate', title: `验收决策 D${round}`, subtitle: decision?.status === 'changes' ? '不通过，生成下一轮' : decision?.status === 'approved' ? '通过，流程收敛' : '等待通过 / 退回', status: decision?.status ?? 'waiting', cardId: reviewer.id, runId: decision?.runId, round, gateType: 'decision', meta: decision?.status === 'changes' ? `REWORK #${round}` : decision?.status?.toUpperCase() ?? 'WAIT' },
+    )
+    edges.push(
+      { id: `${plannerId}>${releaseId}`, from: plannerId, to: releaseId, kind: 'flow', label: '创建并放开' },
+      { id: `${releaseId}>${executorId}`, from: releaseId, to: executorId, kind: 'dependency', label: '依赖 Gate' },
+      { id: `${executorId}>${reviewerId}`, from: executorId, to: reviewerId, kind: 'dependency', label: 'handoff' },
+      { id: `${reviewerId}>${decisionId}`, from: reviewerId, to: decisionId, kind: 'flow', label: '提交验收' },
+    )
+    if (round === 1) edges.push({ id: `terminal:start>${plannerId}`, from: 'terminal:start', to: plannerId, kind: 'flow' })
+    if (decision?.status === 'changes' && round < roundCount) {
+      edges.push({ id: `${decisionId}>round:${round + 1}:role:${planner.id}`, from: decisionId, to: `round:${round + 1}:role:${planner.id}`, kind: 'rework', label: `返工 #${round}${decision.note ? ` · ${decision.note}` : ''}` })
+    } else if (round === roundCount) {
+      edges.push({ id: `${decisionId}>terminal:finish`, from: decisionId, to: 'terminal:finish', kind: 'flow', label: decision?.status === 'approved' ? '批准' : '批准后放行' })
+    }
+  }
+  return { nodes, edges, mode: 'rounds' }
+}
+
 /**
  * Build the visible execution DAG from durable cards and review decisions.
- * Feedback/rework edges are audit overlays and are deliberately excluded from
- * dependency ordering, otherwise a rework loop would stop being a DAG.
+ * Legacy same-card feedback is an audit overlay. Upstream rework is instead
+ * unrolled into a new round whose forward edge remains part of the real DAG.
  */
 export function buildTaskGraph(cards: Card[], state: State, cycles: GraphReviewCycle[], agentName: (id: string) => string): TaskGraph {
+  const rounds = buildRoundGraph(cards, state, cycles, agentName)
+  if (rounds) return rounds
   const nodes: TaskGraphNode[] = [
     { id: 'terminal:start', kind: 'terminal', title: 'START', subtitle: '调度器触发', status: 'open' },
     { id: 'terminal:finish', kind: 'terminal', title: 'DONE', subtitle: cards.length && cards.every(finished) ? '全部闸门已放行' : '等待流程收敛', status: cards.length && cards.every(finished) ? 'done' : 'waiting' },
@@ -134,10 +218,24 @@ export function buildTaskGraph(cards: Card[], state: State, cycles: GraphReviewC
     if (source) edges.push({ id: `${source}>terminal:finish`, from: source, to: 'terminal:finish', kind: 'flow' })
   }
 
-  return { nodes, edges }
+  return { nodes, edges, mode: 'generic' }
 }
 
 export function layoutTaskGraph(graph: TaskGraph): PositionedTaskGraph {
+  if (graph.mode === 'rounds') {
+    const rounds = Math.max(1, ...graph.nodes.map(node => node.round ?? 0))
+    const positions = new Map<string, { x: number; y: number }>()
+    const columns = [250, 478, 706, 934, 1162]
+    for (const node of graph.nodes) {
+      if (node.id === 'terminal:start') positions.set(node.id, { x: 22, y: 64 })
+      else if (node.id === 'terminal:finish') positions.set(node.id, { x: 1390, y: 64 + (rounds - 1) * 166 })
+      else if (node.round) {
+        const column = node.gateType === 'release' ? 1 : node.gateType === 'decision' ? 4 : node.cardId?.endsWith('#0') ? 0 : node.cardId?.endsWith('#1') ? 2 : 3
+        positions.set(node.id, { x: columns[column], y: 64 + (node.round - 1) * 166 })
+      }
+    }
+    return { ...graph, positions, width: 1608, height: Math.max(360, rounds * 166 + 76) }
+  }
   const flowEdges = graph.edges.filter(edge => edge.kind !== 'feedback')
   const incoming = new Map(graph.nodes.map(node => [node.id, 0]))
   const outgoing = new Map(graph.nodes.map(node => [node.id, [] as string[]]))

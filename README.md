@@ -2,7 +2,7 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.11):** replaces the former event-only scheduler with a local SQLite kernel compatible with the durable Kanban semantics of Hermes Agent 0.20.4. Normalized `tasks`, `task_links`, `task_runs`, and `task_events` rows are now the only scheduling truth. DSH events are a separate replay/read projection and are committed in the same transaction as core lifecycle changes.
+**This release (0.12):** adds a topology-driven execution DAG above the 0.11 local SQLite kernel. Role tasks, reviewers, startup/handoff/review gates, and terminal state are first-class nodes; durable dependencies always point forward, while historical rework is rendered as a separate feedback overlay. Selecting any node synchronizes the evidence inspector, and the event stream is now a collapsible replay surface instead of a competing second dashboard.
 
 The plugin remains local-first: `~/.dsh/task-console/task.db` is the only runtime database, and no Cloudflare account or network database is required. An existing `events.jsonl` or pre-0.11 SQLite event table is imported once and retained for rollback and audit. The D1 experiment remains in the source repository for research only and is excluded from the npm package.
 
@@ -25,7 +25,7 @@ Each card Session gets four scoped tools: `task_complete`, `task_block`, `task_r
 
 `task_request_review` is a real gate. With a `reviewer` preset it hands the same card to that Agent in a separate review Run; without one it creates a human decision gate. `task_request_changes` closes the review Run, restores the original implementer, and creates a fresh rework Run. Successful review releases downstream dependencies. Every claim uses `BEGIN IMMEDIATE` plus a conditional update, is renewed by heartbeat, and can be reclaimed after its lease expires.
 
-The Task Studio UI is intentionally DSH-native: the dependency graph is first, gates are control nodes rather than fake Agents, each attempt shows its actual preset, and the event stream exposes claim, Session, handoff, review, rework, block, and completion evidence.
+The Task Studio UI is intentionally DSH-native: the dependency DAG is the primary workspace, gates are first-class control nodes rather than fake Agents, reviewers are visible role nodes, and each attempt shows its actual preset. Rework edges are visually distinct from dependency edges so the graph remains honest about what is schedulable. The event stream exposes claim, Session, handoff, review, rework, block, and completion evidence and can replay the DAG at any point in time.
 
 Public HTML publishing reads `DSH_TASK_CONSOLE_UPLOAD_TOKEN` on the host. Optional overrides are `DSH_TASK_CONSOLE_UPLOAD_URL` and `DSH_TASK_CONSOLE_PUBLIC_DOMAIN`; no upload credential is sent to the browser or written into a task prompt.
 

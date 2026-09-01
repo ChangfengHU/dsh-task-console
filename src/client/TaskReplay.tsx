@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cronHuman } from '../cron.ts'
 import { actorOf, batchStatus, cardRun, describe, fold, type Batch, type Card, type Event, type Run, type State, type TaskSpec } from '../fold.ts'
+import { buildTaskGraph, layoutTaskGraph, type PositionedTaskGraph, type TaskGraphNode } from '../task-graph.ts'
 import type { AgentRow, ArtifactView } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
 import type { TasksApi } from './TasksView.tsx'
@@ -72,6 +73,59 @@ function reviewGateCycles(rows: { e: Event; index: number }[], state: State): Re
   return cycles
 }
 
+function TaskDag({ graph, cards, selected, onSelect }: { graph: PositionedTaskGraph; cards: Card[]; selected: string | null; onSelect: (node: TaskGraphNode) => void }) {
+  const [zoom, setZoom] = useState(.9)
+  const viewport = useRef<HTMLDivElement | null>(null)
+  const cardById = new Map(cards.map(card => [card.id, card]))
+  const nodeById = new Map(graph.nodes.map(node => [node.id, node]))
+  const nodeWidth = 184
+  const nodeHeight = 96
+  const flowPath = (from: string, to: string) => {
+    const a = graph.positions.get(from); const b = graph.positions.get(to)
+    if (!a || !b) return ''
+    const sx = a.x + nodeWidth; const sy = a.y + nodeHeight / 2; const tx = b.x; const ty = b.y + nodeHeight / 2; const bend = Math.max(34, (tx - sx) * .46)
+    return `M ${sx} ${sy} C ${sx + bend} ${sy}, ${tx - bend} ${ty}, ${tx} ${ty}`
+  }
+  const feedbackPath = (from: string, to: string, index: number) => {
+    const a = graph.positions.get(from); const b = graph.positions.get(to)
+    if (!a || !b) return ''
+    const sx = a.x + nodeWidth / 2; const sy = a.y + nodeHeight; const tx = b.x + nodeWidth / 2; const ty = b.y + nodeHeight; const floor = graph.height - 30 - index * 16
+    return `M ${sx} ${sy} C ${sx} ${floor}, ${tx} ${floor}, ${tx} ${ty}`
+  }
+  const icon = (node: TaskGraphNode) => {
+    if (node.kind === 'gate') return '◇'
+    if (node.kind === 'reviewer') return '🦉'
+    if (node.kind === 'human') return '👤'
+    if (node.kind === 'terminal') return node.id === 'terminal:start' ? '▶' : '✓'
+    const card = node.cardId ? cardById.get(node.cardId) : undefined
+    return ROLE_ICONS[(card?.index ?? 0) % ROLE_ICONS.length]
+  }
+  const feedback = graph.edges.filter(edge => edge.kind === 'feedback')
+  const fitGraph = () => {
+    const width = viewport.current?.clientWidth ?? graph.width
+    const height = viewport.current?.clientHeight ?? graph.height
+    setZoom(Math.max(.35, Math.min(1.15, +Math.min((width - 24) / graph.width, (height - 24) / graph.height).toFixed(2))))
+  }
+  return <div className="dtc-dag-wrap">
+    <div className="dtc-dag-tools"><div className="dtc-dag-legend"><span><i className="role" />角色任务</span><span><i className="reviewer" />评估者</span><span><i className="gate" />控制闸门</span><span><i className="feedback" />历史返工</span></div><div className="dtc-dag-zoom"><button title="缩小" onClick={() => setZoom(value => Math.max(.35, +(value - .1).toFixed(2)))} disabled={zoom <= .35}>−</button><b>{Math.round(zoom * 100)}%</b><button title="放大" onClick={() => setZoom(value => Math.min(1.15, +(value + .1).toFixed(2)))} disabled={zoom >= 1.15}>＋</button><button title="完整显示全部节点" onClick={fitGraph}>全图</button></div></div>
+    <div className="dtc-dag-viewport" ref={viewport}>
+      <div className="dtc-dag-scaled" style={{ width: graph.width * zoom, height: graph.height * zoom }}>
+        <div className="dtc-dag-surface" style={{ width: graph.width, height: graph.height, transform: `scale(${zoom})` }}>
+          <svg className="dtc-dag-edges" width={graph.width} height={graph.height} viewBox={`0 0 ${graph.width} ${graph.height}`} aria-hidden="true">
+            <defs><marker id="dtc-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker><marker id="dtc-feedback-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs>
+            {graph.edges.filter(edge => edge.kind !== 'feedback').map(edge => { const a = graph.positions.get(edge.from); const b = graph.positions.get(edge.to); if (!a || !b) return null; const sx = a.x + nodeWidth; const tx = b.x; const sy = a.y + nodeHeight / 2; const ty = b.y + nodeHeight / 2; return <g key={edge.id} className={`dtc-dag-edge ${edge.kind}`}><path d={flowPath(edge.from, edge.to)} markerEnd="url(#dtc-arrow)" />{edge.label ? <text x={(sx + tx) / 2} y={(sy + ty) / 2 - 8}>{edge.label}</text> : null}</g> })}
+            {feedback.map((edge, index) => { const a = graph.positions.get(edge.from); const b = graph.positions.get(edge.to); if (!a || !b) return null; const floor = graph.height - 30 - index * 16; return <g key={edge.id} className="dtc-dag-edge feedback"><path d={feedbackPath(edge.from, edge.to, index)} markerEnd="url(#dtc-feedback-arrow)" /><text x={(a.x + b.x) / 2 + nodeWidth / 2} y={floor - 7}>{edge.label}</text></g> })}
+          </svg>
+          {graph.nodes.map(node => { const pos = graph.positions.get(node.id); if (!pos) return null; const card = node.cardId ? cardById.get(node.cardId) : undefined; return <button type="button" key={node.id} data-node-id={node.id} className={`dtc-dag-node k-${node.kind} s-${node.status} ${selected === node.id ? 'selected' : ''}`} style={{ left: pos.x, top: pos.y }} onClick={() => onSelect(node)}>
+            <span className="dtc-dag-icon" style={node.kind === 'role' && card ? { background: ROLE_COLORS[card.index % ROLE_COLORS.length] } : undefined}>{icon(node)}</span><span className="dtc-dag-copy"><b>{node.title}</b><small>{node.subtitle}</small>{node.meta ? <em>{node.meta}</em> : null}</span><i className="dtc-dag-state">{node.status}</i>
+          </button> })}
+        </div>
+      </div>
+    </div>
+    {feedback.length ? <div className="dtc-dag-feedback-note"><b>↩ {feedback.length} 条返工反馈边</b><span>红色虚线只表示历史退回，不参与 DAG 拓扑排序。</span></div> : null}
+  </div>
+}
+
 export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & LedgerApi; agents: AgentRow[]; id: string; runId?: string; toast: (m: string) => void }) {
   const [events, setEvents] = useState<Event[]>([])
   const [artifacts, setArtifacts] = useState<ArtifactView[]>([])
@@ -80,6 +134,7 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
   const [cursor, setCursor] = useState<number | null>(null)
   const [playing, setPlaying] = useState(false)
   const [selectedCard, setSelectedCard] = useState<string | null>(null)
+  const [selectedGraphNode, setSelectedGraphNode] = useState<string | null>(null)
   const [eventFilter, setEventFilter] = useState<EventFilter>('all')
   const timer = useRef<number | undefined>(undefined)
 
@@ -125,6 +180,7 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
     if (!selectedCard || !cards.some(c => c.id === selectedCard)) {
       const best = cards.find(c => c.status === 'running' || c.status === 'blocked' || c.status === 'review') ?? [...cards].reverse().find(c => c.runIds.length) ?? cards[0]
       setSelectedCard(best.id)
+      setSelectedGraphNode(`role:${best.id}`)
     }
   }, [batchFull?.id, events.length])
 
@@ -149,8 +205,6 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
   const filteredEvents = batchEvents.filter(({ e }) => eventFilter === 'all' || eventGroup(e) === eventFilter)
   const reviewCycles = reviewGateCycles(visibleBatchEvents, now)
   const reworkCycles = reviewCycles.filter(cycle => cycle.status === 'changes')
-  const humanCycles = reviewCycles.filter(cycle => cycle.mode === 'human')
-  const agentCycles = reviewCycles.filter(cycle => cycle.mode === 'agent')
   const lastCard = [...cardsFull].reverse().find(c => c.summary)
   const lastRun = lastCard ? cardRun(full, lastCard) : undefined
   const metricCards = cursor === null ? cardsFull : cardsNow
@@ -158,21 +212,21 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
   const activeCount = metricCards.filter(card => card.status === 'running' || card.status === 'blocked' || card.status === 'review').length
   const dependencyCount = cardsFull.reduce((sum, card) => sum + card.deps.length, 0)
   const claimCount = batchEvents.filter(({ e }) => e.t === 'run/claimed').length
-  const gateCount = humanCycles.filter(cycle => cycle.status === 'pending').length
-  const gateApproved = humanCycles.filter(cycle => cycle.status === 'approved').length
-  const gateChanges = humanCycles.filter(cycle => cycle.status === 'changes').length
   const eventStep = batchEvents.filter(({ index }) => index < upto).length
   const progress = metricCards.length ? Math.round(doneCount / metricCards.length * 100) : 0
+  const graph = layoutTaskGraph(buildTaskGraph(cardsNow, now, reviewCycles, agentName))
+  const selectedNode = graph.nodes.find(node => node.id === selectedGraphNode) ?? (selected ? graph.nodes.find(node => node.id === `role:${selected.id}`) : undefined)
 
   const stepTo = (n: number) => { setPlaying(false); const v = Math.max(1, Math.min(n, events.length)); setCursor(v >= events.length ? null : v) }
   const refreshArtifacts = async () => { if (selId) { setArtifacts(await api.taskArtifacts(id, selId)); setArtifactBatch(selId) } }
+  const selectNode = (node: TaskGraphNode) => { setSelectedGraphNode(node.id); if (node.cardId) setSelectedCard(node.cardId) }
 
   return (
     <div className="dtc-cartoon">
       <header className="dtc-cartoon-head">
         <button className="dtc-cartoon-back" onClick={() => go('tasks')} title="返回任务中心">←</button>
         <div className="dtc-cartoon-logo">🛠️</div>
-        <div className="dtc-cartoon-title"><span>DSH TASK STUDIO</span><h1>{task.title}</h1><small>{batchFull ? `${batchFull.id} · ${cardsFull.length} 个角色${total ? ` · ${total}` : ''}` : '还没运行'}</small></div>
+        <div className="dtc-cartoon-title"><span>DSH TASK STUDIO</span><h1>{task.title}</h1><small>{batchFull ? `${batchFull.id} · ${graph.nodes.filter(node => node.kind === 'role' || node.kind === 'reviewer' || node.kind === 'human').length} 个角色节点${total ? ` · ${total}` : ''}` : '还没运行'}</small></div>
         <div className="dtc-cartoon-live"><i />Hermes 0.20.4 兼容内核在线</div>
         <div className="dtc-cartoon-actions">
           {batches.length > 1 ? <select value={selId} onChange={e => go(`tasks/${task.id}/runs/${e.target.value}`)}>{batches.map(b => <option key={b.id} value={b.id}>{b.id === batches[0].id ? '这次运行' : '之前'} · {fmt(b.firedAt)} · {BS[batchStatus(full, b)].label}</option>)}</select> : null}
@@ -183,62 +237,34 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
       </header>
       {error ? <div className="dtc-err">{error}</div> : null}
 
-      <section className="dtc-cartoon-summary">
+      <section className="dtc-cartoon-summary dtc-dag-summary">
         <div><span>事项组进度</span><strong>{doneCount} / {metricCards.length}</strong><div className="track"><i style={{ width: `${progress}%` }} /></div></div>
-        <div><span>活跃角色</span><strong>{activeCount}</strong><em>{cardsFull.length} 个预置 Agent</em></div>
-        <div><span>依赖边</span><strong>{dependencyCount}</strong><em>按 handoff 顺序放行</em></div>
-        <div><span>领取尝试</span><strong>{claimCount}</strong><em>真实 run/claimed</em></div>
-        <div><span>评审闸门</span><strong>{reviewCycles.length}</strong><em>{agentCycles.length ? `${agentCycles.length} 次 Agent 评审` : gateCount ? `${gateCount} 个待人工决策` : gateApproved ? `${gateApproved} 个已批准` : gateChanges ? `${gateChanges} 次退回` : '尚未创建'}</em></div>
+        <div><span>当前状态</span><strong>{bst ? BS[bst].label : '未运行'}</strong><em>{activeCount ? `${activeCount} 个角色等待处理` : total ? `总耗时 ${total}` : '等待首次调度'}</em></div>
+        <div><span>DAG 结构</span><strong>{graph.nodes.length} 节点</strong><em>{dependencyCount} 条依赖 · {graph.nodes.filter(node => node.kind === 'gate').length} 个闸门</em></div>
+        <div><span>运行证据</span><strong>{claimCount} Runs</strong><em>{reviewCycles.length} 次评审 · {reworkCycles.length} 次返工</em></div>
       </section>
 
-      <main className="dtc-cpanel dtc-cworkspace dtc-cworkspace-top">
-        <div className="dtc-cpanel-head"><div><b>任务依赖图</b><small>角色节点、依赖 Gate、评审 Gate 与返工轮次来自同一条事件流</small></div><code>{batchFull?.id ?? '尚未创建'}</code></div>
-        <div className="dtc-ccanvas">
-          {cardsNow.length ? <div className="dtc-cflow">{cardsNow.map(card => {
-            const run = cardRun(now, card)
-            const parents = card.deps.map(dep => now.cards.get(dep)).filter(Boolean) as Card[]
-            const dependencyOpen = parents.length > 0 && parents.every(parent => parent.status === 'done')
-            const gates = reviewCycles.filter(cycle => cycle.cardId === card.id)
-            const latestGate = gates[gates.length - 1]
-            const attempts = card.runIds.map(rid => now.runs.get(rid)).filter(Boolean) as Run[]
-            return <div className="dtc-cflow-step" key={card.id}>
-              {parents.length ? <div className={`dtc-dependency-gate ${dependencyOpen ? 'open' : 'waiting'}`}><span className="diamond">◇</span><div><b>依赖 Gate</b><small>{dependencyOpen ? 'handoff 已封存' : `等待 ${parents.map(parent => agentName(parent.agentId)).join('、')}`}</small></div><em>{dependencyOpen ? 'OPEN' : 'WAIT'}</em><i>→</i></div> : null}
-              <button className={`dtc-node dtc-cnode s-${card.status} ${selectedCard === card.id ? 'selected' : ''}`} onClick={() => setSelectedCard(card.id)}>
-                {card.status === 'running' ? <span className="dtc-claim-lock">🔐 CLAIMED</span> : null}
-                <div className="dtc-cnode-top"><i style={{ background: ROLE_COLORS[card.index % ROLE_COLORS.length] }}>{ROLE_ICONS[card.index % ROLE_ICONS.length]}</i><div><b>{agentName(card.agentId)}</b><small>{task.participants[card.index]?.brief || `角色 ${card.index + 1}`}</small></div><span className={`dtc-pill ${pillOf(card.status)}`}>{CARD[card.status]}</span></div>
-                <div className="dtc-cnode-meta"><span>Attempt {Math.max(1, card.runIds.length)}</span><span>{card.startedAt ? dur(card.startedAt, card.endedAt ?? stopAt) : '未开始'}</span><span>{run?.sessionCreatedAt ? 'Session 已创建' : run ? '已领取' : '未领取'}</span></div>
-                {attempts.length > 1 ? <div className="dtc-attempt-strip">{attempts.map(attempt => { const gate = reviewCycles.find(cycle => cycle.runId === attempt.id) ?? reviewCycles.find(cycle => cycle.reviewerId === attempt.profileId && cycle.cardId === card.id && cycle.decidedAt === attempt.endedAt); const state = gate?.status === 'changes' ? '返工' : gate?.status === 'approved' ? '通过' : RUN[attempt.outcome ?? attempt.status] ?? attempt.status; return <span key={attempt.id} className={gate?.status ?? ''}>{agentName(attempt.profileId ?? card.agentId)} · A{attempt.attempt} · {state}</span> })}</div> : null}
-                {run?.status === 'blocked' ? <div className="q">? {run.question}</div> : null}
-              </button>
-              {latestGate ? <div className={`dtc-human-gate ${latestGate.status}`}><i>→</i><span className="diamond">◇</span><div><b>{latestGate.mode === 'agent' ? `${agentName(latestGate.reviewerId ?? '')} Review` : '人工验收'} Gate #{latestGate.round}</b><small>{latestGate.status === 'pending' ? latestGate.mode === 'agent' ? '等待评估者领取' : '等待人工决策' : latestGate.status === 'approved' ? '已批准，允许结算' : `已退回 ${agentName(full.cards.get(latestGate.targetCardId ?? latestGate.cardId)?.agentId ?? '')}`}</small></div><em>{latestGate.status === 'pending' ? 'PENDING' : latestGate.status === 'approved' ? 'APPROVED' : 'CHANGES'}</em></div> : null}
-            </div>
-          })}</div> : <div className="dtc-empty">这个时刻还没有运行。</div>}
-          {reworkCycles.length ? <div className="dtc-rework-map"><b>↩ 返工回路</b>{reworkCycles.map(cycle => { const source = full.cards.get(cycle.cardId); const target = full.cards.get(cycle.targetCardId ?? cycle.cardId); const sourceLabel = cycle.mode === 'agent' && cycle.reviewerId ? agentName(cycle.reviewerId) : source ? agentName(source.agentId) : '人工验收'; return <button key={cycle.runId} onClick={() => target && setSelectedCard(target.id)}><span>Gate #{cycle.round}</span><strong>{sourceLabel} </strong><i>CHANGES_REQUESTED</i><strong> {target ? agentName(target.agentId) : '原角色'}</strong><small>{cycle.note}</small></button> })}</div> : null}
+      <section className="dtc-dag-cockpit">
+        <main className="dtc-cpanel dtc-dag-panel">
+          <div className="dtc-cpanel-head"><div><b>执行依赖 DAG</b><small>实线是可调度依赖；闸门是一等控制节点；红色虚线是历史返工反馈</small></div><code>{batchFull?.id ?? '尚未创建'}</code></div>
+          {cardsNow.length ? <TaskDag graph={graph} cards={cardsNow} selected={selectedNode?.id ?? null} onSelect={selectNode} /> : <div className="dtc-empty">这个时刻还没有运行。</div>}
           <div className="dtc-cstep"><b>{String(eventStep).padStart(2, '0')} / {String(batchEvents.length).padStart(2, '0')}</b><div className="track"><i style={{ width: `${batchEvents.length ? eventStep / batchEvents.length * 100 : 0}%` }} /></div><span>{cursor === null ? '现在 · 实时跟随' : `回放到 ${fmt(stopAt)}`}</span></div>
-        </div>
-      </main>
+        </main>
 
-      <section className="dtc-cartoon-layout">
-        <aside className="dtc-cpanel dtc-croles">
-          <div className="dtc-cpanel-head"><div><b>角色与状态</b><small>真实 Agent presence</small></div><span>PRESENCE</span></div>
-          <div className="dtc-crole-list">{cardsNow.map(card => <button key={card.id} className={selectedCard === card.id ? 'selected' : ''} onClick={() => setSelectedCard(card.id)}>
-            <i style={{ background: ROLE_COLORS[card.index % ROLE_COLORS.length] }}>{ROLE_ICONS[card.index % ROLE_ICONS.length]}</i><span><b>{agentName(card.agentId)}</b><small>角色 {card.index + 1} · {CARD[card.status]}</small></span><em className={`s-${card.status}`} />
-          </button>)}</div>
-          <div className="dtc-control-list"><h4>CONTROL NODES</h4><div><i>◇</i><span><b>依赖 Gate</b><small>{dependencyCount} 条依赖边</small></span><em>{cardsNow.filter(card => card.deps.length && card.deps.every(dep => now.cards.get(dep)?.status === 'done')).length}/{dependencyCount}</em></div><div><i>🚪</i><span><b>评审 Gate</b><small>{reworkCycles.length ? `${reworkCycles.length} 次返工` : `${agentCycles.length} Agent / ${humanCycles.length} 人工`}</small></span><em>{reviewCycles.filter(cycle => cycle.status === 'pending').length ? `${reviewCycles.filter(cycle => cycle.status === 'pending').length} 待决` : reviewCycles.length ? '已决' : '未创建'}</em></div></div>
-          <div className="dtc-clegend"><b>核心状态来自 SQLite 规范表</b><br />事件流只负责回放与审计；CAS claim、review、rework 和依赖释放由同一事务内核执行。</div>
-        </aside>
-
-        <aside className="dtc-cpanel dtc-cstream">
-          <div className="dtc-cpanel-head"><div><b>事件流原语</b><small>append-only · 可回放 · 可审计</small></div><span>{batchEvents.length} EVENTS</span></div>
-          <div className="dtc-cevent-tools">{FILTERS.map(filter => <button key={filter.id} className={eventFilter === filter.id ? 'on' : ''} onClick={() => setEventFilter(filter.id)}>{filter.label}</button>)}</div>
-          <div className="dtc-activity-list">{[...filteredEvents].reverse().map(({ e, index }) => { const actor = ACTOR[actorOf(e, full)]; const group = eventGroup(e); return <button key={index} className={`dtc-activity-row g-${group} ${index >= upto ? 'off' : ''} ${index === upto - 1 ? 'cur' : ''}`} onClick={() => stepTo(index + 1)}>
-            <span className="dot">{group === 'process' ? '›' : group === 'result' ? '✓' : '•'}</span><span className="copy"><b>{e.t}</b><span>{describe(e, full, agentName)}</span><small>{fmt(e.at)} · event #{index + 1}</small></span><span className={`dtc-pill ${actor.cls}`}>{actor.label}</span>
-          </button>})}</div>
-          <div className="dtc-replayctl"><button className="dtc-btn sm" onClick={() => stepTo(Math.max(1, upto - 1))} disabled={upto <= 1}>←</button><button className={`dtc-btn sm ${playing ? 'pri' : ''}`} onClick={() => { if (upto >= events.length) setCursor(Math.max(1, batchEvents[0]?.index ?? 0)); setPlaying(value => !value) }}>{playing ? '暂停' : '播放'}</button><button className="dtc-btn sm" onClick={() => stepTo(upto + 1)} disabled={upto >= events.length}>→</button><button className="dtc-btn sm" onClick={() => { setPlaying(false); setCursor(null) }} disabled={cursor === null}>现在</button><span className="dtc-faint">{upto}/{events.length}</span></div>
+        <aside className="dtc-cpanel dtc-dag-inspector">
+          <div className="dtc-cpanel-head"><div><b>节点检查器</b><small>点击图中角色或闸门，右侧证据同步切换</small></div>{selectedNode ? <span>{selectedNode.kind.toUpperCase()}</span> : null}</div>
+          {selectedNode?.cardId && selected ? <CardEvidence focus={selectedNode.kind === 'gate' ? 'gate' : selectedNode.kind === 'reviewer' || selectedNode.kind === 'human' ? 'claim' : 'handoff'} preferredProfileId={selectedNode.agentId} api={api} taskId={id} batchId={batchFull?.id} card={selected} parents={selected.deps.map(dep => full.cards.get(dep)).filter(Boolean) as Card[]} reworkTargets={cardsFull.filter(card => card.index <= selected.index)} gates={reviewCycles.filter(cycle => cycle.cardId === selected.id)} runs={selected.runIds.map(rid => full.runs.get(rid)).filter(Boolean) as Run[]} artifacts={artifacts.filter(a => a.cardId === selected.id)} agentName={agentName(selected.agentId)} labelOf={agentName} toast={toast} refreshArtifacts={refreshArtifacts} /> : <div className="dtc-dag-terminal"><span>{selectedNode?.id === 'terminal:finish' ? '✓' : '▶'}</span><b>{selectedNode?.title ?? '选择一个节点'}</b><p>{selectedNode?.subtitle ?? '查看角色、闸门、Run 和交付证据。'}</p></div>}
         </aside>
       </section>
 
-      {selected ? <div className="dtc-cartoon-drawer"><CardEvidence api={api} taskId={id} batchId={batchFull?.id} card={selected} parents={selected.deps.map(dep => full.cards.get(dep)).filter(Boolean) as Card[]} reworkTargets={cardsFull.filter(card => card.index <= selected.index)} gates={reviewCycles.filter(cycle => cycle.cardId === selected.id)} runs={selected.runIds.map(rid => full.runs.get(rid)).filter(Boolean) as Run[]} artifacts={artifacts.filter(a => a.cardId === selected.id)} agentName={agentName(selected.agentId)} labelOf={agentName} toast={toast} refreshArtifacts={refreshArtifacts} /></div> : null}
+      <details className="dtc-cpanel dtc-timeline" open>
+        <summary><span><b>事件流与时间回放</b><small>点击事件会把 DAG 回放到对应时刻</small></span><em>{batchEvents.length} EVENTS</em></summary>
+        <div className="dtc-cevent-tools">{FILTERS.map(filter => <button key={filter.id} className={eventFilter === filter.id ? 'on' : ''} onClick={() => setEventFilter(filter.id)}>{filter.label}</button>)}</div>
+        <div className="dtc-activity-list">{[...filteredEvents].reverse().map(({ e, index }) => { const actor = ACTOR[actorOf(e, full)]; const group = eventGroup(e); return <button key={index} className={`dtc-activity-row g-${group} ${index >= upto ? 'off' : ''} ${index === upto - 1 ? 'cur' : ''}`} onClick={() => stepTo(index + 1)}>
+          <span className="dot">{group === 'process' ? '›' : group === 'result' ? '✓' : '•'}</span><span className="copy"><b>{e.t}</b><span>{describe(e, full, agentName)}</span><small>{fmt(e.at)} · event #{index + 1}</small></span><span className={`dtc-pill ${actor.cls}`}>{actor.label}</span>
+        </button>})}</div>
+        <div className="dtc-replayctl"><button className="dtc-btn sm" onClick={() => stepTo(Math.max(1, upto - 1))} disabled={upto <= 1}>←</button><button className={`dtc-btn sm ${playing ? 'pri' : ''}`} onClick={() => { if (upto >= events.length) setCursor(Math.max(1, batchEvents[0]?.index ?? 0)); setPlaying(value => !value) }}>{playing ? '暂停' : '播放'}</button><button className="dtc-btn sm" onClick={() => stepTo(upto + 1)} disabled={upto >= events.length}>→</button><button className="dtc-btn sm" onClick={() => { setPlaying(false); setCursor(null) }} disabled={cursor === null}>现在</button><span className="dtc-faint">{upto}/{events.length}</span></div>
+      </details>
 
       {batchFull && bst && bst !== 'run' && bst !== 'park' ? <ResultPanel api={api} taskId={id} batchId={batchFull.id} status={bst} summary={lastCard?.summary} metadata={lastRun?.metadata} artifacts={artifacts} toast={toast} refresh={refreshArtifacts} /> : null}
 
@@ -257,17 +283,20 @@ function ResultPanel({ api, taskId, batchId, status, summary, metadata, artifact
   </section>
 }
 
-function CardEvidence({ api, taskId, batchId, card, parents, reworkTargets, gates, runs, artifacts, agentName, labelOf, toast, refreshArtifacts }: { api: TasksApi & LedgerApi; taskId: string; batchId?: string; card: Card; parents: Card[]; reworkTargets: Card[]; gates: ReviewGateCycle[]; runs: Run[]; artifacts: ArtifactView[]; agentName: string; labelOf: (id: string) => string; toast: (m: string) => void; refreshArtifacts: () => Promise<void> }) {
-  const latest = runs[runs.length - 1]
+type EvidenceTab = 'handoff' | 'claim' | 'ledger' | 'gate' | 'artifacts'
+
+function CardEvidence({ api, taskId, batchId, card, parents, reworkTargets, gates, runs, artifacts, agentName, labelOf, toast, refreshArtifacts, focus = 'handoff', preferredProfileId }: { api: TasksApi & LedgerApi; taskId: string; batchId?: string; card: Card; parents: Card[]; reworkTargets: Card[]; gates: ReviewGateCycle[]; runs: Run[]; artifacts: ArtifactView[]; agentName: string; labelOf: (id: string) => string; toast: (m: string) => void; refreshArtifacts: () => Promise<void>; focus?: EvidenceTab; preferredProfileId?: string }) {
+  const latest = (preferredProfileId ? [...runs].reverse().find(run => run.profileId === preferredProfileId) : undefined) ?? runs[runs.length - 1]
   const [runId, setRunId] = useState<string | undefined>(latest?.id)
-  const [tab, setTab] = useState<'handoff' | 'claim' | 'ledger' | 'gate' | 'artifacts'>('handoff')
+  const [tab, setTab] = useState<EvidenceTab>(focus)
   const [reviewNote, setReviewNote] = useState('')
   const [reworkTarget, setReworkTarget] = useState(card.deps[0] ?? card.id)
   const [busy, setBusy] = useState(false)
   const run = runs.find(r => r.id === runId) ?? latest
   const latestGate = gates[gates.length - 1]
   const humanReviewPending = card.status === 'review' && latestGate?.mode !== 'agent'
-  useEffect(() => { setRunId(latest?.id) }, [card.id, runs.length])
+  useEffect(() => { setRunId(latest?.id) }, [card.id, runs.length, preferredProfileId])
+  useEffect(() => { setTab(focus) }, [card.id, focus])
   useEffect(() => { setReworkTarget(card.deps[0] ?? card.id) }, [card.id])
   const { ledger, error } = useLedger(api, tab === 'ledger' ? run?.sessionId : undefined, run?.status === 'running' || run?.status === 'blocked')
   const decide = async (decision: 'approve' | 'changes') => {

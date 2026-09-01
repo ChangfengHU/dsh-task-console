@@ -135,7 +135,7 @@ async function openWhenListed(ctx: any, sessionId: string): Promise<void> {
   throw new Error('会话已建好,但列表还没刷出来;在左侧找一下')
 }
 
-/** The sidebar button plus the overlay it opens (portaled to body). */
+/** One sidebar entry opens the unified Agent + Task workspace. */
 function FooterEntry({ api, wide }: { api: Api; wide?: boolean }) {
   const [open, setOpen] = useState(readRoute().length > 0 || window.location.hash.startsWith(HASH_PREFIX))
   useEffect(() => {
@@ -147,14 +147,9 @@ function FooterEntry({ api, wide }: { api: Api; wide?: boolean }) {
   const narrow = wide === false
   return (
     <>
-      <div className="dtc-footstack">
-        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}>
-          <span className="ic">◎</span>{narrow ? null : <span>Agent</span>}
-        </button>
-        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务" aria-label="任务" onClick={() => go('tasks')}>
-          <span className="ic">▦</span>{narrow ? null : <span>任务</span>}
-        </button>
-      </div>
+      <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent 工作台" aria-label="Agent 工作台" onClick={() => go('tasks')}>
+        <span className="ic">◆</span>{narrow ? null : <span>Agent 工作台</span>}
+      </button>
       {open ? createPortal(<Console api={api} />, document.body) : null}
     </>
   )

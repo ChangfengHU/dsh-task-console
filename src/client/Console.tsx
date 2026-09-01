@@ -1,7 +1,4 @@
-/**
- * Two full pages, each its own overlay with its own header: Agent
- * (`#/tc/agents…`) and 任务 (`#/tc/tasks…`). The hash carries the screen.
- */
+/** One Agent + Task workspace. The hash carries the current section/screen. */
 
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wire.ts'
@@ -86,11 +83,16 @@ export function Console({ api }: { api: Api }) {
   return (
     <div className="dtc-root dtc-overlay">
       <div className="dtc-head">
-        <div className="dtc-ttl"><span className="ic">{section === 'agents' ? '◎' : '▦'}</span>{section === 'agents' ? 'Agent' : '任务'}</div>
-        {section === 'tasks' && route[1] ? <button className="dtc-btn sm" onClick={() => go('tasks')}>← 看板</button> : null}
-        {section === 'tasks' && !route[1] ? <button className="dtc-btn sm pri" onClick={() => go('tasks/new')}>＋ 新建任务</button> : null}
-        <span className="dtc-url dtc-mono">{url}</span>
-        <button className="dtc-close" title="关闭" onClick={closeConsole}>×</button>
+        <div className="dtc-brand"><span className="ic">◆</span><span><b>Agent 工作台</b><small>配置与任务编排</small></span></div>
+        <nav className="dtc-mainnav" aria-label="工作台导航">
+          <button className={section === 'agents' ? 'on' : ''} aria-current={section === 'agents' ? 'page' : undefined} onClick={() => go('agents')}><span>◎</span>Agent</button>
+          <button className={section === 'tasks' ? 'on' : ''} aria-current={section === 'tasks' ? 'page' : undefined} onClick={() => go('tasks')}><span>▦</span>任务</button>
+        </nav>
+        <div className="dtc-head-actions">
+          {section === 'tasks' && !route[1] ? <button className="dtc-btn sm pri" onClick={() => go('tasks/new')}>＋ 新建任务</button> : null}
+          <span className="dtc-head-context">{section === 'agents' ? (route[1] === 'new' ? '新建 Agent' : 'Agent 配置') : route[1] === 'new' ? '新建任务' : route[1] ? '任务详情' : '任务看板'}</span>
+          <button className="dtc-close" title="关闭工作台" aria-label="关闭工作台" onClick={closeConsole}>×</button>
+        </div>
       </div>
       {error ? <div className="dtc-err" style={{ margin: '12px 20px 0' }}>{error}</div> : null}
       <Boundary key={url}>{page}</Boundary>

@@ -2,7 +2,9 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.15):** adds an explicit final-delivery contract. `task_finalize(summary, artifact)` records which registered file is the approved result; byte-identical executor submissions and reviewer snapshots render as one immutable version, with round, producer, review, and final-state evidence. Existing completed tasks receive a clearly labelled compatibility selection instead of fabricated history. The task list and detail page now expose the final result directly, with sandboxed in-panel preview, download, optional public publishing, and event-faithful replay of artifact registration/finalization.
+**This release (0.16):** unifies Agent configuration and task orchestration behind one workspace entry and one persistent, accessible tab bar. The task list supports search-aware pagination and guarded cleanup of completed or all task records; bulk cleanup never removes DSH sessions or workspace files. The list, Agent editor, task detail, replay DAG, and delivery area now inherit the same DSH light/dark design tokens instead of rendering a hard-coded white cartoon island inside the host shell.
+
+The explicit final-delivery contract from 0.15 remains: `task_finalize(summary, artifact)` records which registered file is the approved result; byte-identical executor submissions and reviewer snapshots render as one immutable version, with round, producer, review, and final-state evidence. Existing completed tasks receive a clearly labelled compatibility selection instead of fabricated history. The task list and detail page expose the final result directly, with sandboxed in-panel preview, download, optional public publishing, and event-faithful replay of artifact registration/finalization.
 
 Dynamic rounds remain database-first. A new run initially inserts only `Planner₁`; `task_plan_round` then atomically inserts the real `Gateₙ → Executorₙ → Reviewerₙ → Plannerₙ₊₁` tasks and links. Gates are durable Task rows without Agent Runs. The live graph reads `tasks`, `task_links`, and `task_runs` directly, while playback rebuilds the same frame one canonical `task_events.id` at a time—there are no inferred future roles or decorative dependency edges.
 
@@ -12,7 +14,7 @@ The plugin remains local-first: `~/.dsh/task-console/task.db` is the only runtim
 dsh plugin --profile web add github:ChangfengHU/dsh-task-console
 ```
 
-Opens from the sidebar footer button 「任务台」; screens live in the URL hash (`#/tc/agents`, `#/tc/agents/<id>`, `#/tc/tasks`, `#/tc/tasks/<id>`).
+Opens from the sidebar footer button 「Agent 工作台」; switch between Agent and 任务 inside the workspace. Screens live in the URL hash (`#/tc/agents`, `#/tc/agents/<id>`, `#/tc/tasks`, `#/tc/tasks/<id>`).
 
 **Talk to an agent from the composer:** type `@` in any composer, pick an agent, type the ask, Enter. That starts a new session on the agent's preset (a session's preset is fixed at creation in dsh, so "@agent" means "a fresh session with that agent") with your text as the first message, pins a readable title, files it under the current workspace, and switches to it. Agent cards also have 「开新会话」.
 

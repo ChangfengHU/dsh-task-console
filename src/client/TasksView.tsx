@@ -75,6 +75,12 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
   const { tasks, runs, reload, error, loaded } = useTasks(api)
   const [filter, setFilter] = useState<TaskFilter>('all')
   const [query, setQuery] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(8)
+  const [manageOpen, setManageOpen] = useState(false)
+  const [confirmText, setConfirmText] = useState('')
+  const [clearing, setClearing] = useState<'ended' | 'all' | ''>('')
+  const [clearError, setClearError] = useState('')
   const rows = useMemo(() => {
     const history = new Map<string, Run[]>()
     for (const run of runs) history.set(run.taskId, [...(history.get(run.taskId) ?? []), run])
@@ -96,6 +102,24 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
   const active = rows.filter(row => row.state === 'run').length
   const attention = rows.filter(row => row.state === 'park' || row.state === 'review' || row.state === 'bad').length
   const schedules = tasks.filter(task => task.trigger.kind === 'cron' && task.enabled).length
+  const ended = rows.filter(row => row.state === 'done' || row.state === 'bad')
+  const pages = Math.max(1, Math.ceil(visible.length / pageSize))
+  const currentPage = Math.min(page, pages)
+  const pageRows = visible.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+  const from = visible.length ? (currentPage - 1) * pageSize + 1 : 0
+  const to = Math.min(currentPage * pageSize, visible.length)
+  useEffect(() => setPage(1), [filter, query, pageSize])
+  const clearTasks = async (scope: 'ended' | 'all') => {
+    const target = scope === 'ended' ? ended : rows
+    if (!target.length || clearing) return
+    setClearing(scope); setClearError('')
+    try {
+      for (const row of target) await api.deleteTask(row.task.id)
+      toast(`已删除 ${target.length} 个任务记录；会话和工作区文件未改动`)
+      setManageOpen(false); setConfirmText(''); setPage(1)
+      await reload()
+    } catch (e) { setClearError(String((e as Error).message ?? e)) } finally { setClearing('') }
+  }
   return (
     <div className="dtc-taskhome">
       <section className="dtc-taskintro">
@@ -114,10 +138,18 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
       </section>
       <div className="dtc-tasktools">
         <div className="dtc-taskfilters">{FILTERS.map(item => <button key={item.id} className={filter === item.id ? 'on' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>)}</div>
-        <label className="dtc-tasksearch"><span>⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务或 Agent" /></label>
+        <div className="dtc-tasktool-actions"><label className="dtc-tasksearch"><span>⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务或 Agent" /></label><button className="dtc-btn" onClick={() => { setManageOpen(true); setClearError(''); setConfirmText('') }}>管理任务</button></div>
       </div>
       {error ? <div className="dtc-err">{error}</div> : null}
-      {!loaded ? <div className="dtc-empty"><span className="dtc-spin" /> 读取任务…</div> : visible.length ? <div className="dtc-taskgrid">{visible.map(row => <TaskGroupCard key={row.task.id} {...row} agents={agents} api={api} reload={reload} toast={toast} />)}</div> : <div className="dtc-taskempty"><span>▦</span><b>{query ? '没有匹配的任务' : '这个视图还没有任务'}</b><p>{query ? '换一个关键词试试。' : '新建任务后，角色、依赖和运行状态会显示在这里。'}</p>{!query ? <button className="dtc-btn pri" onClick={() => go('tasks/new')}>＋ 新建任务</button> : null}</div>}
+      {!loaded ? <div className="dtc-empty"><span className="dtc-spin" /> 读取任务…</div> : visible.length ? <><div className="dtc-taskgrid">{pageRows.map(row => <TaskGroupCard key={row.task.id} {...row} agents={agents} api={api} reload={reload} toast={toast} />)}</div><div className="dtc-pagination"><span>第 {from}–{to} 条，共 {visible.length} 条</span><label>每页<select value={pageSize} onChange={event => setPageSize(Number(event.target.value))}><option value={8}>8</option><option value={16}>16</option><option value={32}>32</option></select></label><div><button className="dtc-btn sm" disabled={currentPage <= 1} onClick={() => setPage(1)}>首页</button><button className="dtc-btn sm" disabled={currentPage <= 1} onClick={() => setPage(value => Math.max(1, value - 1))}>上一页</button><b>{currentPage} / {pages}</b><button className="dtc-btn sm" disabled={currentPage >= pages} onClick={() => setPage(value => Math.min(pages, value + 1))}>下一页</button></div></div></> : <div className="dtc-taskempty"><span>▦</span><b>{query ? '没有匹配的任务' : '这个视图还没有任务'}</b><p>{query ? '换一个关键词试试。' : '新建任务后，角色、依赖和运行状态会显示在这里。'}</p>{!query ? <button className="dtc-btn pri" onClick={() => go('tasks/new')}>＋ 新建任务</button> : null}</div>}
+      {manageOpen ? <div className="dtc-modal" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !clearing) setManageOpen(false) }}><section className="dtc-mbox dtc-cleanbox" role="dialog" aria-modal="true" aria-labelledby="dtc-clean-title">
+        <header className="mh"><div><b id="dtc-clean-title">管理任务记录</b><small>只处理任务台数据，不删除 DSH 会话或工作区文件</small></div><button className="dtc-close" aria-label="关闭" disabled={!!clearing} onClick={() => setManageOpen(false)}>×</button></header>
+        <div className="mb">
+          {clearError ? <div className="dtc-err">{clearError}</div> : null}
+          <div className="dtc-clean-option"><div><b>清理已结束任务</b><p>删除已完成与执行失败的任务及运行记录，共 {ended.length} 个。进行中、待回答和待验收任务会保留。</p></div><button className="dtc-btn danger" disabled={!ended.length || !!clearing} onClick={() => void clearTasks('ended')}>{clearing === 'ended' ? '清理中…' : `清理 ${ended.length} 个`}</button></div>
+          <div className="dtc-clean-option danger"><div><b>清空全部任务</b><p>包括当前活跃任务；正在执行的运行会先取消。此操作无法从任务台撤销。</p><label>输入“清空全部”确认<input value={confirmText} onChange={event => setConfirmText(event.target.value)} placeholder="清空全部" disabled={!!clearing} /></label></div><button className="dtc-btn danger" disabled={!rows.length || confirmText !== '清空全部' || !!clearing} onClick={() => void clearTasks('all')}>{clearing === 'all' ? '清空中…' : `清空 ${rows.length} 个`}</button></div>
+        </div>
+      </section></div> : null}
     </div>
   )
 }

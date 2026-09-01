@@ -69,6 +69,7 @@ test('kernel heartbeat renews a finite lease and later permits stale reclaim', a
   const claim = kernel.claimTask('lease', { ttlSeconds: 10 })!
   now = 109
   assert.equal(kernel.heartbeat('lease', claim.run.id, claim.lock, 10), true)
+  assert.deepEqual(JSON.parse(kernel.listEvents('lease').at(-1)?.payload ?? '{}'), { last_heartbeat_at: 109, claim_expires: 119 })
   now = 111
   assert.equal(kernel.releaseStaleClaims(), 0)
   now = 120

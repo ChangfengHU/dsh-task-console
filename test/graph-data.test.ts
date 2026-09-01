@@ -19,3 +19,20 @@ test('DB replay never displays a task, link, or run before its canonical row eve
   assert.equal(replayGraph(events, 3).links.length, 0)
   assert.equal(replayGraph(events, 4).links.length, 1)
 })
+
+test('DB replay advances visible run evidence for bound, session, prompt, and heartbeat events', () => {
+  const events = [
+    event(1, 'p1', 'created', { title: 'Planner 1', role: 'planner', round: 1, status: 'ready' }),
+    event(2, 'p1', 'claimed', { expires: 902 }, 9),
+    event(3, 'p1', 'run_bound', { external_run_id: 'external-9', session_id: 'session-9' }, 9),
+    event(4, 'p1', 'session_created', { session_id: 'session-9' }, 9),
+    event(5, 'p1', 'prompt_dispatched', { message_id: 'message-9' }, 9),
+    event(6, 'p1', 'heartbeat', { last_heartbeat_at: 6, claim_expires: 906 }, 9),
+  ]
+  assert.deepEqual(replayGraph(events, 2).runs[0].evidence, ['claimed'])
+  assert.equal(replayGraph(events, 3).runs[0].phase, 'bound')
+  assert.equal(replayGraph(events, 4).runs[0].phase, 'session_created')
+  assert.equal(replayGraph(events, 5).runs[0].message_id, 'message-9')
+  assert.deepEqual(replayGraph(events, 6).runs[0].evidence, ['claimed', 'bound', 'session_created', 'prompt_dispatched', 'heartbeat'])
+  assert.equal(replayGraph(events, 6).runs[0].claim_expires, 906)
+})

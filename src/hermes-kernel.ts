@@ -554,7 +554,7 @@ export class HermesKernel {
       if (!cur.changes) return false
       this.db.prepare(`UPDATE task_runs SET claim_expires = ?, last_heartbeat_at = ?
         WHERE id = ? AND claim_lock = ? AND ended_at IS NULL`).run(expires, now, runId, lock)
-      this.appendEvent(taskId, 'heartbeat', note ? { note } : undefined, runId)
+      this.appendEvent(taskId, 'heartbeat', { ...(note ? { note } : {}), last_heartbeat_at: now, claim_expires: expires }, runId)
       return true
     })
   }

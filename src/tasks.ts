@@ -298,9 +298,14 @@ export class EventStore {
     if (!batch) throw new Error('没有这个任务运行')
     const tasks = db.prepare(`SELECT id,title,body,assignee,status,created_at,started_at,completed_at,result,node_kind,round,role,current_run_id FROM tasks WHERE tenant = ? ORDER BY created_at,id`).all(batchId) as GraphTaskRow[]
     const links = db.prepare(`SELECT l.parent_id,l.child_id,l.kind,l.created_at FROM task_links l JOIN tasks c ON c.id=l.child_id WHERE c.tenant=? ORDER BY COALESCE(l.created_at,0),l.rowid`).all(batchId) as GraphLinkRow[]
-    const runs = db.prepare(`SELECT r.id,b.external_run_id,r.task_id,r.profile,r.status,r.started_at,r.ended_at,r.outcome,r.summary,r.error,b.session_id FROM task_runs r JOIN tasks t ON t.id=r.task_id LEFT JOIN dsh_run_bindings b ON b.core_run_id=r.id WHERE t.tenant=? ORDER BY r.started_at,r.id`).all(batchId) as GraphRunRow[]
+    const rawRuns = db.prepare(`SELECT r.id,b.external_run_id,r.task_id,r.profile,r.status,r.started_at,r.ended_at,r.outcome,r.summary,r.error,b.session_id,b.message_id,r.claim_expires,r.last_heartbeat_at FROM task_runs r JOIN tasks t ON t.id=r.task_id LEFT JOIN dsh_run_bindings b ON b.core_run_id=r.id WHERE t.tenant=? ORDER BY r.started_at,r.id`).all(batchId) as Omit<GraphRunRow, 'phase' | 'evidence'>[]
     const eventRows = db.prepare(`SELECT id,graph_id,task_id,run_id,kind,payload,created_at FROM task_events WHERE graph_id=? ORDER BY id`).all(batchId) as { id: number; graph_id: string; task_id: string; run_id: number | null; kind: string; payload: string | null; created_at: number }[]
     const events: GraphEventRow[] = eventRows.map(row => ({ ...row, payload: (() => { try { return row.payload ? JSON.parse(row.payload) : {} } catch { return {} } })() }))
+    const phaseByKind: Partial<Record<string, GraphRunRow['phase']>> = { claimed: 'claimed', run_bound: 'bound', session_created: 'session_created', prompt_dispatched: 'prompt_dispatched', heartbeat: 'heartbeat', completed: 'completed' }
+    const runs = rawRuns.map(run => {
+      const evidence = events.filter(event => event.run_id === run.id).map(event => phaseByKind[event.kind]).filter(Boolean) as GraphRunRow['evidence']
+      return { ...run, phase: evidence.at(-1) ?? 'claimed', evidence: [...new Set(evidence)] }
+    })
     return { graphId: batchId, taskId, batch: { id: batch.id, firedAt: batch.fired_at, settledAt: batch.settled_at, outcome: batch.outcome }, live: { tasks, links, runs }, events }
   }
 

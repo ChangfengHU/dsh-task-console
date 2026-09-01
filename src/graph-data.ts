@@ -35,7 +35,14 @@ export interface GraphRunRow {
   summary: string | null
   error: string | null
   session_id: string | null
+  message_id: string | null
+  claim_expires: number | null
+  last_heartbeat_at: number | null
+  phase: GraphRunPhase
+  evidence: GraphRunPhase[]
 }
+
+export type GraphRunPhase = 'claimed' | 'bound' | 'session_created' | 'prompt_dispatched' | 'heartbeat' | 'completed'
 
 export interface GraphEventRow {
   id: number
@@ -59,6 +66,11 @@ export interface GraphSnapshot {
   batch: { id: string; firedAt: number; settledAt: number | null; outcome: string | null }
   live: GraphFrame
   events: GraphEventRow[]
+}
+
+const addEvidence = (run: GraphRunRow, phase: GraphRunPhase): void => {
+  if (!run.evidence.includes(phase)) run.evidence.push(phase)
+  run.phase = phase
 }
 
 const blankTask = (e: GraphEventRow): GraphTaskRow => {
@@ -98,13 +110,22 @@ export function replayGraph(events: GraphEventRow[], count = events.length): Gra
     } else if (e.kind === 'promoted' && task) task.status = 'ready'
     else if (e.kind === 'claimed' && task && e.run_id !== null) {
       task.status = 'running'; task.started_at ??= e.created_at; task.current_run_id = e.run_id
-      runs.set(e.run_id, { id: e.run_id, external_run_id: typeof p.external_run_id === 'string' ? p.external_run_id : null, task_id: e.task_id, profile: task.assignee, status: 'running', started_at: e.created_at, ended_at: null, outcome: null, summary: null, error: null, session_id: typeof p.session_id === 'string' ? p.session_id : null })
-    } else if ((e.kind === 'run_bound' || e.kind === 'session_created') && e.run_id !== null) {
+      runs.set(e.run_id, { id: e.run_id, external_run_id: typeof p.external_run_id === 'string' ? p.external_run_id : null, task_id: e.task_id, profile: task.assignee, status: 'running', started_at: e.created_at, ended_at: null, outcome: null, summary: null, error: null, session_id: typeof p.session_id === 'string' ? p.session_id : null, message_id: null, claim_expires: typeof p.expires === 'number' ? p.expires : null, last_heartbeat_at: e.created_at, phase: 'claimed', evidence: ['claimed'] })
+    } else if (e.kind === 'run_bound' && e.run_id !== null) {
       const run = runs.get(e.run_id)
-      if (run) { if (typeof p.external_run_id === 'string') run.external_run_id = p.external_run_id; if (typeof p.session_id === 'string') run.session_id = p.session_id }
+      if (run) { if (typeof p.external_run_id === 'string') run.external_run_id = p.external_run_id; if (typeof p.session_id === 'string') run.session_id = p.session_id; addEvidence(run, 'bound') }
+    } else if (e.kind === 'session_created' && e.run_id !== null) {
+      const run = runs.get(e.run_id)
+      if (run) { if (typeof p.session_id === 'string') run.session_id = p.session_id; addEvidence(run, 'session_created') }
+    } else if (e.kind === 'prompt_dispatched' && e.run_id !== null) {
+      const run = runs.get(e.run_id)
+      if (run) { if (typeof p.message_id === 'string') run.message_id = p.message_id; addEvidence(run, 'prompt_dispatched') }
+    } else if (e.kind === 'heartbeat' && e.run_id !== null) {
+      const run = runs.get(e.run_id)
+      if (run) { run.last_heartbeat_at = typeof p.last_heartbeat_at === 'number' ? p.last_heartbeat_at : e.created_at; if (typeof p.claim_expires === 'number') run.claim_expires = p.claim_expires; addEvidence(run, 'heartbeat') }
     } else if ((e.kind === 'completed' || e.kind === 'gate_opened') && task) {
       task.status = 'done'; task.completed_at = e.created_at; task.current_run_id = null
-      if (e.run_id !== null) { const run = runs.get(e.run_id); if (run) { run.status = 'done'; run.outcome = 'completed'; run.summary = typeof p.summary === 'string' ? p.summary : null; run.ended_at = e.created_at } }
+      if (e.run_id !== null) { const run = runs.get(e.run_id); if (run) { run.status = 'done'; run.outcome = 'completed'; run.summary = typeof p.summary === 'string' ? p.summary : null; run.ended_at = e.created_at; addEvidence(run, 'completed') } }
     } else if (e.kind === 'blocked' && task) {
       task.status = String(p.status ?? 'blocked'); task.current_run_id = null
       if (e.run_id !== null) { const run = runs.get(e.run_id); if (run) { run.status = 'blocked'; run.outcome = 'blocked'; run.error = String(p.reason ?? ''); run.ended_at = e.created_at } }
@@ -124,6 +145,10 @@ export function graphEventLabel(e: GraphEventRow): string {
     case 'created': return `INSERT tasks · ${role}`
     case 'linked': return `INSERT task_links · ${String(e.payload.parent_id ?? '?')} → ${e.task_id}`
     case 'claimed': return `INSERT task_runs · ${role} 开始运行`
+    case 'run_bound': return `INSERT dsh_run_bindings · ${role} 已绑定 Run`
+    case 'session_created': return `UPDATE dsh_run_bindings · ${role} 会话已创建`
+    case 'prompt_dispatched': return `UPDATE dsh_run_bindings · ${role} 任务书已发送`
+    case 'heartbeat': return `UPDATE task_runs · ${role} 心跳续租`
     case 'promoted': return `UPDATE tasks · ${role} 进入 ready`
     case 'gate_opened': return `UPDATE tasks · Gate 放行`
     case 'completed': return `UPDATE tasks/task_runs · ${role} 完成`

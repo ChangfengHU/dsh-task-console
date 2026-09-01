@@ -89,6 +89,27 @@ test('runner: request_review cannot settle until a person approves it', async ()
   runner.stop()
 })
 
+test('runner: review changes restart the chosen upstream role and replay the downstream chain', async () => {
+  const { host, store, runner } = await setup()
+  const batch = await runner.fire('T', 'manual')
+  const nextSession = () => [...host.sessions.keys()].at(-1)!
+  let session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'A1' }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'B1' }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_request_review', { summary: 'R1' }); host.endTurn(session); await tick()
+  const reviewer = `${batch.id}#2`; const planner = `${batch.id}#0`
+  await runner.reviewCard(reviewer, 'changes', '重新规划交互', planner); await tick()
+  assert.equal(store.s.cards.get(planner)!.status, 'running'); assert.equal(store.s.cards.get(`${batch.id}#1`)!.status, 'todo'); assert.equal(store.s.cards.get(reviewer)!.status, 'todo')
+  session = nextSession(); assert.match(host.sessions.get(session)!.followups[0].content[0].text, /\[REVIEW CHANGES\]\n重新规划交互/)
+  host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'A2' }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'B2' }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_request_review', { summary: 'R2' }); host.endTurn(session); await tick()
+  await runner.reviewCard(reviewer, 'approve', '第二轮通过'); await tick()
+  assert.deepEqual(batch.cardIds.map(id => store.s.cards.get(id)!.runIds.length), [2, 2, 2])
+  assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')
+  assert.equal(store.all().filter(event => event.t === 'card/changes_requested').length, 1)
+  runner.stop()
+})
+
 test('runner: stopping without a terminator gets one nudge, then protocol_violation; breaker trips after maxTries', async () => {
   const { host, store, runner } = await setup({ participants: [{ agentId: 'a' }], maxTries: 2 })
   const batch = await runner.fire('T', 'manual')

@@ -1,8 +1,8 @@
-/** Run detail: result first, dependency state, selected-card evidence, and an always-visible activity stream. */
+/** Run detail: dependency graph first, selected-card evidence, and an always-visible activity stream. */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cronHuman } from '../cron.ts'
-import { actorOf, batchStatus, cardRun, describe, fold, type Batch, type Card, type Event, type Run, type TaskSpec } from '../fold.ts'
+import { actorOf, batchStatus, cardRun, describe, fold, type Batch, type Card, type Event, type Run, type State, type TaskSpec } from '../fold.ts'
 import type { AgentRow, ArtifactView } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
 import type { TasksApi } from './TasksView.tsx'
@@ -22,6 +22,17 @@ const FILTERS: { id: EventFilter; label: string }[] = [{ id: 'all', label: '全�
 const ROLE_ICONS = ['🦊', '🐻', '🐰', '🐱', '🐼', '🦉']
 const ROLE_COLORS = ['#ffd66b', '#a9ead4', '#ffc2d2', '#cfc5ff', '#bfe8ff', '#ffcfad']
 
+interface ReviewGateCycle {
+  cardId: string
+  runId: string
+  round: number
+  requestedAt: string
+  status: 'pending' | 'approved' | 'changes'
+  decidedAt?: string
+  note?: string
+  targetCardId?: string
+}
+
 function eventGroup(e: Event): Exclude<EventFilter, 'all'> {
   if (e.t === 'run/session_created' || e.t === 'run/prompt_dispatched' || e.t === 'run/claimed') return 'process'
   if (e.t === 'run/completed' || e.t === 'run/failed' || e.t === 'run/timed_out' || e.t === 'run/cancelled' || e.t === 'artifact/registered' || e.t === 'artifact/published' || e.t === 'batch/settled') return 'result'
@@ -37,9 +48,27 @@ function belongsToBatch(e: Event, batchId: string): boolean {
   return false
 }
 
+function reviewGateCycles(rows: { e: Event; index: number }[], state: State): ReviewGateCycle[] {
+  const cycles: ReviewGateCycle[] = []
+  for (const { e } of rows) {
+    if (e.t === 'run/review_requested') {
+      const run = state.runs.get(e.runId)
+      if (!run) continue
+      cycles.push({ cardId: run.cardId, runId: e.runId, round: cycles.filter(cycle => cycle.cardId === run.cardId).length + 1, requestedAt: e.at, status: 'pending' })
+    } else if (e.t === 'card/review_approved' || e.t === 'card/changes_requested') {
+      const cycle = [...cycles].reverse().find(row => row.runId === e.runId)
+      if (!cycle) continue
+      cycle.status = e.t === 'card/review_approved' ? 'approved' : 'changes'; cycle.decidedAt = e.at; cycle.note = e.note
+      if (e.t === 'card/changes_requested') cycle.targetCardId = e.targetCardId
+    }
+  }
+  return cycles
+}
+
 export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & LedgerApi; agents: AgentRow[]; id: string; runId?: string; toast: (m: string) => void }) {
   const [events, setEvents] = useState<Event[]>([])
   const [artifacts, setArtifacts] = useState<ArtifactView[]>([])
+  const [artifactBatch, setArtifactBatch] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [cursor, setCursor] = useState<number | null>(null)
   const [playing, setPlaying] = useState(false)
@@ -49,15 +78,21 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
 
   useEffect(() => {
     let stop = false
-    const load = async () => {
+    const loadEvents = async () => {
       try {
         const next = await api.taskEvents(id)
         if (!stop) { setEvents(next as Event[]); setError('') }
       } catch (e) { if (!stop) setError(String((e as Error).message ?? e)) }
     }
-    void load(); const t = window.setInterval(load, 2500)
+    const loadSnapshot = async () => {
+      try {
+        const next = await api.taskSnapshot(id, runId)
+        if (!stop) { setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId); setError('') }
+      } catch (e) { if (!stop) setError(String((e as Error).message ?? e)) }
+    }
+    void loadSnapshot(); const t = window.setInterval(loadEvents, 2500)
     return () => { stop = true; window.clearInterval(t) }
-  }, [api, id])
+  }, [api, id, runId])
 
   const upto = cursor === null ? events.length : Math.min(cursor, events.length)
   const full = useMemo(() => fold(events), [events])
@@ -70,11 +105,12 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
 
   useEffect(() => {
     let stop = false
-    if (!selId) { setArtifacts([]); return }
-    const load = () => api.taskArtifacts(id, selId).then(a => { if (!stop) setArtifacts(a) }).catch(e => { if (!stop) setError(String((e as Error).message ?? e)) })
-    void load(); const t = window.setInterval(load, 3000)
+    if (!selId) { setArtifacts([]); setArtifactBatch(null); return }
+    const load = () => api.taskArtifacts(id, selId).then(a => { if (!stop) { setArtifacts(a); setArtifactBatch(selId) } }).catch(e => { if (!stop) setError(String((e as Error).message ?? e)) })
+    if (artifactBatch !== selId) void load()
+    const t = window.setInterval(load, 3000)
     return () => { stop = true; window.clearInterval(t) }
-  }, [api, id, selId])
+  }, [api, id, selId, artifactBatch])
 
   useEffect(() => {
     const cards = batchFull?.cardIds.map(cid => full.cards.get(cid)).filter(Boolean) as Card[] | undefined
@@ -102,7 +138,10 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
   const stopAt = cursor !== null ? events[upto - 1]?.at : undefined
   const total = cardsFull.length ? dur(cardsFull.find(c => c.startedAt)?.startedAt, batchFull?.settled?.at ?? [...cardsFull].reverse().find(c => c.endedAt)?.endedAt) : ''
   const batchEvents = batchFull ? events.map((e, index) => ({ e, index })).filter(x => belongsToBatch(x.e, batchFull.id)) : []
+  const visibleBatchEvents = batchEvents.filter(({ index }) => index < upto)
   const filteredEvents = batchEvents.filter(({ e }) => eventFilter === 'all' || eventGroup(e) === eventFilter)
+  const reviewCycles = reviewGateCycles(visibleBatchEvents, now)
+  const reworkCycles = reviewCycles.filter(cycle => cycle.status === 'changes')
   const lastCard = [...cardsFull].reverse().find(c => c.summary)
   const lastRun = lastCard ? cardRun(full, lastCard) : undefined
   const metricCards = cursor === null ? cardsFull : cardsNow
@@ -110,12 +149,14 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
   const activeCount = metricCards.filter(card => card.status === 'running' || card.status === 'blocked' || card.status === 'review').length
   const dependencyCount = cardsFull.reduce((sum, card) => sum + card.deps.length, 0)
   const claimCount = batchEvents.filter(({ e }) => e.t === 'run/claimed').length
-  const gateCount = metricCards.filter(card => card.status === 'review').length
+  const gateCount = reviewCycles.filter(cycle => cycle.status === 'pending').length
+  const gateApproved = reviewCycles.filter(cycle => cycle.status === 'approved').length
+  const gateChanges = reviewCycles.filter(cycle => cycle.status === 'changes').length
   const eventStep = batchEvents.filter(({ index }) => index < upto).length
   const progress = metricCards.length ? Math.round(doneCount / metricCards.length * 100) : 0
 
   const stepTo = (n: number) => { setPlaying(false); const v = Math.max(1, Math.min(n, events.length)); setCursor(v >= events.length ? null : v) }
-  const refreshArtifacts = async () => { if (selId) setArtifacts(await api.taskArtifacts(id, selId)) }
+  const refreshArtifacts = async () => { if (selId) { setArtifacts(await api.taskArtifacts(id, selId)); setArtifactBatch(selId) } }
 
   return (
     <div className="dtc-cartoon">
@@ -138,10 +179,35 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
         <div><span>活跃角色</span><strong>{activeCount}</strong><em>{cardsFull.length} 个预置 Agent</em></div>
         <div><span>依赖边</span><strong>{dependencyCount}</strong><em>按 handoff 顺序放行</em></div>
         <div><span>领取尝试</span><strong>{claimCount}</strong><em>真实 run/claimed</em></div>
-        <div><span>待过闸门</span><strong>{gateCount}</strong><em>人工验收</em></div>
+        <div><span>人工闸门</span><strong>{reviewCycles.length}</strong><em>{gateCount ? `${gateCount} 个待决策` : gateApproved ? `${gateApproved} 个已批准` : gateChanges ? `${gateChanges} 次退回` : '尚未创建'}</em></div>
       </section>
 
-      {batchFull && bst && bst !== 'run' && bst !== 'park' ? <ResultPanel api={api} taskId={id} batchId={batchFull.id} status={bst} summary={lastCard?.summary} metadata={lastRun?.metadata} artifacts={artifacts} toast={toast} refresh={refreshArtifacts} /> : null}
+      <main className="dtc-cpanel dtc-cworkspace dtc-cworkspace-top">
+        <div className="dtc-cpanel-head"><div><b>任务依赖图</b><small>角色节点、依赖 Gate、人工 Gate 与返工轮次来自同一条事件流</small></div><code>{batchFull?.id ?? '尚未创建'}</code></div>
+        <div className="dtc-ccanvas">
+          {cardsNow.length ? <div className="dtc-cflow">{cardsNow.map(card => {
+            const run = cardRun(now, card)
+            const parents = card.deps.map(dep => now.cards.get(dep)).filter(Boolean) as Card[]
+            const dependencyOpen = parents.length > 0 && parents.every(parent => parent.status === 'done')
+            const gates = reviewCycles.filter(cycle => cycle.cardId === card.id)
+            const latestGate = gates[gates.length - 1]
+            const attempts = card.runIds.map(rid => now.runs.get(rid)).filter(Boolean) as Run[]
+            return <div className="dtc-cflow-step" key={card.id}>
+              {parents.length ? <div className={`dtc-dependency-gate ${dependencyOpen ? 'open' : 'waiting'}`}><span className="diamond">◇</span><div><b>依赖 Gate</b><small>{dependencyOpen ? 'handoff 已封存' : `等待 ${parents.map(parent => agentName(parent.agentId)).join('、')}`}</small></div><em>{dependencyOpen ? 'OPEN' : 'WAIT'}</em><i>→</i></div> : null}
+              <button className={`dtc-node dtc-cnode s-${card.status} ${selectedCard === card.id ? 'selected' : ''}`} onClick={() => setSelectedCard(card.id)}>
+                {card.status === 'running' ? <span className="dtc-claim-lock">🔐 CLAIMED</span> : null}
+                <div className="dtc-cnode-top"><i style={{ background: ROLE_COLORS[card.index % ROLE_COLORS.length] }}>{ROLE_ICONS[card.index % ROLE_ICONS.length]}</i><div><b>{agentName(card.agentId)}</b><small>{task.participants[card.index]?.brief || `角色 ${card.index + 1}`}</small></div><span className={`dtc-pill ${pillOf(card.status)}`}>{CARD[card.status]}</span></div>
+                <div className="dtc-cnode-meta"><span>Attempt {Math.max(1, card.runIds.length)}</span><span>{card.startedAt ? dur(card.startedAt, card.endedAt ?? stopAt) : '未开始'}</span><span>{run?.sessionCreatedAt ? 'Session 已创建' : run ? '已领取' : '未领取'}</span></div>
+                {attempts.length > 1 ? <div className="dtc-attempt-strip">{attempts.map(attempt => { const gate = reviewCycles.find(cycle => cycle.runId === attempt.id); const state = gate?.status === 'changes' ? '返工' : gate?.status === 'approved' ? '通过' : RUN[attempt.outcome ?? attempt.status] ?? attempt.status; return <span key={attempt.id} className={gate?.status ?? ''}>A{attempt.attempt} · {state}</span> })}</div> : null}
+                {run?.status === 'blocked' ? <div className="q">? {run.question}</div> : null}
+              </button>
+              {latestGate ? <div className={`dtc-human-gate ${latestGate.status}`}><i>→</i><span className="diamond">◇</span><div><b>人工验收 Gate #{latestGate.round}</b><small>{latestGate.status === 'pending' ? '等待人工决策' : latestGate.status === 'approved' ? '已批准，允许结算' : `已退回 ${agentName(full.cards.get(latestGate.targetCardId ?? latestGate.cardId)?.agentId ?? '')}`}</small></div><em>{latestGate.status === 'pending' ? 'PENDING' : latestGate.status === 'approved' ? 'APPROVED' : 'CHANGES'}</em></div> : null}
+            </div>
+          })}</div> : <div className="dtc-empty">这个时刻还没有运行。</div>}
+          {reworkCycles.length ? <div className="dtc-rework-map"><b>↩ 返工回路</b>{reworkCycles.map(cycle => { const source = full.cards.get(cycle.cardId); const target = full.cards.get(cycle.targetCardId ?? cycle.cardId); return <button key={cycle.runId} onClick={() => target && setSelectedCard(target.id)}><span>Gate #{cycle.round}</span><strong>{source ? agentName(source.agentId) : '验收'} </strong><i>CHANGES_REQUESTED</i><strong> {target ? agentName(target.agentId) : '原角色'}</strong><small>{cycle.note}</small></button> })}</div> : null}
+          <div className="dtc-cstep"><b>{String(eventStep).padStart(2, '0')} / {String(batchEvents.length).padStart(2, '0')}</b><div className="track"><i style={{ width: `${batchEvents.length ? eventStep / batchEvents.length * 100 : 0}%` }} /></div><span>{cursor === null ? '现在 · 实时跟随' : `回放到 ${fmt(stopAt)}`}</span></div>
+        </div>
+      </main>
 
       <section className="dtc-cartoon-layout">
         <aside className="dtc-cpanel dtc-croles">
@@ -149,27 +215,9 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
           <div className="dtc-crole-list">{cardsNow.map(card => <button key={card.id} className={selectedCard === card.id ? 'selected' : ''} onClick={() => setSelectedCard(card.id)}>
             <i style={{ background: ROLE_COLORS[card.index % ROLE_COLORS.length] }}>{ROLE_ICONS[card.index % ROLE_ICONS.length]}</i><span><b>{agentName(card.agentId)}</b><small>角色 {card.index + 1} · {CARD[card.status]}</small></span><em className={`s-${card.status}`} />
           </button>)}</div>
+          <div className="dtc-control-list"><h4>CONTROL NODES</h4><div><i>◇</i><span><b>依赖 Gate</b><small>{dependencyCount} 条依赖边</small></span><em>{cardsNow.filter(card => card.deps.length && card.deps.every(dep => now.cards.get(dep)?.status === 'done')).length}/{dependencyCount}</em></div><div><i>🚪</i><span><b>人工验收 Gate</b><small>{reworkCycles.length ? `${reworkCycles.length} 次返工` : '没有返工'}</small></span><em>{gateCount ? `${gateCount} 待决` : gateApproved ? `${gateApproved} 通过` : gateChanges ? `${gateChanges} 退回` : '未创建'}</em></div></div>
           <div className="dtc-clegend"><b>状态来自事件折叠</b><br />claimed → running；blocked / review 单独表达；完成后释放下游依赖。</div>
         </aside>
-
-        <main className="dtc-cpanel dtc-cworkspace">
-          <div className="dtc-cpanel-head"><div><b>任务依赖图</b><small>上游交卷后，下游才会进入 ready</small></div><code>{batchFull?.id ?? '尚未创建'}</code></div>
-          <div className="dtc-ccanvas">
-            {cardsNow.length ? <div className="dtc-cflow">{cardsNow.map((card, i) => {
-              const run = cardRun(now, card); const upstream = i ? cardsNow[i - 1] : undefined; const open = upstream?.status === 'done'
-              return <div className="dtc-cflow-step" key={card.id}>
-                {i ? <div className={`dtc-cconnector ${open ? 'open' : ''}`}><span>{open ? 'handoff 已封存' : '等待依赖'}</span><i>▼</i></div> : null}
-                <button className={`dtc-node dtc-cnode s-${card.status} ${selectedCard === card.id ? 'selected' : ''}`} onClick={() => setSelectedCard(card.id)}>
-                  {card.status === 'running' ? <span className="dtc-claim-lock">🔐 CLAIMED</span> : null}
-                  <div className="dtc-cnode-top"><i style={{ background: ROLE_COLORS[card.index % ROLE_COLORS.length] }}>{ROLE_ICONS[card.index % ROLE_ICONS.length]}</i><div><b>{agentName(card.agentId)}</b><small>{task.participants[card.index]?.brief || `角色 ${card.index + 1}`}</small></div><span className={`dtc-pill ${pillOf(card.status)}`}>{CARD[card.status]}</span></div>
-                  <div className="dtc-cnode-meta"><span>尝试 {Math.max(1, card.runIds.length)} / {task.maxTries}</span><span>{card.startedAt ? dur(card.startedAt, card.endedAt ?? stopAt) : '未开始'}</span><span>{run?.sessionCreatedAt ? 'Session 已创建' : run ? '已领取' : '未领取'}</span></div>
-                  {run?.status === 'blocked' ? <div className="q">? {run.question}</div> : null}
-                </button>
-              </div>
-            })}</div> : <div className="dtc-empty">这个时刻还没有运行。</div>}
-            <div className="dtc-cstep"><b>{String(eventStep).padStart(2, '0')} / {String(batchEvents.length).padStart(2, '0')}</b><div className="track"><i style={{ width: `${batchEvents.length ? eventStep / batchEvents.length * 100 : 0}%` }} /></div><span>{cursor === null ? '现在 · 实时跟随' : `回放到 ${fmt(stopAt)}`}</span></div>
-          </div>
-        </main>
 
         <aside className="dtc-cpanel dtc-cstream">
           <div className="dtc-cpanel-head"><div><b>事件流原语</b><small>append-only · 可回放 · 可审计</small></div><span>{batchEvents.length} EVENTS</span></div>
@@ -181,7 +229,9 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
         </aside>
       </section>
 
-      {selected ? <div className="dtc-cartoon-drawer"><CardEvidence api={api} taskId={id} batchId={batchFull?.id} card={selected} parents={selected.deps.map(dep => full.cards.get(dep)).filter(Boolean) as Card[]} runs={selected.runIds.map(rid => full.runs.get(rid)).filter(Boolean) as Run[]} artifacts={artifacts.filter(a => a.cardId === selected.id)} agentName={agentName(selected.agentId)} toast={toast} refreshArtifacts={refreshArtifacts} /></div> : null}
+      {selected ? <div className="dtc-cartoon-drawer"><CardEvidence api={api} taskId={id} batchId={batchFull?.id} card={selected} parents={selected.deps.map(dep => full.cards.get(dep)).filter(Boolean) as Card[]} reworkTargets={cardsFull.filter(card => card.index <= selected.index)} gates={reviewCycles.filter(cycle => cycle.cardId === selected.id)} runs={selected.runIds.map(rid => full.runs.get(rid)).filter(Boolean) as Run[]} artifacts={artifacts.filter(a => a.cardId === selected.id)} agentName={agentName(selected.agentId)} labelOf={agentName} toast={toast} refreshArtifacts={refreshArtifacts} /></div> : null}
+
+      {batchFull && bst && bst !== 'run' && bst !== 'park' ? <ResultPanel api={api} taskId={id} batchId={batchFull.id} status={bst} summary={lastCard?.summary} metadata={lastRun?.metadata} artifacts={artifacts} toast={toast} refresh={refreshArtifacts} /> : null}
 
       <details className="dtc-cpanel dtc-cartoon-details"><summary>任务书与运行边界</summary><div className="dtc-hand">{task.brief}</div><div className="dtc-kv"><span className="k">工作区</span><span className="dtc-mono">{task.cwd}</span><span className="k">触发</span><span>{task.trigger.kind === 'cron' ? cronHuman(task.trigger.expr) : '单次'}</span><span className="k">超时</span><span>{Math.round(task.timeoutSec / 60)} 分钟 / 角色</span><span className="k">失败后</span><span>{task.onFail === 'retry' ? `自动重试，最多 ${task.maxTries} 次` : '停下'}</span></div></details>
     </div>
@@ -198,17 +248,21 @@ function ResultPanel({ api, taskId, batchId, status, summary, metadata, artifact
   </section>
 }
 
-function CardEvidence({ api, taskId, batchId, card, parents, runs, artifacts, agentName, toast, refreshArtifacts }: { api: TasksApi & LedgerApi; taskId: string; batchId?: string; card: Card; parents: Card[]; runs: Run[]; artifacts: ArtifactView[]; agentName: string; toast: (m: string) => void; refreshArtifacts: () => Promise<void> }) {
+function CardEvidence({ api, taskId, batchId, card, parents, reworkTargets, gates, runs, artifacts, agentName, labelOf, toast, refreshArtifacts }: { api: TasksApi & LedgerApi; taskId: string; batchId?: string; card: Card; parents: Card[]; reworkTargets: Card[]; gates: ReviewGateCycle[]; runs: Run[]; artifacts: ArtifactView[]; agentName: string; labelOf: (id: string) => string; toast: (m: string) => void; refreshArtifacts: () => Promise<void> }) {
   const latest = runs[runs.length - 1]
   const [runId, setRunId] = useState<string | undefined>(latest?.id)
   const [tab, setTab] = useState<'handoff' | 'claim' | 'ledger' | 'gate' | 'artifacts'>('handoff')
   const [reviewNote, setReviewNote] = useState('')
+  const [reworkTarget, setReworkTarget] = useState(card.deps[0] ?? card.id)
   const [busy, setBusy] = useState(false)
   const run = runs.find(r => r.id === runId) ?? latest
+  const latestGate = gates[gates.length - 1]
+  useEffect(() => { setRunId(latest?.id) }, [card.id, runs.length])
+  useEffect(() => { setReworkTarget(card.deps[0] ?? card.id) }, [card.id])
   const { ledger, error } = useLedger(api, tab === 'ledger' ? run?.sessionId : undefined, run?.status === 'running' || run?.status === 'blocked')
   const decide = async (decision: 'approve' | 'changes') => {
     setBusy(true)
-    try { await api.reviewCard(card.id, decision, reviewNote); toast(decision === 'approve' ? '已验收通过' : '已退回修改'); setReviewNote('') }
+    try { await api.reviewCard(card.id, decision, reviewNote, decision === 'changes' ? reworkTarget : undefined); toast(decision === 'approve' ? '已验收通过' : `已退回 ${labelOf(reworkTargets.find(target => target.id === reworkTarget)?.agentId ?? '')}`); setReviewNote('') }
     catch (e) { toast(String((e as Error).message ?? e)) } finally { setBusy(false) }
   }
   return <div className="dtc-panel dtc-evidence">
@@ -225,7 +279,7 @@ function CardEvidence({ api, taskId, batchId, card, parents, runs, artifacts, ag
     </div> : null}
     {tab === 'claim' ? <div className="dtc-tabbody"><div className="dtc-cartoon-note"><h4>🔐 真实领取记录</h4><p>本地 SQLite 版由单一调度器串行领取，避免同一进程重复启动；这里展示真实 run/claimed 与会话边界，不伪造分布式租约。</p></div><div className="dtc-kv dtc-runfacts"><span className="k">Run</span><span className="dtc-mono">{run?.id || '—'}</span><span className="k">尝试</span><span>{run?.attempt ?? 0} / {card.runIds.length || 1}</span><span className="k">领取</span><span>{fmt(run?.startedAt) || '—'}</span><span className="k">会话创建</span><span>{fmt(run?.sessionCreatedAt) || '等待中'}</span><span className="k">提示词发送</span><span>{fmt(run?.promptDispatchedAt) || '等待中'}</span><span className="k">Session</span><span className="dtc-mono">{run?.sessionId || '—'}</span></div></div> : null}
     {tab === 'ledger' ? <div className="dtc-tabbody">{error ? <div className="dtc-err">{error}</div> : ledger ? <TurnLedgerView ledger={ledger} compact /> : run?.sessionId ? <div className="dtc-empty"><span className="dtc-spin" /> 折叠会话日志…</div> : <div className="dtc-empty">没有会话。</div>}</div> : null}
-    {tab === 'gate' ? <div className="dtc-tabbody"><div className={`dtc-cartoon-gate ${card.status === 'review' ? 'pending' : run?.outcome === 'review' && card.status === 'done' ? 'approved' : ''}`}><span>{card.status === 'review' ? '🚪' : run?.outcome === 'review' && card.status === 'done' ? '✅' : '🪁'}</span><div><b>{card.status === 'review' ? '正在等待人工验收' : run?.outcome === 'review' && card.status === 'done' ? '人工闸门已批准' : '这个角色没有请求人工闸门'}</b><p>{card.status === 'review' ? '批准前不会放行下游，也不会结算整个任务组。' : run?.outcome === 'review' && card.status === 'done' ? '审批事件已写入事件流，下游可以继续。' : '只有 Agent 调用 task_request_review 后才会阻塞在这里。'}</p></div></div>{card.status === 'review' ? <div className="dtc-review"><textarea value={reviewNote} onChange={e => setReviewNote(e.target.value)} placeholder="验收意见；退回修改时必填" /><div className="dtc-chips"><button className="dtc-btn pri" disabled={busy} onClick={() => decide('approve')}>通过并放行</button><button className="dtc-btn danger" disabled={busy || !reviewNote.trim()} onClick={() => decide('changes')}>退回修改</button></div></div> : null}</div> : null}
+    {tab === 'gate' ? <div className="dtc-tabbody"><div className={`dtc-cartoon-gate ${card.status === 'review' ? 'pending' : latestGate?.status ?? ''}`}><span>{card.status === 'review' ? '🚪' : latestGate?.status === 'approved' ? '✅' : latestGate?.status === 'changes' ? '↩' : '🪁'}</span><div><b>{card.status === 'review' ? '正在等待人工验收' : latestGate?.status === 'approved' ? '人工闸门已批准' : latestGate?.status === 'changes' ? `已退回 ${labelOf(reworkTargets.find(target => target.id === latestGate.targetCardId)?.agentId ?? '')}` : '这个角色没有请求人工闸门'}</b><p>{card.status === 'review' ? '批准前不会放行下游，也不会结算整个任务组。退回时可选择从哪个上游角色重新开始。' : latestGate?.status === 'approved' ? '审批事件已写入事件流，下游可以继续。' : latestGate?.status === 'changes' ? latestGate.note : '只有 Agent 调用 task_request_review 后才会创建控制节点。'}</p></div></div>{gates.length ? <div className="dtc-gate-history"><h4>闸门历史</h4>{gates.map(gate => <div key={gate.runId}><span>Gate #{gate.round}</span><b>{gate.status === 'pending' ? '等待决策' : gate.status === 'approved' ? '通过' : `退回 ${labelOf(reworkTargets.find(target => target.id === gate.targetCardId)?.agentId ?? '')}`}</b><small>{fmt(gate.requestedAt)}{gate.note ? ` · ${gate.note}` : ''}</small></div>)}</div> : null}{card.status === 'review' ? <div className="dtc-review"><textarea value={reviewNote} onChange={e => setReviewNote(e.target.value)} placeholder="验收意见；退回修改时必填" /><label className="dtc-rework-target">退回到<select value={reworkTarget} onChange={e => setReworkTarget(e.target.value)}>{reworkTargets.map(target => <option value={target.id} key={target.id}>{target.index + 1}. {labelOf(target.agentId)}{target.id === card.deps[0] ? '（默认）' : ''}</option>)}</select></label><div className="dtc-chips"><button className="dtc-btn pri" disabled={busy} onClick={() => decide('approve')}>通过并放行</button><button className="dtc-btn danger" disabled={busy || !reviewNote.trim()} onClick={() => decide('changes')}>退回并开启返工轮次</button></div></div> : null}</div> : null}
     {tab === 'artifacts' ? <div className="dtc-tabbody"><ArtifactList api={api} taskId={taskId} batchId={batchId} artifacts={artifacts} toast={toast} refresh={refreshArtifacts} empty="这个角色没有登记产物。" /></div> : null}
   </div>
 }

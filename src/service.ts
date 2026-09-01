@@ -364,6 +364,16 @@ export class TaskConsoleService extends TypertRemoteService {
     return JSON.stringify(this.runner.store.all().filter((e: any) => e.taskId === id).map((e: any) => e.t === 'artifact/registered' ? { ...e, artifact: this.artifactView(e.artifact) } : e))
   }
 
+  /** Initial detail payload in one round trip; live polling stays event-only afterwards. */
+  async taskSnapshot(payload: string): Promise<string> {
+    const { id, batchId } = JSON.parse(payload) as { id: string; batchId?: string }
+    const events = this.runner.store.all().filter((e: any) => e.taskId === id).map((e: any) => e.t === 'artifact/registered' ? { ...e, artifact: this.artifactView(e.artifact) } : e)
+    if (!this.runner.store.s.tasks.has(id)) return JSON.stringify({ events, artifacts: [], batchId: null })
+    const selected = batchId ?? [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]?.id
+    const artifacts = selected ? (await this.artifactsFor(id, selected)).map(a => this.artifactView(a)) : []
+    return JSON.stringify({ events, artifacts, batchId: selected ?? null })
+  }
+
   private artifactView(a: Artifact): ArtifactView {
     const { storagePath: _storagePath, ...view } = a
     return view
@@ -411,9 +421,9 @@ export class TaskConsoleService extends TypertRemoteService {
   }
 
   async reviewCard(payload: string): Promise<string> {
-    const { cardId, decision, note } = JSON.parse(payload) as { cardId: string; decision: 'approve' | 'changes'; note?: string }
+    const { cardId, decision, note, targetCardId } = JSON.parse(payload) as { cardId: string; decision: 'approve' | 'changes'; note?: string; targetCardId?: string }
     if (decision !== 'approve' && decision !== 'changes') throw new Error('不支持的验收决定')
-    await this.runner.reviewCard(cardId, decision, note)
+    await this.runner.reviewCard(cardId, decision, note, targetCardId)
     return JSON.stringify({ ok: true })
   }
 

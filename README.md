@@ -2,7 +2,7 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.9):** makes the open-source plugin local-first and brings the accepted cartoon Task Studio prototype into the real task screens. Tasks use an embedded SQLite database at `~/.dsh/task-console/task.db`; an existing `events.jsonl` is imported once and then kept untouched as a rollback/audit copy. The live UI now combines task groups, role presence, dependency flow, namespaced event primitives, replay, handoff evidence, claim/session boundaries, review gates, and artifacts without substituting prototype data for runtime state.
+**This release (0.10):** makes the open-source plugin local-first and brings the accepted cartoon Task Studio prototype into the real task screens. Tasks use an embedded SQLite database at `~/.dsh/task-console/task.db`; an existing `events.jsonl` is imported once and then kept untouched as a rollback/audit copy. The live UI now puts the dependency graph first, renders dependency and human-review gates as control nodes, preserves each attempt, and draws review-to-rework routes. A review can restart any selected upstream role and deterministically replay its downstream chain. Initial task detail data is returned as one snapshot and the Agent/MCP catalog is loaded only on routes that use it.
 
 The deployed Cloudflare D1 kernel remains in `cloudflare/` as an optional remote coordination reference. The plugin does not require a Cloudflare account or network database to run.
 

@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { AgentRow, AgentSpec, ArtifactView, Catalog, Preview, LegacyRun as Run, TaskEvent, TaskSpec, TryRunResult, TurnLedger } from '../wire.ts'
+import type { AgentRow, AgentSpec, ArtifactView, Catalog, Preview, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec, TryRunResult, TurnLedger } from '../wire.ts'
 import { Console, HASH_PREFIX, go, readRoute, type Api } from './Console.tsx'
 import { CONSOLE_REMOTE, unwrap } from './remote.ts'
 import { installStyles } from './styles.ts'
@@ -38,11 +38,12 @@ export async function apply(ctx: any): Promise<void> {
     deleteTask: async (id: string) => { await call('deleteTask', { id }) },
     fireTask: (id: string, by?: 'manual' | 'retry') => call<{ runId: string }>('fireTask', { id, by }),
     cancelRun: async (runId: string) => { await call('cancelRun', { runId }) },
+    taskSnapshot: (id: string, batchId?: string) => call<TaskSnapshot>('taskSnapshot', { id, batchId }),
     taskEvents: (id: string) => call<TaskEvent[]>('taskEvents', { id }),
     taskArtifacts: (id: string, batchId?: string) => call<ArtifactView[]>('taskArtifacts', { id, batchId }),
     artifactContent: (id: string, artifactId: string, batchId?: string) => call<{ artifact: ArtifactView; base64: string }>('artifactContent', { id, artifactId, batchId }),
     publishArtifact: (id: string, artifactId: string) => call<{ publicUrl: string }>('publishArtifact', { id, artifactId }),
-    reviewCard: async (cardId: string, decision: 'approve' | 'changes', note?: string) => { await call('reviewCard', { cardId, decision, note }) },
+    reviewCard: async (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => { await call('reviewCard', { cardId, decision, note, targetCardId }) },
     startAgentSession: (agentId: string, text?: string, cwd?: string) => call<{ sessionId: string; name: string }>('startAgentSession', { agentId, text, cwd }),
     openSession: (sessionId: string) => openWhenListed(ctx, sessionId),
     sessionTurns: (sessionId: string) => call<TurnLedger>('sessionTurns', { sessionId }),
@@ -53,7 +54,6 @@ export async function apply(ctx: any): Promise<void> {
   // session on that agent's preset with the ask as its first message.
   let roster: AgentRow[] = []
   const refreshRoster = () => api.agents().then(a => { roster = a.filter(x => !x.broken) }).catch(() => undefined)
-  void refreshRoster()
   const claimFor = (agent: AgentRow, prefix: string) => ({
     claim: {
       token: prefix,

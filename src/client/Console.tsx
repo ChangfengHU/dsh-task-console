@@ -61,22 +61,27 @@ export function Console({ api }: { api: Api }) {
   const [toast, showToast] = useToast()
 
   useEffect(() => { const on = () => setRoute(readRoute()); window.addEventListener('hashchange', on); return () => window.removeEventListener('hashchange', on) }, [])
-  const reload = useCallback(async () => {
-    try { const [c, a] = await Promise.all([api.catalog(), api.agents()]); setCatalog(c); setAgents(a); setError('') }
+  const loadAgents = useCallback(async () => {
+    try { setAgents(await api.agents()); setError('') }
     catch (e) { setError(e instanceof Error ? e.message : String(e)) }
   }, [api])
-  useEffect(() => { void reload() }, [reload])
+  const loadCatalog = useCallback(async () => {
+    try { setCatalog(await api.catalog()); setError('') }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }, [api])
 
   const section = route[0] === 'tasks' ? 'tasks' : 'agents'
+  const needsCatalog = section === 'agents' || route[1] === 'new'
+  const reload = useCallback(async () => { await Promise.all([loadCatalog(), loadAgents()]) }, [loadCatalog, loadAgents])
+  useEffect(() => { void loadAgents(); if (needsCatalog) void loadCatalog() }, [loadAgents, loadCatalog, needsCatalog])
   const url = `${HASH_PREFIX}/${route.join('/')}`
   const loading = <div className="dtc-empty" style={{ padding: 60 }}><span className="dtc-spin" /> 读取…</div>
 
   let page: JSX.Element
-  if (!agents || !catalog) page = loading
-  else if (section === 'agents') page = <AgentsPage api={api} catalog={catalog} agents={agents} id={route[1] === 'new' ? 'new' : (route[1] ?? null)} onSaved={reload} toast={showToast} />
-  else if (route[1] === 'new') page = <div className="dtc-body"><NewTask api={api} agents={agents} toast={showToast} workspaces={catalog.workspaces} /></div>
-  else if (route[1]) page = <div className="dtc-body"><TaskReplay api={api} agents={agents} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} toast={showToast} /></div>
-  else page = <div className="dtc-body"><TaskBoard api={api} agents={agents} toast={showToast} /></div>
+  if (section === 'agents') page = !agents || !catalog ? loading : <AgentsPage api={api} catalog={catalog} agents={agents} id={route[1] === 'new' ? 'new' : (route[1] ?? null)} onSaved={reload} toast={showToast} />
+  else if (route[1] === 'new') page = !agents || !catalog ? loading : <div className="dtc-body"><NewTask api={api} agents={agents} toast={showToast} workspaces={catalog.workspaces} /></div>
+  else if (route[1]) page = <div className="dtc-body"><TaskReplay api={api} agents={agents ?? []} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} toast={showToast} /></div>
+  else page = <div className="dtc-body"><TaskBoard api={api} agents={agents ?? []} toast={showToast} /></div>
 
   return (
     <div className="dtc-root dtc-overlay">

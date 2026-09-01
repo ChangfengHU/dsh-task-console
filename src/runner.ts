@@ -335,14 +335,16 @@ export class TaskRunner {
   }
 
   /** Resolve the explicit human review gate for one card. */
-  async reviewCard(cardId: string, decision: 'approve' | 'changes', note = ''): Promise<void> {
+  async reviewCard(cardId: string, decision: 'approve' | 'changes', note = '', targetCardId?: string): Promise<void> {
     const card = this.store.s.cards.get(cardId)
     if (!card || card.status !== 'review' || !card.currentRunId && !card.runIds.length) throw new Error('这张卡不在待验收状态')
     const runId = card.runIds[card.runIds.length - 1]
     if (decision === 'approve') await this.append({ t: 'card/review_approved', taskId: card.taskId, cardId, runId, ...(note.trim() ? { note: note.trim() } : {}) })
     else {
       if (!note.trim()) throw new Error('退回修改时必须写明原因')
-      await this.append({ t: 'card/changes_requested', taskId: card.taskId, cardId, runId, note: note.trim() })
+      const target = this.store.s.cards.get(targetCardId ?? card.deps[0] ?? card.id)
+      if (!target || target.batchId !== card.batchId || target.index > card.index) throw new Error('返工目标必须是同一运行中当前角色或它的上游')
+      await this.append({ t: 'card/changes_requested', taskId: card.taskId, cardId, runId, note: note.trim(), targetCardId: target.id })
     }
     await this.tick()
   }

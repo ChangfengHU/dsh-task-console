@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { cronHuman, nextFire, parseCron } from '../cron.ts'
-import type { AgentRow, ArtifactView, LegacyRun as Run, TaskEvent, TaskSpec } from '../wire.ts'
+import type { AgentRow, ArtifactView, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
 
 export interface TasksApi {
@@ -16,11 +16,12 @@ export interface TasksApi {
   deleteTask: (id: string) => Promise<void>
   fireTask: (id: string, by?: 'manual' | 'retry') => Promise<{ runId: string }>
   cancelRun: (runId: string) => Promise<void>
+  taskSnapshot: (id: string, batchId?: string) => Promise<TaskSnapshot>
   taskEvents: (id: string) => Promise<TaskEvent[]>
   taskArtifacts: (id: string, batchId?: string) => Promise<ArtifactView[]>
   artifactContent: (id: string, artifactId: string, batchId?: string) => Promise<{ artifact: ArtifactView; base64: string }>
   publishArtifact: (id: string, artifactId: string) => Promise<{ publicUrl: string }>
-  reviewCard: (cardId: string, decision: 'approve' | 'changes', note?: string) => Promise<void>
+  reviewCard: (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => Promise<void>
   openSession: (sessionId: string) => Promise<void>
   sessionTurns: (sessionId: string) => Promise<import('../wire.ts').TurnLedger>
 }

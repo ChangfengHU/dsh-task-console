@@ -139,7 +139,7 @@ export type Event =
   | { t: 'run/review_requested'; at: string; taskId: string; runId: string; summary: string; metadata?: Record<string, unknown> }
   | { t: 'run/failed' | 'run/timed_out' | 'run/crashed' | 'run/cancelled'; at: string; taskId: string; runId: string; outcome?: RunOutcome; error?: string }
   | { t: 'card/review_approved'; at: string; taskId: string; cardId: string; runId: string; note?: string }
-  | { t: 'card/changes_requested'; at: string; taskId: string; cardId: string; runId: string; note: string }
+  | { t: 'card/changes_requested'; at: string; taskId: string; cardId: string; runId: string; note: string; targetCardId?: string }
   | { t: 'card/gave_up'; at: string; taskId: string; cardId: string; error: string }
   | { t: 'card/cancelled'; at: string; taskId: string; cardId: string }
   | { t: 'artifact/registered'; at: string; taskId: string; artifact: Artifact }
@@ -215,7 +215,16 @@ export function fold(events: Event[]): State {
       }
       case 'card/changes_requested': {
         const c = s.cards.get(e.cardId)
-        if (c && c.status === 'review') { c.status = 'ready'; c.reviewNote = e.note; c.endedAt = undefined }
+        if (c && c.status === 'review') {
+          const target = e.targetCardId ? s.cards.get(e.targetCardId) : c
+          if (!target || target.batchId !== c.batchId || target.index > c.index) break
+          for (const affected of s.cards.values()) {
+            if (affected.batchId !== c.batchId || affected.index < target.index || affected.index > c.index) continue
+            affected.status = affected.id === target.id ? 'ready' : 'todo'
+            affected.currentRunId = undefined; affected.summary = undefined; affected.endedAt = undefined; affected.error = undefined
+            affected.reviewNote = affected.id === target.id ? e.note : undefined
+          }
+        }
         break
       }
       case 'run/failed': case 'run/timed_out': case 'run/crashed': case 'run/cancelled': {
@@ -297,7 +306,7 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
     case 'run/completed': return `${who(e.runId)} 交卷(${e.summary.length} 字交接单)`
     case 'run/review_requested': return `${who(e.runId)} 提交验收(${e.summary.length} 字)`
     case 'card/review_approved': return `${card(e.cardId)} 验收通过${e.note ? ':' + e.note : ''}`
-    case 'card/changes_requested': return `${card(e.cardId)} 被退回修改:${e.note}`
+    case 'card/changes_requested': return e.targetCardId && e.targetCardId !== e.cardId ? `${card(e.cardId)} 退回到 ${card(e.targetCardId)}:${e.note}` : `${card(e.cardId)} 被退回修改:${e.note}`
     case 'run/failed': return `${who(e.runId)} 失败${e.outcome === 'protocol_violation' ? '(没按协议交卷)' : ''}${e.error ? ':' + e.error : ''}`
     case 'run/timed_out': return `${who(e.runId)} 超时${e.error ? ':' + e.error : ''}`
     case 'run/crashed': return `${who(e.runId)} 进程没了${e.error ? ':' + e.error : ''}`

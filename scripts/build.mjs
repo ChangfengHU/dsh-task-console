@@ -47,11 +47,12 @@ const client = await build({
   platform: 'browser',
   target: 'es2022',
   jsx: 'automatic',
+  minify: true,
   external: ['react', 'react-dom', 'react/jsx-runtime'],
   logLevel: 'info',
 })
 
-const body = client.outputFiles[0].text
+const body = client.outputFiles[0].text.replace(/[ \t]+$/gm, '')
 await writeFile(join(out, 'client.js'), `window.__ModuleLoader__.load({
 \tid: ${JSON.stringify(pkg.name)},
 \tfactory: (require) => {

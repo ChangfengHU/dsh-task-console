@@ -56,6 +56,24 @@ test('review is a real gate: downstream waits until approval, and changes return
   assert.deepEqual(readyCards(s).map(c => c.id), ['b1#1'])
 })
 
+test('review changes can reopen an upstream card and invalidate its downstream chain', () => {
+  const task3: TaskSpec = { ...task, participants: [{ agentId: 'planner' }, { agentId: 'executor' }, { agentId: 'reviewer' }] }
+  const fired3: Event = { t: 'batch/fired', at: '2', taskId: 'T-1', batch: { id: 'b3', by: 'manual', cards: [
+    { id: 'b3#0', agentId: 'planner', deps: [] }, { id: 'b3#1', agentId: 'executor', deps: ['b3#0'] }, { id: 'b3#2', agentId: 'reviewer', deps: ['b3#1'] },
+  ] } }
+  const events: Event[] = [{ t: 'task/created', at: '1', taskId: 'T-1', task: task3 }, fired3,
+    { t: 'run/claimed', at: '3', taskId: 'T-1', cardId: 'b3#0', runId: 'p1', sessionId: 'sp', attempt: 1 }, { t: 'run/completed', at: '4', taskId: 'T-1', runId: 'p1', summary: '计划一' },
+    { t: 'card/ready', at: '5', taskId: 'T-1', cardId: 'b3#1' }, { t: 'run/claimed', at: '6', taskId: 'T-1', cardId: 'b3#1', runId: 'e1', sessionId: 'se', attempt: 1 }, { t: 'run/completed', at: '7', taskId: 'T-1', runId: 'e1', summary: '实现一' },
+    { t: 'card/ready', at: '8', taskId: 'T-1', cardId: 'b3#2' }, { t: 'run/claimed', at: '9', taskId: 'T-1', cardId: 'b3#2', runId: 'r1', sessionId: 'sr', attempt: 1 }, { t: 'run/review_requested', at: '10', taskId: 'T-1', runId: 'r1', summary: '请验收' },
+    { t: 'card/changes_requested', at: '11', taskId: 'T-1', cardId: 'b3#2', runId: 'r1', targetCardId: 'b3#0', note: '重新规划交互' },
+  ]
+  const s = fold(events)
+  assert.equal(s.cards.get('b3#0')!.status, 'ready'); assert.equal(s.cards.get('b3#0')!.reviewNote, '重新规划交互')
+  assert.equal(s.cards.get('b3#1')!.status, 'todo'); assert.equal(s.cards.get('b3#2')!.status, 'todo')
+  assert.equal(s.cards.get('b3#0')!.summary, undefined); assert.equal(s.cards.get('b3#1')!.summary, undefined); assert.equal(s.cards.get('b3#2')!.summary, undefined)
+  assert.deepEqual(readyCards(s).map(card => card.id), ['b3#0'])
+})
+
 test('migrate: a 0.4 leg/* stream folds to the same picture', () => {
   const old = [
     { t: 'task/created', at: '1', task },

@@ -35,4 +35,6 @@ test('DB replay advances visible run evidence for bound, session, prompt, and he
   assert.equal(replayGraph(events, 5).runs[0].message_id, 'message-9')
   assert.deepEqual(replayGraph(events, 6).runs[0].evidence, ['claimed', 'bound', 'session_created', 'prompt_dispatched', 'heartbeat'])
   assert.equal(replayGraph(events, 6).runs[0].claim_expires, 906)
+  const legacy = [...events.slice(0, 5), event(6, 'p1', 'heartbeat', {}, 9)]
+  assert.equal(replayGraph(legacy).runs[0].claim_expires, null)
 })

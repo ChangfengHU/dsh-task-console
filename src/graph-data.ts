@@ -122,7 +122,7 @@ export function replayGraph(events: GraphEventRow[], count = events.length): Gra
       if (run) { if (typeof p.message_id === 'string') run.message_id = p.message_id; addEvidence(run, 'prompt_dispatched') }
     } else if (e.kind === 'heartbeat' && e.run_id !== null) {
       const run = runs.get(e.run_id)
-      if (run) { run.last_heartbeat_at = typeof p.last_heartbeat_at === 'number' ? p.last_heartbeat_at : e.created_at; if (typeof p.claim_expires === 'number') run.claim_expires = p.claim_expires; addEvidence(run, 'heartbeat') }
+      if (run) { run.last_heartbeat_at = typeof p.last_heartbeat_at === 'number' ? p.last_heartbeat_at : e.created_at; run.claim_expires = typeof p.claim_expires === 'number' ? p.claim_expires : null; addEvidence(run, 'heartbeat') }
     } else if ((e.kind === 'completed' || e.kind === 'gate_opened') && task) {
       task.status = 'done'; task.completed_at = e.created_at; task.current_run_id = null
       if (e.run_id !== null) { const run = runs.get(e.run_id); if (run) { run.status = 'done'; run.outcome = 'completed'; run.summary = typeof p.summary === 'string' ? p.summary : null; run.ended_at = e.created_at; addEvidence(run, 'completed') } }

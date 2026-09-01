@@ -133,6 +133,7 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
   const [error, setError] = useState('')
   const [cursor, setCursor] = useState<number | null>(null)
   const [playing, setPlaying] = useState(false)
+  const [playbackSpeed, setPlaybackSpeed] = useState(1)
   const [selectedCard, setSelectedCard] = useState<string | null>(null)
   const [selectedGraphNode, setSelectedGraphNode] = useState<string | null>(null)
   const [eventFilter, setEventFilter] = useState<EventFilter>('all')
@@ -164,6 +165,8 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
   const selId = runId ?? batches[0]?.id
   const batchFull: Batch | undefined = selId ? full.batches.get(selId) : undefined
   const batchNow: Batch | undefined = selId ? now.batches.get(selId) : undefined
+  const batchEvents = useMemo(() => batchFull ? events.map((e, index) => ({ e, index })).filter(x => belongsToBatch(x.e, batchFull.id)) : [], [events, batchFull?.id])
+  const eventStep = batchEvents.filter(({ index }) => index < upto).length
 
   useEffect(() => {
     let stop = false
@@ -185,11 +188,12 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
   }, [batchFull?.id, events.length])
 
   useEffect(() => {
-    if (!playing) { window.clearTimeout(timer.current); return }
-    if (upto >= events.length) { setPlaying(false); setCursor(null); return }
-    timer.current = window.setTimeout(() => setCursor(c => (c ?? 0) + 1), 700)
+    window.clearTimeout(timer.current)
+    if (!playing) return
+    if (!batchEvents.length || eventStep >= batchEvents.length) { setPlaying(false); setCursor(null); return }
+    timer.current = window.setTimeout(() => setCursor(batchEvents[eventStep].index + 1), Math.round(900 / playbackSpeed))
     return () => window.clearTimeout(timer.current)
-  }, [playing, upto, events.length])
+  }, [playing, eventStep, batchEvents, playbackSpeed])
 
   const agentName = (aid: string) => agents.find(a => a.id === aid)?.name ?? aid
   if (!task) return <div className="dtc-empty">{error || (events.length ? '没有这个任务' : <><span className="dtc-spin" /> 读取事件流…</>)}</div>
@@ -198,9 +202,7 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
   const cardsFull = batchFull ? batchFull.cardIds.map(cid => full.cards.get(cid)).filter(Boolean) as Card[] : []
   const selected = selectedCard ? full.cards.get(selectedCard) : undefined
   const bst = batchFull ? batchStatus(full, batchFull) : undefined
-  const stopAt = cursor !== null ? events[upto - 1]?.at : undefined
   const total = cardsFull.length ? dur(cardsFull.find(c => c.startedAt)?.startedAt, batchFull?.settled?.at ?? [...cardsFull].reverse().find(c => c.endedAt)?.endedAt) : ''
-  const batchEvents = batchFull ? events.map((e, index) => ({ e, index })).filter(x => belongsToBatch(x.e, batchFull.id)) : []
   const visibleBatchEvents = batchEvents.filter(({ index }) => index < upto)
   const filteredEvents = batchEvents.filter(({ e }) => eventFilter === 'all' || eventGroup(e) === eventFilter)
   const reviewCycles = reviewGateCycles(visibleBatchEvents, now)
@@ -212,12 +214,23 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
   const activeCount = metricCards.filter(card => card.status === 'running' || card.status === 'blocked' || card.status === 'review').length
   const dependencyCount = cardsFull.reduce((sum, card) => sum + card.deps.length, 0)
   const claimCount = batchEvents.filter(({ e }) => e.t === 'run/claimed').length
-  const eventStep = batchEvents.filter(({ index }) => index < upto).length
   const progress = metricCards.length ? Math.round(doneCount / metricCards.length * 100) : 0
   const graph = layoutTaskGraph(buildTaskGraph(cardsNow, now, reviewCycles, agentName))
   const selectedNode = graph.nodes.find(node => node.id === selectedGraphNode) ?? (selected ? graph.nodes.find(node => node.id === `role:${selected.id}`) : undefined)
+  const currentBatchEvent = eventStep ? batchEvents[eventStep - 1] : undefined
 
-  const stepTo = (n: number) => { setPlaying(false); const v = Math.max(1, Math.min(n, events.length)); setCursor(v >= events.length ? null : v) }
+  const seekBatchStep = (step: number) => {
+    setPlaying(false)
+    const target = Math.max(0, Math.min(step, batchEvents.length))
+    if (target === batchEvents.length) setCursor(null)
+    else setCursor(target === 0 ? (batchEvents[0]?.index ?? 0) : batchEvents[target - 1].index + 1)
+  }
+  const togglePlayback = () => {
+    if (playing) { setPlaying(false); return }
+    if (!batchEvents.length) return
+    if (eventStep >= batchEvents.length) setCursor(batchEvents[0].index)
+    setPlaying(true)
+  }
   const refreshArtifacts = async () => { if (selId) { setArtifacts(await api.taskArtifacts(id, selId)); setArtifactBatch(selId) } }
   const selectNode = (node: TaskGraphNode) => { setSelectedGraphNode(node.id); if (node.cardId) setSelectedCard(node.cardId) }
 
@@ -248,7 +261,17 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
         <main className="dtc-cpanel dtc-dag-panel">
           <div className="dtc-cpanel-head"><div><b>执行依赖 DAG</b><small>实线是可调度依赖；闸门是一等控制节点；红色虚线是历史返工反馈</small></div><code>{batchFull?.id ?? '尚未创建'}</code></div>
           {cardsNow.length ? <TaskDag graph={graph} cards={cardsNow} selected={selectedNode?.id ?? null} onSelect={selectNode} /> : <div className="dtc-empty">这个时刻还没有运行。</div>}
-          <div className="dtc-cstep"><b>{String(eventStep).padStart(2, '0')} / {String(batchEvents.length).padStart(2, '0')}</b><div className="track"><i style={{ width: `${batchEvents.length ? eventStep / batchEvents.length * 100 : 0}%` }} /></div><span>{cursor === null ? '现在 · 实时跟随' : `回放到 ${fmt(stopAt)}`}</span></div>
+          <div className={`dtc-replaybar ${playing ? 'playing' : ''}`} aria-label="任务运行回放">
+            <div className="dtc-replay-now"><span>{playing ? '正在自动回放' : cursor === null ? '实时状态' : eventStep ? `事件 ${eventStep}` : '运行起点'}</span><b>{String(eventStep).padStart(2, '0')} / {String(batchEvents.length).padStart(2, '0')}</b><small>{currentBatchEvent ? `${fmt(currentBatchEvent.e.at)} · ${describe(currentBatchEvent.e, now, agentName)}` : '等待调度器触发这个批次'}</small></div>
+            <div className="dtc-replay-actions">
+              <button title="回到运行起点" onClick={() => seekBatchStep(0)} disabled={!batchEvents.length || eventStep === 0}>从头</button>
+              <button title="上一个事件" aria-label="上一个事件" onClick={() => seekBatchStep(eventStep - 1)} disabled={!batchEvents.length || eventStep === 0}>←</button>
+              <button className="play" onClick={togglePlayback} disabled={!batchEvents.length}>{playing ? 'Ⅱ 暂停' : eventStep >= batchEvents.length ? '▶ 从头播放' : '▶ 播放'}</button>
+              <button title="下一个事件" aria-label="下一个事件" onClick={() => seekBatchStep(eventStep + 1)} disabled={!batchEvents.length || eventStep >= batchEvents.length}>→</button>
+            </div>
+            <label className="dtc-replay-range"><span>事件进度</span><input aria-label="事件回放进度" type="range" min="0" max={batchEvents.length} value={eventStep} onChange={e => seekBatchStep(Number(e.target.value))} /><output>{eventStep}</output></label>
+            <div className="dtc-replay-tail"><label>速度<select aria-label="回放速度" value={playbackSpeed} onChange={e => setPlaybackSpeed(Number(e.target.value))}><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option></select></label><button className="live" onClick={() => { setPlaying(false); setCursor(null) }} disabled={cursor === null}>● 回到实时</button></div>
+          </div>
         </main>
 
         <aside className="dtc-cpanel dtc-dag-inspector">
@@ -260,10 +283,9 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
       <details className="dtc-cpanel dtc-timeline" open>
         <summary><span><b>事件流与时间回放</b><small>点击事件会把 DAG 回放到对应时刻</small></span><em>{batchEvents.length} EVENTS</em></summary>
         <div className="dtc-cevent-tools">{FILTERS.map(filter => <button key={filter.id} className={eventFilter === filter.id ? 'on' : ''} onClick={() => setEventFilter(filter.id)}>{filter.label}</button>)}</div>
-        <div className="dtc-activity-list">{[...filteredEvents].reverse().map(({ e, index }) => { const actor = ACTOR[actorOf(e, full)]; const group = eventGroup(e); return <button key={index} className={`dtc-activity-row g-${group} ${index >= upto ? 'off' : ''} ${index === upto - 1 ? 'cur' : ''}`} onClick={() => stepTo(index + 1)}>
+        <div className="dtc-activity-list">{[...filteredEvents].reverse().map(({ e, index }) => { const actor = ACTOR[actorOf(e, full)]; const group = eventGroup(e); return <button key={index} className={`dtc-activity-row g-${group} ${index >= upto ? 'off' : ''} ${index === upto - 1 ? 'cur' : ''}`} onClick={() => { setPlaying(false); setCursor(index + 1) }}>
           <span className="dot">{group === 'process' ? '›' : group === 'result' ? '✓' : '•'}</span><span className="copy"><b>{e.t}</b><span>{describe(e, full, agentName)}</span><small>{fmt(e.at)} · event #{index + 1}</small></span><span className={`dtc-pill ${actor.cls}`}>{actor.label}</span>
         </button>})}</div>
-        <div className="dtc-replayctl"><button className="dtc-btn sm" onClick={() => stepTo(Math.max(1, upto - 1))} disabled={upto <= 1}>←</button><button className={`dtc-btn sm ${playing ? 'pri' : ''}`} onClick={() => { if (upto >= events.length) setCursor(Math.max(1, batchEvents[0]?.index ?? 0)); setPlaying(value => !value) }}>{playing ? '暂停' : '播放'}</button><button className="dtc-btn sm" onClick={() => stepTo(upto + 1)} disabled={upto >= events.length}>→</button><button className="dtc-btn sm" onClick={() => { setPlaying(false); setCursor(null) }} disabled={cursor === null}>现在</button><span className="dtc-faint">{upto}/{events.length}</span></div>
       </details>
 
       {batchFull && bst && bst !== 'run' && bst !== 'park' ? <ResultPanel api={api} taskId={id} batchId={batchFull.id} status={bst} summary={lastCard?.summary} metadata={lastRun?.metadata} artifacts={artifacts} toast={toast} refresh={refreshArtifacts} /> : null}

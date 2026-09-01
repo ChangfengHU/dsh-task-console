@@ -23,13 +23,33 @@ function DbDag({ frame, selected, onSelect, nameOf }: { frame: GraphFrame; selec
     for (const child of sortIds([...(children.get(id) ?? [])])) { const next = (indegree.get(child) ?? 1) - 1; indegree.set(child, next); if (!next) { queue.push(child); sortIds(queue) } }
   }
   for (const task of frame.tasks) if (!ordered.includes(task)) ordered.push(task)
-  const width = Math.max(760, ordered.length * 226 + 48)
-  const height = 250
-  const positions = new Map(ordered.map((task, index) => [task.id, { x: 28 + index * 226, y: task.node_kind === 'gate' ? 91 : 75 }]))
+  const roundRows = Math.max(1, Math.ceil(Math.max(0, ordered.length - 1) / 4))
+  const width = ordered.length > 1 ? 1180 : 760
+  const height = Math.max(250, roundRows * 150 + 170)
+  const positions = new Map(ordered.map((task, index) => {
+    if (index === 0) return [task.id, { x: 28, y: 40 }]
+    const row = Math.floor((index - 1) / 4); const within = (index - 1) % 4 + 1
+    const column = row % 2 === 0 ? within : 4 - within
+    return [task.id, { x: 28 + column * 226, y: 40 + row * 150 + (task.node_kind === 'gate' ? 16 : 0) }]
+  }))
   return <div className="dtc-dbdag-scroll"><div className="dtc-dbdag" style={{ width, height }}>
+    {Array.from({ length: roundRows }, (_, row) => <div key={row} className="dtc-dbround" style={{ top: 20 + row * 150 }}><b>ROUND {String(row + 1).padStart(2, '0')}</b></div>)}
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-label={`${frame.links.length} 条数据库依赖`}>
       <defs><marker id="db-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0L10 5L0 10z" /></marker></defs>
-      {frame.links.map(link => { const a = positions.get(link.parent_id); const b = positions.get(link.child_id); if (!a || !b) return null; const aw = byId.get(link.parent_id)?.node_kind === 'gate' ? 142 : 178; const ay = a.y + 48; const by = b.y + 48; return <g key={`${link.parent_id}>${link.child_id}`}><path className="dtc-dbdag-edge" d={`M${a.x + aw} ${ay} C${a.x + aw + 21} ${ay},${b.x - 21} ${by},${b.x} ${by}`} markerEnd="url(#db-arrow)" /><text x={(a.x + aw + b.x) / 2} y={Math.min(ay, by) - 9}>depends</text></g> })}
+      {frame.links.map(link => {
+        const a = positions.get(link.parent_id); const b = positions.get(link.child_id); if (!a || !b) return null
+        const aw = byId.get(link.parent_id)?.node_kind === 'gate' ? 142 : 178; const bw = byId.get(link.child_id)?.node_kind === 'gate' ? 142 : 178
+        const sameRow = Math.abs(a.y - b.y) < 30
+        let path = ''; let labelX = 0; let labelY = 0
+        if (sameRow) {
+          const right = b.x > a.x; const sx = right ? a.x + aw : a.x; const tx = right ? b.x : b.x + bw; const sy = a.y + 48; const ty = b.y + 48; const bend = Math.max(18, Math.abs(tx - sx) / 2)
+          path = `M${sx} ${sy} C${sx + (right ? bend : -bend)} ${sy},${tx + (right ? -bend : bend)} ${ty},${tx} ${ty}`; labelX = (sx + tx) / 2; labelY = Math.min(sy, ty) - 9
+        } else {
+          const sx = a.x + aw / 2; const sy = a.y + 96; const tx = b.x + bw / 2; const ty = b.y
+          path = `M${sx} ${sy} C${sx} ${sy + 34},${tx} ${ty - 34},${tx} ${ty}`; labelX = (sx + tx) / 2 + 8; labelY = (sy + ty) / 2
+        }
+        return <g key={`${link.parent_id}>${link.child_id}`}><path className="dtc-dbdag-edge" d={path} markerEnd="url(#db-arrow)" /><text x={labelX} y={labelY}>depends</text></g>
+      })}
     </svg>
     {ordered.map(task => { const pos = positions.get(task.id)!; const role = ROLE[task.role ?? task.node_kind] ?? { label: task.role ?? '角色', icon: '●' }; const runs = frame.runs.filter(run => run.task_id === task.id); return <button key={task.id} className={`dtc-dbnode k-${task.node_kind} s-${task.status} ${selected === task.id ? 'selected' : ''}`} style={{ left: pos.x, top: pos.y }} onClick={() => onSelect(task.id)}>
       <i>{role.icon}</i><span><b>{role.label}{task.round ? ` ${task.round}` : ''}</b><small>{task.node_kind === 'gate' ? 'System task · no Agent Run' : nameOf(task.assignee)}</small><em>{runs.length} Run · row #{task.id.split('#').at(-1)}</em></span><strong>{STATUS[task.status] ?? task.status}</strong>

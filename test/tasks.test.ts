@@ -57,3 +57,24 @@ test('EventStore imports old JSONL into SQLite once and appends there', async ()
   const reloaded = new EventStore(dir); await reloaded.load()
   assert.equal(reloaded.all().length, 5); assert.equal(reloaded.s.cards.get('r-9#1')!.status, 'ready')
 })
+
+test('EventStore rolls core and replay rows back together when projection fails', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tc-atomic-'))
+  const store = new EventStore(dir); await store.load()
+  await store.append({ t: 'task/created', at: '2026-09-01T00:00:00Z', taskId: task.id, task })
+  const cardId = 'atomic#0'
+  await store.createBatch(task, { t: 'batch/fired', at: '2026-09-01T00:00:01Z', taskId: task.id, batch: { id: 'atomic', by: 'manual', cards: [{ id: cardId, agentId: 'installer', deps: [] }] } })
+  await assert.rejects(store.transition(
+    () => store.kernel.claimTask(cardId),
+    claim => { if (claim) throw new Error('projection failed'); return undefined },
+  ), /projection failed/)
+  assert.equal(store.kernel.getTask(cardId)!.status, 'ready')
+  assert.equal(store.kernel.listRuns(cardId).length, 0)
+  assert.equal(store.all().filter(event => event.t === 'run/claimed').length, 0)
+
+  const claim = await store.claimCard(cardId, `${cardId}#1`, 'session-1', 1)
+  assert.ok(claim)
+  assert.equal(store.kernel.getTask(cardId)!.status, 'running')
+  assert.equal(store.all().filter(event => event.t === 'run/claimed').length, 1)
+  assert.equal(store.coreRunId(`${cardId}#1`), claim!.run.id)
+})

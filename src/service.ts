@@ -427,6 +427,13 @@ export class TaskConsoleService extends TypertRemoteService {
     return JSON.stringify({ ok: true })
   }
 
+  async unblockCard(payload: string): Promise<string> {
+    const { cardId } = JSON.parse(payload) as { cardId: string }
+    if (!cardId?.trim()) throw new Error('缺少 cardId')
+    await this.runner.unblockCard(cardId)
+    return JSON.stringify({ ok: true })
+  }
+
   /** What one agent has been doing: cards, last run, tasks it takes part in. */
   async agentActivity(payload: string): Promise<string> {
     const { agentId } = JSON.parse(payload) as { agentId: string }

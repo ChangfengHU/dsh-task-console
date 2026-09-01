@@ -122,32 +122,70 @@ test('runner: stopping without a terminator gets one nudge, then protocol_violat
   const s2 = [...host.sessions.keys()][1]; assert.ok(s2, 'second attempt started'); host.consumeFirst(s2)
   host.endTurn(s2); await tick(); host.endTurn(s2); await tick()
   assert.equal(store.s.cards.get(`${batch.id}#0`)!.status, 'failed', 'breaker tripped')
+  assert.equal(store.kernel.getTask(`${batch.id}#0`)!.status, 'triage', 'core cannot redispatch a gave-up card')
   assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'failed')
   assert.equal(host.sessions.size, 2)
   runner.stop()
 })
 
-test('runner: task_block(needs_input) parks the run; a person\'s message resumes it; then complete', async () => {
+test('runner: cancelling a live batch archives active and waiting core tasks', async () => {
+  const { host, store, runner } = await setup({ participants: [{ agentId: 'a' }, { agentId: 'b' }] })
+  const batch = await runner.fire('T', 'manual')
+  assert.equal(host.sessions.size, 1)
+  await runner.cancelBatch(batch.id); await tick()
+  assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'cancelled')
+  assert.deepEqual(batch.cardIds.map(id => store.kernel.getTask(id)!.status), ['archived', 'archived'])
+  await runner.tick(); await tick()
+  assert.equal(host.sessions.size, 1, 'cancelled core tasks never restart')
+  runner.stop()
+})
+
+test('runner: task_block(needs_input) closes the run; unblock creates a fresh run', async () => {
   const { host, store, runner } = await setup({ participants: [{ agentId: 'a' }] })
   const batch = await runner.fire('T', 'manual')
   const s1 = [...host.sessions.keys()][0]; host.consumeFirst(s1)
   await host.callTool(s1, 'task_block', { reason: '要不要抄送老板?', kind: 'needs_input' }); host.endTurn(s1); await tick()
   assert.equal(store.s.cards.get(`${batch.id}#0`)!.status, 'blocked'); assert.equal(store.s.runs.get(`${batch.id}#0#1`)!.question, '要不要抄送老板?')
-  assert.equal(host.sessions.get(s1)!.disposed, false, 'session stays alive while parked')
+  assert.equal(host.sessions.get(s1)!.disposed, true, 'terminal block closes the old worker')
+  assert.equal(store.kernel.listRuns(`${batch.id}#0`)[0].outcome, 'blocked')
   host.emit(s1, { type: 'user/message', data: { id: 'answer-1', source: { kind: 'user' } } }); await tick()
+  assert.equal(store.s.cards.get(`${batch.id}#0`)!.status, 'blocked', 'a dead worker cannot be revived by a late message')
+  await runner.unblockCard(`${batch.id}#0`); await tick()
+  const s2 = [...host.sessions.keys()].at(-1)!; assert.notEqual(s2, s1)
   assert.equal(store.s.cards.get(`${batch.id}#0`)!.status, 'running')
-  await host.callTool(s1, 'task_complete', { summary: '抄送了' }); host.endTurn(s1); await tick()
+  host.consumeFirst(s2); await host.callTool(s2, 'task_complete', { summary: '抄送了' }); host.endTurn(s2); await tick()
   assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')
   runner.stop()
 })
 
-test('runner: capability block fails the card without retry and cancels the rest of the chain', async () => {
+test('runner: capability block is a durable human-visible blocker and does not cancel dependencies', async () => {
   const { host, store, runner } = await setup({ participants: [{ agentId: 'a' }, { agentId: 'b' }] })
   const batch = await runner.fire('T', 'manual')
   const s1 = [...host.sessions.keys()][0]; host.consumeFirst(s1)
   await host.callTool(s1, 'task_block', { reason: '没有 ssh 工具', kind: 'capability' }); host.endTurn(s1); await tick()
-  assert.equal(store.s.cards.get(`${batch.id}#0`)!.status, 'failed'); assert.equal(store.s.cards.get(`${batch.id}#1`)!.status, 'cancelled')
-  assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'failed'); assert.equal(host.sessions.size, 1)
+  assert.equal(store.s.cards.get(`${batch.id}#0`)!.status, 'blocked'); assert.equal(store.s.cards.get(`${batch.id}#1`)!.status, 'todo')
+  assert.equal(store.s.batches.get(batch.id)!.settled, undefined); assert.equal(host.sessions.size, 1)
+  assert.equal(store.kernel.getTask(`${batch.id}#0`)!.block_kind, 'capability')
+  runner.stop()
+})
+
+test('runner: automated same-card review uses reviewer profile, changes_requested, rework, and approval', async () => {
+  const { host, store, runner } = await setup({ participants: [{ agentId: 'a' }] })
+  const batch = await runner.fire('T', 'manual'); const cardId = `${batch.id}#0`
+  let session = [...host.sessions.keys()].at(-1)!; host.consumeFirst(session)
+  await host.callTool(session, 'task_request_review', { summary: 'round 1', reviewer: 'b', metadata: { tests: 9 } }); host.endTurn(session); await tick()
+  assert.equal(store.kernel.getTask(cardId)!.assignee, 'b')
+  session = [...host.sessions.keys()].at(-1)!; host.consumeFirst(session)
+  await host.callTool(session, 'task_request_changes', { reason: '补 AC1 测试' }); host.endTurn(session); await tick()
+  assert.equal(store.kernel.getTask(cardId)!.assignee, 'a')
+  session = [...host.sessions.keys()].at(-1)!; assert.match(host.sessions.get(session)!.followups[0].content[0].text, /补 AC1 测试/); host.consumeFirst(session)
+  await host.callTool(session, 'task_request_review', { summary: 'round 2: 10 passed', reviewer: 'b' }); host.endTurn(session); await tick()
+  session = [...host.sessions.keys()].at(-1)!; host.consumeFirst(session)
+  await host.callTool(session, 'task_complete', { summary: 'approved' }); host.endTurn(session); await tick()
+  assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')
+  assert.deepEqual(store.kernel.listRuns(cardId).map(run => [run.profile, run.outcome]), [
+    ['a', 'review_requested'], ['b', 'changes_requested'], ['a', 'review_requested'], ['b', 'completed'],
+  ])
   runner.stop()
 })
 

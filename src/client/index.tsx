@@ -44,6 +44,7 @@ export async function apply(ctx: any): Promise<void> {
     artifactContent: (id: string, artifactId: string, batchId?: string) => call<{ artifact: ArtifactView; base64: string }>('artifactContent', { id, artifactId, batchId }),
     publishArtifact: (id: string, artifactId: string) => call<{ publicUrl: string }>('publishArtifact', { id, artifactId }),
     reviewCard: async (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => { await call('reviewCard', { cardId, decision, note, targetCardId }) },
+    unblockCard: async (cardId: string) => { await call('unblockCard', { cardId }) },
     startAgentSession: (agentId: string, text?: string, cwd?: string) => call<{ sessionId: string; name: string }>('startAgentSession', { agentId, text, cwd }),
     openSession: (sessionId: string) => openWhenListed(ctx, sessionId),
     sessionTurns: (sessionId: string) => call<TurnLedger>('sessionTurns', { sessionId }),

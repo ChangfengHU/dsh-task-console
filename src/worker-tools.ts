@@ -1,5 +1,5 @@
 /**
- * The three tools a card's session gets and nothing else does — the
+ * The four tools a card's session gets and nothing else does — the
  * lifecycle terminators (hermes: kanban_complete / kanban_block /
  * kanban_request_review). Registered on the agent's own scope after its
  * preset is mounted, so an "@agent" chat on the same preset never sees them.
@@ -12,15 +12,16 @@ import type { BlockKind } from './fold.ts'
 export interface WorkerHooks {
   complete(summary: string, artifacts: string[], metadata?: Record<string, unknown>): Promise<void>
   block(reason: string, kind: BlockKind): Promise<void>
-  requestReview(summary: string, artifacts: string[], metadata?: Record<string, unknown>): Promise<void>
+  requestReview(summary: string, artifacts: string[], metadata?: Record<string, unknown>, reviewer?: string): Promise<void>
+  requestChanges(reason: string): Promise<void>
 }
 
 const OUT = { type: 'object', additionalProperties: false, properties: { ok: { type: 'boolean', required: true }, note: { type: 'string' } } } as const
 const render = (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }]
 
-export const WORKER_TOOL_NAMES = ['task_complete', 'task_block', 'task_request_review'] as const
+export const WORKER_TOOL_NAMES = ['task_complete', 'task_block', 'task_request_review', 'task_request_changes'] as const
 
-/** Register the three tools on one agent scope. Returns the disposer. */
+/** Register the four tools on one agent scope. Returns the disposer. */
 export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks): Promise<() => void> {
   // The real compiler is host-owned. Unit tests use identity descriptors so they do not need to install the whole dsh host.
   const defineTool: (spec: any) => any = process.env.NODE_ENV === 'test' ? (spec => spec) : (await import('@deepseek-ai/dsh-tools')).defineTool
@@ -44,7 +45,7 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks): Pr
   })))
   disposers.push(agentCtx.tools.register(defineTool({
     name: 'task_block',
-    description: '做不下去时调用。kind: needs_input=要人回答(会停车等人,人在这个会话里回答后你继续);capability=缺工具或权限;transient=临时故障可重试;dependency=要等别的卡。',
+    description: '做不下去时调用并结束本次运行。kind: needs_input=需要人回答;capability=缺工具或权限;transient=临时故障;dependency=等待其他任务。解除后会创建新的 run，不会复活旧 worker。',
     parameters: {
       reason: { type: 'string', required: true, description: '一句话说清卡在哪。' },
       kind: { type: 'string', required: true, enum: ['needs_input', 'capability', 'transient', 'dependency'], description: '卡住的类型。' },
@@ -54,24 +55,37 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks): Pr
       const reason = String(args.reason ?? '').trim(); const kind = String(args.kind ?? 'needs_input') as BlockKind
       if (!reason) return { ok: false, note: 'reason 不能为空' }
       await hooks.block(reason, (['needs_input', 'capability', 'transient', 'dependency'] as string[]).includes(kind) ? kind : 'needs_input')
-      return { ok: true, note: kind === 'needs_input' ? '已停车等人。等对方在这个会话里回答,然后继续。' : '已记录。这一次运行到此为止。' }
+      return { ok: true, note: '已记录并结束本次运行；解除阻塞后会创建新的 run。' }
     },
   })))
   disposers.push(agentCtx.tools.register(defineTool({
     name: 'task_request_review',
-    description: '做完了但需要人工把关时调用。验收通过前不会启动下游或判定整批完成;文件路径放进 artifacts。',
+    description: '提交同卡评审。指定 reviewer 时由该 Agent 创建独立 review run；不指定时进入人工验收。验收通过前不会放行下游。',
     parameters: {
       summary: { type: 'string', required: true, description: '交接单正文。' },
       artifacts: { type: 'array', items: { type: 'string' }, description: '待验收的交付文件路径。' },
       metadata: { type: 'object', additionalProperties: true, description: '可选的结构化结果数据。' },
+      reviewer: { type: 'string', description: '可选 reviewer Agent preset id；省略表示人工验收。' },
     },
     output: { schema: OUT, render },
     async execute(args: any) {
       const summary = String(args.summary ?? '').trim()
       if (!summary) return { ok: false, note: 'summary 不能为空' }
       const artifacts = Array.isArray(args.artifacts) ? args.artifacts.map(String) : []
-      await hooks.requestReview(summary, artifacts, args.metadata as Record<string, unknown> | undefined)
+      await hooks.requestReview(summary, artifacts, args.metadata as Record<string, unknown> | undefined, String(args.reviewer ?? '').trim() || undefined)
       return { ok: true, note: `已提交验收${artifacts.length ? `,登记 ${artifacts.length} 个产物` : ''}。` }
+    },
+  })))
+  disposers.push(agentCtx.tools.register(defineTool({
+    name: 'task_request_changes',
+    description: '仅供同卡 reviewer 使用：退回当前实现并结束本次 review run。任务会恢复给原 implementer，评审意见进入下一次 handoff。',
+    parameters: { reason: { type: 'string', required: true, description: '明确、可执行的返工原因。' } },
+    output: { schema: OUT, render },
+    async execute(args: any) {
+      const reason = String(args.reason ?? '').trim()
+      if (!reason) return { ok: false, note: 'reason 不能为空' }
+      await hooks.requestChanges(reason)
+      return { ok: true, note: '已退回原 implementer；本次 review run 已结束。' }
     },
   })))
   return () => { for (const d of disposers.splice(0)) { try { d() } catch { /* already gone */ } } }

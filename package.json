@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-console",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Local-first Agent presets and task orchestration for DeepSeek Harness, backed by SQLite.",
   "license": "MIT",
   "type": "module",
@@ -13,9 +13,7 @@
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "files": [
-    "lib", "src", "prototype", "cordis.patch.yml", "README.md", "LICENSE",
-    "cloudflare/README.md", "cloudflare/migrations", "cloudflare/src", "cloudflare/package.json",
-    "cloudflare/package-lock.json", "cloudflare/tsconfig.json", "cloudflare/wrangler.jsonc"
+    "lib", "src", "prototype", "cordis.patch.yml", "README.md", "LICENSE", "NOTICE"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -36,11 +34,12 @@
   "keywords": ["dsh-plugin", "deepseek-harness", "agent-preset", "task-console"],
   "repository": { "type": "git", "url": "https://github.com/ChangfengHU/dsh-task-console" },
   "dependencies": {
-    "sql.js": "1.14.2",
+    "better-sqlite3": "12.4.1",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
     "@deepseek-ai/schemastery": "^3.18.1",
     "esbuild": "^0.25.12",
     "tsx": "^4.23.13"

@@ -1,0 +1,11 @@
+dsh-task-console 0.11 contains a TypeScript semantic port of the durable
+Kanban kernel behavior from Hermes Agent 0.20.4 (commit
+6f31cfad7825a78b69c46eedbd31f2ac2abacfb8).
+
+Hermes Agent is MIT licensed.
+Copyright (c) 2025 Nous Research.
+
+The port retains the normalized task/run/event model and its transactional
+invariants. DSH task templates, Agent/Session bindings, worker tools, migration
+layer, replay projection, and user interface are original integration code for
+this plugin.

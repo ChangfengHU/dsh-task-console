@@ -22,6 +22,7 @@ export interface TasksApi {
   artifactContent: (id: string, artifactId: string, batchId?: string) => Promise<{ artifact: ArtifactView; base64: string }>
   publishArtifact: (id: string, artifactId: string) => Promise<{ publicUrl: string }>
   reviewCard: (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => Promise<void>
+  unblockCard: (cardId: string) => Promise<void>
   openSession: (sessionId: string) => Promise<void>
   sessionTurns: (sessionId: string) => Promise<import('../wire.ts').TurnLedger>
 }

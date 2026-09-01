@@ -11,7 +11,7 @@
  *   Card   one agent doing one thing inside a batch; `deps` are card ids that
  *          must be done before it is ready (the wizard makes a chain)
  *   Run    one attempt at a card = one real session; retries add runs
- *   Event  the only truth; everything above is fold(events)
+ *   Event  a replay/read projection; normalized SQLite rows own scheduling
  *
  * @module dsh-task-console/fold
  */
@@ -43,7 +43,7 @@ export interface TaskSpec {
 export type BlockKind = 'needs_input' | 'dependency' | 'capability' | 'transient'
 
 export type RunStatus = 'running' | 'blocked' | 'done' | 'failed' | 'timed_out' | 'crashed' | 'cancelled'
-export type RunOutcome = 'completed' | 'review' | 'blocked' | 'crashed' | 'timed_out' | 'failed' | 'protocol_violation' | 'cancelled'
+export type RunOutcome = 'completed' | 'review' | 'changes_requested' | 'blocked' | 'crashed' | 'timed_out' | 'failed' | 'protocol_violation' | 'cancelled'
 
 export interface Run {
   id: string
@@ -51,6 +51,8 @@ export interface Run {
   batchId: string
   taskId: string
   attempt: number
+  /** Agent preset that actually executed this attempt (reviewers may differ from the card owner). */
+  profileId?: string
   sessionId: string
   startedAt: string
   endedAt?: string
@@ -60,6 +62,8 @@ export interface Run {
   summary?: string
   question?: string
   blockKind?: BlockKind
+  /** Explicit task_block closes this run; ask_user_question only pauses it. */
+  terminalBlock?: boolean
   error?: string
   /** Structured completion data supplied by the worker. */
   metadata?: Record<string, unknown>
@@ -129,17 +133,17 @@ export type Event =
   | { t: 'task/deleted'; at: string; taskId: string }
   | { t: 'batch/fired'; at: string; taskId: string; batch: { id: string; by: Batch['by']; cards: { id: string; agentId: string; brief?: string; deps: string[] }[] } }
   | { t: 'card/ready'; at: string; taskId: string; cardId: string }
-  | { t: 'run/claimed'; at: string; taskId: string; cardId: string; runId: string; sessionId: string; attempt: number }
+  | { t: 'run/claimed'; at: string; taskId: string; cardId: string; runId: string; sessionId: string; attempt: number; profileId?: string }
   | { t: 'run/session_created'; at: string; taskId: string; runId: string; sessionId: string }
   | { t: 'run/prompt_dispatched'; at: string; taskId: string; runId: string; messageId: string }
-  | { t: 'run/blocked'; at: string; taskId: string; runId: string; kind: BlockKind; reason: string }
+  | { t: 'run/blocked'; at: string; taskId: string; runId: string; kind: BlockKind; reason: string; terminal?: boolean }
   | { t: 'run/resumed'; at: string; taskId: string; runId: string }
   | { t: 'run/nudged'; at: string; taskId: string; runId: string }
   | { t: 'run/completed'; at: string; taskId: string; runId: string; summary: string; metadata?: Record<string, unknown> }
-  | { t: 'run/review_requested'; at: string; taskId: string; runId: string; summary: string; metadata?: Record<string, unknown> }
+  | { t: 'run/review_requested'; at: string; taskId: string; runId: string; summary: string; metadata?: Record<string, unknown>; reviewer?: string }
   | { t: 'run/failed' | 'run/timed_out' | 'run/crashed' | 'run/cancelled'; at: string; taskId: string; runId: string; outcome?: RunOutcome; error?: string }
   | { t: 'card/review_approved'; at: string; taskId: string; cardId: string; runId: string; note?: string }
-  | { t: 'card/changes_requested'; at: string; taskId: string; cardId: string; runId: string; note: string; targetCardId?: string }
+  | { t: 'card/changes_requested'; at: string; taskId: string; cardId: string; runId: string; note: string; targetCardId?: string; reviewer?: string }
   | { t: 'card/gave_up'; at: string; taskId: string; cardId: string; error: string }
   | { t: 'card/cancelled'; at: string; taskId: string; cardId: string }
   | { t: 'artifact/registered'; at: string; taskId: string; artifact: Artifact }
@@ -181,10 +185,10 @@ export function fold(events: Event[]): State {
         e.batch.cards.forEach((c, i) => s.cards.set(c.id, { id: c.id, batchId: e.batch.id, taskId: e.taskId, index: i, agentId: c.agentId, brief: c.brief, deps: c.deps, status: c.deps.length ? 'todo' : 'ready', runIds: [], consecutiveFailures: 0, blockRecurrences: 0 }))
         break
       }
-      case 'card/ready': { const c = s.cards.get(e.cardId); if (c && (c.status === 'todo' || c.status === 'ready')) c.status = 'ready'; break }
+      case 'card/ready': { const c = s.cards.get(e.cardId); if (c && ['todo', 'ready', 'blocked'].includes(c.status)) { c.status = 'ready'; c.error = undefined } break }
       case 'run/claimed': {
         const c = s.cards.get(e.cardId); if (!c) break
-        s.runs.set(e.runId, { id: e.runId, cardId: c.id, batchId: c.batchId, taskId: e.taskId, attempt: e.attempt, sessionId: e.sessionId, startedAt: e.at, status: 'running', nudges: 0 })
+        s.runs.set(e.runId, { id: e.runId, cardId: c.id, batchId: c.batchId, taskId: e.taskId, attempt: e.attempt, profileId: e.profileId ?? c.agentId, sessionId: e.sessionId, startedAt: e.at, status: 'running', nudges: 0 })
         c.runIds.push(e.runId); c.currentRunId = e.runId; c.status = 'running'; c.startedAt ??= e.at; c.error = undefined
         break
       }
@@ -192,14 +196,16 @@ export function fold(events: Event[]): State {
       case 'run/prompt_dispatched': { const r = s.runs.get(e.runId); if (r) r.promptDispatchedAt = e.at; break }
       case 'run/blocked': {
         const r = s.runs.get(e.runId); if (!r) break
-        r.status = 'blocked'; r.blockKind = e.kind; r.question = e.reason
+        r.status = 'blocked'; r.blockKind = e.kind; r.question = e.reason; r.terminalBlock = !!e.terminal
+        if (e.terminal) r.endedAt = e.at
         const c = s.cards.get(r.cardId); if (c) {
           c.status = 'blocked'
+          if (e.terminal && c.currentRunId === r.id) c.currentRunId = undefined
           if (c.lastBlockReason === e.reason) c.blockRecurrences++; else { c.lastBlockReason = e.reason; c.blockRecurrences = 1 }
         }
         break
       }
-      case 'run/resumed': { const r = s.runs.get(e.runId); if (!r) break; r.status = 'running'; r.question = undefined; const c = s.cards.get(r.cardId); if (c) c.status = 'running'; break }
+      case 'run/resumed': { const r = s.runs.get(e.runId); if (!r) break; r.status = 'running'; r.question = undefined; r.terminalBlock = false; const c = s.cards.get(r.cardId); if (c) c.status = 'running'; break }
       case 'run/nudged': { const r = s.runs.get(e.runId); if (r) r.nudges++; break }
       case 'run/completed': case 'run/review_requested': {
         const r = s.runs.get(e.runId); if (!r) break
@@ -215,7 +221,11 @@ export function fold(events: Event[]): State {
       }
       case 'card/changes_requested': {
         const c = s.cards.get(e.cardId)
-        if (c && c.status === 'review') {
+        if (c && (c.status === 'review' || c.status === 'running')) {
+          const reviewRun = s.runs.get(e.runId)
+          if (reviewRun && !reviewRun.endedAt) {
+            reviewRun.status = 'done'; reviewRun.outcome = 'changes_requested'; reviewRun.summary = e.note; reviewRun.endedAt = e.at
+          }
           const target = e.targetCardId ? s.cards.get(e.targetCardId) : c
           if (!target || target.batchId !== c.batchId || target.index > c.index) break
           for (const affected of s.cards.values()) {
@@ -276,9 +286,15 @@ export function cardRun(s: State, c: Card): Run | undefined {
 }
 
 /** Who moved: the host dispatcher, the agent itself, a person, or the clock. */
-export function actorOf(e: Event, batches?: Map<string, Batch>): 'dispatcher' | 'agent' | 'person' | 'clock' {
+export function actorOf(e: Event, s?: State): 'dispatcher' | 'agent' | 'person' | 'clock' {
   switch (e.t) {
-    case 'task/created': case 'task/enabled': case 'task/deleted': case 'card/review_approved': case 'card/changes_requested': case 'artifact/published': return 'person'
+    case 'task/created': case 'task/enabled': case 'task/deleted': case 'card/review_approved': case 'artifact/published': return 'person'
+    case 'card/changes_requested': {
+      if (e.reviewer) return 'agent'
+      const run = s?.runs.get(e.runId)
+      const card = s?.cards.get(e.cardId)
+      return run?.profileId && card && run.profileId !== card.agentId ? 'agent' : 'person'
+    }
     case 'batch/fired': return e.batch.by === 'cron' ? 'clock' : 'person'
     case 'run/blocked': case 'run/completed': case 'run/review_requested': case 'artifact/registered': return 'agent'
     case 'run/resumed': return 'person'
@@ -289,7 +305,7 @@ export function actorOf(e: Event, batches?: Map<string, Batch>): 'dispatcher' | 
 
 /** One line a person can read for each event. */
 export function describe(e: Event, s: State, agentName: (id: string) => string): string {
-  const who = (runId: string) => { const r = s.runs.get(runId); const c = r && s.cards.get(r.cardId); return c ? agentName(c.agentId) : runId }
+  const who = (runId: string) => { const r = s.runs.get(runId); const c = r && s.cards.get(r.cardId); return r?.profileId ? agentName(r.profileId) : c ? agentName(c.agentId) : runId }
   const card = (cardId: string) => { const c = s.cards.get(cardId); return c ? agentName(c.agentId) : cardId }
   switch (e.t) {
     case 'task/created': return `建卡「${e.task.title}」,${e.task.participants.map(p => agentName(p.agentId)).join(' → ')}`
@@ -297,7 +313,7 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
     case 'task/deleted': return '删除任务'
     case 'batch/fired': return `${({ cron: '到点', manual: '手动', retry: '重试' })[e.batch.by]}触发,${e.batch.cards.length} 张卡排好队`
     case 'card/ready': return `${card(e.cardId)} 可以开始了(上一位已交卷)`
-    case 'run/claimed': return `${card(e.cardId)} 开工${e.attempt > 1 ? `(第 ${e.attempt} 次)` : ''}`
+    case 'run/claimed': return `${e.profileId ? agentName(e.profileId) : card(e.cardId)} 开工${e.attempt > 1 ? `(第 ${e.attempt} 次)` : ''}`
     case 'run/session_created': return `${who(e.runId)} 的会话已创建:${e.sessionId}`
     case 'run/prompt_dispatched': return `任务书已发给 ${who(e.runId)}`
     case 'run/blocked': return `${who(e.runId)} 停下来${e.kind === 'needs_input' ? '问' : '等'}:${e.reason}`
@@ -306,7 +322,13 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
     case 'run/completed': return `${who(e.runId)} 交卷(${e.summary.length} 字交接单)`
     case 'run/review_requested': return `${who(e.runId)} 提交验收(${e.summary.length} 字)`
     case 'card/review_approved': return `${card(e.cardId)} 验收通过${e.note ? ':' + e.note : ''}`
-    case 'card/changes_requested': return e.targetCardId && e.targetCardId !== e.cardId ? `${card(e.cardId)} 退回到 ${card(e.targetCardId)}:${e.note}` : `${card(e.cardId)} 被退回修改:${e.note}`
+    case 'card/changes_requested': {
+      const run = s.runs.get(e.runId)
+      const reviewed = s.cards.get(e.cardId)
+      const reviewer = e.reviewer ?? (run?.profileId && run.profileId !== reviewed?.agentId ? run.profileId : undefined)
+      const target = card(e.targetCardId ?? e.cardId)
+      return reviewer ? `${agentName(reviewer)} 退回 ${target}:${e.note}` : e.targetCardId && e.targetCardId !== e.cardId ? `${card(e.cardId)} 退回到 ${target}:${e.note}` : `${card(e.cardId)} 被退回修改:${e.note}`
+    }
     case 'run/failed': return `${who(e.runId)} 失败${e.outcome === 'protocol_violation' ? '(没按协议交卷)' : ''}${e.error ? ':' + e.error : ''}`
     case 'run/timed_out': return `${who(e.runId)} 超时${e.error ? ':' + e.error : ''}`
     case 'run/crashed': return `${who(e.runId)} 进程没了${e.error ? ':' + e.error : ''}`

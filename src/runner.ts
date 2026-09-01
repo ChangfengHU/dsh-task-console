@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { captureArtifacts } from './artifacts.ts'
 import { readSpec } from './presets.ts'
-import { BLOCK_RECURRENCE_LIMIT, EventStore, NUDGE, cardMessage, cronMatches, parseCron, readyCards, type Batch, type BlockKind, type Card, type Run, type TaskSpec } from './tasks.ts'
+import { EventStore, NUDGE, cardMessage, cronMatches, parseCron, type Batch, type BlockKind, type Card, type TaskSpec } from './tasks.ts'
 import { registerWorkerTools } from './worker-tools.ts'
 
 interface Flight {
@@ -28,10 +28,14 @@ interface Flight {
   handle: any
   disposeTools?: () => void
   lastText: string
+  coreRunId: number
+  claimLock: string
+  profileId: string
   /** Set by a terminator tool; the turn's end then finalizes the run. */
-  terminal?: { kind: 'completed' | 'review' | 'blocked'; summary?: string; reason?: string; blockKind?: BlockKind; metadata?: Record<string, unknown> }
+  terminal?: { kind: 'completed' | 'review' | 'changes' | 'blocked'; summary?: string; reason?: string; blockKind?: BlockKind; metadata?: Record<string, unknown>; reviewer?: string }
   pendingAsk?: string
   timer?: ReturnType<typeof setTimeout>
+  heartbeatTimer?: ReturnType<typeof setInterval>
   timeoutSec: number
 }
 
@@ -48,6 +52,7 @@ export class TaskRunner {
   private firedMinute = new Map<string, string>()
   private disposeListener?: () => void
   private ticking = false
+  private dispatchSuspended = 0
   readonly maxInProgress: number
   private readonly clock: () => number
 
@@ -59,9 +64,16 @@ export class TaskRunner {
 
   async start(): Promise<void> {
     await this.store.load()
-    // Runs still live in the fold belonged to a previous process: they crashed.
+    // Runs still live in the projection belonged to a previous host process.
+    // Close the normalized core run first; the UI event is only its projection.
     for (const r of this.store.s.runs.values()) {
-      if (r.status === 'running' || r.status === 'blocked') await this.append({ t: 'run/crashed', taskId: r.taskId, runId: r.id, error: '宿主重启,会话不在了' })
+      if (r.status !== 'running' && r.status !== 'blocked') continue
+      const coreRunId = this.store.coreRunId(r.id)
+      if (coreRunId === undefined) continue
+      await this.store.transition(
+        () => this.store.kernel.failRun(r.cardId, { expectedRunId: coreRunId, outcome: 'crashed', error: '宿主重启,会话不在了' }),
+        result => result.ok ? { t: 'run/crashed', at: this.now(), taskId: r.taskId, runId: r.id, error: '宿主重启,会话不在了' } : undefined,
+      )
     }
     await this.settleBatches()
     this.disposeListener = (this.ctx as any).on('session/event', (session: any, event: any) => this.onSessionEvent(session, event))
@@ -74,7 +86,7 @@ export class TaskRunner {
   stop(): void {
     if (this.ticker) clearInterval(this.ticker)
     this.disposeListener?.()
-    for (const f of this.flights.values()) { if (f.timer) clearTimeout(f.timer); f.disposeTools?.() }
+    for (const f of this.flights.values()) { this.disarm(f); this.stopHeartbeat(f); f.disposeTools?.() }
   }
 
   private now(): string { return new Date(this.clock()).toISOString() }
@@ -83,7 +95,7 @@ export class TaskRunner {
   // ── the tick ──────────────────────────────────────────────────────────
 
   async tick(): Promise<void> {
-    if (this.ticking) return
+    if (this.ticking || this.dispatchSuspended > 0) return
     this.ticking = true
     try {
       await this.fireDueCron()
@@ -105,15 +117,31 @@ export class TaskRunner {
   /** Promote, claim, spawn — bounded by the in-progress cap. */
   private async dispatch(): Promise<void> {
     const s = this.store.s
-    for (const c of readyCards(s)) if (c.status === 'todo') await this.append({ t: 'card/ready', taskId: c.taskId, cardId: c.id })
-    let inProgress = [...this.store.s.runs.values()].filter(r => r.status === 'running' || r.status === 'blocked').length
-    const ready = readyCards(this.store.s).sort((a, b) => a.batchId.localeCompare(b.batchId) || a.index - b.index)
+    this.store.kernel.promoteReadyTasks()
+    const core = this.store.kernel.listTasks()
+    for (const task of core.filter(row => row.status === 'ready')) {
+      const card = s.cards.get(task.id)
+      if (card?.status === 'todo') await this.append({ t: 'card/ready', taskId: card.taskId, cardId: card.id })
+    }
+    let inProgress = core.filter(row => row.status === 'running').length
+    const automatedReview = (cardId: string) => {
+      const event = this.store.kernel.listEvents(cardId).filter(row => row.kind === 'review_requested').at(-1)
+      if (!event?.payload) return false
+      try { return !!JSON.parse(event.payload).reviewer } catch { return false }
+    }
+    const ready = core.filter(row => row.status === 'ready' || (row.status === 'review' && automatedReview(row.id)))
+      .map(row => s.cards.get(row.id)).filter(Boolean) as Card[]
+    ready.sort((a, b) => a.batchId.localeCompare(b.batchId) || a.index - b.index)
     for (const c of ready) {
       if (inProgress >= this.maxInProgress) break
       const task = this.store.tasks.get(c.taskId); if (!task) continue
       const batch = this.store.s.batches.get(c.batchId); if (!batch || batch.settled) continue
       if (c.consecutiveFailures > 0 && (task.onFail !== 'retry' || c.consecutiveFailures >= task.maxTries)) {
-        await this.append({ t: 'card/gave_up', taskId: c.taskId, cardId: c.id, error: c.error ?? `连续失败 ${c.consecutiveFailures} 次` })
+        const failure = c.error ?? `连续失败 ${c.consecutiveFailures} 次`
+        await this.store.transition(
+          () => this.store.kernel.giveUpTask(c.id, failure),
+          ok => ok ? { t: 'card/gave_up', at: this.now(), taskId: c.taskId, cardId: c.id, error: failure } : undefined,
+        )
         await this.settleBatches(); continue
       }
       await this.startRun(task, batch, c)
@@ -130,7 +158,12 @@ export class TaskRunner {
       if (!cards.length) continue
       const dead = cards.filter(c => c.status === 'failed' || c.status === 'cancelled')
       if (dead.length) {
-        for (const c of cards) if (c.status === 'todo' || c.status === 'ready') await this.append({ t: 'card/cancelled', taskId: b.taskId, cardId: c.id })
+        for (const c of cards) if (c.status === 'todo' || c.status === 'ready') {
+          await this.store.transition(
+            () => this.store.kernel.cancelTask(c.id, '上游失败，任务不可达'),
+            ok => ok ? { t: 'card/cancelled', at: this.now(), taskId: b.taskId, cardId: c.id } : undefined,
+          )
+        }
         const stillLive = cards.some(c => c.status === 'running' || c.status === 'blocked')
         if (!stillLive) await this.append({ t: 'batch/settled', taskId: b.taskId, batchId: b.id, outcome: dead.some(c => c.status === 'failed') ? 'failed' : 'cancelled' })
         continue
@@ -147,13 +180,23 @@ export class TaskRunner {
     if (!task) throw new Error('没有这个任务')
     const batchId = `b-${this.clock().toString(36)}${Math.random().toString(36).slice(2, 5)}`
     const cards = task.participants.map((p, i) => ({ id: `${batchId}#${i}`, agentId: p.agentId, ...(p.brief ? { brief: p.brief } : {}), deps: i ? [`${batchId}#${i - 1}`] : [] }))
-    await this.append({ t: 'batch/fired', taskId, batch: { id: batchId, by, cards } })
+    await this.store.createBatch(task, { t: 'batch/fired', at: this.now(), taskId, batch: { id: batchId, by, cards } })
     const problem = await this.preflight(task)
     if (problem) {
       const first = cards[0]
-      await this.append({ t: 'run/claimed', taskId, cardId: first.id, runId: `${first.id}#0`, sessionId: '', attempt: 0 })
-      await this.append({ t: 'run/failed', taskId, runId: `${first.id}#0`, error: `预检不过:${problem}` })
-      await this.append({ t: 'card/gave_up', taskId, cardId: first.id, error: `预检不过:${problem}` })
+      const runId = `${first.id}#1`
+      const failure = `预检不过:${problem}`
+      const claim = await this.store.claimCard(first.id, runId, '', 1)
+      if (claim) {
+        await this.store.transition(
+          () => this.store.kernel.failRun(first.id, { expectedRunId: claim.run.id, outcome: 'failed', error: failure }),
+          result => result.ok ? { t: 'run/failed', at: this.now(), taskId, runId, outcome: 'failed', error: failure } : undefined,
+        )
+        await this.store.transition(
+          () => this.store.kernel.giveUpTask(first.id, failure),
+          ok => ok ? { t: 'card/gave_up', at: this.now(), taskId, cardId: first.id, error: failure } : undefined,
+        )
+      }
       await this.settleBatches()
     } else {
       await this.tick()
@@ -175,45 +218,60 @@ export class TaskRunner {
 
   private async startRun(task: TaskSpec, batch: Batch, card: Card): Promise<void> {
     const presets = (this.ctx as any).get('agentPresets')
-    const preset = await presets.resolve(card.agentId)
+    const coreTask = this.store.kernel.getTask(card.id)
+    if (!coreTask || !['ready', 'review'].includes(coreTask.status)) return
+    const fromReview = coreTask.status === 'review'
+    const profileId = coreTask.assignee ?? card.agentId
+    const preset = await presets.resolve(profileId)
     const spec = await readSpec(dirname(String(preset.path)))
     const agentName = spec?.name ?? preset.name ?? preset.id
     let selection: any = (() => { try { return (this.ctx as any).get('agentDefaultModel')?.currentSelection?.() } catch { return undefined } })()
     if (spec?.model?.includes('/')) { const [provider, ...rest] = spec.model.split('/'); selection = { provider, model: rest.join('/'), ...(spec.effort ? { reasoningEffort: spec.effort } : {}) } }
 
-    const attempt = card.runIds.length + 1
+    const attempt = this.store.kernel.listRuns(card.id).length + 1
     const runId = `${card.id}#${attempt}`
     const sessionId = `task-${task.id}-${batch.id}-${card.index + 1}${attempt > 1 ? `-t${attempt}` : ''}`.toLowerCase().replace(/[^a-z0-9-]/g, '-')
-    this.nameCache.set(card.agentId, agentName)
+    this.nameCache.set(profileId, agentName)
     const upstream: { agentName: string; summary: string }[] = []
     for (const d of card.deps.map(x => this.store.s.cards.get(x)).filter(Boolean) as Card[]) upstream.push({ agentName: await this.displayName(d.agentId), summary: d.summary ?? '' })
-    const text = cardMessage(task, card, batch.id, upstream)
+    const text = `${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}`
     const messageId = randomUUID()
-    const flight: Flight = { runId, cardId: card.id, taskId: task.id, sessionId, messageId, consumed: false, handle: undefined, lastText: '', timeoutSec: task.timeoutSec }
+    const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview)
+    if (!claim) return
+    const flight: Flight = {
+      runId, cardId: card.id, taskId: task.id, sessionId, messageId, consumed: false,
+      handle: undefined, lastText: '', timeoutSec: task.timeoutSec,
+      coreRunId: claim.run.id, claimLock: claim.lock, profileId,
+    }
     this.flights.set(sessionId, flight)
+    this.startHeartbeat(flight)
     try {
-      // Claim is durable before a process/session is created; later events make each boundary observable.
-      await this.append({ t: 'run/claimed', taskId: task.id, cardId: card.id, runId, sessionId, attempt })
+      // The normalized CAS claim is durable before a DSH session is created.
       flight.handle = await (this.ctx as any).agents.create({
         sessionId,
         ...(selection ? { agentOptions: selection } : {}),
         meta: { cwd: task.cwd, agentPreset: preset.id },
         setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
       })
+      this.store.kernel.recordEvent(card.id, 'session_created', { session_id: sessionId }, flight.coreRunId)
       await this.append({ t: 'run/session_created', taskId: task.id, runId, sessionId })
       // The terminators live on this agent's scope only.
       try {
-        const submit = async (kind: 'completed' | 'review', summary: string, paths: string[], metadata?: Record<string, unknown>) => {
+        const submit = async (kind: 'completed' | 'review', summary: string, paths: string[], metadata?: Record<string, unknown>, reviewer?: string) => {
           if (flight.terminal) throw new Error('这次运行已经提交了终态')
           const at = this.now()
           const captured = await captureArtifacts({ root: this.store.root, task, batchId: batch.id, cardId: card.id, runId, sessionId, at }, paths)
           for (const artifact of captured) await this.append({ t: 'artifact/registered', at, taskId: task.id, artifact })
-          flight.terminal = { kind, summary, metadata }
+          flight.terminal = { kind, summary, metadata, reviewer }
         }
         flight.disposeTools = await registerWorkerTools(flight.handle.agent.ctx, {
           complete: async (summary, artifacts, metadata) => submit('completed', summary, artifacts, metadata),
-          requestReview: async (summary, artifacts, metadata) => submit('review', summary, artifacts, metadata),
-          block: async (reason, kind) => { flight.terminal = { kind: 'blocked', reason, blockKind: kind }; if (kind === 'needs_input') this.disarm(flight); await this.append({ t: 'run/blocked', taskId: task.id, runId, kind, reason }) },
+          requestReview: async (summary, artifacts, metadata, reviewer) => submit('review', summary, artifacts, metadata, reviewer),
+          requestChanges: async (reason) => {
+            if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            flight.terminal = { kind: 'changes', reason }
+          },
+          block: async (reason, kind) => { flight.terminal = { kind: 'blocked', reason, blockKind: kind } },
         })
       } catch (error) { console.warn('[task-console] worker tools not registered:', error) }
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }
@@ -223,11 +281,13 @@ export class TaskRunner {
         await ws?.attachSession?.(sessionId)
       } catch { /* cosmetic */ }
       flight.handle.agent.followup({ id: messageId, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
+      this.store.kernel.recordEvent(card.id, 'prompt_dispatched', { message_id: messageId }, flight.coreRunId)
       await this.append({ t: 'run/prompt_dispatched', taskId: task.id, runId, messageId })
       this.arm(flight)
     } catch (error) {
       this.flights.delete(sessionId)
-      if (!this.store.s.runs.has(runId)) await this.append({ t: 'run/claimed', taskId: task.id, cardId: card.id, runId, sessionId, attempt })
+      this.stopHeartbeat(flight)
+      this.store.kernel.failRun(card.id, { expectedRunId: flight.coreRunId, outcome: 'failed', error: error instanceof Error ? error.message : String(error) })
       await this.append({ t: 'run/failed', taskId: task.id, runId, error: error instanceof Error ? error.message : String(error) })
     }
   }
@@ -239,6 +299,20 @@ export class TaskRunner {
     ;(f.timer as any).unref?.()
   }
   private disarm(f: Flight): void { if (f.timer) { clearTimeout(f.timer); f.timer = undefined } }
+
+  private startHeartbeat(f: Flight): void {
+    this.stopHeartbeat(f)
+    f.heartbeatTimer = setInterval(() => {
+      if (!this.store.kernel.heartbeat(f.cardId, f.coreRunId, f.claimLock, undefined, `session=${f.sessionId}`)) {
+        console.warn(`[task-console] heartbeat refused: ${f.cardId} core run ${f.coreRunId}`)
+      }
+    }, 60_000)
+    ;(f.heartbeatTimer as any).unref?.()
+  }
+
+  private stopHeartbeat(f: Flight): void {
+    if (f.heartbeatTimer) { clearInterval(f.heartbeatTimer); f.heartbeatTimer = undefined }
+  }
 
   private nameCache = new Map<string, string>()
   private async displayName(id: string): Promise<string> {
@@ -294,14 +368,9 @@ export class TaskRunner {
     if (reason && reason.kind !== 'completed') { await this.finish(f, 'run/failed', 'failed', JSON.stringify(reason)); return }
     const t = f.terminal
     if (t?.kind === 'completed') { await this.finish(f, 'run/completed', 'completed', undefined, t.summary, false, t.metadata); return }
-    if (t?.kind === 'review') { await this.finish(f, 'run/review_requested', 'review', undefined, t.summary, false, t.metadata); return }
-    if (t?.kind === 'blocked') {
-      if (t.blockKind === 'needs_input') return   // stay parked; the person's next message resumes it
-      const card = this.store.s.cards.get(f.cardId)
-      if (t.blockKind === 'transient' || t.blockKind === 'dependency') { await this.finish(f, 'run/failed', 'blocked', t.reason); return }
-      if (card && card.blockRecurrences >= BLOCK_RECURRENCE_LIMIT) { await this.finish(f, 'run/failed', 'blocked', t.reason); return }
-      await this.finish(f, 'run/failed', 'blocked', t.reason, undefined, true); return   // capability: no retry
-    }
+    if (t?.kind === 'review') { await this.finish(f, 'run/review_requested', 'review', undefined, t.summary, false, t.metadata, t.reviewer); return }
+    if (t?.kind === 'changes') { await this.finishChanges(f, t.reason ?? 'changes requested'); return }
+    if (t?.kind === 'blocked') { await this.finishBlocked(f, t.reason ?? 'blocked', t.blockKind ?? 'needs_input'); return }
     const run = this.store.s.runs.get(f.runId)
     if (run?.status === 'blocked') return   // ask_user_question in flight
     if ((run?.nudges ?? 0) < 1) {
@@ -312,26 +381,97 @@ export class TaskRunner {
     await this.finish(f, 'run/failed', 'protocol_violation', '停了两次都没有调用 task_complete / task_block')
   }
 
-  private async finish(f: Flight, t: 'run/completed' | 'run/review_requested' | 'run/failed' | 'run/timed_out' | 'run/cancelled', outcome: string, error?: string, summary?: string, giveUpNow = false, metadata?: Record<string, unknown>): Promise<void> {
+  private async finish(f: Flight, t: 'run/completed' | 'run/review_requested' | 'run/failed' | 'run/timed_out' | 'run/cancelled', outcome: string, error?: string, summary?: string, giveUpNow = false, metadata?: Record<string, unknown>, reviewer?: string): Promise<void> {
     if (!this.flights.has(f.sessionId)) return
     this.flights.delete(f.sessionId)
     if (f.timer) clearTimeout(f.timer)
+    this.stopHeartbeat(f)
     f.disposeTools?.()
     try { await f.handle?.dispose?.() } catch { /* already gone */ }
-    if (t === 'run/completed' || t === 'run/review_requested') {
-      await this.append({ t, taskId: f.taskId, runId: f.runId, summary: summary ?? f.lastText, ...(metadata ? { metadata } : {}) })
+    let changed = false
+    if (t === 'run/completed') {
+      changed = await this.store.transition(
+        () => this.store.kernel.completeTask(f.cardId, { expectedRunId: f.coreRunId, summary: summary ?? f.lastText, metadata }),
+        ok => ok ? { t, at: this.now(), taskId: f.taskId, runId: f.runId, summary: summary ?? f.lastText, ...(metadata ? { metadata } : {}) } : undefined,
+      )
+    } else if (t === 'run/review_requested') {
+      changed = await this.store.transition(
+        () => this.store.kernel.requestReview(f.cardId, { expectedRunId: f.coreRunId, summary: summary ?? f.lastText, metadata, reviewer }),
+        ok => ok ? { t, at: this.now(), taskId: f.taskId, runId: f.runId, summary: summary ?? f.lastText, ...(metadata ? { metadata } : {}), ...(reviewer ? { reviewer } : {}) } : undefined,
+      )
     } else {
-      await this.append({ t, taskId: f.taskId, runId: f.runId, outcome, error })
-      if (giveUpNow) { const c = this.store.s.cards.get(f.cardId); if (c && c.status !== 'failed') await this.append({ t: 'card/gave_up', taskId: f.taskId, cardId: f.cardId, error: error ?? outcome }) }
+      const mapped = outcome === 'timed_out' ? 'timed_out' : outcome === 'cancelled' ? 'cancelled' : outcome === 'protocol_violation' ? 'protocol_violation' : 'failed'
+      const result = await this.store.transition(
+        () => {
+          const failed = this.store.kernel.failRun(f.cardId, { expectedRunId: f.coreRunId, outcome: mapped, error })
+          if (failed.ok && mapped === 'cancelled' && !this.store.kernel.cancelTask(f.cardId, error ?? '人工取消')) throw new Error(`无法归档已取消任务 ${f.cardId}`)
+          return failed
+        },
+        value => value.ok ? { t, at: this.now(), taskId: f.taskId, runId: f.runId, outcome: outcome as any, error } : undefined,
+      )
+      changed = result.ok
     }
+    if (!changed) {
+      console.warn(`[task-console] stale terminal transition refused: ${f.cardId} core run ${f.coreRunId}`)
+      await this.tick(); return
+    }
+    if (giveUpNow) {
+      const c = this.store.s.cards.get(f.cardId)
+      if (c && c.status !== 'failed') await this.store.transition(
+        () => this.store.kernel.giveUpTask(f.cardId, error ?? outcome),
+        ok => ok ? { t: 'card/gave_up', at: this.now(), taskId: f.taskId, cardId: f.cardId, error: error ?? outcome } : undefined,
+      )
+    }
+    await this.tick()
+  }
+
+  private async finishBlocked(f: Flight, reason: string, kind: BlockKind): Promise<void> {
+    if (!this.flights.has(f.sessionId)) return
+    this.flights.delete(f.sessionId)
+    if (f.timer) clearTimeout(f.timer)
+    this.stopHeartbeat(f)
+    f.disposeTools?.()
+    try { await f.handle?.dispose?.() } catch { /* already gone */ }
+    const ok = await this.store.transition(
+      () => this.store.kernel.blockTask(f.cardId, { expectedRunId: f.coreRunId, reason, kind }),
+      changed => changed ? { t: 'run/blocked', at: this.now(), taskId: f.taskId, runId: f.runId, kind, reason, terminal: true } : undefined,
+    )
+    if (!ok) console.warn(`[task-console] stale block refused: ${f.cardId} core run ${f.coreRunId}`)
+    await this.tick()
+  }
+
+  private async finishChanges(f: Flight, reason: string): Promise<void> {
+    if (!this.flights.has(f.sessionId)) return
+    this.flights.delete(f.sessionId)
+    if (f.timer) clearTimeout(f.timer)
+    this.stopHeartbeat(f)
+    f.disposeTools?.()
+    try { await f.handle?.dispose?.() } catch { /* already gone */ }
+    const result = await this.store.transition(
+      () => this.store.kernel.requestChanges(f.cardId, { expectedRunId: f.coreRunId, reason }),
+      value => value.ok ? { t: 'card/changes_requested', at: this.now(), taskId: f.taskId, cardId: f.cardId, runId: f.runId, note: reason, targetCardId: f.cardId, reviewer: f.profileId } : undefined,
+    )
+    if (!result.ok) console.warn(`[task-console] request_changes refused: ${result.error}`)
     await this.tick()
   }
 
   async cancelBatch(batchId: string): Promise<void> {
     const b = this.store.s.batches.get(batchId); if (!b) return
-    for (const f of [...this.flights.values()]) { const r = this.store.s.runs.get(f.runId); if (r?.batchId === batchId) await this.finish(f, 'run/cancelled', 'cancelled', '人工取消') }
-    for (const id of b.cardIds) { const c = this.store.s.cards.get(id); if (c && (c.status === 'todo' || c.status === 'ready' || c.status === 'review')) await this.append({ t: 'card/cancelled', taskId: b.taskId, cardId: id }) }
-    if (!this.store.s.batches.get(batchId)?.settled) await this.append({ t: 'batch/settled', taskId: b.taskId, batchId, outcome: 'cancelled' })
+    this.dispatchSuspended++
+    try {
+      for (const f of [...this.flights.values()]) { const r = this.store.s.runs.get(f.runId); if (r?.batchId === batchId) await this.finish(f, 'run/cancelled', 'cancelled', '人工取消') }
+      for (const id of b.cardIds) {
+        const c = this.store.s.cards.get(id)
+        if (c && (c.status === 'todo' || c.status === 'ready' || c.status === 'review')) await this.store.transition(
+          () => this.store.kernel.cancelTask(id, '人工取消批次'),
+          ok => ok ? { t: 'card/cancelled', at: this.now(), taskId: b.taskId, cardId: id } : undefined,
+        )
+      }
+      if (!this.store.s.batches.get(batchId)?.settled) await this.append({ t: 'batch/settled', taskId: b.taskId, batchId, outcome: 'cancelled' })
+    } finally {
+      this.dispatchSuspended--
+    }
+    await this.tick()
   }
 
   /** Resolve the explicit human review gate for one card. */
@@ -339,13 +479,42 @@ export class TaskRunner {
     const card = this.store.s.cards.get(cardId)
     if (!card || card.status !== 'review' || !card.currentRunId && !card.runIds.length) throw new Error('这张卡不在待验收状态')
     const runId = card.runIds[card.runIds.length - 1]
-    if (decision === 'approve') await this.append({ t: 'card/review_approved', taskId: card.taskId, cardId, runId, ...(note.trim() ? { note: note.trim() } : {}) })
-    else {
+    if (decision === 'approve') {
+      const ok = await this.store.transition(
+        () => this.store.kernel.completeTask(cardId, { summary: note.trim() || 'Human review approved.', metadata: { approval: 'human' } }),
+        changed => changed ? { t: 'card/review_approved', at: this.now(), taskId: card.taskId, cardId, runId, ...(note.trim() ? { note: note.trim() } : {}) } : undefined,
+      )
+      if (!ok) throw new Error('核心任务状态已经变化，无法批准')
+    } else {
       if (!note.trim()) throw new Error('退回修改时必须写明原因')
       const target = this.store.s.cards.get(targetCardId ?? card.deps[0] ?? card.id)
       if (!target || target.batchId !== card.batchId || target.index > card.index) throw new Error('返工目标必须是同一运行中当前角色或它的上游')
-      await this.append({ t: 'card/changes_requested', taskId: card.taskId, cardId, runId, note: note.trim(), targetCardId: target.id })
+      const affected = [...this.store.s.cards.values()].filter(row => row.batchId === card.batchId && row.index >= target.index && row.index <= card.index).sort((a, b) => a.index - b.index)
+      await this.store.transition(
+        () => {
+          for (const row of affected) {
+            const ok = this.store.kernel.reopenForChanges(row.id, {
+              reason: note.trim(), assignee: row.agentId, forceTodo: row.id !== target.id, sourceTaskId: card.id,
+            })
+            if (!ok) throw new Error(`无法重开核心任务 ${row.id}`)
+          }
+          return true
+        },
+        () => ({ t: 'card/changes_requested', at: this.now(), taskId: card.taskId, cardId, runId, note: note.trim(), targetCardId: target.id }),
+      )
     }
+    await this.tick()
+  }
+
+  /** Hermes unblock semantics: a blocked run stays closed and a new run is claimed. */
+  async unblockCard(cardId: string): Promise<void> {
+    const card = this.store.s.cards.get(cardId)
+    if (!card || card.status !== 'blocked') throw new Error('这张卡不在阻塞状态')
+    const ok = await this.store.transition(
+      () => this.store.kernel.unblockTask(cardId),
+      changed => changed && this.store.kernel.getTask(cardId)?.status === 'ready' ? { t: 'card/ready', at: this.now(), taskId: card.taskId, cardId } : undefined,
+    )
+    if (!ok) throw new Error('核心任务状态已经变化，无法解除阻塞')
     await this.tick()
   }
 

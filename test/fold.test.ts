@@ -103,6 +103,23 @@ test('describe / actorOf read as one line with the right hand', () => {
   assert.equal(describe({ t: 'run/failed', at: '5', taskId: 'T-1', runId: 'r1', outcome: 'protocol_violation' }, s, name), '装机员 失败(没按协议交卷)')
 })
 
+test('automated reviewer owns the changes-requested edge, including legacy events without reviewer metadata', () => {
+  const events: Event[] = [
+    { t: 'task/created', at: '1', taskId: 'T-1', task }, fired,
+    { t: 'run/claimed', at: '3', taskId: 'T-1', cardId: 'b1#0', runId: 'work', sessionId: 's1', attempt: 1, profileId: 'installer' },
+    { t: 'run/review_requested', at: '4', taskId: 'T-1', runId: 'work', summary: '请验收', reviewer: 'inspector' },
+    { t: 'run/claimed', at: '5', taskId: 'T-1', cardId: 'b1#0', runId: 'review', sessionId: 's2', attempt: 2, profileId: 'inspector' },
+  ]
+  const s = fold(events)
+  const legacy: Event = { t: 'card/changes_requested', at: '6', taskId: 'T-1', cardId: 'b1#0', runId: 'review', note: '缺少键盘交互', targetCardId: 'b1#0' }
+  const current: Event = { ...legacy, reviewer: 'inspector' }
+  const name = (id: string) => ({ installer: '执行者', inspector: '评估者' })[id] ?? id
+
+  assert.equal(actorOf(legacy, s), 'agent')
+  assert.equal(actorOf(current, s), 'agent')
+  assert.equal(describe(legacy, s, name), '评估者 退回 执行者:缺少键盘交互')
+})
+
 test('foldTurns classifies task_* terminators as their own kind', () => {
   const t0 = 1_700_000_000_000
   const ev = [

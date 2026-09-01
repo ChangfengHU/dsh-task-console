@@ -26,7 +26,7 @@ const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 await mkdir(out, { recursive: true })
 
 /** Harness packages the host must share with the app, never bundle. */
-const HOST_EXTERNAL = ['@deepseek-ai/cordis', '@deepseek-ai/dsh-*', '@deepseek-ai/schemastery', 'sql.js', 'zod', 'yaml', 'node:*']
+const HOST_EXTERNAL = ['@deepseek-ai/cordis', '@deepseek-ai/dsh-*', '@deepseek-ai/schemastery', 'better-sqlite3', 'zod', 'yaml', 'node:*']
 
 await build({
   entryPoints: [join(root, 'src/index.ts'), join(root, 'src/typert.host.ts')],

@@ -31,6 +31,8 @@ export interface TaskSpec {
   brief: string
   trigger: Trigger
   participants: Participant[]
+  /** Static chains are kept for historical tasks; dynamic rounds materialize one DB-backed round at a time. */
+  graphMode?: 'static-chain' | 'dynamic-rounds'
   cwd: string
   timeoutSec: number
   onFail: 'stop' | 'retry'
@@ -81,6 +83,9 @@ export interface Card {
   /** Position in the chain, for display. */
   index: number
   agentId: string
+  kind?: 'agent' | 'gate'
+  role?: 'planner' | 'executor' | 'reviewer' | 'gate'
+  round?: number
   brief?: string
   deps: string[]
   status: CardStatus
@@ -131,7 +136,9 @@ export type Event =
   | { t: 'task/created'; at: string; taskId: string; task: TaskSpec }
   | { t: 'task/enabled'; at: string; taskId: string; enabled: boolean }
   | { t: 'task/deleted'; at: string; taskId: string }
-  | { t: 'batch/fired'; at: string; taskId: string; batch: { id: string; by: Batch['by']; cards: { id: string; agentId: string; brief?: string; deps: string[] }[] } }
+  | { t: 'batch/fired'; at: string; taskId: string; batch: { id: string; by: Batch['by']; cards: CardSeed[] } }
+  | { t: 'card/created'; at: string; taskId: string; batchId: string; card: CardSeed }
+  | { t: 'gate/opened'; at: string; taskId: string; cardId: string }
   | { t: 'card/ready'; at: string; taskId: string; cardId: string }
   | { t: 'run/claimed'; at: string; taskId: string; cardId: string; runId: string; sessionId: string; attempt: number; profileId?: string }
   | { t: 'run/session_created'; at: string; taskId: string; runId: string; sessionId: string }
@@ -158,6 +165,16 @@ export interface State {
   artifacts: Map<string, Artifact>
 }
 
+export interface CardSeed {
+  id: string
+  agentId: string
+  brief?: string
+  deps: string[]
+  kind?: Card['kind']
+  role?: Card['role']
+  round?: number
+}
+
 /** How many times the same block reason may recur on one card before it gives up (hermes BLOCK_RECURRENCE_LIMIT). */
 export const BLOCK_RECURRENCE_LIMIT = 3
 
@@ -182,9 +199,18 @@ export function fold(events: Event[]): State {
       }
       case 'batch/fired': {
         s.batches.set(e.batch.id, { id: e.batch.id, taskId: e.taskId, firedAt: e.at, by: e.batch.by, cardIds: e.batch.cards.map(c => c.id) })
-        e.batch.cards.forEach((c, i) => s.cards.set(c.id, { id: c.id, batchId: e.batch.id, taskId: e.taskId, index: i, agentId: c.agentId, brief: c.brief, deps: c.deps, status: c.deps.length ? 'todo' : 'ready', runIds: [], consecutiveFailures: 0, blockRecurrences: 0 }))
+        e.batch.cards.forEach((c, i) => s.cards.set(c.id, { ...c, id: c.id, batchId: e.batch.id, taskId: e.taskId, index: i, agentId: c.agentId, brief: c.brief, deps: c.deps, status: c.deps.length ? 'todo' : 'ready', runIds: [], consecutiveFailures: 0, blockRecurrences: 0 }))
         break
       }
+      case 'card/created': {
+        const b = s.batches.get(e.batchId)
+        if (!b || s.cards.has(e.card.id)) break
+        const index = b.cardIds.length
+        b.cardIds.push(e.card.id)
+        s.cards.set(e.card.id, { ...e.card, batchId: e.batchId, taskId: e.taskId, index, status: e.card.deps.length ? 'todo' : 'ready', runIds: [], consecutiveFailures: 0, blockRecurrences: 0 })
+        break
+      }
+      case 'gate/opened': { const c = s.cards.get(e.cardId); if (c?.kind === 'gate') { c.status = 'done'; c.endedAt = e.at; c.summary = 'Gate opened after its dependencies completed.' } break }
       case 'card/ready': { const c = s.cards.get(e.cardId); if (c && ['todo', 'ready', 'blocked'].includes(c.status)) { c.status = 'ready'; c.error = undefined } break }
       case 'run/claimed': {
         const c = s.cards.get(e.cardId); if (!c) break
@@ -262,6 +288,7 @@ export function fold(events: Event[]): State {
 export function readyCards(s: State): Card[] {
   const out: Card[] = []
   for (const c of s.cards.values()) {
+    if (c.kind === 'gate') continue
     if (c.status !== 'todo' && c.status !== 'ready') continue
     if (c.deps.every(d => s.cards.get(d)?.status === 'done')) out.push(c)
   }
@@ -312,6 +339,8 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
     case 'task/enabled': return e.enabled ? '启用时间表' : '停用时间表'
     case 'task/deleted': return '删除任务'
     case 'batch/fired': return `${({ cron: '到点', manual: '手动', retry: '重试' })[e.batch.by]}触发,${e.batch.cards.length} 张卡排好队`
+    case 'card/created': return `数据库新增${e.card.kind === 'gate' ? '闸门' : '角色'}:${e.card.role ?? card(e.card.id)}`
+    case 'gate/opened': return `闸门 ${e.cardId} 放行`
     case 'card/ready': return `${card(e.cardId)} 可以开始了(上一位已交卷)`
     case 'run/claimed': return `${e.profileId ? agentName(e.profileId) : card(e.cardId)} 开工${e.attempt > 1 ? `(第 ${e.attempt} 次)` : ''}`
     case 'run/session_created': return `${who(e.runId)} 的会话已创建:${e.sessionId}`

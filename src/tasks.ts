@@ -8,8 +8,9 @@
 import { mkdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { fold, migrate, type Card, type Event, type Participant, type State, type TaskSpec, type Trigger } from './fold.ts'
+import { fold, migrate, type Batch, type Card, type Event, type Participant, type State, type TaskSpec, type Trigger } from './fold.ts'
 import { HermesKernel, type ClaimResult } from './hermes-kernel.ts'
+import type { GraphEventRow, GraphLinkRow, GraphRunRow, GraphSnapshot, GraphTaskRow } from './graph-data.ts'
 
 export { actorOf, batchStatus, cardRun, describe, fold, foldTurns, migrate, readyCards, BLOCK_RECURRENCE_LIMIT } from './fold.ts'
 export type { Artifact, Batch, BlockKind, Card, CardStatus, Event, Participant, Run, RunOutcome, RunStatus, State, StepRow, TaskSpec, ToolRow, Trigger, TurnLedger, TurnRow } from './fold.ts'
@@ -209,13 +210,18 @@ export class EventStore {
         db.prepare(`INSERT INTO dsh_card_bindings(card_id, spec_id, batch_id, position, brief) VALUES (?, ?, ?, ?, ?)`).run(card.id, task.id, event.batch.id, index, card.brief ?? null)
         const status = card.deps.length ? 'todo' : 'ready'
         db.prepare(`INSERT INTO tasks(id, title, body, assignee, status, priority, created_by, created_at,
-          workspace_kind, workspace_path, tenant, max_runtime_seconds, max_retries)
-          VALUES (?, ?, ?, ?, ?, ?, 'dsh-task-console', ?, 'dir', ?, ?, ?, ?)`).run(
+          workspace_kind, workspace_path, tenant, max_runtime_seconds, max_retries, node_kind, round, role)
+          VALUES (?, ?, ?, ?, ?, ?, 'dsh-task-console', ?, 'dir', ?, ?, ?, ?, ?, ?, ?)`).run(
           card.id, `${task.title} · ${card.agentId}`, [task.brief, card.brief].filter(Boolean).join('\n\n'), card.agentId,
           status, index * -1, toEpoch(event.at), task.cwd, event.batch.id, task.timeoutSec, task.maxTries,
+          card.kind ?? 'agent', card.round ?? null, card.role ?? null,
         )
-        for (const parent of card.deps) db.prepare('INSERT INTO task_links(parent_id, child_id) VALUES (?, ?)').run(parent, card.id)
-        db.prepare(`INSERT INTO task_events(task_id, kind, payload, created_at) VALUES (?, 'created', ?, ?)`).run(card.id, JSON.stringify({ assignee: card.agentId, status, parents: card.deps, tenant: event.batch.id }), toEpoch(event.at))
+        const at = toEpoch(event.at)
+        db.prepare(`INSERT INTO task_events(task_id, kind, payload, created_at, graph_id) VALUES (?, 'created', ?, ?, ?)`).run(card.id, JSON.stringify({ title: `${task.title} · ${card.role ?? card.agentId}`, body: [task.brief, card.brief].filter(Boolean).join('\n\n'), assignee: card.agentId, status, parents: card.deps, tenant: event.batch.id, node_kind: card.kind ?? 'agent', round: card.round ?? null, role: card.role ?? null, created_at: at }), at, event.batch.id)
+        for (const parent of card.deps) {
+          db.prepare(`INSERT INTO task_links(parent_id, child_id, kind, created_at) VALUES (?, ?, 'dependency', ?)`).run(parent, card.id, at)
+          db.prepare(`INSERT INTO task_events(task_id, kind, payload, created_at, graph_id) VALUES (?, 'linked', ?, ?, ?)`).run(card.id, JSON.stringify({ parent_id: parent, kind: 'dependency' }), at, event.batch.id)
+        }
         insertedCards.push(card.id)
       }
       if (insertedCards.length !== event.batch.cards.length) throw new Error('batch card insert incomplete')
@@ -224,12 +230,87 @@ export class EventStore {
     this.events.push(event); this.state = fold(this.events)
   }
 
+  /** Materialize one real rework round. Nothing is inferred by the browser. */
+  async expandRound(task: TaskSpec, batch: Batch, planner: Card, summary: string): Promise<void> {
+    if (task.graphMode !== 'dynamic-rounds' || planner.role !== 'planner' || !planner.round) throw new Error('只有动态回合的规划者能创建下一轮')
+    const round = planner.round
+    const seeds: Extract<Event, { t: 'card/created' }>[] = []
+    const next = this.queue.then(async () => {
+      this.kernel.compose(() => {
+        const db = this.kernel.db
+        const active = this.kernel.getTask(planner.id)
+        if (!active || active.status !== 'running') throw new Error('规划者已不在运行中')
+        if ((db.prepare('SELECT COUNT(*) AS n FROM task_links WHERE parent_id = ?').get(planner.id) as { n: number }).n) throw new Error('这个规划者已经创建过下一轮')
+        const atIso = new Date().toISOString(); const at = toEpoch(atIso)
+        const rows = [
+          { id: `${batch.id}#g${round}`, agentId: '__gate__', kind: 'gate' as const, role: 'gate' as const, round, deps: [planner.id], brief: `Round ${round} 放行闸门` },
+          { id: `${batch.id}#e${round}`, agentId: task.participants[1].agentId, kind: 'agent' as const, role: 'executor' as const, round, deps: [`${batch.id}#g${round}`], brief: task.participants[1].brief ?? `执行规划者给出的第 ${round} 轮方案。` },
+          { id: `${batch.id}#r${round}`, agentId: task.participants[2].agentId, kind: 'agent' as const, role: 'reviewer' as const, round, deps: [`${batch.id}#e${round}`], brief: task.participants[2].brief ?? `评估第 ${round} 轮结果，明确给出通过或返工依据。` },
+          { id: `${batch.id}#p${round + 1}`, agentId: task.participants[0].agentId, kind: 'agent' as const, role: 'planner' as const, round: round + 1, deps: [`${batch.id}#r${round}`], brief: task.participants[0].brief ?? `读取第 ${round} 轮评估，决定结束或创建第 ${round + 1} 轮。` },
+        ]
+        const position = Number((db.prepare('SELECT COALESCE(MAX(position), -1) AS n FROM dsh_card_bindings WHERE batch_id = ?').get(batch.id) as { n: number }).n) + 1
+        for (const [offset, row] of rows.entries()) {
+          const status = 'todo'
+          const assignee = row.kind === 'gate' ? null : row.agentId
+          const title = `${task.title} · ${row.role} ${row.round}`
+          db.prepare(`INSERT INTO dsh_card_bindings(card_id, spec_id, batch_id, position, brief) VALUES (?, ?, ?, ?, ?)`).run(row.id, task.id, batch.id, position + offset, row.brief)
+          db.prepare(`INSERT INTO tasks(id, title, body, assignee, status, priority, created_by, created_at, workspace_kind, workspace_path, tenant, max_runtime_seconds, max_retries, node_kind, round, role)
+            VALUES (?, ?, ?, ?, ?, ?, 'dsh-task-console', ?, 'dir', ?, ?, ?, ?, ?, ?, ?)`).run(row.id, title, [task.brief, row.brief, summary].filter(Boolean).join('\n\n'), assignee, status, -(position + offset), at, task.cwd, batch.id, task.timeoutSec, task.maxTries, row.kind, row.round, row.role)
+          db.prepare(`INSERT INTO task_events(task_id, kind, payload, created_at, graph_id) VALUES (?, 'created', ?, ?, ?)`).run(row.id, JSON.stringify({ title, body: [task.brief, row.brief].join('\n\n'), assignee, status, parents: row.deps, tenant: batch.id, node_kind: row.kind, round: row.round, role: row.role, created_at: at }), at, batch.id)
+          seeds.push({ t: 'card/created', at: atIso, taskId: task.id, batchId: batch.id, card: row })
+        }
+        for (const row of rows) for (const parent of row.deps) {
+          db.prepare(`INSERT INTO task_links(parent_id, child_id, kind, created_at) VALUES (?, ?, 'dependency', ?)`).run(parent, row.id, at)
+          db.prepare(`INSERT INTO task_events(task_id, kind, payload, created_at, graph_id) VALUES (?, 'linked', ?, ?, ?)`).run(row.id, JSON.stringify({ parent_id: parent, kind: 'dependency' }), at, batch.id)
+        }
+        const insertEvent = db.prepare('INSERT INTO dsh_events(event_type, task_id, occurred_at, payload_json) VALUES (?, ?, ?, ?)')
+        for (const e of seeds) insertEvent.run(e.t, e.taskId, e.at, JSON.stringify(e))
+      })
+      this.events.push(...seeds); this.state = fold(this.events)
+    })
+    this.queue = next.then(() => undefined, () => undefined)
+    return next
+  }
+
+  async openReadyGates(): Promise<string[]> {
+    const projected: Event[] = []
+    const next = this.queue.then(async () => {
+      const ids = this.kernel.compose(() => {
+        const opened = this.kernel.openReadyGates()
+        const insert = this.kernel.db.prepare('INSERT INTO dsh_events(event_type, task_id, occurred_at, payload_json) VALUES (?, ?, ?, ?)')
+        for (const cardId of opened) {
+          const card = this.state.cards.get(cardId); if (!card) continue
+          const e: Event = { t: 'gate/opened', at: new Date().toISOString(), taskId: card.taskId, cardId }
+          insert.run(e.t, e.taskId, e.at, JSON.stringify(e)); projected.push(e)
+        }
+        return opened
+      })
+      if (projected.length) { this.events.push(...projected); this.state = fold(this.events) }
+      return ids
+    })
+    this.queue = next.then(() => undefined, () => undefined)
+    return next
+  }
+
+  graphSnapshot(taskId: string, batchId: string): GraphSnapshot {
+    const db = this.kernel.db
+    const batch = db.prepare(`SELECT id, fired_at, settled_at, outcome FROM dsh_batches WHERE id = ? AND spec_id = ?`).get(batchId, taskId) as { id: string; fired_at: number; settled_at: number | null; outcome: string | null } | undefined
+    if (!batch) throw new Error('没有这个任务运行')
+    const tasks = db.prepare(`SELECT id,title,body,assignee,status,created_at,started_at,completed_at,result,node_kind,round,role,current_run_id FROM tasks WHERE tenant = ? ORDER BY created_at,id`).all(batchId) as GraphTaskRow[]
+    const links = db.prepare(`SELECT l.parent_id,l.child_id,l.kind,l.created_at FROM task_links l JOIN tasks c ON c.id=l.child_id WHERE c.tenant=? ORDER BY COALESCE(l.created_at,0),l.rowid`).all(batchId) as GraphLinkRow[]
+    const runs = db.prepare(`SELECT r.id,b.external_run_id,r.task_id,r.profile,r.status,r.started_at,r.ended_at,r.outcome,r.summary,r.error,b.session_id FROM task_runs r JOIN tasks t ON t.id=r.task_id LEFT JOIN dsh_run_bindings b ON b.core_run_id=r.id WHERE t.tenant=? ORDER BY r.started_at,r.id`).all(batchId) as GraphRunRow[]
+    const eventRows = db.prepare(`SELECT id,graph_id,task_id,run_id,kind,payload,created_at FROM task_events WHERE graph_id=? ORDER BY id`).all(batchId) as { id: number; graph_id: string; task_id: string; run_id: number | null; kind: string; payload: string | null; created_at: number }[]
+    const events: GraphEventRow[] = eventRows.map(row => ({ ...row, payload: (() => { try { return row.payload ? JSON.parse(row.payload) : {} } catch { return {} } })() }))
+    return { graphId: batchId, taskId, batch: { id: batch.id, firedAt: batch.fired_at, settledAt: batch.settled_at, outcome: batch.outcome }, live: { tasks, links, runs }, events }
+  }
+
   async claimCard(cardId: string, externalRunId: string, sessionId: string, attempt: number, fromReview = false): Promise<ClaimResult | undefined> {
     return this.transition(
       () => this.kernel.claimTask(cardId, { fromReview }),
       claim => {
         if (!claim) return undefined
         this.kernel.db.prepare(`INSERT INTO dsh_run_bindings(external_run_id, core_run_id, session_id) VALUES (?, ?, ?)`).run(externalRunId, claim.run.id, sessionId)
+        this.kernel.recordEvent(cardId, 'run_bound', { external_run_id: externalRunId, session_id: sessionId }, claim.run.id)
         return { t: 'run/claimed', at: new Date(claim.run.started_at * 1000).toISOString(), taskId: this.state.cards.get(cardId)?.taskId ?? '', cardId, runId: externalRunId, sessionId, attempt, profileId: claim.run.profile ?? undefined }
       },
     )
@@ -256,6 +337,16 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (card.brief?.trim()) lines.push('', '[YOUR PART]', card.brief.trim())
   for (const u of upstream) lines.push('', `[UPSTREAM HANDOFF from ${u.agentName}]`, u.summary.trim() || '(上游没有留下交接单)')
   if (card.reviewNote?.trim()) lines.push('', '[REVIEW CHANGES]', card.reviewNote.trim())
+  if (task.graphMode === 'dynamic-rounds' && card.role === 'planner') {
+    lines.push('', '[DYNAMIC DAG CONTRACT]',
+      card.round === 1
+        ? '你是初始规划者。完成方案后必须调用 task_plan_round(summary)；系统随后才会创建真实 Gate、执行者、评估者和下一位规划者记录。'
+        : '你是回合决策者。结合上游评估：需要返工就调用 task_plan_round(summary) 创建新一轮真实记录；已经通过就调用 task_finalize(summary)。',
+      '不要调用 task_complete；本会话只提供 task_plan_round、task_finalize 和 task_block。')
+    return lines.join('\n')
+  }
+  if (task.graphMode === 'dynamic-rounds' && card.role === 'executor') lines.push('', '[ROLE]', `你是第 ${card.round} 轮执行者。严格执行本 Task body 中的规划，完成后调用 task_complete。`)
+  if (task.graphMode === 'dynamic-rounds' && card.role === 'reviewer') lines.push('', '[ROLE]', `你是第 ${card.round} 轮评估者。给出明确通过/返工结论和依据，完成后调用 task_complete；下一位规划者负责据此结束或创建新一轮。`)
   lines.push('', '[CONTRACT]',
     '做完后必须调用 task_complete(summary, artifacts, metadata) 交卷;summary 写「产物 / 干了什么 / 下游注意」,它会原样交给下一张卡。',
     '生成了文件时,必须把文件路径放进 artifacts 数组;系统会保存不可变副本并让浏览器直接预览或下载。',
@@ -286,9 +377,12 @@ export function validateTask(raw: unknown, agentIds: Set<string>): TaskSpec {
   }
   const timeoutSec = Math.min(Math.max(Number(s.timeoutSec) || 1800, 60), 6 * 3600)
   const onFail = s.onFail === 'retry' ? 'retry' : 'stop'
+  const graphMode = s.graphMode === 'dynamic-rounds' ? 'dynamic-rounds' : 'static-chain'
+  if (graphMode === 'dynamic-rounds' && participants.length !== 3) throw new Error('动态回合必须依次选择 3 位参与者:规划者、执行者、评估者')
   return {
     id: String(s.id ?? '') || `T-${Date.now().toString(36)}`,
     title, brief, trigger, participants,
+    graphMode,
     cwd: String(s.cwd ?? '').trim() || homedir(),
     timeoutSec, onFail,
     maxTries: onFail === 'retry' ? Math.min(Math.max(Number(s.maxTries) || 2, 1), 5) : 1,

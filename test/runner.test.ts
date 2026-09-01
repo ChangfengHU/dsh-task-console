@@ -49,6 +49,40 @@ async function setup(taskPatch: Partial<TaskSpec> = {}) {
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
 
+test('runner: dynamic rounds materialize DB rows only after planner decisions and gates never own runs', async () => {
+  const { host, store, runner } = await setup({ graphMode: 'dynamic-rounds' })
+  const batch = await runner.fire('T', 'manual')
+  const nextSession = () => [...host.sessions.keys()].at(-1)!
+  let session = nextSession(); host.consumeFirst(session)
+  assert.deepEqual(store.graphSnapshot('T', batch.id).live.tasks.map(row => row.role), ['planner'])
+  assert.ok(host.sessions.get(session)!.tools.some(tool => tool.name === 'task_plan_round'))
+  assert.ok(!host.sessions.get(session)!.tools.some(tool => tool.name === 'task_complete'))
+  await host.callTool(session, 'task_plan_round', { summary: '第一轮计划' })
+  let graph = store.graphSnapshot('T', batch.id)
+  assert.equal(graph.live.tasks.length, 5); assert.equal(graph.live.links.length, 4); assert.equal(graph.live.runs.length, 1)
+  assert.equal(graph.live.tasks.find(row => row.role === 'gate')!.status, 'todo')
+  host.endTurn(session); await tick()
+  graph = store.graphSnapshot('T', batch.id)
+  assert.equal(graph.live.tasks.find(row => row.role === 'gate')!.status, 'done')
+  assert.equal(graph.live.runs.filter(row => row.task_id.includes('#g')).length, 0)
+
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '执行一' }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '评估：返工' }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_plan_round', { summary: '第二轮返工计划' })
+  graph = store.graphSnapshot('T', batch.id)
+  assert.equal(graph.live.tasks.length, 9); assert.equal(graph.live.links.length, 8)
+  host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '执行二' }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '评估：通过' }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_finalize', { summary: '批准结束' }); host.endTurn(session); await tick()
+  graph = store.graphSnapshot('T', batch.id)
+  assert.equal(graph.live.tasks.length, 9); assert.equal(graph.live.links.length, 8); assert.equal(graph.live.runs.length, 7)
+  assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')
+  assert.equal(graph.events.filter(event => event.kind === 'created').length, 9)
+  assert.equal(graph.events.filter(event => event.kind === 'linked').length, 8)
+  runner.stop()
+})
+
 test('runner: a 3-card chain records process boundaries and snapshots declared artifacts', async () => {
   const { host, store, runner, root } = await setup()
   await writeFile(join(root, 'result.html'), '<h1>done</h1>')

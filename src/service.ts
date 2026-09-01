@@ -374,6 +374,15 @@ export class TaskConsoleService extends TypertRemoteService {
     return JSON.stringify({ events, artifacts, batchId: selected ?? null })
   }
 
+  /** Raw normalized rows plus the canonical event log for DB-faithful replay. */
+  async taskGraph(payload: string): Promise<string> {
+    const { id, batchId } = JSON.parse(payload) as { id: string; batchId?: string }
+    if (!this.runner.store.s.tasks.has(id)) throw new Error('没有这个任务')
+    const selected = batchId ?? [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]?.id
+    if (!selected) throw new Error('这个任务还没有运行')
+    return JSON.stringify(this.runner.store.graphSnapshot(id, selected))
+  }
+
   private artifactView(a: Artifact): ArtifactView {
     const { storagePath: _storagePath, ...view } = a
     return view

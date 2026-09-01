@@ -116,6 +116,7 @@ export class TaskRunner {
 
   /** Promote, claim, spawn — bounded by the in-progress cap. */
   private async dispatch(): Promise<void> {
+    await this.store.openReadyGates()
     const s = this.store.s
     this.store.kernel.promoteReadyTasks()
     const core = this.store.kernel.listTasks()
@@ -179,7 +180,9 @@ export class TaskRunner {
     const task = this.store.tasks.get(taskId)
     if (!task) throw new Error('没有这个任务')
     const batchId = `b-${this.clock().toString(36)}${Math.random().toString(36).slice(2, 5)}`
-    const cards = task.participants.map((p, i) => ({ id: `${batchId}#${i}`, agentId: p.agentId, ...(p.brief ? { brief: p.brief } : {}), deps: i ? [`${batchId}#${i - 1}`] : [] }))
+    const cards = task.graphMode === 'dynamic-rounds'
+      ? [{ id: `${batchId}#p1`, agentId: task.participants[0].agentId, ...(task.participants[0].brief ? { brief: task.participants[0].brief } : {}), deps: [], kind: 'agent' as const, role: 'planner' as const, round: 1 }]
+      : task.participants.map((p, i) => ({ id: `${batchId}#${i}`, agentId: p.agentId, ...(p.brief ? { brief: p.brief } : {}), deps: i ? [`${batchId}#${i - 1}`] : [] }))
     await this.store.createBatch(task, { t: 'batch/fired', at: this.now(), taskId, batch: { id: batchId, by, cards } })
     const problem = await this.preflight(task)
     if (problem) {
@@ -272,7 +275,16 @@ export class TaskRunner {
             flight.terminal = { kind: 'changes', reason }
           },
           block: async (reason, kind) => { flight.terminal = { kind: 'blocked', reason, blockKind: kind } },
-        })
+          planRound: async (summary) => {
+            if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            await this.store.expandRound(task, batch, card, summary)
+            flight.terminal = { kind: 'completed', summary, metadata: { decision: card.round === 1 ? 'planned' : 'rework', round: card.round } }
+          },
+          finalize: async (summary) => {
+            if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            flight.terminal = { kind: 'completed', summary, metadata: { decision: 'approved', round: card.round } }
+          },
+        }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner' })
       } catch (error) { console.warn('[task-console] worker tools not registered:', error) }
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }
       try {

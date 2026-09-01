@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { AgentRow, AgentSpec, ArtifactView, Catalog, Preview, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec, TryRunResult, TurnLedger } from '../wire.ts'
+import type { AgentRow, AgentSpec, ArtifactView, Catalog, GraphSnapshot, Preview, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec, TryRunResult, TurnLedger } from '../wire.ts'
 import { Console, HASH_PREFIX, go, readRoute, type Api } from './Console.tsx'
 import { CONSOLE_REMOTE, unwrap } from './remote.ts'
 import { installStyles } from './styles.ts'
@@ -39,6 +39,7 @@ export async function apply(ctx: any): Promise<void> {
     fireTask: (id: string, by?: 'manual' | 'retry') => call<{ runId: string }>('fireTask', { id, by }),
     cancelRun: async (runId: string) => { await call('cancelRun', { runId }) },
     taskSnapshot: (id: string, batchId?: string) => call<TaskSnapshot>('taskSnapshot', { id, batchId }),
+    taskGraph: (id: string, batchId?: string) => call<GraphSnapshot>('taskGraph', { id, batchId }),
     taskEvents: (id: string) => call<TaskEvent[]>('taskEvents', { id }),
     taskArtifacts: (id: string, batchId?: string) => call<ArtifactView[]>('taskArtifacts', { id, batchId }),
     artifactContent: (id: string, artifactId: string, batchId?: string) => call<{ artifact: ArtifactView; base64: string }>('artifactContent', { id, artifactId, batchId }),

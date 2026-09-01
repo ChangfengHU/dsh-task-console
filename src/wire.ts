@@ -44,7 +44,7 @@ export const METHODS = [
   ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
   ['startAgentSession', 1], ['sessionTurns', 1],
   ['board', 0], ['tasks', 0], ['createTask', 1], ['setTaskEnabled', 1], ['deleteTask', 1], ['fireTask', 1], ['cancelRun', 1], ['taskEvents', 1],
-  ['taskSnapshot', 1], ['taskArtifacts', 1], ['artifactContent', 1], ['publishArtifact', 1], ['reviewCard', 1], ['unblockCard', 1], ['agentActivity', 1],
+  ['taskSnapshot', 1], ['taskGraph', 1], ['taskArtifacts', 1], ['artifactContent', 1], ['publishArtifact', 1], ['reviewCard', 1], ['unblockCard', 1], ['agentActivity', 1],
 ] as const
 
 export const CONSOLE_INVOCATIONS = Object.freeze(METHODS.map(([method, argc]) => descriptor(method, argc)))
@@ -137,6 +137,7 @@ export interface TryRunResult {
 
 // ── tasks (types live beside the fold; type-only import keeps node out of the client) ──
 export type { Artifact, Batch, BlockKind, Card, CardStatus, Event as TaskEvent, Participant, Run, RunOutcome, RunStatus, TaskSpec, Trigger, TurnLedger, TurnRow, StepRow, ToolRow } from './fold.ts'
+export type { GraphEventRow, GraphFrame, GraphLinkRow, GraphRunRow, GraphSnapshot, GraphTaskRow } from './graph-data.ts'
 import type { Artifact as FoldArtifact } from './fold.ts'
 
 /** Browser-safe artifact row; the immutable host snapshot path never crosses the wire. */

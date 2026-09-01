@@ -14,19 +14,21 @@ export interface WorkerHooks {
   block(reason: string, kind: BlockKind): Promise<void>
   requestReview(summary: string, artifacts: string[], metadata?: Record<string, unknown>, reviewer?: string): Promise<void>
   requestChanges(reason: string): Promise<void>
+  planRound?(summary: string): Promise<void>
+  finalize?(summary: string): Promise<void>
 }
 
 const OUT = { type: 'object', additionalProperties: false, properties: { ok: { type: 'boolean', required: true }, note: { type: 'string' } } } as const
 const render = (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }]
 
-export const WORKER_TOOL_NAMES = ['task_complete', 'task_block', 'task_request_review', 'task_request_changes'] as const
+export const WORKER_TOOL_NAMES = ['task_complete', 'task_block', 'task_request_review', 'task_request_changes', 'task_plan_round', 'task_finalize'] as const
 
 /** Register the four tools on one agent scope. Returns the disposer. */
-export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks): Promise<() => void> {
+export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, options: { planner?: boolean } = {}): Promise<() => void> {
   // The real compiler is host-owned. Unit tests use identity descriptors so they do not need to install the whole dsh host.
   const defineTool: (spec: any) => any = process.env.NODE_ENV === 'test' ? (spec => spec) : (await import('@deepseek-ai/dsh-tools')).defineTool
   const disposers: (() => void)[] = []
-  disposers.push(agentCtx.tools.register(defineTool({
+  if (!options.planner) disposers.push(agentCtx.tools.register(defineTool({
     name: 'task_complete',
     description: '交卷:这张卡做完了。summary 写「产物 / 干了什么 / 下游注意」;生成的文件路径必须放进 artifacts,系统会保存副本供浏览器预览和下载。调用后不要再做别的。',
     parameters: {
@@ -58,7 +60,7 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks): Pr
       return { ok: true, note: '已记录并结束本次运行；解除阻塞后会创建新的 run。' }
     },
   })))
-  disposers.push(agentCtx.tools.register(defineTool({
+  if (!options.planner) disposers.push(agentCtx.tools.register(defineTool({
     name: 'task_request_review',
     description: '提交同卡评审。指定 reviewer 时由该 Agent 创建独立 review run；不指定时进入人工验收。验收通过前不会放行下游。',
     parameters: {
@@ -76,7 +78,7 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks): Pr
       return { ok: true, note: `已提交验收${artifacts.length ? `,登记 ${artifacts.length} 个产物` : ''}。` }
     },
   })))
-  disposers.push(agentCtx.tools.register(defineTool({
+  if (!options.planner) disposers.push(agentCtx.tools.register(defineTool({
     name: 'task_request_changes',
     description: '仅供同卡 reviewer 使用：退回当前实现并结束本次 review run。任务会恢复给原 implementer，评审意见进入下一次 handoff。',
     parameters: { reason: { type: 'string', required: true, description: '明确、可执行的返工原因。' } },
@@ -88,5 +90,33 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks): Pr
       return { ok: true, note: '已退回原 implementer；本次 review run 已结束。' }
     },
   })))
+  if (options.planner) {
+    disposers.push(agentCtx.tools.register(defineTool({
+      name: 'task_plan_round',
+      description: '规划者决定继续或返工时调用。系统会在一个 SQLite 事务里创建真实的 Gate、执行者、评估者和下一位规划者 Task，并写入真实 task_links。',
+      parameters: { summary: { type: 'string', required: true, description: '本轮计划；返工时要包含评估意见和可执行改动。' } },
+      output: { schema: OUT, render },
+      async execute(args: any) {
+        const summary = String(args.summary ?? '').trim()
+        if (!summary) return { ok: false, note: 'summary 不能为空' }
+        if (!hooks.planRound) return { ok: false, note: '当前任务不支持动态回合' }
+        await hooks.planRound(summary)
+        return { ok: true, note: '下一轮 Task 与 task_links 已写入数据库；规划者交卷后 Gate 才会放行。' }
+      },
+    })))
+    disposers.push(agentCtx.tools.register(defineTool({
+      name: 'task_finalize',
+      description: '规划者确认上一轮通过时调用，结束整个动态 DAG；不会虚构下一轮节点。',
+      parameters: { summary: { type: 'string', required: true, description: '批准依据和最终交接。' } },
+      output: { schema: OUT, render },
+      async execute(args: any) {
+        const summary = String(args.summary ?? '').trim()
+        if (!summary) return { ok: false, note: 'summary 不能为空' }
+        if (!hooks.finalize) return { ok: false, note: '当前任务不支持结束决策' }
+        await hooks.finalize(summary)
+        return { ok: true, note: '动态 DAG 已批准结束。' }
+      },
+    })))
+  }
   return () => { for (const d of disposers.splice(0)) { try { d() } catch { /* already gone */ } } }
 }

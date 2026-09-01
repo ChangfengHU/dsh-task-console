@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { cronHuman, nextFire, parseCron } from '../cron.ts'
-import type { AgentRow, ArtifactView, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec } from '../wire.ts'
+import type { AgentRow, ArtifactView, GraphSnapshot, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
 
 export interface TasksApi {
@@ -17,6 +17,7 @@ export interface TasksApi {
   fireTask: (id: string, by?: 'manual' | 'retry') => Promise<{ runId: string }>
   cancelRun: (runId: string) => Promise<void>
   taskSnapshot: (id: string, batchId?: string) => Promise<TaskSnapshot>
+  taskGraph: (id: string, batchId?: string) => Promise<GraphSnapshot>
   taskEvents: (id: string) => Promise<TaskEvent[]>
   taskArtifacts: (id: string, batchId?: string) => Promise<ArtifactView[]>
   artifactContent: (id: string, artifactId: string, batchId?: string) => Promise<{ artifact: ArtifactView; base64: string }>
@@ -167,6 +168,7 @@ const CRON_PRESETS: [string, string][] = [['*/10 * * * *', '每 10 分钟'], ['0
 export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; agents: AgentRow[]; toast: (m: string) => void; workspaces: { id: string; path: string; title: string }[] }) {
   const [brief, setBrief] = useState('')
   const [parts, setParts] = useState<{ agentId: string; brief?: string }[]>([])
+  const [graphMode, setGraphMode] = useState<'dynamic-rounds' | 'static-chain'>('dynamic-rounds')
   const [kind, setKind] = useState<'once' | 'cron'>('once')
   const [expr, setExpr] = useState('*/10 * * * *')
   const [cwd, setCwd] = useState(workspaces[0]?.path ?? '')
@@ -176,7 +178,7 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const usable = agents.filter(a => !a.broken)
-  const ok = brief.trim().length >= 4 && parts.length > 0 && (kind === 'once' || !!parseCron(expr))
+  const ok = brief.trim().length >= 4 && (graphMode === 'dynamic-rounds' ? parts.length === 3 : parts.length > 0) && (kind === 'once' || !!parseCron(expr))
   const toggle = (id: string) => setParts(p => p.some(x => x.agentId === id) ? p.filter(x => x.agentId !== id) : [...p, { agentId: id }])
   const move = (i: number, d: number) => setParts(p => { const n = [...p]; const [x] = n.splice(i, 1); n.splice(i + d, 0, x); return n })
   const noAsk = parts.some(p => { const a = agents.find(x => x.id === p.agentId); return a?.spec && !a.spec.tools.includes('ask-user') })
@@ -184,7 +186,7 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
   const submit = async () => {
     setBusy(true); setErr('')
     try {
-      const { id } = await api.createTask({ brief, participants: parts, trigger: kind === 'once' ? { kind: 'once' } : { kind: 'cron', expr }, cwd, timeoutSec: timeout * 60, onFail, maxTries: tries })
+      const { id } = await api.createTask({ brief, participants: parts, graphMode, trigger: kind === 'once' ? { kind: 'once' } : { kind: 'cron', expr }, cwd, timeoutSec: timeout * 60, onFail, maxTries: tries })
       toast(kind === 'once' ? '已建卡并触发' : '已建卡')
       go(`tasks/${id}`)
     } catch (e) { setErr(String((e as Error).message ?? e)) } finally { setBusy(false) }
@@ -198,6 +200,8 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
         <div className="dtc-step"><h3><span className="no">1</span>写任务书</h3><div className="sub">建卡后不可改。每个参与者都会原文收到它。</div>
           <textarea value={brief} onChange={e => setBrief(e.target.value)} placeholder="要做成什么样,怎么算做完。例:逐台核对机群状态,把异常写成「现象 / 依据 / 建议动作」。" /></div>
         <div className="dtc-step"><h3><span className="no">2</span>选参与者</h3><div className="sub">勾选顺序 = 接力顺序:上一位的最后一条回复作为交接单交给下一位。</div>
+          <div className="dtc-radio" style={{ margin: '10px 0' }}><div className={`dtc-rd ${graphMode === 'dynamic-rounds' ? 'on' : ''}`} onClick={() => setGraphMode('dynamic-rounds')}>动态回合 DAG</div><div className={`dtc-rd ${graphMode === 'static-chain' ? 'on' : ''}`} onClick={() => setGraphMode('static-chain')}>固定接力</div></div>
+          <div className="dtc-muted" style={{ fontSize: 12.5, marginBottom: 10 }}>{graphMode === 'dynamic-rounds' ? '必须按顺序选择 3 位:规划者、执行者、评估者。返工会新增真实 Task、Link 和 Run。' : '兼容模式:建卡时一次创建全部角色。'}</div>
           <div className="dtc-pick">{usable.map(a => { const i = parts.findIndex(p => p.agentId === a.id); return (
             <div key={a.id} className={`dtc-pk ${i >= 0 ? 'on' : ''}`} onClick={() => toggle(a.id)}><span className={`ord ${i >= 0 ? '' : 'off'}`}>{i >= 0 ? i + 1 : '+'}</span><div><div className="pn">{a.name} <span className="dtc-mono dtc-faint" style={{ fontSize: 11 }}>{a.id}</span></div><div className="pd">{a.description}</div></div></div>) })}</div>
           {parts.length ? <div className="dtc-order">{parts.map((p, i) => <div key={p.agentId} className="dtc-oi"><span className="ord">{i + 1}</span><b>{agentName(agents, p.agentId)}</b><input placeholder="它的分工(可选)" value={p.brief ?? ''} onChange={e => setParts(ps => ps.map((x, j) => j === i ? { ...x, brief: e.target.value } : x))} /><button className="dtc-btn sm" disabled={i === 0} onClick={() => move(i, -1)}>↑</button><button className="dtc-btn sm" disabled={i === parts.length - 1} onClick={() => move(i, 1)}>↓</button></div>)}</div> : null}
@@ -220,6 +224,7 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
       <div className="dtc-panel dtc-sticky"><h3>建卡预览</h3><div className="dtc-kv">
         <span className="k">任务书</span><span>{brief.trim() ? brief.trim().slice(0, 60) + (brief.length > 60 ? '…' : '') : <span className="dtc-faint">还没写</span>}</span>
         <span className="k">参与</span><span>{parts.length ? parts.map(p => agentName(agents, p.agentId)).join(' → ') : <span className="dtc-faint">还没选</span>}</span>
+        <span className="k">编排</span><span>{graphMode === 'dynamic-rounds' ? '动态回合 · DB 真相回放' : '固定接力 · 兼容模式'}</span>
         <span className="k">触发</span><span>{kind === 'once' ? '提交即跑' : cronHuman(expr)}</span>
         <span className="k">边界</span><span>{timeout} 分钟/段 · {onFail === 'retry' ? `失败重试 ${tries} 次` : '失败停下'}</span>
         <span className="k">进哪列</span><span>{kind === 'once' ? '进行中' : '待触发'}</span></div>

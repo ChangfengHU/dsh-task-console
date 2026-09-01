@@ -56,6 +56,9 @@ export interface KernelTask {
   max_retries: number | null
   block_kind: KernelBlockKind | null
   block_recurrences: number
+  node_kind: 'agent' | 'gate'
+  round: number | null
+  role: string | null
 }
 
 export interface KernelRun {
@@ -84,6 +87,7 @@ export interface KernelEvent {
   kind: string
   payload: string | null
   created_at: number
+  graph_id: string | null
 }
 
 export interface CreateKernelTask {
@@ -103,6 +107,9 @@ export interface CreateKernelTask {
   providerOverride?: string
   reasoningEffort?: string
   parents?: string[]
+  nodeKind?: 'agent' | 'gate'
+  round?: number
+  role?: string
 }
 
 export interface ClaimResult {
@@ -156,12 +163,17 @@ CREATE TABLE IF NOT EXISTS tasks (
   goal_max_turns INTEGER,
   session_id TEXT,
   block_kind TEXT,
-  block_recurrences INTEGER NOT NULL DEFAULT 0
+  block_recurrences INTEGER NOT NULL DEFAULT 0,
+  node_kind TEXT NOT NULL DEFAULT 'agent',
+  round INTEGER,
+  role TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_links (
   parent_id TEXT NOT NULL,
   child_id TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'dependency',
+  created_at INTEGER,
   PRIMARY KEY (parent_id, child_id)
 );
 
@@ -179,7 +191,8 @@ CREATE TABLE IF NOT EXISTS task_events (
   run_id INTEGER,
   kind TEXT NOT NULL,
   payload TEXT,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  graph_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_runs (
@@ -317,7 +330,22 @@ export class HermesKernel {
     this.db.pragma('busy_timeout = 5000')
     this.prepareLegacyEventTable()
     this.db.exec(CORE_SCHEMA_SQL)
+    this.ensureGraphColumns()
     this.db.prepare(`INSERT INTO dsh_meta(key, value) VALUES ('hermes_compat_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(HERMES_COMPAT_VERSION)
+  }
+
+  private ensureGraphColumns(): void {
+    const ensure = (table: string, column: string, ddl: string) => {
+      const columns = (this.db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(row => row.name)
+      if (!columns.includes(column)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`)
+    }
+    ensure('tasks', 'node_kind', `node_kind TEXT NOT NULL DEFAULT 'agent'`)
+    ensure('tasks', 'round', 'round INTEGER')
+    ensure('tasks', 'role', 'role TEXT')
+    ensure('task_links', 'kind', `kind TEXT NOT NULL DEFAULT 'dependency'`)
+    ensure('task_links', 'created_at', 'created_at INTEGER')
+    ensure('task_events', 'graph_id', 'graph_id TEXT')
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_events_graph_id ON task_events(graph_id, id)')
   }
 
   close(): void { this.db.close() }
@@ -367,8 +395,9 @@ export class HermesKernel {
   private now(): number { return Math.floor(this.clock()) }
 
   private appendEvent(taskId: string, kind: string, payload?: unknown, runId?: number | null): void {
-    this.db.prepare('INSERT INTO task_events(task_id, run_id, kind, payload, created_at) VALUES (?, ?, ?, ?, ?)')
-      .run(taskId, runId ?? null, kind, json(payload), this.now())
+    const graphId = this.taskRow(taskId)?.tenant ?? null
+    this.db.prepare('INSERT INTO task_events(task_id, run_id, kind, payload, created_at, graph_id) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(taskId, runId ?? null, kind, json(payload), this.now(), graphId)
   }
 
   private taskRow(id: string): KernelTask | undefined {
@@ -396,16 +425,17 @@ export class HermesKernel {
       this.db.prepare(`INSERT INTO tasks(
         id, title, body, assignee, status, priority, created_by, created_at,
         workspace_kind, workspace_path, tenant, max_runtime_seconds, max_retries,
-        model_override, provider_override, reasoning_effort
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        model_override, provider_override, reasoning_effort, node_kind, round, role
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         input.id, input.title.trim(), input.body?.trim() || null, input.assignee?.trim() || null,
         status, input.priority ?? 0, input.createdBy?.trim() || null, now,
         input.workspaceKind ?? 'dir', input.workspacePath?.trim() || null, input.tenant?.trim() || null,
         input.maxRuntimeSeconds ?? null, input.maxRetries ?? null,
         input.modelOverride?.trim() || null, input.providerOverride?.trim() || null, input.reasoningEffort?.trim() || null,
+        input.nodeKind ?? 'agent', input.round ?? null, input.role?.trim() || null,
       )
-      for (const parent of parents) this.db.prepare('INSERT INTO task_links(parent_id, child_id) VALUES (?, ?)').run(parent, input.id)
-      this.appendEvent(input.id, 'created', { assignee: input.assignee ?? null, status, parents, tenant: input.tenant ?? null })
+      for (const parent of parents) this.db.prepare('INSERT INTO task_links(parent_id, child_id, kind, created_at) VALUES (?, ?, ?, ?)').run(parent, input.id, 'dependency', now)
+      this.appendEvent(input.id, 'created', { title: input.title.trim(), assignee: input.assignee ?? null, status, parents, tenant: input.tenant ?? null, node_kind: input.nodeKind ?? 'agent', round: input.round ?? null, role: input.role ?? null, created_at: now })
       return this.taskRow(input.id)!
     })
   }
@@ -419,11 +449,29 @@ export class HermesKernel {
         UNION SELECT l.child_id FROM task_links l JOIN descendants d ON l.parent_id = d.id
       ) SELECT 1 FROM descendants WHERE id = ? LIMIT 1`).get(childId, parentId)
       if (cycle) throw new Error('dependency would create a cycle')
-      this.db.prepare('INSERT OR IGNORE INTO task_links(parent_id, child_id) VALUES (?, ?)').run(parentId, childId)
+      this.db.prepare('INSERT OR IGNORE INTO task_links(parent_id, child_id, kind, created_at) VALUES (?, ?, ?, ?)').run(parentId, childId, 'dependency', this.now())
       this.db.prepare(`UPDATE tasks SET status = 'todo' WHERE id = ? AND status = 'ready'
         AND EXISTS (SELECT 1 FROM task_links l JOIN tasks p ON p.id = l.parent_id
           WHERE l.child_id = tasks.id AND p.status NOT IN ('done', 'archived'))`).run(childId)
       this.appendEvent(childId, 'linked', { parent_id: parentId })
+    })
+  }
+
+  /** Gates are durable task rows but never own an agent run. */
+  openReadyGates(): string[] {
+    return this.write(() => {
+      const rows = this.db.prepare(`SELECT id FROM tasks WHERE node_kind = 'gate' AND status = 'todo' ORDER BY created_at, id`).all() as { id: string }[]
+      const opened: string[] = []
+      for (const row of rows) {
+        if (!this.parentsSatisfied(row.id)) continue
+        const now = this.now()
+        const cur = this.db.prepare(`UPDATE tasks SET status = 'done', completed_at = ?, result = 'gate_opened' WHERE id = ? AND status = 'todo'`).run(now, row.id)
+        if (!cur.changes) continue
+        this.appendEvent(row.id, 'gate_opened', { status: 'done' })
+        this.promoteChildren(row.id)
+        opened.push(row.id)
+      }
+      return opened
     })
   }
 

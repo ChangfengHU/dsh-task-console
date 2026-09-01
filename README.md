@@ -2,7 +2,7 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.13):** unrolls upstream rework into explicit rounds. Every durable Planner, Executor, and Reviewer Run appears once in `Plannerₙ → Gateₙ → Executorₙ → Reviewerₙ → Decisionₙ`; a rejected decision points forward to a new Planner node instead of drawing a confusing loop back to an old node. Round lanes, exact-Run inspection, gate-specific evidence, and event playback now show how a multi-round task actually converged while keeping the execution graph acyclic.
+**This release (0.14):** makes dynamic rounds database-first. A new run initially inserts only `Planner₁`; `task_plan_round` then atomically inserts the real `Gateₙ → Executorₙ → Reviewerₙ → Plannerₙ₊₁` tasks and links. Gates are durable Task rows without Agent Runs. The live graph reads `tasks`, `task_links`, and `task_runs` directly, while playback rebuilds the same frame one canonical `task_events.id` at a time—there are no inferred future roles or decorative dependency edges.
 
 The plugin remains local-first: `~/.dsh/task-console/task.db` is the only runtime database, and no Cloudflare account or network database is required. An existing `events.jsonl` or pre-0.11 SQLite event table is imported once and retained for rollback and audit. The D1 experiment remains in the source repository for research only and is excluded from the npm package.
 
@@ -17,11 +17,11 @@ Opens from the sidebar footer button 「任务台」; screens live in the URL ha
 **Task runtime:** the model follows Hermes' durable Kanban vocabulary while keeping DSH's template and Session layers:
 
 - **Task** — a template: brief + ordered participants + trigger (once / cron).
-- **Batch** — one firing of a task; it creates one **Card** per participant, chained by `deps` (a DAG underneath; the wizard makes a chain).
+- **Batch** — one firing of a task. Dynamic mode starts with only the first Planner and materializes later rounds after real decisions; fixed-chain mode remains for compatibility.
 - **Run** — one attempt at a card = one real dsh session on that agent's preset. Retries add runs.
 - **Event** — core lifecycle audit in `task_events`; the separate `dsh_events` projection powers browser replay without becoming a second scheduler.
 
-Each card Session gets four scoped tools: `task_complete`, `task_block`, `task_request_review`, and `task_request_changes`. A run must end with one of them; a run that stops without a terminal tool is nudged once, then fails as `protocol_violation`. An explicit `task_block` closes the current Run; unblocking performs a fresh CAS claim and creates a new Run and Session. In contrast, DSH's native `ask_user_question` pauses and resumes the same live Run.
+Ordinary card Sessions get `task_complete`, `task_block`, `task_request_review`, and `task_request_changes`. Dynamic Planner Sessions instead get `task_plan_round`, `task_finalize`, and `task_block`, so the decision that creates a round is explicit and auditable. A run that stops without a terminal tool is nudged once, then fails as `protocol_violation`. An explicit `task_block` closes the current Run; unblocking performs a fresh CAS claim and creates a new Run and Session. In contrast, DSH's native `ask_user_question` pauses and resumes the same live Run.
 
 `task_request_review` is a real gate. With a `reviewer` preset it hands the same card to that Agent in a separate review Run; without one it creates a human decision gate. `task_request_changes` closes the review Run, restores the original implementer, and creates a fresh rework Run. Successful review releases downstream dependencies. Every claim uses `BEGIN IMMEDIATE` plus a conditional update, is renewed by heartbeat, and can be reclaimed after its lease expires.
 

@@ -2,7 +2,9 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.14):** makes dynamic rounds database-first. A new run initially inserts only `Planner₁`; `task_plan_round` then atomically inserts the real `Gateₙ → Executorₙ → Reviewerₙ → Plannerₙ₊₁` tasks and links. Gates are durable Task rows without Agent Runs. The live graph reads `tasks`, `task_links`, and `task_runs` directly, while playback rebuilds the same frame one canonical `task_events.id` at a time—there are no inferred future roles or decorative dependency edges.
+**This release (0.15):** adds an explicit final-delivery contract. `task_finalize(summary, artifact)` records which registered file is the approved result; byte-identical executor submissions and reviewer snapshots render as one immutable version, with round, producer, review, and final-state evidence. Existing completed tasks receive a clearly labelled compatibility selection instead of fabricated history. The task list and detail page now expose the final result directly, with sandboxed in-panel preview, download, optional public publishing, and event-faithful replay of artifact registration/finalization.
+
+Dynamic rounds remain database-first. A new run initially inserts only `Planner₁`; `task_plan_round` then atomically inserts the real `Gateₙ → Executorₙ → Reviewerₙ → Plannerₙ₊₁` tasks and links. Gates are durable Task rows without Agent Runs. The live graph reads `tasks`, `task_links`, and `task_runs` directly, while playback rebuilds the same frame one canonical `task_events.id` at a time—there are no inferred future roles or decorative dependency edges.
 
 The plugin remains local-first: `~/.dsh/task-console/task.db` is the only runtime database, and no Cloudflare account or network database is required. An existing `events.jsonl` or pre-0.11 SQLite event table is imported once and retained for rollback and audit. The D1 experiment remains in the source repository for research only and is excluded from the npm package.
 

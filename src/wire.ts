@@ -161,4 +161,14 @@ export interface BoardView {
 
 /** Legacy 0.4 projection served by `tasks()` until the 0.5 pages land. */
 export interface LegacyLeg { agentId: string; status: string; tries: number; sessionId?: string; startedAt?: string; endedAt?: string; handoff?: string; question?: string; error?: string }
-export interface LegacyRun { id: string; taskId: string; firedAt: string; by: 'cron' | 'manual' | 'retry'; legs: LegacyLeg[]; settled?: { at: string; outcome: 'done' | 'failed' | 'cancelled' } }
+export interface LegacyRun {
+  id: string
+  taskId: string
+  firedAt: string
+  by: 'cron' | 'manual' | 'retry'
+  legs: LegacyLeg[]
+  settled?: { at: string; outcome: 'done' | 'failed' | 'cancelled' }
+  finalArtifact?: ArtifactView
+  rounds?: number
+  reworks?: number
+}

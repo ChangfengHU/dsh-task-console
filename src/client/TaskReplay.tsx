@@ -9,6 +9,7 @@ import { closeConsole, go } from './Console.tsx'
 import type { TasksApi } from './TasksView.tsx'
 import { TurnLedgerView, useLedger, type LedgerApi } from './TurnLedger.tsx'
 import { DynamicTaskReplay } from './DynamicTaskReplay.tsx'
+import { ArtifactDelivery } from './ArtifactDelivery.tsx'
 
 const fmt = (iso?: string) => iso ? new Date(iso).toLocaleTimeString('zh-CN', { hour12: false }) : ''
 const dur = (a?: string, b?: string) => { if (!a) return ''; const s = Math.max(0, Math.round(((b ? +new Date(b) : Date.now()) - +new Date(a)) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` }
@@ -291,15 +292,15 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
         </aside>
       </section>
 
-      <details className="dtc-cpanel dtc-timeline" open>
+      {batchFull && bst && bst !== 'run' && bst !== 'park' ? <ResultPanel api={api} taskId={id} batchId={batchFull.id} status={bst} summary={lastCard?.summary} metadata={lastRun?.metadata} artifacts={artifacts} toast={toast} refresh={refreshArtifacts} /> : null}
+
+      <details className="dtc-cpanel dtc-timeline">
         <summary><span><b>事件流与时间回放</b><small>点击事件会把 DAG 回放到对应时刻</small></span><em>{batchEvents.length} EVENTS</em></summary>
         <div className="dtc-cevent-tools">{FILTERS.map(filter => <button key={filter.id} className={eventFilter === filter.id ? 'on' : ''} onClick={() => setEventFilter(filter.id)}>{filter.label}</button>)}</div>
         <div className="dtc-activity-list">{[...filteredEvents].reverse().map(({ e, index }) => { const actor = ACTOR[actorOf(e, full)]; const group = eventGroup(e); return <button key={index} className={`dtc-activity-row g-${group} ${index >= upto ? 'off' : ''} ${index === upto - 1 ? 'cur' : ''}`} onClick={() => { setPlaying(false); setCursor(index + 1) }}>
           <span className="dot">{group === 'process' ? '›' : group === 'result' ? '✓' : '•'}</span><span className="copy"><b>{e.t}</b><span>{describe(e, full, agentName)}</span><small>{fmt(e.at)} · event #{index + 1}</small></span><span className={`dtc-pill ${actor.cls}`}>{actor.label}</span>
         </button>})}</div>
       </details>
-
-      {batchFull && bst && bst !== 'run' && bst !== 'park' ? <ResultPanel api={api} taskId={id} batchId={batchFull.id} status={bst} summary={lastCard?.summary} metadata={lastRun?.metadata} artifacts={artifacts} toast={toast} refresh={refreshArtifacts} /> : null}
 
       <details className="dtc-cpanel dtc-cartoon-details"><summary>任务书与运行边界</summary><div className="dtc-hand">{task.brief}</div><div className="dtc-kv"><span className="k">工作区</span><span className="dtc-mono">{task.cwd}</span><span className="k">触发</span><span>{task.trigger.kind === 'cron' ? cronHuman(task.trigger.expr) : '单次'}</span><span className="k">超时</span><span>{Math.round(task.timeoutSec / 60)} 分钟 / 角色</span><span className="k">失败后</span><span>{task.onFail === 'retry' ? `自动重试，最多 ${task.maxTries} 次` : '停下'}</span></div></details>
     </div>
@@ -311,7 +312,7 @@ function ResultPanel({ api, taskId, batchId, status, summary, metadata, artifact
   return <section className="dtc-result">
     <div className="dtc-result-head"><div><span className="eyebrow">RUN RESULT</span><h2>{status === 'done' ? '任务已完成' : status === 'bad' ? '任务未完成' : status === 'park' ? '正在等待输入' : status === 'review' ? '正在等待评审' : '任务正在运行'}</h2></div>{status ? <span className={`dtc-pill ${BS[status].cls}`}>{BS[status].label}</span> : null}</div>
     <div className="dtc-result-grid"><div><h3>最终交接</h3>{links.length ? <div className="dtc-public-results"><b>公网结果</b>{links.map((url, index) => <a key={url} href={url} target="_blank" rel="noreferrer">{links.length > 1 ? `打开结果 ${index + 1}` : '打开公网结果'} ↗</a>)}</div> : null}<div className="dtc-result-copy">{summary || <span className="dtc-faint">最后一个角色交卷后，结果会显示在这里。</span>}</div>{metadata ? <pre className="dtc-meta">{JSON.stringify(metadata, null, 2)}</pre> : null}</div>
-      <div><h3>交付产物 <span className="dtc-faint">{artifacts.length}</span></h3><ArtifactList api={api} taskId={taskId} batchId={batchId} artifacts={artifacts} toast={toast} refresh={refresh} empty="还没有登记产物。新任务会把 task_complete 的 artifacts 保存成可访问副本。" /></div>
+      <div><ArtifactDelivery api={api} taskId={taskId} batchId={batchId} artifacts={artifacts} summary={summary} toast={toast} refresh={refresh} empty="还没有登记产物。新任务会把 task_complete 的 artifacts 保存成可访问副本。" /></div>
     </div>
   </section>
 }

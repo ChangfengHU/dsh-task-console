@@ -148,6 +148,7 @@ function TaskGroupCard({ task, latest, history, state, agents, api, reload, toas
       {state === 'park' && current?.question ? <div className="dtc-tasknotice ask"><b>{agentName(agents, current.agentId)} 正在等你</b><span>{current.question}</span></div> : null}
       {state === 'review' && current ? <div className="dtc-tasknotice review"><b>{agentName(agents, current.agentId)} 已提交</b><span>验收通过后才会启动下游任务。</span></div> : null}
       {state === 'bad' && current ? <div className="dtc-tasknotice bad"><b>{agentName(agents, current.agentId)} 执行失败</b><span>{current.error || LEG[current.status] || current.status}</span></div> : null}
+      {state === 'done' && latest?.finalArtifact ? <div className="dtc-tasknotice result"><div><b>最终产物 · {latest.finalArtifact.name}</b><span>{latest.reworks ? `经历 ${latest.reworks} 次返工 · ` : ''}SHA256 {latest.finalArtifact.sha256.slice(0, 10)}…</span></div><button className="dtc-btn sm pri" onClick={event => { event.stopPropagation(); go(`tasks/${task.id}/runs/${latest.id}`) }}>查看最终结果</button></div> : null}
       <div className="dtc-taskgroup-foot"><div>
         {task.trigger.kind === 'cron' ? <><span className="dtc-mono">{cronHuman(task.trigger.expr)}</span><span>{task.enabled && task.nextFire ? `下次 ${fmt(task.nextFire)}` : '时间表已停用'}</span></> : latest ? <><span>{ago(latest.firedAt)} · {BY[latest.by]}</span><span>{history} 次运行</span></> : <span>单次任务</span>}
         </div><div className="acts">

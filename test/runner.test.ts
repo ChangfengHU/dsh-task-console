@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { TaskRunner } from '../src/runner.ts'
 import { EventStore, type TaskSpec } from '../src/tasks.ts'
+import { groupArtifacts } from '../src/artifact-delivery.ts'
 
 /** A fake dsh host: presets resolve, agents.create hands back a controllable session. */
 function fakeHost(presetDir: string) {
@@ -50,7 +51,8 @@ async function setup(taskPatch: Partial<TaskSpec> = {}) {
 const tick = () => new Promise(r => setTimeout(r, 80))
 
 test('runner: dynamic rounds materialize DB rows only after planner decisions and gates never own runs', async () => {
-  const { host, store, runner } = await setup({ graphMode: 'dynamic-rounds' })
+  const { host, store, runner, root } = await setup({ graphMode: 'dynamic-rounds' })
+  await writeFile(join(root, 'result.html'), '<h1>version 1</h1>')
   const batch = await runner.fire('T', 'manual')
   const nextSession = () => [...host.sessions.keys()].at(-1)!
   let session = nextSession(); host.consumeFirst(session)
@@ -66,20 +68,36 @@ test('runner: dynamic rounds materialize DB rows only after planner decisions an
   assert.equal(graph.live.tasks.find(row => row.role === 'gate')!.status, 'done')
   assert.equal(graph.live.runs.filter(row => row.task_id.includes('#g')).length, 0)
 
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '执行一' }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '评估：返工' }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '执行一', artifacts: ['result.html'] }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '评估：返工', artifacts: ['result.html'] }); host.endTurn(session); await tick()
   session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_plan_round', { summary: '第二轮返工计划' })
   graph = store.graphSnapshot('T', batch.id)
   assert.equal(graph.live.tasks.length, 9); assert.equal(graph.live.links.length, 8)
   host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '执行二' }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '评估：通过' }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_finalize', { summary: '批准结束' }); host.endTurn(session); await tick()
+  await writeFile(join(root, 'result.html'), '<h1>version 2</h1>')
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '执行二', artifacts: ['result.html'] }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '评估：通过', artifacts: ['result.html'] }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_finalize', { summary: '批准结束', artifact: 'result.html' })
+  assert.equal(store.all().filter(event => event.t === 'artifact/finalized').length, 0, 'final result is committed only when the planner run completes')
+  host.endTurn(session); await tick()
   graph = store.graphSnapshot('T', batch.id)
   assert.equal(graph.live.tasks.length, 9); assert.equal(graph.live.links.length, 8); assert.equal(graph.live.runs.length, 7)
   assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')
   assert.equal(graph.events.filter(event => event.kind === 'created').length, 9)
   assert.equal(graph.events.filter(event => event.kind === 'linked').length, 8)
+  assert.equal(graph.events.filter(event => event.kind === 'artifact_registered').length, 4)
+  assert.equal(graph.events.filter(event => event.kind === 'artifact_finalized').length, 1)
+  assert.ok(graph.events.findIndex(event => event.kind === 'artifact_finalized') > graph.events.findLastIndex(event => event.kind === 'completed'))
+  const artifacts = [...store.s.artifacts.values()]
+  assert.equal(artifacts.length, 4)
+  const final = artifacts.find(artifact => artifact.final)!
+  assert.equal(store.s.cards.get(final.cardId)!.role, 'executor', 'reviewer snapshot must not replace the executor delivery')
+  assert.equal(store.s.cards.get(final.cardId)!.round, 2)
+  const planner = [...store.s.runs.values()].filter(run => store.s.cards.get(run.cardId)?.role === 'planner').at(-1)!
+  assert.equal(planner.metadata?.finalArtifactId, final.id)
+  const groups = groupArtifacts(artifacts, [...store.s.cards.values()].map(card => ({ cardId: card.id, role: card.role, round: card.round, name: card.agentId })))
+  assert.equal(groups.length, 2, 'executor submission and byte-identical reviewer verification are one version')
+  assert.equal(groups.find(group => group.final)?.entries.length, 2)
   runner.stop()
 })
 

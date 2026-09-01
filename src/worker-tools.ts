@@ -15,7 +15,7 @@ export interface WorkerHooks {
   requestReview(summary: string, artifacts: string[], metadata?: Record<string, unknown>, reviewer?: string): Promise<void>
   requestChanges(reason: string): Promise<void>
   planRound?(summary: string): Promise<void>
-  finalize?(summary: string): Promise<void>
+  finalize?(summary: string, artifact?: string): Promise<void>
 }
 
 const OUT = { type: 'object', additionalProperties: false, properties: { ok: { type: 'boolean', required: true }, note: { type: 'string' } } } as const
@@ -106,15 +106,19 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, opt
     })))
     disposers.push(agentCtx.tools.register(defineTool({
       name: 'task_finalize',
-      description: '规划者确认上一轮通过时调用，结束整个动态 DAG；不会虚构下一轮节点。',
-      parameters: { summary: { type: 'string', required: true, description: '批准依据和最终交接。' } },
+      description: '规划者确认上一轮通过时调用，结束整个动态 DAG；有文件交付时用 artifact 明确指定最终产物路径。',
+      parameters: {
+        summary: { type: 'string', required: true, description: '批准依据和最终交接。' },
+        artifact: { type: 'string', description: '最终交付文件路径；必须是本次运行已登记的产物。没有文件交付时省略。' },
+      },
       output: { schema: OUT, render },
       async execute(args: any) {
         const summary = String(args.summary ?? '').trim()
         if (!summary) return { ok: false, note: 'summary 不能为空' }
         if (!hooks.finalize) return { ok: false, note: '当前任务不支持结束决策' }
-        await hooks.finalize(summary)
-        return { ok: true, note: '动态 DAG 已批准结束。' }
+        const artifact = String(args.artifact ?? '').trim() || undefined
+        await hooks.finalize(summary, artifact)
+        return { ok: true, note: artifact ? '动态 DAG 已批准结束，并确认最终产物。' : '动态 DAG 已批准结束。' }
       },
     })))
   }

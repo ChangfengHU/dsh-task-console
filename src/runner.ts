@@ -12,7 +12,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
-import { dirname } from 'node:path'
+import { realpath } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
 import { captureArtifacts } from './artifacts.ts'
 import { readSpec } from './presets.ts'
 import { EventStore, NUDGE, cardMessage, cronMatches, parseCron, type Batch, type BlockKind, type Card, type TaskSpec } from './tasks.ts'
@@ -280,9 +281,22 @@ export class TaskRunner {
             await this.store.expandRound(task, batch, card, summary)
             flight.terminal = { kind: 'completed', summary, metadata: { decision: card.round === 1 ? 'planned' : 'rework', round: card.round } }
           },
-          finalize: async (summary) => {
+          finalize: async (summary, artifactPath) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
-            flight.terminal = { kind: 'completed', summary, metadata: { decision: 'approved', round: card.round } }
+            let finalArtifactId: string | undefined
+            if (artifactPath) {
+              let originalPath: string
+              try { originalPath = await realpath(resolve(task.cwd, artifactPath)) } catch { throw new Error(`最终产物不存在:${artifactPath}`) }
+              const candidates = [...this.store.s.artifacts.values()].filter(row => row.batchId === batch.id && row.originalPath === originalPath)
+              const selected = candidates.sort((a, b) => {
+                const ac = this.store.s.cards.get(a.cardId); const bc = this.store.s.cards.get(b.cardId)
+                const executor = Number(ac?.role === 'executor') - Number(bc?.role === 'executor')
+                return executor || (ac?.round ?? 0) - (bc?.round ?? 0) || a.createdAt.localeCompare(b.createdAt)
+              }).at(-1)
+              if (!selected) throw new Error(`最终产物尚未通过 task_complete 登记:${artifactPath}`)
+              finalArtifactId = selected.id
+            }
+            flight.terminal = { kind: 'completed', summary, metadata: { decision: 'approved', round: card.round, ...(finalArtifactId ? { finalArtifactId } : {}) } }
           },
         }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner' })
       } catch (error) { console.warn('[task-console] worker tools not registered:', error) }
@@ -426,6 +440,13 @@ export class TaskRunner {
     if (!changed) {
       console.warn(`[task-console] stale terminal transition refused: ${f.cardId} core run ${f.coreRunId}`)
       await this.tick(); return
+    }
+    if (t === 'run/completed' && metadata?.decision === 'approved' && typeof metadata.finalArtifactId === 'string') {
+      const artifact = this.store.s.artifacts.get(metadata.finalArtifactId)
+      const card = this.store.s.cards.get(f.cardId)
+      if (artifact && card?.role === 'planner' && artifact.batchId === card.batchId) {
+        await this.append({ t: 'artifact/finalized', taskId: f.taskId, batchId: artifact.batchId, artifactId: artifact.id, artifactCardId: artifact.cardId, cardId: f.cardId, runId: f.runId, sha256: artifact.sha256 })
+      }
     }
     if (giveUpNow) {
       const c = this.store.s.cards.get(f.cardId)

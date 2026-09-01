@@ -130,6 +130,10 @@ export interface Artifact {
   storagePath: string
   legacy?: boolean
   publicUrl?: string
+  /** Explicitly selected by the final planner. Compatibility rows are marked separately in the read projection. */
+  final?: boolean
+  finalSource?: 'explicit' | 'compatibility'
+  finalizedAt?: string
 }
 
 export type Event =
@@ -154,6 +158,7 @@ export type Event =
   | { t: 'card/gave_up'; at: string; taskId: string; cardId: string; error: string }
   | { t: 'card/cancelled'; at: string; taskId: string; cardId: string }
   | { t: 'artifact/registered'; at: string; taskId: string; artifact: Artifact }
+  | { t: 'artifact/finalized'; at: string; taskId: string; batchId: string; artifactId: string; artifactCardId: string; cardId: string; runId: string; sha256: string }
   | { t: 'artifact/published'; at: string; taskId: string; artifactId: string; publicUrl: string }
   | { t: 'batch/settled'; at: string; taskId: string; batchId: string; outcome: 'done' | 'failed' | 'cancelled' }
 
@@ -277,6 +282,11 @@ export function fold(events: Event[]): State {
       case 'card/gave_up': { const c = s.cards.get(e.cardId); if (c) { c.status = 'failed'; c.error = e.error; c.endedAt = e.at } break }
       case 'card/cancelled': { const c = s.cards.get(e.cardId); if (c && c.status !== 'done') { c.status = 'cancelled'; c.endedAt = e.at } break }
       case 'artifact/registered': s.artifacts.set(e.artifact.id, e.artifact); break
+      case 'artifact/finalized': {
+        for (const a of s.artifacts.values()) if (a.batchId === e.batchId) { a.final = a.id === e.artifactId; if (!a.final) { a.finalSource = undefined; a.finalizedAt = undefined } }
+        const a = s.artifacts.get(e.artifactId); if (a) { a.final = true; a.finalSource = 'explicit'; a.finalizedAt = e.at }
+        break
+      }
       case 'artifact/published': { const a = s.artifacts.get(e.artifactId); if (a) a.publicUrl = e.publicUrl; break }
       case 'batch/settled': { const b = s.batches.get(e.batchId); if (b) b.settled = { at: e.at, outcome: e.outcome }; break }
     }
@@ -323,7 +333,7 @@ export function actorOf(e: Event, s?: State): 'dispatcher' | 'agent' | 'person' 
       return run?.profileId && card && run.profileId !== card.agentId ? 'agent' : 'person'
     }
     case 'batch/fired': return e.batch.by === 'cron' ? 'clock' : 'person'
-    case 'run/blocked': case 'run/completed': case 'run/review_requested': case 'artifact/registered': return 'agent'
+    case 'run/blocked': case 'run/completed': case 'run/review_requested': case 'artifact/registered': case 'artifact/finalized': return 'agent'
     case 'run/resumed': return 'person'
     case 'run/cancelled': return 'person'
     default: return 'dispatcher'
@@ -365,6 +375,7 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
     case 'card/gave_up': return `${card(e.cardId)} 连续失败,放弃:${e.error}`
     case 'card/cancelled': return `${card(e.cardId)} 未开始,取消`
     case 'artifact/registered': return `${card(e.artifact.cardId)} 登记产物:${e.artifact.name}`
+    case 'artifact/finalized': return `${card(e.cardId)} 确认最终产物:${s.artifacts.get(e.artifactId)?.name ?? e.artifactId}`
     case 'artifact/published': return `产物已发布:${s.artifacts.get(e.artifactId)?.name ?? e.artifactId}`
     case 'batch/settled': return ({ done: '这次运行完成', failed: '这次运行失败', cancelled: '这次运行取消' })[e.outcome]
   }

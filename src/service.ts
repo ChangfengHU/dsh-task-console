@@ -16,13 +16,14 @@ import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { discoverLegacyArtifacts, publishHtml, readArtifact } from './artifacts.ts'
+import { withFinalArtifact } from './artifact-delivery.ts'
 import {
   NATIVE_TOOLS, mask, readSpec, removePreset, renderComposition, scanSkills, userPresetRoot, validateSpec, writePreset,
   type HostMcp,
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
 import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask } from './tasks.ts'
-import type { Artifact } from './tasks.ts'
+import type { Artifact, Card } from './tasks.ts'
 import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
@@ -314,7 +315,16 @@ export class TaskConsoleService extends TypertRemoteService {
         return { agentId: c!.kind === 'gate' ? '系统闸门' : c!.agentId, status, tries: c!.runIds.length, sessionId: r?.sessionId || undefined, startedAt: c!.startedAt, endedAt: c!.endedAt, handoff: c!.summary, question: r?.status === 'blocked' ? r.question : undefined, error: c!.error }
       })
       const bs = batchStatus(st, b)
-      return { id: b.id, taskId: b.taskId, firedAt: b.firedAt, by: b.by, legs, ...(b.settled ? { settled: b.settled } : bs === 'done' ? { settled: { at: b.firedAt, outcome: 'done' } } : {}) }
+      const cards = b.cardIds.map(id => st.cards.get(id)).filter(Boolean)
+      const artifacts = withFinalArtifact([...st.artifacts.values()].filter(a => a.batchId === b.id), cards as Card[], b)
+      const final = artifacts.find(a => a.final)
+      const rounds = cards.filter(card => card?.kind === 'gate').length
+      return {
+        id: b.id, taskId: b.taskId, firedAt: b.firedAt, by: b.by, legs,
+        ...(b.settled ? { settled: b.settled } : bs === 'done' ? { settled: { at: b.firedAt, outcome: 'done' } } : {}),
+        ...(final ? { finalArtifact: this.artifactView(final) } : {}),
+        ...(rounds ? { rounds, reworks: Math.max(0, rounds - 1) } : {}),
+      }
     })
     return JSON.stringify({ tasks: [...st.tasks.values()].map(t => this.withNext(t)), runs })
   }
@@ -394,7 +404,17 @@ export class TaskConsoleService extends TypertRemoteService {
     const registered = [...this.runner.store.s.artifacts.values()].filter(a => a.taskId === taskId && (!batchId || a.batchId === batchId))
     const runs = [...this.runner.store.s.runs.values()].filter(r => r.taskId === taskId && (!batchId || r.batchId === batchId))
     const legacy = await discoverLegacyArtifacts(task, runs, new Set(registered.map(a => a.originalPath)))
-    return [...registered, ...legacy].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    const rows = [...registered, ...legacy].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    const batches = batchId
+      ? [this.runner.store.s.batches.get(batchId)].filter(Boolean)
+      : [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === taskId)
+    const projected = new Map(rows.map(row => [row.id, row]))
+    for (const batch of batches) {
+      const selected = rows.filter(row => row.batchId === batch!.id)
+      const cards = batch!.cardIds.map(id => this.runner.store.s.cards.get(id)).filter(Boolean)
+      for (const artifact of withFinalArtifact(selected, cards as Card[], batch)) projected.set(artifact.id, artifact)
+    }
+    return [...projected.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   }
 
   async taskArtifacts(payload: string): Promise<string> {

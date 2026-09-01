@@ -50,6 +50,7 @@ export class EventStore {
     this.events = rows.flatMap(row => { try { return [JSON.parse(row.payload_json) as Event] } catch { return [] } })
     this.state = fold(this.events)
     this.backfillCoreProjection()
+    this.backfillArtifactProjection()
   }
 
   /** One-time, read-only import. The JSONL file remains untouched for rollback and audit. */
@@ -126,6 +127,29 @@ export class EventStore {
     })
   }
 
+  /** Older plugin builds stored artifacts only in dsh_events/task_attachments. Add replay evidence once. */
+  private backfillArtifactProjection(): void {
+    const marker = this.kernel.db.prepare(`SELECT value FROM dsh_meta WHERE key = 'dsh_artifact_projection_v1'`).get()
+    if (marker) return
+    this.kernel.write(() => {
+      const db = this.kernel.db
+      const insert = db.prepare(`INSERT INTO task_events(task_id, run_id, kind, payload, created_at, graph_id)
+        SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM tasks WHERE id = ?)`)
+      for (const event of this.events) {
+        if (event.t === 'artifact/registered') {
+          const a = event.artifact
+          insert.run(a.cardId, this.coreRunId(a.runId) ?? null, 'artifact_registered', JSON.stringify({ artifact_id: a.id, name: a.name, sha256: a.sha256, size: a.size }), toEpoch(event.at), a.batchId, a.cardId)
+        } else if (event.t === 'artifact/finalized') {
+          insert.run(event.cardId, this.coreRunId(event.runId) ?? null, 'artifact_finalized', JSON.stringify({ artifact_id: event.artifactId, artifact_card_id: event.artifactCardId, sha256: event.sha256 }), toEpoch(event.at), event.batchId, event.cardId)
+        } else if (event.t === 'artifact/published') {
+          const a = this.state.artifacts.get(event.artifactId)
+          if (a) insert.run(a.cardId, this.coreRunId(a.runId) ?? null, 'artifact_published', JSON.stringify({ artifact_id: a.id, public_url: event.publicUrl }), toEpoch(event.at), a.batchId, a.cardId)
+        }
+      }
+      db.prepare(`INSERT INTO dsh_meta(key, value) VALUES ('dsh_artifact_projection_v1', ?)`).run(new Date().toISOString())
+    })
+  }
+
   private applyExtension(e: Event): void {
     const db = this.kernel.db
     switch (e.t) {
@@ -157,9 +181,22 @@ export class EventStore {
         db.prepare('UPDATE dsh_run_bindings SET message_id = ? WHERE external_run_id = ?').run(e.messageId, e.runId); break
       case 'run/nudged':
         db.prepare('UPDATE dsh_run_bindings SET nudges = nudges + 1 WHERE external_run_id = ?').run(e.runId); break
-      case 'artifact/registered':
+      case 'artifact/registered': {
         db.prepare(`INSERT INTO task_attachments(task_id, filename, stored_path, content_type, size, uploaded_by, created_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`).run(e.artifact.cardId, e.artifact.name, e.artifact.storagePath, e.artifact.mime, e.artifact.size, e.artifact.sessionId, toEpoch(e.at)); break
+          VALUES (?, ?, ?, ?, ?, ?, ?)`).run(e.artifact.cardId, e.artifact.name, e.artifact.storagePath, e.artifact.mime, e.artifact.size, e.artifact.sessionId, toEpoch(e.at))
+        db.prepare(`INSERT INTO task_events(task_id, run_id, kind, payload, created_at, graph_id) VALUES (?, ?, 'artifact_registered', ?, ?, ?)`)
+          .run(e.artifact.cardId, this.coreRunId(e.artifact.runId) ?? null, JSON.stringify({ artifact_id: e.artifact.id, name: e.artifact.name, sha256: e.artifact.sha256, size: e.artifact.size }), toEpoch(e.at), e.artifact.batchId)
+        break
+      }
+      case 'artifact/finalized':
+        db.prepare(`INSERT INTO task_events(task_id, run_id, kind, payload, created_at, graph_id) VALUES (?, ?, 'artifact_finalized', ?, ?, ?)`)
+          .run(e.cardId, this.coreRunId(e.runId) ?? null, JSON.stringify({ artifact_id: e.artifactId, artifact_card_id: e.artifactCardId, sha256: e.sha256 }), toEpoch(e.at), e.batchId); break
+      case 'artifact/published': {
+        const a = this.state.artifacts.get(e.artifactId)
+        if (a) db.prepare(`INSERT INTO task_events(task_id, run_id, kind, payload, created_at, graph_id) VALUES (?, ?, 'artifact_published', ?, ?, ?)`)
+          .run(a.cardId, this.coreRunId(a.runId) ?? null, JSON.stringify({ artifact_id: a.id, public_url: e.publicUrl }), toEpoch(e.at), a.batchId)
+        break
+      }
       default: break
     }
   }
@@ -346,7 +383,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
     lines.push('', '[DYNAMIC DAG CONTRACT]',
       card.round === 1
         ? '你是初始规划者。完成方案后必须调用 task_plan_round(summary)；系统随后才会创建真实 Gate、执行者、评估者和下一位规划者记录。'
-        : '你是回合决策者。结合上游评估：需要返工就调用 task_plan_round(summary) 创建新一轮真实记录；已经通过就调用 task_finalize(summary)。',
+        : '你是回合决策者。结合上游评估：需要返工就调用 task_plan_round(summary) 创建新一轮真实记录；已经通过就调用 task_finalize(summary, artifact)。有文件交付时 artifact 必须指向最终文件，没有文件时省略。',
       '不要调用 task_complete；本会话只提供 task_plan_round、task_finalize 和 task_block。')
     return lines.join('\n')
   }

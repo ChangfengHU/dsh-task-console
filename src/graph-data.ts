@@ -152,6 +152,9 @@ export function graphEventLabel(e: GraphEventRow): string {
     case 'promoted': return `UPDATE tasks · ${role} 进入 ready`
     case 'gate_opened': return `UPDATE tasks · Gate 放行`
     case 'completed': return `UPDATE tasks/task_runs · ${role} 完成`
+    case 'artifact_registered': return `INSERT task_attachments · ${String(e.payload.name ?? '产物')}`
+    case 'artifact_finalized': return `FINAL artifact · ${String(e.payload.artifact_id ?? '')}`
+    case 'artifact_published': return `PUBLISH artifact · 公网链接已生成`
     case 'blocked': return `UPDATE tasks/task_runs · ${role} 阻塞`
     default: return `${e.kind} · ${role}`
   }

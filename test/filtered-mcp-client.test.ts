@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { assertToolArguments, publicToolName } from '../src/filtered-mcp-client.ts'
+import { assertToolArguments, instanceServerName, publicToolName } from '../src/filtered-mcp-client.ts'
 
 test('filtered MCP public names match the DSH naming contract', () => {
   assert.equal(publicToolName('vault-agent', 'get_config'), 'mcp__vault-agent__get_config')
   const lossy = publicToolName('vault-agent', 'a tool with a very long name '.repeat(4))
   assert.match(lossy, /^[A-Za-z0-9_-]{1,64}$/)
   assert.equal(lossy.length, 64)
+})
+
+test('each Agent gets a valid unique internal MCP namespace', () => {
+  const first = instanceServerName('vyibc-fleet-fleet-installer', 'agent-fleet-installer-one')
+  const second = instanceServerName('vyibc-fleet-fleet-installer', 'agent-fleet-installer-two')
+  assert.match(first, /^[A-Za-z0-9_-]{1,32}$/)
+  assert.equal(first.length, 32)
+  assert.notEqual(first, second)
+  assert.equal(instanceServerName('vyibc-fleet-fleet-installer', 'agent-fleet-installer-one'), first)
 })
 
 test('MCP argument policy admits scoped keys and rejects unrelated keys', () => {

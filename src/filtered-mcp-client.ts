@@ -30,6 +30,12 @@ export function publicToolName(serverName: string, rawName: string): string {
   return `${normalized.slice(0, 51)}_${hash}`
 }
 
+/** Give every live Agent its own MCP namespace without changing model-facing tool names. */
+export function instanceServerName(serverName: string, agentId: string): string {
+  const hash = createHash('sha256').update(`${serverName}\0${agentId}`).digest('hex').slice(0, 12)
+  return `${serverName.slice(0, 19)}-${hash}`
+}
+
 export function assertToolArguments(rawName: string, rule: ToolRule | undefined, candidate: unknown): void {
   if (!rule) return
   const args = candidate && typeof candidate === 'object' && !Array.isArray(candidate) ? candidate as Record<string, unknown> : {}
@@ -54,18 +60,22 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
   const allowedTools = [...new Set(rawAllowed.map(tool => tool.trim()))]
   if (!allowedTools.length) throw new Error('filtered-mcp-client: allowedTools must not be empty')
-  const allowedPublic = new Set(allowedTools.map(tool => publicToolName(mcp.serverName, tool)))
-  const rawByPublic = new Map(allowedTools.map(tool => [publicToolName(mcp.serverName, tool), tool]))
+  const agentId = String((ctx as Context & { agent?: { id?: string } }).agent?.id ?? '')
+  if (!agentId) throw new Error('filtered-mcp-client: an Agent-scoped context is required')
+  const stableServerName = mcp.serverName
+  const liveServerName = instanceServerName(stableServerName, agentId)
+  const rawByInternal = new Map(allowedTools.map(tool => [publicToolName(liveServerName, tool), tool]))
 
   const tools = new Proxy(ctx.tools, {
     get(target, property) {
       if (property === 'register') {
         return (definition: { name: string; execute: (args: unknown, exec: unknown) => unknown }) => {
-          if (!allowedPublic.has(definition.name)) return () => undefined
-          const rawName = rawByPublic.get(definition.name)!
+          const rawName = rawByInternal.get(definition.name)
+          if (!rawName) return () => undefined
           const execute = definition.execute
           return target.register({
             ...definition,
+            name: publicToolName(stableServerName, rawName),
             execute(args: unknown, exec: unknown) {
               assertToolArguments(rawName, toolRules[rawName], args)
               return execute(args, exec)
@@ -84,5 +94,5 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
       return typeof value === 'function' ? value.bind(target) : value
     },
   })
-  await applyMcpClient(facade as Context, mcp as McpConfig)
+  await applyMcpClient(facade as Context, { ...mcp, serverName: liveServerName } as McpConfig)
 }

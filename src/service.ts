@@ -24,7 +24,7 @@ import {
 import { TaskRunner } from './runner.ts'
 import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask } from './tasks.ts'
 import type { Artifact, Card } from './tasks.ts'
-import type { ArtifactView, BoardView } from './wire.ts'
+import type { ArtifactView, BoardView, TaskSessionRow } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
 
@@ -39,14 +39,34 @@ const KNOWN_MODELS = [
 ]
 
 export class TaskConsoleService extends TypertRemoteService {
-  static inject = ['loader', 'tools', 'agents']
+  static inject = ['loader', 'tools', 'agents', 'workspaceRegistry']
 
   readonly runner: TaskRunner
 
   constructor(ctx: Context) {
     super(ctx, NAMESPACE)
-    this.runner = new TaskRunner(ctx, new EventStore())
-    void this.runner.start().catch(err => console.error('[task-console] runner failed to start:', err))
+    this.runner = new TaskRunner(ctx, new EventStore(), { onBatchSettled: batch => this.archiveBatchSessions(batch.id) })
+    void this.runner.start()
+      .then(() => this.archiveSettledTaskSessions())
+      .catch(err => console.error('[task-console] runner failed to start:', err))
+  }
+
+  /** Task sessions leave the normal sidebar when their batch settles; logs remain owned by DSH. */
+  private async archiveBatchSessions(batchId: string): Promise<void> {
+    const registry = (this.ctx as any).get('workspaceRegistry')
+    if (!registry?.archiveSession) return
+    const sessionIds = [...new Set([...this.runner.store.s.runs.values()]
+      .filter(run => run.batchId === batchId && run.sessionId)
+      .map(run => run.sessionId))]
+    for (const sessionId of sessionIds) {
+      try { await registry.archiveSession(sessionId) }
+      catch (error) { console.warn(`[task-console] could not archive task session ${sessionId}:`, error) }
+    }
+  }
+
+  /** Reconcile batches completed by older plugin versions on startup. */
+  private async archiveSettledTaskSessions(): Promise<void> {
+    for (const batch of this.runner.store.s.batches.values()) if (batch.settled) await this.archiveBatchSessions(batch.id)
   }
 
   // ── facts ──────────────────────────────────────────────────────────────
@@ -282,6 +302,34 @@ export class TaskConsoleService extends TypertRemoteService {
       events = live?.events ?? []; agentPreset = live?.header?.agentPreset
     }
     return JSON.stringify(foldTurns(sessionId, events, agentPreset))
+  }
+
+  /** Task-to-session relationship projection for the Sessions module. */
+  async taskSessions(): Promise<string> {
+    const state = this.runner.store.s
+    const archived = new Set<string>(((this.ctx as any).get('workspaceRegistry')?.archivedSessionIds ?? []).map(String))
+    const rows: TaskSessionRow[] = [...state.runs.values()].filter(run => run.sessionId).map(run => {
+      const card = state.cards.get(run.cardId)
+      const task = state.tasks.get(run.taskId)
+      return {
+        sessionId: run.sessionId,
+        taskId: run.taskId,
+        taskTitle: task?.title ?? run.taskId,
+        batchId: run.batchId,
+        cardId: run.cardId,
+        runId: run.id,
+        agentId: run.profileId ?? card?.agentId ?? '',
+        role: card?.role ?? card?.kind ?? 'agent',
+        round: card?.round ?? 0,
+        status: run.status,
+        ...(run.outcome ? { outcome: run.outcome } : {}),
+        startedAt: run.startedAt,
+        ...(run.endedAt ? { endedAt: run.endedAt } : {}),
+        archived: archived.has(run.sessionId),
+      }
+    })
+    rows.sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    return JSON.stringify(rows)
   }
 
   // ── tasks ──────────────────────────────────────────────────────────────

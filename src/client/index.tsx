@@ -9,7 +9,7 @@ declare const require: (id: string) => unknown
 declare const __DTC_VERSION__: string
 
 export const name = 'dsh-task-console'
-export const inject = ['slots', 'remote', 'sessions', 'inputTriggers']
+export const inject = ['slots', 'remote', 'sessions', 'workspaces', 'inputTriggers']
 const HASH_PREFIX = '#/tc'
 
 type Heavy = typeof import('./heavy.tsx')
@@ -38,9 +38,30 @@ function go(path: string): void { window.location.hash = `${HASH_PREFIX}/${path}
 
 export async function apply(ctx: any): Promise<void> {
   ctx.effect(() => installLightStyles(), 'task-console: lightweight stylesheet')
+  ctx.effect(() => installSessionUrlSync(ctx), 'task-console: session URL sync')
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'task-console', order: 30, inject: () => ({ ctx }) }, FooterEntry))
   ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'task-console-trace', order: 25, label: () => 'Trace', inject: (sessionId: string) => ({ ctx, sessionId }) }, LazyTrace))
   try { ctx.effect(() => ctx.inputTriggers.registerSource(lazyAgentSource(ctx)), 'task-console: lazy @agent trigger') } catch (error) { console.warn('[task-console] @agent trigger not registered:', error) }
+}
+
+/** Keep native session selection shareable without replacing DSH's own session list. */
+function installSessionUrlSync(ctx: any): () => void {
+  let requested = new URL(window.location.href).searchParams.get('session')
+  const sync = () => {
+    const snapshot = ctx.sessions.list.getSnapshot()
+    if (requested && snapshot.byId?.[requested]) {
+      try { ctx.sessions.open(requested); requested = null } catch { /* wait for the next list projection */ }
+    }
+    if (window.location.hash.startsWith(HASH_PREFIX)) return
+    const url = new URL(window.location.href)
+    const current = snapshot.current
+    if (current) url.searchParams.set('session', current)
+    else url.searchParams.delete('session')
+    history.replaceState('', document.title, `${url.pathname}${url.search}${url.hash}`)
+  }
+  const stop = ctx.sessions.list.subscribe(sync)
+  sync()
+  return stop
 }
 
 function useHeavy(ctx: any): { heavy?: Heavy; api?: Awaited<ReturnType<Heavy['activate']>>; error?: string } {
@@ -67,7 +88,7 @@ function FooterEntry({ ctx, wide }: { ctx: any; wide?: boolean }) {
   const [open, setOpen] = useState(window.location.hash.startsWith(HASH_PREFIX))
   useEffect(() => { const on = () => setOpen(window.location.hash.startsWith(HASH_PREFIX)); window.addEventListener('hashchange', on); on(); return () => window.removeEventListener('hashchange', on) }, [])
   const narrow = wide === false
-  return <><div className="dtc-footstack"><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}><span className="ic">◎</span>{narrow ? null : <span>Agent</span>}</button><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务看板" aria-label="任务看板" onClick={() => go('tasks')}><span className="ic">▦</span>{narrow ? null : <span>Board</span>}</button></div>{open ? createPortal(<LazyConsole ctx={ctx} />, document.body) : null}</>
+  return <><div className="dtc-footstack"><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}><span className="ic">◎</span>{narrow ? null : <span>Agent</span>}</button><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务看板" aria-label="任务看板" onClick={() => go('tasks')}><span className="ic">▦</span>{narrow ? null : <span>Board</span>}</button><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="会话管理" aria-label="会话管理" onClick={() => go('sessions')}><span className="ic">◫</span>{narrow ? null : <span>Sessions</span>}</button></div>{open ? createPortal(<LazyConsole ctx={ctx} />, document.body) : null}</>
 }
 
 function currentCwd(ctx: any, action: any): string | undefined {

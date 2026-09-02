@@ -44,7 +44,7 @@ function descriptor(method: string, argc: 0 | 1) {
 /** Every method the console calls, in the order the service defines them. */
 export const METHODS = [
   ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
-  ['startAgentSession', 1], ['sessionTurns', 1],
+  ['startAgentSession', 1], ['sessionTurns', 1], ['taskSessions', 0],
   ['board', 0], ['tasks', 0], ['createTask', 1], ['setTaskEnabled', 1], ['deleteTask', 1], ['deleteTasks', 1], ['fireTask', 1], ['cancelRun', 1], ['taskEvents', 1],
   ['taskSnapshot', 1], ['taskGraph', 1], ['taskArtifacts', 1], ['artifactContent', 1], ['publishArtifact', 1], ['reviewCard', 1], ['unblockCard', 1], ['agentActivity', 1],
 ] as const
@@ -135,6 +135,24 @@ export interface TryRunResult {
   tools: string[]
   answer: string
   error?: string
+}
+
+/** One DSH session created by a task run; DSH remains the session authority. */
+export interface TaskSessionRow {
+  sessionId: string
+  taskId: string
+  taskTitle: string
+  batchId: string
+  cardId: string
+  runId: string
+  agentId: string
+  role: string
+  round: number
+  status: string
+  outcome?: string
+  startedAt: string
+  endedAt?: string
+  archived: boolean
 }
 
 // ── tasks (types live beside the fold; type-only import keeps node out of the client) ──

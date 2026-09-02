@@ -2,7 +2,9 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.16):** unifies Agent configuration and task orchestration behind one workspace entry and one persistent, accessible tab bar. The task list supports search-aware pagination and guarded cleanup of completed or all task records; bulk cleanup never removes DSH sessions or workspace files. The list, Agent editor, task detail, replay DAG, and delivery area now inherit the same DSH light/dark design tokens instead of rendering a hard-coded white cartoon island inside the host shell.
+**This release (0.18):** adds a Sessions lifecycle module beside Agent and Board. It joins DSH's native session summaries with task/run relationships, supports search, filtering, pagination, opening and safe archive, and automatically archives every task session when its batch settles. Archive remains a DSH-native visibility operation: logs, task evidence, workspace files, and deliverables are retained. Completed batches created by older plugin versions are reconciled on startup.
+
+The task list supports search-aware pagination and guarded cleanup of completed or all task records; bulk cleanup never removes DSH sessions or workspace files. The list, Agent editor, task detail, replay DAG, delivery area, and Sessions module inherit the same DSH light/dark design tokens instead of rendering a hard-coded white cartoon island inside the host shell.
 
 The explicit final-delivery contract from 0.15 remains: `task_finalize(summary, artifact)` records which registered file is the approved result; byte-identical executor submissions and reviewer snapshots render as one immutable version, with round, producer, review, and final-state evidence. Existing completed tasks receive a clearly labelled compatibility selection instead of fabricated history. The task list and detail page expose the final result directly, with sandboxed in-panel preview, download, optional public publishing, and event-faithful replay of artifact registration/finalization.
 
@@ -14,7 +16,7 @@ The plugin remains local-first: `~/.dsh/task-console/task.db` is the only runtim
 dsh plugin --profile web add github:ChangfengHU/dsh-task-console
 ```
 
-Opens from the sidebar footer buttons Agent and Board. Screens live in the URL hash (`#/tc/agents`, `#/tc/agents/<id>`, `#/tc/tasks`, `#/tc/tasks/<id>`). The SQLite data directory intentionally remains `~/.dsh/task-console/` across the package rename so existing tasks and audit history stay available.
+Opens from the sidebar footer buttons Agent, Board, and Sessions. Screens live in the URL hash (`#/tc/agents`, `#/tc/agents/<id>`, `#/tc/tasks`, `#/tc/tasks/<id>`, `#/tc/sessions`). The SQLite data directory intentionally remains `~/.dsh/task-console/` across the package rename so existing tasks and audit history stay available.
 
 **Talk to an agent from the composer:** type `@` in any composer, pick an agent, type the ask, Enter. That starts a new session on the agent's preset (a session's preset is fixed at creation in dsh, so "@agent" means "a fresh session with that agent") with your text as the first message, pins a readable title, files it under the current workspace, and switches to it. Agent cards also have 「开新会话」.
 

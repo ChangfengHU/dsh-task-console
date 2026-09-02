@@ -37,12 +37,12 @@ function fakeHost(presetDir: string) {
   return { ctx, sessions, emit, consumeFirst, callTool, endTurn }
 }
 
-async function setup(taskPatch: Partial<TaskSpec> = {}) {
+async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: ConstructorParameters<typeof TaskRunner>[2] = {}) {
   const root = await mkdtemp(join(tmpdir(), 'tc-run-'))
   const presets = join(root, 'presets'); for (const id of ['a', 'b', 'c']) { await mkdir(join(presets, id), { recursive: true }); await writeFile(join(presets, id, 'task-console.json'), JSON.stringify({ id, name: id.toUpperCase(), description: '', persona: '', model: 'p/m', effort: '', tools: [], mcp: [], skills: [] })) }
   const host = fakeHost(presets)
   const store = new EventStore(join(root, 'store'))
-  const runner = new TaskRunner(host.ctx, store, { maxInProgress: 2 })
+  const runner = new TaskRunner(host.ctx, store, { maxInProgress: 2, ...runnerPatch })
   await runner.start()
   const task: TaskSpec = { id: 'T', title: 't', brief: 'do it', trigger: { kind: 'once' }, participants: [{ agentId: 'a' }, { agentId: 'b' }, { agentId: 'c' }], cwd: root, timeoutSec: 60, onFail: 'retry', maxTries: 2, enabled: true, createdAt: 'x', ...taskPatch }
   await store.append({ t: 'task/created', at: 'x', taskId: task.id, task })
@@ -124,6 +124,18 @@ test('runner: a 3-card chain records process boundaries and snapshots declared a
   const s3 = [...host.sessions.keys()][2]; host.consumeFirst(s3); await host.callTool(s3, 'task_complete', { summary: 'C' }); host.endTurn(s3); await tick()
   assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')
   assert.deepEqual(store.all().filter(e => e.t === 'run/completed').length, 3)
+  runner.stop()
+})
+
+test('runner: settled batches notify session lifecycle exactly once', async () => {
+  const settled: string[] = []
+  const { host, store, runner } = await setup({ participants: [{ agentId: 'a' }] }, { onBatchSettled: batch => { settled.push(batch.id) } })
+  const batch = await runner.fire('T', 'manual')
+  const session = [...host.sessions.keys()][0]; host.consumeFirst(session)
+  await host.callTool(session, 'task_complete', { summary: 'done' }); host.endTurn(session); await tick()
+  await runner.tick()
+  assert.deepEqual(settled, [batch.id])
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome, 'done')
   runner.stop()
 })
 

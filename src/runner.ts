@@ -43,6 +43,7 @@ interface Flight {
 export interface RunnerOptions {
   maxInProgress?: number
   now?: () => number
+  onBatchSettled?: (batch: Batch) => void | Promise<void>
 }
 
 export class TaskRunner {
@@ -56,11 +57,13 @@ export class TaskRunner {
   private dispatchSuspended = 0
   readonly maxInProgress: number
   private readonly clock: () => number
+  private readonly onBatchSettled?: (batch: Batch) => void | Promise<void>
 
   constructor(ctx: Context, store: EventStore, opts: RunnerOptions = {}) {
     this.ctx = ctx; this.store = store
     this.maxInProgress = opts.maxInProgress ?? 3
     this.clock = opts.now ?? (() => Date.now())
+    this.onBatchSettled = opts.onBatchSettled
   }
 
   async start(): Promise<void> {
@@ -92,6 +95,13 @@ export class TaskRunner {
 
   private now(): string { return new Date(this.clock()).toISOString() }
   private append(e: any): Promise<void> { return this.store.append({ at: this.now(), ...e }) }
+
+  private async settleBatch(batch: Batch, outcome: 'done' | 'failed' | 'cancelled'): Promise<void> {
+    if (this.store.s.batches.get(batch.id)?.settled) return
+    await this.append({ t: 'batch/settled', taskId: batch.taskId, batchId: batch.id, outcome })
+    try { await this.onBatchSettled?.(this.store.s.batches.get(batch.id) ?? batch) }
+    catch (error) { console.warn(`[task-console] session archive failed for batch ${batch.id}:`, error) }
+  }
 
   // ── the tick ──────────────────────────────────────────────────────────
 
@@ -167,10 +177,10 @@ export class TaskRunner {
           )
         }
         const stillLive = cards.some(c => c.status === 'running' || c.status === 'blocked')
-        if (!stillLive) await this.append({ t: 'batch/settled', taskId: b.taskId, batchId: b.id, outcome: dead.some(c => c.status === 'failed') ? 'failed' : 'cancelled' })
+        if (!stillLive) await this.settleBatch(b, dead.some(c => c.status === 'failed') ? 'failed' : 'cancelled')
         continue
       }
-      if (cards.every(c => c.status === 'done')) await this.append({ t: 'batch/settled', taskId: b.taskId, batchId: b.id, outcome: 'done' })
+      if (cards.every(c => c.status === 'done')) await this.settleBatch(b, 'done')
     }
   }
 
@@ -500,7 +510,7 @@ export class TaskRunner {
           ok => ok ? { t: 'card/cancelled', at: this.now(), taskId: b.taskId, cardId: id } : undefined,
         )
       }
-      if (!this.store.s.batches.get(batchId)?.settled) await this.append({ t: 'batch/settled', taskId: b.taskId, batchId, outcome: 'cancelled' })
+      if (!this.store.s.batches.get(batchId)?.settled) await this.settleBatch(b, 'cancelled')
     } finally {
       this.dispatchSuspended--
     }

@@ -14,7 +14,7 @@ import { TaskConsoleService } from './service.ts'
 import { registerPublicHtmlTool } from './public-upload.ts'
 
 export const name = 'task-console'
-export const inject = ['loader', 'tools', 'agents', 'webServer']
+export const inject = ['loader', 'tools', 'agents', 'webServer', 'workspaceRegistry']
 
 export { TaskConsoleService } from './service.ts'
 export {

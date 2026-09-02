@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-console",
-  "version": "0.17.5",
+  "version": "0.18.2",
   "description": "Local-first Agent presets and task orchestration for DeepSeek Harness, backed by SQLite.",
   "license": "MIT",
   "type": "module",
@@ -33,14 +33,23 @@
   },
   "keywords": ["dsh-plugin", "deepseek-harness", "agent-preset", "task-console", "agent-task-console"],
   "repository": { "type": "git", "url": "https://github.com/ChangfengHU/dsh-task-console" },
+  "pnpm": {
+    "onlyBuiltDependencies": ["better-sqlite3", "esbuild"]
+  },
   "dependencies": {
     "better-sqlite3": "12.4.1",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "^0.1.1-rc.2"
+  },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",
     "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-tools": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.1.1-rc.2",
     "esbuild": "^0.25.12",
     "tsx": "^4.23.13"
   }

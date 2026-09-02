@@ -152,20 +152,32 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
 
   useEffect(() => {
     let stop = false
+    let poll: number | undefined
     const loadEvents = async () => {
       try {
         const next = await api.taskEvents(id)
-        if (!stop) { setEvents(next as Event[]); setError('') }
+        if (!stop) {
+          const state = fold(next as Event[])
+          const selected = runId ? state.batches.get(runId) : [...state.batches.values()].filter(batch => batch.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]
+          setEvents(next as Event[]); setError('')
+          if (!selected?.settled) poll = window.setTimeout(loadEvents, 4000)
+        }
       } catch (e) { if (!stop) setError(String((e as Error).message ?? e)) }
     }
     const loadSnapshot = async () => {
       try {
         const next = await api.taskSnapshot(id, runId)
-        if (!stop) { setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId); setError('') }
+        if (!stop) {
+          setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId); setError('')
+          const state = fold(next.events as Event[])
+          const spec = state.tasks.get(id)
+          const selected = next.batchId ? state.batches.get(next.batchId) : undefined
+          if (spec?.graphMode !== 'dynamic-rounds' && !selected?.settled) poll = window.setTimeout(loadEvents, 4000)
+        }
       } catch (e) { if (!stop) setError(String((e as Error).message ?? e)) }
     }
-    void loadSnapshot(); const t = window.setInterval(loadEvents, 2500)
-    return () => { stop = true; window.clearInterval(t) }
+    void loadSnapshot()
+    return () => { stop = true; window.clearTimeout(poll) }
   }, [api, id, runId])
 
   const upto = cursor === null ? events.length : Math.min(cursor, events.length)
@@ -182,11 +194,12 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
   useEffect(() => {
     let stop = false
     if (!selId) { setArtifacts([]); setArtifactBatch(null); return }
+    if (task?.graphMode === 'dynamic-rounds' || batchFull?.settled) return
     const load = () => api.taskArtifacts(id, selId).then(a => { if (!stop) { setArtifacts(a); setArtifactBatch(selId) } }).catch(e => { if (!stop) setError(String((e as Error).message ?? e)) })
     if (artifactBatch !== selId) void load()
     const t = window.setInterval(load, 3000)
     return () => { stop = true; window.clearInterval(t) }
-  }, [api, id, selId, artifactBatch])
+  }, [api, id, selId, artifactBatch, task?.graphMode, batchFull?.settled])
 
   useEffect(() => {
     const cards = batchFull?.cardIds.map(cid => full.cards.get(cid)).filter(Boolean) as Card[] | undefined

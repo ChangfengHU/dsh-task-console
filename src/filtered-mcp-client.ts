@@ -6,7 +6,7 @@
  * stable public names correspond to the selected raw MCP tools are registered.
  */
 
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { apply as applyMcpClient } from '@deepseek-ai/dsh-mcp-client'
 import type { Config as McpConfig } from '@deepseek-ai/dsh-mcp-client'
@@ -60,10 +60,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
   const allowedTools = [...new Set(rawAllowed.map(tool => tool.trim()))]
   if (!allowedTools.length) throw new Error('filtered-mcp-client: allowedTools must not be empty')
-  const agentId = String((ctx as Context & { agent?: { id?: string } }).agent?.id ?? '')
-  if (!agentId) throw new Error('filtered-mcp-client: an Agent-scoped context is required')
   const stableServerName = mcp.serverName
-  const liveServerName = instanceServerName(stableServerName, agentId)
+  const liveServerName = instanceServerName(stableServerName, randomUUID())
   const rawByInternal = new Map(allowedTools.map(tool => [publicToolName(liveServerName, tool), tool]))
 
   const tools = new Proxy(ctx.tools, {

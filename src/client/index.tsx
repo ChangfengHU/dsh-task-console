@@ -139,8 +139,9 @@ async function openWhenListed(ctx: any, sessionId: string): Promise<void> {
 /** Independent Agent and Task entries share the same full-page console shell. */
 function FooterEntry({ api, wide }: { api: Api; wide?: boolean }) {
   const [open, setOpen] = useState(readRoute().length > 0 || window.location.hash.startsWith(HASH_PREFIX))
+  const [section, setSection] = useState(readRoute()[0] ?? '')
   useEffect(() => {
-    const on = () => setOpen(window.location.hash.startsWith(HASH_PREFIX))
+    const on = () => { setOpen(window.location.hash.startsWith(HASH_PREFIX)); setSection(readRoute()[0] ?? '') }
     window.addEventListener('hashchange', on)
     on()
     return () => window.removeEventListener('hashchange', on)
@@ -149,10 +150,10 @@ function FooterEntry({ api, wide }: { api: Api; wide?: boolean }) {
   return (
     <>
       <div className="dtc-footstack">
-        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}>
+        <button type="button" className={`dtc-foot ${section === 'agents' ? 'active' : ''} ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}>
           <span className="ic">◎</span>{narrow ? null : <span>Agent</span>}
         </button>
-        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务" aria-label="任务" onClick={() => go('tasks')}>
+        <button type="button" className={`dtc-foot ${section === 'tasks' ? 'active' : ''} ${narrow ? 'narrow' : ''}`} title="任务" aria-label="任务" onClick={() => go('tasks')}>
           <span className="ic">▦</span>{narrow ? null : <span>任务</span>}
         </button>
       </div>

@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { cronHuman, nextFire, parseCron } from '../cron.ts'
 import type { AgentRow, ArtifactView, GraphSnapshot, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
-import { ArtifactResultAction } from './ArtifactDelivery.tsx'
+import { ArtifactResultAction, canPreviewArtifact } from './ArtifactDelivery.tsx'
 
 export interface TasksApi {
   tasks: () => Promise<{ tasks: (TaskSpec & { nextFire: string | null })[]; runs: Run[] }>
@@ -153,7 +153,7 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
     <div className="dtc-taskhome">
       <section className="dtc-taskintro">
         <div>
-          <div className="dtc-eyebrow">TASK ORCHESTRATION</div>
+          <div className="dtc-eyebrow">任务编排</div>
           <h1>任务中心</h1>
           <p>用预置 Agent 组成执行链，集中查看依赖、验收、交接和最终产物。</p>
         </div>
@@ -213,7 +213,7 @@ function TaskGroupCard({ task, latest, history, state, selected, onSelect, agent
       {state === 'park' && current?.question ? <div className="dtc-tasknotice ask"><b>{agentName(agents, current.agentId)} 正在等你</b><span>{current.question}</span></div> : null}
       {state === 'review' && current ? <div className="dtc-tasknotice review"><b>{agentName(agents, current.agentId)} 已提交</b><span>验收通过后才会启动下游任务。</span></div> : null}
       {state === 'bad' && current ? <div className="dtc-tasknotice bad"><b>{agentName(agents, current.agentId)} 执行失败</b><span>{current.error || LEG[current.status] || current.status}</span></div> : null}
-      {state === 'done' && resultArtifact && latest ? <div className="dtc-tasknotice result"><div><b>{latest.finalArtifact ? '最终交付' : '最近交付'} · {resultArtifact.name}</b><span>{latest.reworks ? `经历 ${latest.reworks} 次返工 · ` : ''}{resultArtifact.mime || '未知类型'} · SHA256 {resultArtifact.sha256.slice(0, 10)}…</span></div><ArtifactResultAction api={api} taskId={task.id} batchId={latest.id} artifact={resultArtifact} toast={toast} label={resultArtifact.mime === 'text/html' || /\.html?$/i.test(resultArtifact.name) ? '查看 / View' : '查看交付物'} /></div> : null}
+      {state === 'done' && resultArtifact && latest ? <div className="dtc-tasknotice result"><div><span className="dtc-result-kicker">{latest.finalArtifact ? '最终交付' : '最近交付'}</span><b>{resultArtifact.name}</b><span>{latest.reworks ? `经历 ${latest.reworks} 次返工 · ` : ''}{resultArtifact.mime || '未知类型'} · SHA256 {resultArtifact.sha256.slice(0, 10)}…</span></div><ArtifactResultAction api={api} taskId={task.id} batchId={latest.id} artifact={resultArtifact} toast={toast} label={canPreviewArtifact(resultArtifact) ? '预览' : '交付详情'} /></div> : null}
       <div className="dtc-taskgroup-foot"><div>
         {task.trigger.kind === 'cron' ? <><span className="dtc-mono">{cronHuman(task.trigger.expr)}</span><span>{task.enabled && task.nextFire ? `下次 ${fmt(task.nextFire)}` : '时间表已停用'}</span></> : latest ? <><span>{ago(latest.firedAt)} · {BY[latest.by]}</span><span>{history} 次运行</span></> : <span>单次任务</span>}
         </div><div className="acts">

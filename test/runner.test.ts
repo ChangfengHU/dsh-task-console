@@ -50,6 +50,16 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
 
+test('runner: marks each task session internal immediately after DSH creates it', async () => {
+  const internal: string[] = []
+  const { runner } = await setup({}, { onSessionCreated: sessionId => { internal.push(sessionId) } })
+  const batch = await runner.fire('T', 'manual')
+  await tick()
+
+  assert.deepEqual(internal, [`task-t-${batch.id}-1`])
+  runner.stop()
+})
+
 test('runner: dynamic rounds materialize DB rows only after planner decisions and gates never own runs', async () => {
   const { host, store, runner, root } = await setup({ graphMode: 'dynamic-rounds' })
   await writeFile(join(root, 'result.html'), '<h1>version 1</h1>')

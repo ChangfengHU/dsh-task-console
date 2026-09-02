@@ -44,6 +44,7 @@ export interface RunnerOptions {
   maxInProgress?: number
   now?: () => number
   onBatchSettled?: (batch: Batch) => void | Promise<void>
+  onSessionCreated?: (sessionId: string) => void | Promise<void>
 }
 
 export class TaskRunner {
@@ -58,12 +59,14 @@ export class TaskRunner {
   readonly maxInProgress: number
   private readonly clock: () => number
   private readonly onBatchSettled?: (batch: Batch) => void | Promise<void>
+  private readonly onSessionCreated?: (sessionId: string) => void | Promise<void>
 
   constructor(ctx: Context, store: EventStore, opts: RunnerOptions = {}) {
     this.ctx = ctx; this.store = store
     this.maxInProgress = opts.maxInProgress ?? 3
     this.clock = opts.now ?? (() => Date.now())
     this.onBatchSettled = opts.onBatchSettled
+    this.onSessionCreated = opts.onSessionCreated
   }
 
   async start(): Promise<void> {
@@ -267,6 +270,7 @@ export class TaskRunner {
         meta: { cwd: task.cwd, agentPreset: preset.id },
         setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
       })
+      await this.onSessionCreated?.(sessionId)
       this.store.kernel.recordEvent(card.id, 'session_created', { session_id: sessionId }, flight.coreRunId)
       await this.append({ t: 'run/session_created', taskId: task.id, runId, sessionId })
       // The terminators live on this agent's scope only.

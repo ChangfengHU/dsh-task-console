@@ -10,6 +10,7 @@ export interface NativeSessionRow {
   blank: boolean
   updatedAt: number
   archived: boolean
+  internal: boolean
 }
 
 interface SessionsApi {
@@ -61,7 +62,7 @@ export function SessionsPage({ api, toast }: { api: SessionsApi; toast: (message
   return <div className="dtc-body dtc-sessions">
     <section className="dtc-cpanel dtc-session-summary">
       <div><b>{native.length}</b><span>DSH 会话</span></div><div><b>{relations.length}</b><span>任务运行记录</span></div><div><b>{native.filter(row => row.archived).length}</b><span>已归档</span></div>
-      <p>任务完成后自动归档其角色会话；归档只移出普通侧栏，不删除日志和任务证据。</p>
+      <p>任务会话创建后即从普通首页隐藏；完成后自动归档。隐藏和归档都不会删除日志与任务证据。</p>
     </section>
     <section className="dtc-cpanel dtc-session-panel">
       <div className="dtc-session-tools"><div className="dtc-segment"><button className={scope === 'task' ? 'on' : ''} onClick={() => setScope('task')}>任务会话</button><button className={scope === 'all' ? 'on' : ''} onClick={() => setScope('all')}>全部</button><button className={scope === 'archived' ? 'on' : ''} onClick={() => setScope('archived')}>已归档</button></div><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索标题、任务、Agent 或 Session ID" /><button className="dtc-btn sm" onClick={() => void load()}>刷新</button></div>

@@ -2,7 +2,7 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.18):** adds a Sessions lifecycle module beside Agent and Board. It joins DSH's native session summaries with task/run relationships, supports search, filtering, pagination, opening and safe archive, and automatically archives every task session when its batch settles. Archive remains a DSH-native visibility operation: logs, task evidence, workspace files, and deliverables are retained. Completed batches created by older plugin versions are reconciled on startup.
+**This release (0.18):** adds a Sessions lifecycle module beside Agent and Board. It joins DSH's native session summaries with task/run relationships, supports search, filtering, pagination, opening and safe archive, marks every task Session internal immediately after creation, and archives it independently when its batch settles. Internal Sessions stay out of ordinary DSH navigation and search but remain directly openable from Task and Trace links. Historical relationships and completed batches are reconciled on startup; logs, task evidence, workspace files, and deliverables are retained.
 
 The task list supports search-aware pagination and guarded cleanup of completed or all task records; bulk cleanup never removes DSH sessions or workspace files. The list, Agent editor, task detail, replay DAG, delivery area, and Sessions module inherit the same DSH light/dark design tokens instead of rendering a hard-coded white cartoon island inside the host shell.
 

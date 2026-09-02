@@ -153,6 +153,7 @@ export interface TaskSessionRow {
   startedAt: string
   endedAt?: string
   archived: boolean
+  internal: boolean
 }
 
 // ── tasks (types live beside the fold; type-only import keeps node out of the client) ──

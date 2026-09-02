@@ -33,8 +33,8 @@ export function activate(ctx: any): Promise<Api> {
       sessionTurns: (sessionId: string) => call<TurnLedger>('sessionTurns', { sessionId }), agentActivity: (agentId: string) => call<any>('agentActivity', { agentId }),
       taskSessions: () => call<TaskSessionRow[]>('taskSessions'),
       sessionSnapshot: () => {
-        const sessions = ctx.sessions.list.getSnapshot(); const archived = new Set(ctx.workspaces.list.getSnapshot().archivedSessionIds)
-        return sessions.ids.map((id: string) => ({ ...sessions.byId[id], archived: archived.has(id) }))
+        const sessions = ctx.sessions.list.getSnapshot(); const workspace = ctx.workspaces.list.getSnapshot(); const archived = new Set(workspace.archivedSessionIds); const internal = new Set(workspace.internalSessionIds ?? [])
+        return sessions.ids.map((id: string) => ({ ...sessions.byId[id], archived: archived.has(id), internal: internal.has(id) }))
       },
       subscribeSessions: (listener: () => void) => { const a = ctx.sessions.list.subscribe(listener); const b = ctx.workspaces.list.subscribe(listener); return () => { a(); b() } },
       refreshSessions: async () => { await Promise.all([ctx.sessions.refresh(), ctx.workspaces.refresh()]) },

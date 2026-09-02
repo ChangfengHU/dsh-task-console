@@ -45,10 +45,31 @@ export class TaskConsoleService extends TypertRemoteService {
 
   constructor(ctx: Context) {
     super(ctx, NAMESPACE)
-    this.runner = new TaskRunner(ctx, new EventStore(), { onBatchSettled: batch => this.archiveBatchSessions(batch.id) })
+    this.runner = new TaskRunner(ctx, new EventStore(), {
+      onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
+      onBatchSettled: batch => this.archiveBatchSessions(batch.id),
+    })
     void this.runner.start()
-      .then(() => this.archiveSettledTaskSessions())
+      .then(async () => {
+        await this.markExistingTaskSessionsInternal()
+        await this.archiveSettledTaskSessions()
+      })
       .catch(err => console.error('[task-console] runner failed to start:', err))
+  }
+
+  /** Hide task-owned sessions from ordinary DSH discovery while retaining direct access. */
+  private async markTaskSessionInternal(sessionId: string): Promise<void> {
+    const registry = (this.ctx as any).get('workspaceRegistry')
+    if (!registry?.markSessionInternal) return
+    try { await registry.markSessionInternal(sessionId) }
+    catch (error) { console.warn(`[task-console] could not mark task session ${sessionId} internal:`, error) }
+  }
+
+  /** Migrate every historical task-session relation into the internal set. */
+  private async markExistingTaskSessionsInternal(): Promise<void> {
+    const sessionIds = [...new Set([...this.runner.store.s.runs.values()]
+      .map(run => run.sessionId).filter((id): id is string => Boolean(id)))]
+    for (const sessionId of sessionIds) await this.markTaskSessionInternal(sessionId)
   }
 
   /** Task sessions leave the normal sidebar when their batch settles; logs remain owned by DSH. */
@@ -308,6 +329,7 @@ export class TaskConsoleService extends TypertRemoteService {
   async taskSessions(): Promise<string> {
     const state = this.runner.store.s
     const archived = new Set<string>(((this.ctx as any).get('workspaceRegistry')?.archivedSessionIds ?? []).map(String))
+    const internal = new Set<string>(((this.ctx as any).get('workspaceRegistry')?.internalSessionIds ?? []).map(String))
     const rows: TaskSessionRow[] = [...state.runs.values()].filter(run => run.sessionId).map(run => {
       const card = state.cards.get(run.cardId)
       const task = state.tasks.get(run.taskId)
@@ -326,6 +348,7 @@ export class TaskConsoleService extends TypertRemoteService {
         startedAt: run.startedAt,
         ...(run.endedAt ? { endedAt: run.endedAt } : {}),
         archived: archived.has(run.sessionId),
+        internal: internal.has(run.sessionId),
       }
     })
     rows.sort((a, b) => b.startedAt.localeCompare(a.startedAt))

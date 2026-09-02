@@ -96,6 +96,10 @@ export class TaskConsoleService extends TypertRemoteService {
     return rows
   }
 
+  private hostToolNames(): string[] {
+    return ((this.ctx as any).tools.schemas() as { name: string }[]).map(schema => schema.name)
+  }
+
   /** Registered workspaces in sidebar order; empty when the registry is not composed. */
   private workspaces(): { id: string; path: string; title: string }[] {
     try {
@@ -119,7 +123,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const defaultModel = def ? `${def.provider}/${def.model}` : ''
     const models = [...new Set([defaultModel, ...KNOWN_MODELS].filter(Boolean))]
     const out: Catalog = {
-      tools: NATIVE_TOOLS.map(({ rows: _rows, ...t }) => t),
+      tools: NATIVE_TOOLS.map(({ rows: _rows, schemaNames: _schemaNames, ...t }) => t),
       mcp: this.hostMcp().map(({ config: _c, live: _l, ...m }) => m),
       skills: await scanSkills(),
       models,
@@ -155,7 +159,7 @@ export class TaskConsoleService extends TypertRemoteService {
 
   async previewAgent(payload: string): Promise<string> {
     const spec = validateSpec(JSON.parse(payload))
-    const preview = renderComposition(spec, this.hostMcp())
+    const preview = renderComposition(spec, this.hostMcp(), this.hostToolNames())
     return JSON.stringify({ ...preview, yml: mask(preview.yml) } satisfies Preview)
   }
 
@@ -165,7 +169,7 @@ export class TaskConsoleService extends TypertRemoteService {
     if (presets && presets.authorable === false) throw new Error('这个部署没有可写的 preset 根')
     const shipped = presets ? (await presets.list() as any[]).find(p => p.id === spec.id && p.trust === 'system') : undefined
     if (shipped) throw new Error(`"${spec.id}" 是出厂 preset,不能覆盖;换个 id`)
-    const { path, preview } = await writePreset(spec, this.hostMcp(), await scanSkills())
+    const { path, preview } = await writePreset(spec, this.hostMcp(), await scanSkills(), userPresetRoot(), this.hostToolNames())
     return JSON.stringify({ path, preview: { ...preview, yml: mask(preview.yml) } })
   }
 

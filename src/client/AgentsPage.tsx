@@ -1,6 +1,6 @@
 /**
  * Agent: a master-detail page. Left, the roster; right, one agent — its
- * persona, the tools it may see (the fence), its MCP servers and skills,
+ * persona, the exact native/MCP tools it may see (the fence), its skills,
  * what it has been doing, and the preset file the editor writes.
  */
 
@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wire.ts'
 import { closeConsole, go, type Api } from './Console.tsx'
 
-const EMPTY: AgentSpec = { id: '', name: '', description: '', persona: '', model: '', effort: 'medium', tools: ['ask-user'], mcp: [], skills: [] }
+const EMPTY: AgentSpec = { id: '', name: '', description: '', persona: '', model: '', effort: 'medium', tools: ['ask-user'], mcpTools: {}, mcpPolicy: {}, skills: [] }
 const PERM: Record<Preview['permission'], { label: string; cls: string; dot: string }> = {
   'read-only': { label: '只读', cls: 'dtc-p-ok', dot: 'ro' },
   'limited-write': { label: '受限可写', cls: 'dtc-p-warn', dot: 'lw' },
@@ -18,7 +18,7 @@ const COLORS = ['#1f6f78', '#1f7a4d', '#6b4fbb', '#2563a8', '#b26a00', '#8e5a8a'
 export const colorOf = (id: string) => { let h = 0; for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return COLORS[h % COLORS.length] }
 export function derivePerm(spec: AgentSpec): Preview['permission'] {
   if (spec.tools.some(t => t === 'bash' || t === 'fs' || t === 'str-replace-editor')) return 'write'
-  if (spec.tools.some(t => t === 'fs' || t === 'bash') || spec.mcp.length) return 'limited-write'
+  if (Object.values(spec.mcpTools).some(tools => tools.length)) return 'limited-write'
   return 'read-only'
 }
 
@@ -92,7 +92,18 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
   }, [spec, api, readOnly])
 
   const set = <K extends keyof AgentSpec>(k: K, v: AgentSpec[K]) => { dirty.current = true; setSpec(s => ({ ...s, [k]: v })) }
-  const toggle = (k: 'tools' | 'mcp' | 'skills', v: string) => set(k, spec[k].includes(v) ? spec[k].filter(x => x !== v) : [...spec[k], v])
+  const toggle = (k: 'tools' | 'skills', v: string) => set(k, spec[k].includes(v) ? spec[k].filter(x => x !== v) : [...spec[k], v])
+  const selectedMcpTools = (server: string, available: string[]) => spec.mcpTools[server]?.includes('*') ? available : (spec.mcpTools[server] ?? [])
+  const setMcpTools = (server: string, tools: string[]) => {
+    const next = { ...spec.mcpTools }
+    if (tools.length) next[server] = [...new Set(tools)]
+    else delete next[server]
+    set('mcpTools', next)
+  }
+  const toggleMcpTool = (server: string, tool: string, available: string[]) => {
+    const selected = selectedMcpTools(server, available)
+    setMcpTools(server, selected.includes(tool) ? selected.filter(x => x !== tool) : [...selected, tool])
+  }
   const save = async () => {
     setBusy('save'); setErr('')
     try { const out = await api.saveAgent(spec); setPreview(out.preview); dirty.current = false; toast(`已写 ${out.path}/agent.cordis.yml`); await onSaved(); if (!id) go(`agents/${spec.id}`) }
@@ -117,7 +128,12 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
   const perm = preview?.permission ?? derivePerm(spec)
   const groups = [...new Set(catalog.tools.map(t => t.group))]
   const writes = spec.tools.filter(t => catalog.tools.find(x => x.id === t)?.writes)
-  const missingMcp = spec.mcp.filter(m => !catalog.mcp.some(x => x.serverName === m))
+  const selectedMcpCount = catalog.mcp.reduce((n, m) => n + selectedMcpTools(m.serverName, m.tools).length, 0)
+  const missingMcp = Object.entries(spec.mcpTools).flatMap(([server, tools]) => {
+    const found = catalog.mcp.find(m => m.serverName === server)
+    if (!found) return [`${server}/*`]
+    return tools.includes('*') ? [] : tools.filter(tool => !found.tools.includes(tool)).map(tool => `${server}/${tool}`)
+  })
   const cli = /^(claude|codex)-local/.test(spec.model)
   const claude = /^claude-local/.test(spec.model)
 
@@ -158,7 +174,7 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
           <div className="dtc-panel"><h3>人设 <span className="dtc-faint" style={{ fontWeight: 400 }}>→ dsh-persona 行</span></h3>
             <textarea value={spec.persona} disabled={readOnly} onChange={e => set('persona', e.target.value)} placeholder="职责、边界、交卷格式" style={{ minHeight: 140 }} />
           </div>
-          <div className="dtc-panel"><h3>工具 <span className="dtc-faint" style={{ fontWeight: 400 }}>没勾的,模型连 schema 都看不到 —— 这就是权限</span></h3>
+          <div className="dtc-panel"><h3>工具与权限 <span className="dtc-faint" style={{ fontWeight: 400 }}>按具体工具授权；DSH 运行器的会话内置工具除外</span></h3>
             {groups.map(g => (
               <div key={g}>
                 <div className="dtc-tgroup">{g}</div>
@@ -172,22 +188,31 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
                 </div>
               </div>
             ))}
-            <div className="dtc-note">{writes.length || spec.mcp.length
-              ? <>推出来的权限:<b>{PERM[perm].label}</b>{writes.length ? <> —— 勾了可写工具 {writes.map(w => <span key={w} className="dtc-mono">{w} </span>)}</> : null}{spec.mcp.length ? <>;MCP 服务按整台算受限可写</> : null}</>
+            {catalog.mcp.map(m => { const selected = selectedMcpTools(m.serverName, m.tools); return (
+              <div key={m.serverName}>
+                <div className="dtc-tgroup" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>MCP · <span className="dtc-mono">{m.serverName}</span>{m.disabled ? ' · 已停' : ''}</span>
+                  {!readOnly && m.tools.length ? <span><button className="dtc-linkbtn" onClick={() => setMcpTools(m.serverName, m.tools)}>全选</button><button className="dtc-linkbtn" onClick={() => setMcpTools(m.serverName, [])}>清空</button></span> : null}
+                </div>
+                <div className="dtc-matrix">
+                  {m.tools.map(tool => { const mutates = /(?:delete|set|register|disable|enable|recycle|heal|capture|write|update|create)/i.test(tool); const constrained = !!spec.mcpPolicy[m.serverName]?.[tool]; return (
+                    <label key={tool} className={`dtc-cap ${selected.includes(tool) ? 'on' : ''}`}>
+                      <input type="checkbox" checked={selected.includes(tool)} disabled={readOnly} onChange={() => toggleMcpTool(m.serverName, tool, m.tools)} />
+                      <span><span className="nm dtc-mono">{tool}</span>{mutates ? <span className="w">可写</span> : null}{constrained ? <span className="w" style={{ color: 'var(--dtc-warn)' }}>参数受限</span> : null}<span className="d">来自 {m.serverName} · 单工具授权</span></span>
+                    </label>
+                  ) })}
+                </div>
+                {!m.tools.length ? <div className="dtc-faint" style={{ fontSize: 12.5 }}>当前没有注册工具。</div> : null}
+              </div>
+            ) })}
+            {!catalog.mcp.length ? <div className="dtc-faint" style={{ fontSize: 12.5 }}>宿主没有 MCP 工具。</div> : null}
+            {missingMcp.length ? <div className="dtc-warn">以下已保存工具当前不存在，将不会挂载：{missingMcp.join('、')}</div> : null}
+            <div className="dtc-note">{writes.length || selectedMcpCount
+              ? <>推出来的权限:<b>{PERM[perm].label}</b>{writes.length ? <> —— 原生可写工具 {writes.map(w => <span key={w} className="dtc-mono">{w} </span>)}</> : null}{selectedMcpCount ? <>；已授权 <b>{selectedMcpCount}</b> 个 MCP 工具</> : null}</>
               : <>推出来的权限:<b>只读</b> —— 没有任何可写工具,它不可能改任何东西。</>}</div>
+            <div className="dtc-faint" style={{ marginTop: 8, fontSize: 12.5 }}>试跑时 DSH 可能按会话附加 schedule_* 等运行器内置工具；它们不来自 Agent preset，也不属于 MCP 授权。</div>
           </div>
-          <div className="dtc-panel"><h3>MCP <span className="dtc-faint" style={{ fontWeight: 400 }}>宿主正在跑的服务,整台勾选</span></h3>
-            {catalog.mcp.map(m => (
-              <label key={m.serverName} className={`dtc-mcprow ${spec.mcp.includes(m.serverName) ? 'on' : ''}`}>
-                <input type="checkbox" checked={spec.mcp.includes(m.serverName)} disabled={readOnly} onChange={() => toggle('mcp', m.serverName)} />
-                <div style={{ minWidth: 0 }}><div className="nm dtc-mono">{m.serverName}{m.disabled ? <span className="dtc-pill dtc-p-grey" style={{ marginLeft: 6 }}>已停</span> : null}</div><div className="url">{m.target}</div><div className="url">{m.tools.length ? m.tools.join(' · ') : '(还没注册工具)'}</div></div>
-                <span className="cnt">{m.tools.length} 个工具</span>
-              </label>
-            ))}
-            {!catalog.mcp.length ? <div className="dtc-faint" style={{ fontSize: 12.5 }}>宿主没有 MCP 服务。</div> : null}
-            {missingMcp.length ? <div className="dtc-warn">选了宿主里没有的 MCP:{missingMcp.join(', ')},生成时会跳过。</div> : null}
-            {preview?.renamed.length ? <div className="dtc-warn">宿主层仍在跑 {preview.renamed.map(r => r.from).join('、')},preset 里改名为 {preview.renamed.map(r => r.to).join('、')} 挂载。<b>所有 agent 现在都看得到宿主那份</b>;要真正围栏,得把宿主那行摘掉。</div> : null}
-          </div>
+          {preview?.renamed.length ? <div className="dtc-note">宿主 MCP 在此 Agent 内使用独立命名空间；继承的宿主副本已由 preset 围栏隐藏。</div> : null}
           <div className="dtc-panel"><h3>Skill <span className="dtc-faint" style={{ fontWeight: 400 }}>拷进 preset 的 skills/,随它走</span></h3>
             <div className="dtc-chips">
               {spec.skills.map(s => <button key={s} className="dtc-chip on" disabled={readOnly} onClick={() => toggle('skills', s)}>{s}</button>)}

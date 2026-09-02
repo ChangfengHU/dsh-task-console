@@ -104,8 +104,18 @@ export interface AgentSpec {
   model: string
   effort: 'low' | 'medium' | 'high' | ''
   tools: string[]
-  mcp: string[]
+  /** Exact raw MCP tool names selected under each server. `*` reads legacy whole-server specs. */
+  mcpTools: Record<string, string[]>
+  /** Optional host-enforced argument constraints for selected MCP tools. */
+  mcpPolicy: Record<string, Record<string, McpToolPolicy>>
   skills: string[]
+}
+
+export interface McpToolPolicy {
+  /** Argument must equal one of these values or start with one of these prefixes. */
+  valuesOrPrefixes?: Record<string, string[]>
+  /** Argument must match this regular expression when present. */
+  patterns?: Record<string, string>
 }
 
 /** One roster row, enriched with our spec when we authored it. */

@@ -323,6 +323,8 @@ body[data-ds-dark-theme] .dtc-node .q { color:#a794e0 }
 .dtc-cap.on { border-color:var(--dtc-accent); background:var(--dtc-accent-bg); color:var(--dtc-ink) }
 .dtc-cap input { width:auto; margin-top:3px }
 .dtc-cap .nm { font-weight:500 } .dtc-cap .w { font-size:10.5px; color:var(--dtc-bad); margin-left:4px } .dtc-cap .d { display:block; font-size:11px; color:var(--dtc-faint) }
+.dtc-linkbtn { color:var(--dtc-accent); font-size:11.5px; padding:2px 5px; border-radius:5px }
+.dtc-linkbtn:hover { background:var(--dtc-accent-bg) }
 .dtc-mcprow { display:flex; align-items:center; gap:12px; padding:10px 12px; border:1px solid var(--dtc-line-soft); border-radius:8px; margin-bottom:8px; cursor:pointer; background:var(--dtc-surface) }
 .dtc-mcprow.on { border-color:var(--dtc-accent) } .dtc-mcprow input { width:auto }
 .dtc-mcprow .nm { font-weight:600 } .dtc-mcprow .url { font-size:11.5px; color:var(--dtc-faint); overflow:hidden; text-overflow:ellipsis; white-space:nowrap } .dtc-mcprow .cnt { margin-left:auto; font-size:12px; color:var(--dtc-muted); white-space:nowrap }

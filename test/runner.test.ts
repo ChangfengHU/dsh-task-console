@@ -39,7 +39,7 @@ function fakeHost(presetDir: string) {
 
 async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: ConstructorParameters<typeof TaskRunner>[2] = {}) {
   const root = await mkdtemp(join(tmpdir(), 'tc-run-'))
-  const presets = join(root, 'presets'); for (const id of ['a', 'b', 'c']) { await mkdir(join(presets, id), { recursive: true }); await writeFile(join(presets, id, 'task-console.json'), JSON.stringify({ id, name: id.toUpperCase(), description: '', persona: '', model: 'p/m', effort: '', tools: [], mcp: [], skills: [] })) }
+  const presets = join(root, 'presets'); for (const id of ['a', 'b', 'c']) { await mkdir(join(presets, id), { recursive: true }); await writeFile(join(presets, id, 'task-console.json'), JSON.stringify({ id, name: id.toUpperCase(), description: '', persona: '', model: 'p/m', effort: '', tools: [], mcpTools: {}, skills: [] })) }
   const host = fakeHost(presets)
   const store = new EventStore(join(root, 'store'))
   const runner = new TaskRunner(host.ctx, store, { maxInProgress: 2, ...runnerPatch })

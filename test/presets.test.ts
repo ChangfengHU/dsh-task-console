@@ -12,15 +12,21 @@ test('validateSpec rejects bad ids and keeps only known native tools', () => {
   assert.throws(() => validateSpec({ ...base, id: 'Inspector' }), /id/)
   const spec = validateSpec({ ...base, tools: ['bash', 'nope', 'bash'], mcp: ['vault'], skills: ['a'] })
   assert.deepEqual(spec.tools, ['bash'])
-  assert.deepEqual(spec.mcp, ['vault'])
+  assert.deepEqual(spec.mcpTools, { vault: ['*'] })
+  assert.deepEqual(spec.mcpPolicy, {})
 })
 
 test('renderComposition lists only chosen rows and renames a live host MCP', () => {
-  const spec = validateSpec({ ...base, tools: ['ask-user', 'fs-search'], mcp: ['vault', 'ghost'], skills: ['linux-clash-skill'] })
-  const out = renderComposition(spec, [{ serverName: 'vault', live: true, config: { serverName: 'vault', transport: 'streamable-http', url: 'https://x/mcp/vault', headers: { Authorization: 'Bearer sd@secret' } } }])
+  const spec = validateSpec({ ...base, tools: ['ask-user', 'fs-search'], mcpTools: { vault: ['get_config'], ghost: ['status'] }, skills: ['linux-clash-skill'] })
+  const out = renderComposition(spec, [{ serverName: 'vault', tools: ['get_config', 'delete_config'], live: true, config: { serverName: 'vault', transport: 'streamable-http', url: 'https://x/mcp/vault', headers: { Authorization: 'Bearer sd@secret' } } }])
   assert.match(out.yml, /dsh-tool-ask-user/)
   assert.match(out.yml, /dsh-tool-fs-search/)
   assert.doesNotMatch(out.yml, /dsh-tool-bash/)
+  assert.match(out.yml, /agent-tool-fence/)
+  assert.match(out.yml, /filtered-mcp-client/)
+  assert.match(out.yml, /allowedTools:\n\s+- get_config/)
+  const allowedBlock = out.yml.slice(out.yml.indexOf('    allowedTools:'), out.yml.indexOf('\n\n', out.yml.indexOf('    allowedTools:')))
+  assert.doesNotMatch(allowedBlock, /delete_config/)
   assert.match(out.yml, /serverName: vault-inspector/)
   assert.deepEqual(out.renamed, [{ from: 'vault', to: 'vault-inspector' }])
   assert.match(out.yml, /ghost: 宿主里没有/)
@@ -31,15 +37,26 @@ test('renderComposition lists only chosen rows and renames a live host MCP', () 
 })
 
 test('renderComposition supplies the required todo policy', () => {
-  const preview = renderComposition({ ...base, tools: ['todo'], mcp: [], skills: [] }, [])
+  const preview = renderComposition({ ...base, tools: ['todo'], mcpTools: {}, mcpPolicy: {}, skills: [] }, [])
   assert.match(preview.yml, /tool-todo[\s\S]*allowParallelInProgress: true/)
+})
+
+test('the inherited fence keeps selected preset-local shadows visible to child chats', () => {
+  const preview = renderComposition(
+    { ...base, tools: ['ask-user'], mcpTools: {}, mcpPolicy: {}, skills: [] },
+    [],
+    ['ask_user_question', 'publish_public_html'],
+  )
+  const fence = preview.yml.slice(preview.yml.indexOf('inherited-tool-fence'))
+  assert.doesNotMatch(fence, /ask_user_question/)
+  assert.match(fence, /publish_public_html/)
 })
 
 test('permission is derived from tools, not declared', () => {
   const f = () => false
-  assert.equal(permissionOf({ tools: ['ask-user'], mcp: [] }, f), 'read-only')
-  assert.equal(permissionOf({ tools: ['ask-user'], mcp: ['fleet'] }, () => true), 'limited-write')
-  assert.equal(permissionOf({ tools: ['bash'], mcp: [] }, f), 'write')
+  assert.equal(permissionOf({ tools: ['ask-user'], mcpTools: {} }, f), 'read-only')
+  assert.equal(permissionOf({ tools: ['ask-user'], mcpTools: { fleet: ['status'] } }, () => true), 'limited-write')
+  assert.equal(permissionOf({ tools: ['bash'], mcpTools: {} }, f), 'write')
 })
 
 test('mask hides bearer tokens and url credentials', () => {
@@ -53,7 +70,7 @@ test('writePreset lays out the directory, copies chosen skills, and readSpec rou
   const root = await mkdtemp(join(tmpdir(), 'tc-'))
   const lib = join(root, 'lib'); await mkdir(join(lib, 'linux-clash-skill'), { recursive: true })
   await writeFile(join(lib, 'linux-clash-skill', 'SKILL.md'), '---\nname: linux-clash-skill\ndescription: clash\n---\nbody')
-  const spec = validateSpec({ ...base, tools: ['bash'], mcp: [], skills: ['linux-clash-skill'] })
+  const spec = validateSpec({ ...base, tools: ['bash'], mcpTools: {}, skills: ['linux-clash-skill'] })
   const presetRoot = join(root, 'presets')
   const { path } = await writePreset(spec, [], [{ name: 'linux-clash-skill', dir: join(lib, 'linux-clash-skill'), description: '', root: 'x' }], presetRoot)
   assert.equal(path, join(presetRoot, 'inspector'))

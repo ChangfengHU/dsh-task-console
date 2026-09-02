@@ -29,7 +29,12 @@ await mkdir(out, { recursive: true })
 const HOST_EXTERNAL = ['@deepseek-ai/cordis', '@deepseek-ai/dsh-*', '@deepseek-ai/schemastery', 'better-sqlite3', 'zod', 'yaml', 'node:*']
 
 await build({
-  entryPoints: [join(root, 'src/index.ts'), join(root, 'src/typert.host.ts')],
+  entryPoints: [
+    join(root, 'src/index.ts'),
+    join(root, 'src/typert.host.ts'),
+    join(root, 'src/agent-tool-fence.ts'),
+    join(root, 'src/filtered-mcp-client.ts'),
+  ],
   outdir: out,
   bundle: true,
   format: 'esm',
@@ -88,4 +93,4 @@ ${heavyBody}
 };
 `)
 
-console.log('built lib/index.js, lib/typert.host.js, lib/client.js, lib/client-heavy.js')
+console.log('built host, policy, filtered MCP and client bundles')

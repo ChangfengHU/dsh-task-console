@@ -2,7 +2,11 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.18.6):** keeps the plugin focused on Agent and Board. Task-owned Sessions are internal evidence: they stay out of ordinary DSH navigation and search without being archived, and remain directly openable from the task's Related Sessions drawer, Trace, and exact `?session=` links. Historical task-session relationships are reconciled from the append-only event log; logs, task evidence, workspace files, and deliverables are retained. Agent presets that select `todo_write` now emit its required parallel-progress policy and mount cleanly on DSH `0.1.1-rc.2`.
+**This release (0.19.0):** makes Agent permissions tool-granular. Native and MCP tools now live in one capability matrix; MCP servers are only grouping labels, while each advertised tool is independently selectable. Generated presets hide every inherited host tool, mount only the chosen MCP definitions through a filtered client, and may enforce per-tool argument policies such as Vault key prefixes and Fleet hostname patterns. A real try-run still reports the exact request header, so the UI claim is verifiable against what the model actually received.
+
+The deployed `装机者` preset now defaults to a base Fleet node: SSH/`claude`, Clash/Mihomo, Controller/Dashboard, browser/VNC, Cloudflare hostnames, Fleet registration and evidence. `chatgpt-image-service`, `imggen-*`, browser-login identity and a pinned image job are an explicit image-worker extension rather than a false prerequisite of ordinary machine onboarding.
+
+Task-owned Sessions remain internal evidence: they stay out of ordinary DSH navigation and search without being archived, and remain directly openable from the task's Related Sessions drawer, Trace, and exact `?session=` links. Historical task-session relationships are reconciled from the append-only event log; logs, task evidence, workspace files, and deliverables are retained.
 
 The task list supports search-aware pagination and guarded cleanup of completed or all task records; bulk cleanup never removes DSH sessions or workspace files. The list, Agent editor, task detail, replay DAG, delivery area, and Related Sessions drawer inherit the same DSH light/dark design tokens instead of rendering a hard-coded white cartoon island inside the host shell.
 
@@ -55,6 +59,5 @@ CLI-backed providers: `codex-local` calls the terminators fine; `claude-local` t
 
 ## Known limits
 
-- MCP servers are ticked whole (no per-tool subset yet).
-- If the host composition still runs an MCP server with the same `serverName`, the preset mounts it under `<server>-<id>` — every agent can still see the host copy until that row is removed.
-- CLI-backed providers (`claude-local`, `codex-local`) bring their own Bash / Edit; dsh's fence cannot remove those. Provider-side sandboxing is the next step.
+- The DSH fence governs model-facing DSH tools. CLI-backed providers (`claude-local`, `codex-local`) bring their own Bash/Edit, which require provider-side process sandboxing when those capabilities must also be constrained.
+- Exact-tool and argument policies are enforced in the Agent scope. An upstream MCP should still issue scoped credentials when it needs a security boundary against a compromised host process.

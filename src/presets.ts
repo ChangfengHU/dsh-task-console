@@ -24,30 +24,38 @@ import type { AgentSpec, NativeTool, Preview, SkillEntry } from './wire.ts'
 export const ID_RE = /^[a-z0-9][a-z0-9-]*$/
 
 /** Native tools the editor offers, each mapping to one composition row. */
-export const NATIVE_TOOLS: readonly (NativeTool & { rows: string })[] = [
+export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: string[] })[] = [
   { id: 'ask-user', label: 'ask_user_question', group: '交互', writes: false,
     description: '停下来问人。没有它,拿不准的事只能失败重来。',
+    schemaNames: ['ask_user_question'],
     rows: "- id: tool-ask-user\n  name: '@deepseek-ai/dsh-tool-ask-user'" },
   { id: 'bash', label: 'bash', group: '本机', writes: true,
     description: '在 dsh 宿主机执行 shell。',
+    schemaNames: ['bash'],
     rows: "- id: tool-bash\n  name: '@deepseek-ai/dsh-tool-bash'\n  disabled: !!js process.platform === 'win32'" },
-  { id: 'fs', label: 'read / write / edit', group: '本机', writes: true,
-    description: '读写改文件。',
+  { id: 'fs', label: 'read / write / edit / read_image', group: '本机', writes: true,
+    description: '读写改文件并读取本地图片。',
+    schemaNames: ['edit', 'read', 'read_image', 'write'],
     rows: "- id: tool-fs\n  name: '@deepseek-ai/dsh-tool-fs'" },
   { id: 'fs-search', label: 'glob / grep', group: '本机', writes: false,
     description: '找文件、搜内容,只读。',
+    schemaNames: ['glob', 'grep'],
     rows: "- id: tool-fs-search\n  name: '@deepseek-ai/dsh-tool-fs-search'\n  config:\n    sampleOverCapGlobResults: false" },
   { id: 'str-replace-editor', label: 'str_replace_editor', group: '本机', writes: true,
     description: '精确替换式编辑器。',
+    schemaNames: ['str_replace_editor'],
     rows: "- id: tool-str-replace-editor\n  name: '@deepseek-ai/dsh-tool-str-replace-editor'" },
   { id: 'web', label: 'web_search / fetch', group: '网络', writes: false,
     description: '搜网页、抓页面。',
+    schemaNames: ['web_fetch', 'web_search'],
     rows: "- id: tool-web\n  name: '@deepseek-ai/dsh-tool-web'" },
   { id: 'jobs', label: 'job_list / job_output / job_kill', group: '本机', writes: false,
     description: '收后台任务的输出、停掉它。',
+    schemaNames: ['job_kill', 'job_list', 'job_output'],
     rows: "- id: tool-jobs\n  name: '@deepseek-ai/dsh-tool-jobs'" },
   { id: 'todo', label: 'todo_write', group: '交互', writes: false,
     description: '给自己记待办。',
+    schemaNames: ['todo_write'],
     rows: "- id: tool-todo\n  name: '@deepseek-ai/dsh-tool-todo'\n  config:\n    allowParallelInProgress: true" },
 ]
 
@@ -100,10 +108,10 @@ export async function scanSkills(home = homedir()): Promise<SkillEntry[]> {
 }
 
 /** Which permission the selected tools add up to. */
-export function permissionOf(spec: Pick<AgentSpec, 'tools' | 'mcp'>, mcpWrites: (server: string) => boolean): Preview['permission'] {
+export function permissionOf(spec: Pick<AgentSpec, 'tools' | 'mcpTools'>, mcpWrites: (server: string, tool: string) => boolean): Preview['permission'] {
   const native = spec.tools.map(id => NATIVE_TOOLS.find(t => t.id === id)).filter(Boolean) as NativeTool[]
   if (native.some(t => DANGEROUS.has(t.id))) return 'write'
-  if (native.some(t => t.writes) || spec.mcp.some(mcpWrites)) return 'limited-write'
+  if (native.some(t => t.writes) || Object.entries(spec.mcpTools).some(([server, tools]) => tools.some(tool => mcpWrites(server, tool)))) return 'limited-write'
   return 'read-only'
 }
 
@@ -124,6 +132,8 @@ export function mask(text: string): string {
 /** Host MCP entries the generator copies rows from. */
 export interface HostMcp {
   serverName: string
+  /** Raw tools currently advertised by this server. */
+  tools?: string[]
   /** The entry's full `config` block, headers included — copied verbatim. */
   config: Record<string, unknown>
   /** Whether the host still runs it, which forces a rename to avoid the name clash. */
@@ -131,7 +141,7 @@ export interface HostMcp {
 }
 
 /** Render `agent.cordis.yml` for a spec. Pure; the caller writes it. */
-export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[]): Preview {
+export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inheritedTools: string[] = []): Preview {
   const parts: string[] = []
   const renamed: Preview['renamed'] = []
   parts.push(`# ${spec.name || spec.id} — 由 dsh-task-console 生成。可以直接改;dsh 热读取 preset 根,保存即生效。`)
@@ -145,18 +155,33 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[]): Preview 
     if (tool) parts.push(tool.rows)
   }
 
-  for (const serverName of spec.mcp) {
+  for (const [serverName, selected] of Object.entries(spec.mcpTools)) {
     const host = hostMcp.find(h => h.serverName === serverName)
     if (!host) { parts.push(`# mcp ${serverName}: 宿主里没有这个服务,跳过`); continue }
+    const allowedTools = selected.includes('*') ? host.tools ?? [] : selected
+    if (!allowedTools.length) { parts.push(`# mcp ${serverName}: 没有选择工具,跳过`); continue }
     let name = serverName
     if (host.live) { name = `${serverName}-${spec.id}`; renamed.push({ from: serverName, to: name }) }
-    const config = { ...host.config, serverName: name }
+    const toolRules = spec.mcpPolicy[serverName] ?? {}
+    const config = { ...host.config, serverName: name, allowedTools, ...(Object.keys(toolRules).length ? { toolRules } : {}) }
     const body = toYaml(config, { lineWidth: 0 }).trimEnd()
-    parts.push(`${host.live ? `# 宿主层仍有同名 ${serverName},改名挂载;宿主那行摘掉后可改回\n` : ''}- id: mcp-${name}\n  name: '@deepseek-ai/dsh-mcp-client'\n  config:\n${indent(body, 4)}`)
+    parts.push(`${host.live ? `# 宿主层仍有同名 ${serverName},preset 围栏会隐藏宿主副本\n` : ''}- id: mcp-${name}\n  name: 'dsh-task-console/filtered-mcp-client'\n  config:\n${indent(body, 4)}`)
   }
 
   if (spec.skills.length) {
     parts.push(`# skills/ 随 preset 走;baseUrl 是 preset 自己的目录\n- id: skill-filesystem\n  name: '@deepseek-ai/dsh-skill-filesystem'\n  config:\n    providerName: preset-${spec.id}\n    includeDefaultRoots: false\n    customSkillDirs:\n      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"\n- id: tool-skill\n  name: '@deepseek-ai/dsh-tool-skill'`)
+  }
+
+  const inherited = inheritedTools.length ? inheritedTools : hostMcp.flatMap(host => (host.tools ?? []).map(tool => `mcp__${host.serverName}__${tool}`))
+  // A preset-local tool shadows a byte-equal global. Do not deny that name:
+  // child chat scopes inherit the preset layer, so its own restriction would
+  // otherwise hide the selected shadow along with the global definition.
+  const selectedLocalNames = new Set(spec.tools.flatMap(id => NATIVE_TOOLS.find(tool => tool.id === id)?.schemaNames ?? []))
+  if (spec.skills.length) selectedLocalNames.add('skill')
+  const deniedInherited = [...new Set(inherited)].filter(name => !selectedLocalNames.has(name))
+  if (deniedInherited.length) {
+    const fence = toYaml({ deny: deniedInherited }, { lineWidth: 0 }).trimEnd()
+    parts.push(`- id: inherited-tool-fence\n  name: 'dsh-task-console/agent-tool-fence'\n  config:\n${indent(fence, 4)}`)
   }
 
   return { yml: parts.join('\n\n') + '\n', renamed, permission: permissionOf(spec, () => true) }
@@ -166,13 +191,56 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[]): Preview 
 const SPEC_FILE = 'task-console.json'
 
 export function validateSpec(raw: unknown): AgentSpec {
-  const s = (raw ?? {}) as Partial<AgentSpec>
+  const s = (raw ?? {}) as Partial<AgentSpec> & { mcp?: unknown }
   const id = String(s.id ?? '').trim()
   if (!ID_RE.test(id)) throw new Error('id 只能用 a-z 0-9 和 -,且以字母或数字开头')
   const name = String(s.name ?? '').trim()
   if (!name) throw new Error('名字必填')
   const list = (v: unknown) => Array.isArray(v) ? [...new Set(v.map(String).filter(Boolean))] : []
   const effort = s.effort === 'low' || s.effort === 'medium' || s.effort === 'high' ? s.effort : ''
+  const mcpTools: Record<string, string[]> = {}
+  if (s.mcpTools && typeof s.mcpTools === 'object' && !Array.isArray(s.mcpTools)) {
+    for (const [server, tools] of Object.entries(s.mcpTools)) {
+      const clean = list(tools)
+      if (server.trim() && clean.length) mcpTools[server.trim()] = clean
+    }
+  } else {
+    // 0.18 and earlier persisted whole-server selections as `mcp: string[]`.
+    for (const server of list(s.mcp)) mcpTools[server] = ['*']
+  }
+  const mcpPolicy: AgentSpec['mcpPolicy'] = {}
+  if (s.mcpPolicy && typeof s.mcpPolicy === 'object' && !Array.isArray(s.mcpPolicy)) {
+    for (const [server, policies] of Object.entries(s.mcpPolicy)) {
+      if (!policies || typeof policies !== 'object' || Array.isArray(policies)) continue
+      const serverPolicies: AgentSpec['mcpPolicy'][string] = {}
+      for (const [tool, candidate] of Object.entries(policies)) {
+        if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
+        const rule = candidate as { valuesOrPrefixes?: unknown; patterns?: unknown }
+        const cleanMap = (value: unknown): Record<string, string[]> => {
+          const out: Record<string, string[]> = {}
+          if (!value || typeof value !== 'object' || Array.isArray(value)) return out
+          for (const [argument, choices] of Object.entries(value)) {
+            const clean = list(choices)
+            if (argument.trim() && clean.length) out[argument.trim()] = clean
+          }
+          return out
+        }
+        const patterns: Record<string, string> = {}
+        if (rule.patterns && typeof rule.patterns === 'object' && !Array.isArray(rule.patterns)) {
+          for (const [argument, pattern] of Object.entries(rule.patterns)) if (argument.trim() && typeof pattern === 'string' && pattern) {
+            try { new RegExp(pattern) } catch { throw new Error(`MCP policy regex 无效:${server}/${tool}/${argument}`) }
+            patterns[argument.trim()] = pattern
+          }
+        }
+        const valuesOrPrefixes = cleanMap(rule.valuesOrPrefixes)
+        if (Object.keys(valuesOrPrefixes).length || Object.keys(patterns).length) serverPolicies[tool] = {
+          ...(Object.keys(valuesOrPrefixes).length ? { valuesOrPrefixes } : {}),
+          ...(Object.keys(patterns).length ? { patterns } : {}),
+        }
+      }
+      if (Object.keys(serverPolicies).length) mcpPolicy[server] = serverPolicies
+    }
+  }
   return {
     id, name,
     description: String(s.description ?? '').trim(),
@@ -180,19 +248,20 @@ export function validateSpec(raw: unknown): AgentSpec {
     model: String(s.model ?? '').trim(),
     effort,
     tools: list(s.tools).filter(t => NATIVE_TOOLS.some(n => n.id === t)),
-    mcp: list(s.mcp),
+    mcpTools,
+    mcpPolicy,
     skills: list(s.skills),
   }
 }
 
 /** Write (or rewrite) one preset directory from a spec. Returns its path. */
-export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root = userPresetRoot()): Promise<{ path: string; preview: Preview }> {
+export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root = userPresetRoot(), inheritedTools: string[] = []): Promise<{ path: string; preview: Preview }> {
   const dir = resolve(root, spec.id)
   if (!dir.startsWith(resolve(root) + '/')) throw new Error('非法 id')
   await mkdir(dir, { recursive: true, mode: 0o700 })
   await chmod(root, 0o700).catch(() => undefined)
 
-  const preview = renderComposition(spec, hostMcp)
+  const preview = renderComposition(spec, hostMcp, inheritedTools)
   await writeFile(join(dir, 'agent.cordis.yml'), preview.yml, { mode: 0o600 })
   await writeFile(join(dir, 'preset.yml'), `name: ${JSON.stringify(spec.name)}\ndescription: ${JSON.stringify(spec.description)}\n`, { mode: 0o600 })
   await writeFile(join(dir, SPEC_FILE), JSON.stringify(spec, null, 2) + '\n', { mode: 0o600 })

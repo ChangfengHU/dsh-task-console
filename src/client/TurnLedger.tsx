@@ -71,29 +71,42 @@ function Tool({ r }: { r: ToolRow }) {
   )
 }
 
-function Step({ s }: { s: StepRow }) {
+type AuditFilter = 'all' | 'llm' | 'skill' | 'mcp' | 'tools'
+
+function Step({ s, filter }: { s: StepRow; filter: AuditFilter }) {
   const [open, setOpen] = useState(false)
+  const tools = s.tools.filter(tool => {
+    if (filter === 'all') return true
+    if (filter === 'mcp') return tool.kind === 'mcp'
+    if (filter === 'skill') return tool.kind === 'skill'
+    if (filter === 'tools') return !['mcp', 'skill'].includes(tool.kind)
+    return false
+  })
+  if (filter !== 'all' && filter !== 'llm' && tools.length === 0) return null
   return (
     <div className="dtc-step-row">
       <div className="dtc-step-head">
-        <span className="dtc-faint">第 {s.step} 步</span>
+        <span className="dtc-faint">第 {s.step} 步</span>{filter === 'all' || filter === 'llm' ? <span className="dtc-pill dtc-p-acc">LLM RESPONSE</span> : null}
         <span className="dtc-mono dtc-faint">{s.model ?? ''}</span>
         <span className="dtc-faint">↓{tok(s.usage.input)} ↑{tok(s.usage.output)}{s.usage.reasoning ? ` (思考 ${tok(s.usage.reasoning)})` : ''}</span>
         <span className="dtc-faint">{ms(s.ms)}</span>
         <span className="sp" />
-        {s.tools.length ? <span className="dtc-faint">{s.tools.length} 次工具</span> : null}
-        {s.text ? <button className="dtc-btn sm" onClick={() => setOpen(o => !o)}>{open ? '收起回复' : '看回复'}</button> : null}
+        {tools.length ? <span className="dtc-faint">{tools.length} 次工具</span> : null}
+        {s.text && (filter === 'all' || filter === 'llm') ? <button className="dtc-btn sm" onClick={() => setOpen(o => !o)}>{open ? '收起响应' : '查看响应'}</button> : null}
       </div>
-      {s.tools.map(r => <Tool key={r.callId} r={r} />)}
-      {open ? <div className="dtc-hand" style={{ marginTop: 6 }}>{s.text}</div> : null}
+      {tools.map(r => <Tool key={r.callId} r={r} />)}
+      {open && (filter === 'all' || filter === 'llm') ? <div className="dtc-hand" style={{ marginTop: 6 }}>{s.text}</div> : null}
     </div>
   )
 }
 
 export function TurnLedgerView({ ledger, compact }: { ledger: Ledger; compact?: boolean }) {
+  const [filter, setFilter] = useState<AuditFilter>('all')
+  const filters: { id: AuditFilter; label: string }[] = [{ id: 'all', label: '全部' }, { id: 'llm', label: 'LLM' }, { id: 'skill', label: 'Skills' }, { id: 'mcp', label: 'MCP' }, { id: 'tools', label: 'Tools' }]
   return (
     <div className="dtc-ledger">
       <LedgerTotals ledger={ledger} />
+      <div className="dtc-audit-head"><div><b>运行审计</b><small>LLM 请求/响应、Skill、MCP 与 Tool 调用</small></div><div className="dtc-audit-filters">{filters.map(item => <button key={item.id} className={filter === item.id ? 'on' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>)}</div></div>
       {ledger.turns.length === 0 ? <div className="dtc-empty">No turns in this session yet.</div> : null}
       {ledger.turns.map(t => (
         <div key={t.turn} className="dtc-turn">
@@ -104,8 +117,8 @@ export function TurnLedgerView({ ledger, compact }: { ledger: Ledger; compact?: 
             <span className="sp" />
             <span className="dtc-faint">{t.steps.length} 步 · {t.steps.reduce((n, s) => n + s.tools.length, 0)} 次工具</span>
           </div>
-          {t.user && !compact ? <div className="dtc-user">{t.user.length > 400 ? t.user.slice(0, 400) + '…' : t.user}</div> : null}
-          {t.steps.map(s => <Step key={s.step} s={s} />)}
+          {t.user && (filter === 'all' || filter === 'llm') ? <div className="dtc-audit-request"><span className="dtc-pill dtc-p-acc">LLM REQUEST</span><p>{t.user.length > (compact ? 220 : 400) ? t.user.slice(0, compact ? 220 : 400) + '…' : t.user}</p></div> : null}
+          {t.steps.map(s => <Step key={s.step} s={s} filter={filter} />)}
         </div>
       ))}
     </div>

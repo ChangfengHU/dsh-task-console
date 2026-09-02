@@ -49,6 +49,7 @@ const client = await build({
   jsx: 'automatic',
   minify: true,
   external: ['react', 'react-dom', 'react/jsx-runtime'],
+  define: { __DTC_VERSION__: JSON.stringify(pkg.version) },
   logLevel: 'info',
 })
 
@@ -65,4 +66,26 @@ ${body}
 });
 `)
 
-console.log('built lib/index.js, lib/typert.host.js, lib/client.js')
+const heavy = await build({
+  entryPoints: [join(root, 'src/client/heavy.tsx')],
+  bundle: true,
+  write: false,
+  format: 'cjs',
+  platform: 'browser',
+  target: 'es2022',
+  jsx: 'automatic',
+  minify: true,
+  external: ['react', 'react-dom', 'react/jsx-runtime'],
+  logLevel: 'info',
+})
+const heavyBody = heavy.outputFiles[0].text.replace(/[ \t]+$/gm, '')
+await writeFile(join(out, 'client-heavy.js'), `window.__DSHTaskConsoleHeavyFactory__ = (require) => {
+\tvar module = { exports: {} };
+\tvar exports = module.exports;
+\tObject.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+${heavyBody}
+\treturn module.exports;
+};
+`)
+
+console.log('built lib/index.js, lib/typert.host.js, lib/client.js, lib/client-heavy.js')

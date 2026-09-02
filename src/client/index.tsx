@@ -1,166 +1,88 @@
-/**
- * Browser half: one sidebar footer button that opens the console as a
- * full-page overlay; the URL hash carries which screen is open.
- *
- * @module dsh-agent-task-console/client
- */
+/** Lightweight browser entry. Heavy Agent, Board, DAG, and Trace code is fetched on demand. */
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { AgentRow, AgentSpec, ArtifactView, Catalog, GraphSnapshot, Preview, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec, TryRunResult, TurnLedger } from '../wire.ts'
-import { Console, HASH_PREFIX, go, readRoute, type Api } from './Console.tsx'
-import { CONSOLE_REMOTE, unwrap } from './remote.ts'
-import { installStyles } from './styles.ts'
-import { SessionLedgerTab } from './TurnLedger.tsx'
+import type { AgentRow } from '../wire.ts'
+import { installLightStyles } from './light-styles.ts'
+
+declare const require: (id: string) => unknown
+declare const __DTC_VERSION__: string
 
 export const name = 'dsh-task-console'
 export const inject = ['slots', 'remote', 'sessions', 'inputTriggers']
+const HASH_PREFIX = '#/tc'
+
+type Heavy = typeof import('./heavy.tsx')
+type HeavyWindow = Window & { __DSHTaskConsoleHeavyFactory__?: (require: (id: string) => unknown) => Heavy }
+let heavyPromise: Promise<Heavy> | undefined
+
+function loadHeavy(): Promise<Heavy> {
+  if (heavyPromise) return heavyPromise
+  heavyPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script')
+    script.async = true
+    script.src = `/dsh-task-console/client-heavy.js?v=${encodeURIComponent(__DTC_VERSION__)}`
+    script.onload = () => {
+      script.remove()
+      const factory = (window as HeavyWindow).__DSHTaskConsoleHeavyFactory__
+      if (!factory) { reject(new Error('任务界面已下载，但没有注册模块')); return }
+      try { resolve(factory(require)) } catch (error) { reject(error) }
+    }
+    script.onerror = () => { script.remove(); reject(new Error('任务界面加载失败，请重试')) }
+    document.head.append(script)
+  }).catch(error => { heavyPromise = undefined; throw error })
+  return heavyPromise
+}
+
+function go(path: string): void { window.location.hash = `${HASH_PREFIX}/${path}`.replace(/\/+$/, '') }
 
 export async function apply(ctx: any): Promise<void> {
-  ctx.effect(() => installStyles(), 'task-console: stylesheet')
-  await ctx.remote.$mount(CONSOLE_REMOTE)
-  // A plugin reload can happen after the browser runtime's initial list pull.
-  // Refresh the official session baseline once; it is read-only and never
-  // creates, modifies, or removes a session.
-  void ctx.sessions.refresh().catch((error: unknown) => console.warn('[task-console] session baseline refresh failed:', error))
-
-  const call = async <T,>(method: string, payload?: unknown): Promise<T> => {
-    const service = ctx.get('remote.taskConsole')
-    const result = payload === undefined ? await service[method]() : await service[method](JSON.stringify(payload))
-    return JSON.parse(unwrap<string>(result, method)) as T
-  }
-  const api: Api = {
-    catalog: () => call<Catalog>('catalog'),
-    agents: () => call<AgentRow[]>('agents'),
-    previewAgent: (spec: AgentSpec) => call<Preview>('previewAgent', spec),
-    saveAgent: (spec: AgentSpec) => call<{ path: string; preview: Preview }>('saveAgent', spec),
-    deleteAgent: async (id: string) => { await call('deleteAgent', { id }) },
-    tryRun: (id: string) => call<TryRunResult>('tryRun', { id }),
-    tasks: () => call<{ tasks: (TaskSpec & { nextFire: string | null })[]; runs: Run[] }>('tasks'),
-    createTask: (spec: Partial<TaskSpec>) => call<{ id: string }>('createTask', spec),
-    setTaskEnabled: async (id: string, enabled: boolean) => { await call('setTaskEnabled', { id, enabled }) },
-    deleteTask: async (id: string) => { await call('deleteTask', { id }) },
-    deleteTasks: async (ids: string[]) => { await call('deleteTasks', { ids }) },
-    fireTask: (id: string, by?: 'manual' | 'retry') => call<{ runId: string }>('fireTask', { id, by }),
-    cancelRun: async (runId: string) => { await call('cancelRun', { runId }) },
-    taskSnapshot: (id: string, batchId?: string) => call<TaskSnapshot>('taskSnapshot', { id, batchId }),
-    taskGraph: (id: string, batchId?: string) => call<GraphSnapshot>('taskGraph', { id, batchId }),
-    taskEvents: (id: string) => call<TaskEvent[]>('taskEvents', { id }),
-    taskArtifacts: (id: string, batchId?: string) => call<ArtifactView[]>('taskArtifacts', { id, batchId }),
-    artifactContent: (id: string, artifactId: string, batchId?: string) => call<{ artifact: ArtifactView; base64: string }>('artifactContent', { id, artifactId, batchId }),
-    publishArtifact: (id: string, artifactId: string) => call<{ publicUrl: string }>('publishArtifact', { id, artifactId }),
-    reviewCard: async (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => { await call('reviewCard', { cardId, decision, note, targetCardId }) },
-    unblockCard: async (cardId: string) => { await call('unblockCard', { cardId }) },
-    startAgentSession: (agentId: string, text?: string, cwd?: string) => call<{ sessionId: string; name: string }>('startAgentSession', { agentId, text, cwd }),
-    openSession: (sessionId: string) => openWhenListed(ctx, sessionId),
-    sessionTurns: (sessionId: string) => call<TurnLedger>('sessionTurns', { sessionId }),
-    agentActivity: (agentId: string) => call<any>('agentActivity', { agentId }),
-  }
-
-  // `@巡检员 …` in the composer: pick an agent, type the ask, Enter starts a
-  // session on that agent's preset with the ask as its first message.
-  let roster: AgentRow[] = []
-  const refreshRoster = () => api.agents().then(a => { roster = a.filter(x => !x.broken) }).catch(() => undefined)
-  const claimFor = (agent: AgentRow, prefix: string) => ({
-    claim: {
-      token: prefix,
-      hint: `要 ${agent.name} 做什么`,
-      images: false,
-      submit: async (args: string, actx: any) => {
-        try {
-          const cwd = currentCwd(ctx, actx)
-          const { sessionId } = await api.startAgentSession(agent.id, args, cwd)
-          await openWhenListed(ctx, sessionId)
-          return { kind: 'success' as const }
-        } catch (e) { return { kind: 'error' as const, text: e instanceof Error ? e.message : String(e) } }
-      },
-    },
-  })
-  const source = {
-    trigger: '@' as const,
-    name: 'Agent',
-    order: -10,
-    warm: () => { void refreshRoster() },
-    candidates: async (_session: unknown, req: { query: string }) => {
-      if (!roster.length) await refreshRoster()
-      const q = (req.query ?? '').toLowerCase()
-      return roster.filter(a => !q || a.name.toLowerCase().includes(q) || a.id.includes(q)).map(a => ({
-        name: a.name, description: a.description || a.id, hint: '开一个它的会话', value: a.id, section: 'Agent',
-      }))
-    },
-    onPick: (pick: { candidate: { value?: string } }) => {
-      const agent = roster.find(a => a.id === pick.candidate.value)
-      return agent ? claimFor(agent, `@${agent.name} `) : undefined
-    },
-    matchEnter: async (_session: unknown, line: string) => {
-      const m = /^@(\S+)\s*([\s\S]*)$/.exec(line.trim())
-      if (!m) return undefined
-      if (!roster.length) await refreshRoster()
-      const agent = roster.find(a => a.name === m[1] || a.id === m[1])
-      return agent ? claimFor(agent, `@${m[1]} `) : undefined
-    },
-  }
-  try { ctx.effect(() => ctx.inputTriggers.registerSource(source), 'task-console: @agent trigger') } catch (e) { console.warn('[task-console] @agent trigger not registered:', e) }
-
-  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
-    name: 'sidebar.footer.action',
-    id: 'task-console',
-    order: 30,
-    inject: () => ({ api }),
-  }, FooterEntry))
-
-  // Trace beside Chat / Trajectory: this session's MCP / skill / model work, turn by turn.
-  ctx.slots.inject('conversation.view', () => ctx.slots.register({
-    name: 'conversation.view',
-    id: 'task-console-trace',
-    order: 25,
-    label: () => 'Trace',
-    inject: (sessionId: string) => ({ api, sessionId }),
-  }, SessionLedgerTab))
+  ctx.effect(() => installLightStyles(), 'task-console: lightweight stylesheet')
+  ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'task-console', order: 30, inject: () => ({ ctx }) }, FooterEntry))
+  ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'task-console-trace', order: 25, label: () => 'Trace', inject: (sessionId: string) => ({ ctx, sessionId }) }, LazyTrace))
+  try { ctx.effect(() => ctx.inputTriggers.registerSource(lazyAgentSource(ctx)), 'task-console: lazy @agent trigger') } catch (error) { console.warn('[task-console] @agent trigger not registered:', error) }
 }
 
-/** The workspace path of the session the composer belongs to, when knowable. */
-function currentCwd(ctx: any, actx: any): string | undefined {
-  try {
-    const id = actx?.session?.id ?? actx?.sessionId
-    const snap = ctx.sessions?.list?.getSnapshot?.()
-    const cwd = id && snap?.byId?.[id]?.cwd
-    if (typeof cwd === 'string' && cwd) return cwd
-    const cur = snap?.current && snap.byId?.[snap.current]?.cwd
-    return typeof cur === 'string' && cur ? cur : undefined
-  } catch { return undefined }
+function useHeavy(ctx: any): { heavy?: Heavy; api?: Awaited<ReturnType<Heavy['activate']>>; error?: string } {
+  const [state, setState] = useState<{ heavy?: Heavy; api?: Awaited<ReturnType<Heavy['activate']>>; error?: string }>({})
+  useEffect(() => { let live = true; loadHeavy().then(async heavy => ({ heavy, api: await heavy.activate(ctx) })).then(next => { if (live) setState(next) }).catch(error => { if (live) setState({ error: String(error?.message ?? error) }) }); return () => { live = false } }, [ctx])
+  return state
 }
 
-/** Open a session once the client's list mirror has learned about it (the host announces it over the socket). */
-async function openWhenListed(ctx: any, sessionId: string): Promise<void> {
-  for (let i = 0; i < 40; i++) {
-    try { ctx.sessions.open(sessionId); return } catch { /* not listed yet */ }
-    await new Promise(r => setTimeout(r, 250))
-  }
-  throw new Error('会话已建好,但列表还没刷出来;在左侧找一下')
+function LazyConsole({ ctx }: { ctx: any }) {
+  const { heavy, api, error } = useHeavy(ctx)
+  if (error) return <div className="dtc-lazy error">{error}</div>
+  if (!heavy || !api) return <div className="dtc-lazy"><div><span />正在加载任务界面…</div></div>
+  return <heavy.Console api={api} />
 }
 
-/** Independent Agent and Task entries share the same full-page console shell. */
-function FooterEntry({ api, wide }: { api: Api; wide?: boolean }) {
-  const [open, setOpen] = useState(readRoute().length > 0 || window.location.hash.startsWith(HASH_PREFIX))
-  useEffect(() => {
-    const on = () => setOpen(window.location.hash.startsWith(HASH_PREFIX))
-    window.addEventListener('hashchange', on)
-    on()
-    return () => window.removeEventListener('hashchange', on)
-  }, [])
+function LazyTrace({ ctx, sessionId }: { ctx: any; sessionId: string }) {
+  const { heavy, api, error } = useHeavy(ctx)
+  if (error) return <div className="dtc-lazy error">{error}</div>
+  if (!heavy || !api) return <div className="dtc-lazy"><div><span />正在加载 Trace…</div></div>
+  return <heavy.SessionLedgerTab api={api} sessionId={sessionId} />
+}
+
+function FooterEntry({ ctx, wide }: { ctx: any; wide?: boolean }) {
+  const [open, setOpen] = useState(window.location.hash.startsWith(HASH_PREFIX))
+  useEffect(() => { const on = () => setOpen(window.location.hash.startsWith(HASH_PREFIX)); window.addEventListener('hashchange', on); on(); return () => window.removeEventListener('hashchange', on) }, [])
   const narrow = wide === false
-  return (
-    <>
-      <div className="dtc-footstack">
-        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}>
-          <span className="ic">◎</span>{narrow ? null : <span>Agent</span>}
-        </button>
-        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务看板" aria-label="任务看板" onClick={() => go('tasks')}>
-          <span className="ic">▦</span>{narrow ? null : <span>Board</span>}
-        </button>
-      </div>
-      {open ? createPortal(<Console api={api} />, document.body) : null}
-    </>
-  )
+  return <><div className="dtc-footstack"><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}><span className="ic">◎</span>{narrow ? null : <span>Agent</span>}</button><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务看板" aria-label="任务看板" onClick={() => go('tasks')}><span className="ic">▦</span>{narrow ? null : <span>Board</span>}</button></div>{open ? createPortal(<LazyConsole ctx={ctx} />, document.body) : null}</>
+}
+
+function currentCwd(ctx: any, action: any): string | undefined {
+  try { const id = action?.session?.id ?? action?.sessionId; const snap = ctx.sessions?.list?.getSnapshot?.(); const cwd = id && snap?.byId?.[id]?.cwd; if (typeof cwd === 'string' && cwd) return cwd; const current = snap?.current && snap.byId?.[snap.current]?.cwd; return typeof current === 'string' && current ? current : undefined } catch { return undefined }
+}
+
+function lazyAgentSource(ctx: any) {
+  let roster: AgentRow[] = []
+  const api = async () => (await loadHeavy()).activate(ctx)
+  const refresh = async () => { roster = (await (await api()).agents()).filter(agent => !agent.broken) }
+  const claimFor = (agent: AgentRow, prefix: string) => ({ claim: { token: prefix, hint: `要 ${agent.name} 做什么`, images: false, submit: async (args: string, action: any) => { try { const service = await api(); const { sessionId } = await service.startAgentSession(agent.id, args, currentCwd(ctx, action)); await service.openSession(sessionId); return { kind: 'success' as const } } catch (error) { return { kind: 'error' as const, text: error instanceof Error ? error.message : String(error) } } } } })
+  return {
+    trigger: '@' as const, name: 'Agent', order: -10, warm: () => undefined,
+    candidates: async (_session: unknown, request: { query: string }) => { if (!roster.length) await refresh(); const query = (request.query ?? '').toLowerCase(); return roster.filter(agent => !query || agent.name.toLowerCase().includes(query) || agent.id.includes(query)).map(agent => ({ name: agent.name, description: agent.description || agent.id, hint: '开一个它的会话', value: agent.id, section: 'Agent' })) },
+    onPick: (pick: { candidate: { value?: string } }) => { const agent = roster.find(row => row.id === pick.candidate.value); return agent ? claimFor(agent, `@${agent.name} `) : undefined },
+    matchEnter: async (_session: unknown, line: string) => { const match = /^@(\S+)\s*([\s\S]*)$/.exec(line.trim()); if (!match) return undefined; if (!roster.length) await refresh(); const agent = roster.find(row => row.name === match[1] || row.id === match[1]); return agent ? claimFor(agent, `@${match[1]} `) : undefined },
+  }
 }

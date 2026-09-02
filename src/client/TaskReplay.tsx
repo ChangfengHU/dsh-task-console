@@ -137,7 +137,7 @@ function TaskDag({ graph, cards, selected, onSelect }: { graph: PositionedTaskGr
   </div>
 }
 
-export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & LedgerApi; agents: AgentRow[]; id: string; runId?: string; toast: (m: string) => void }) {
+export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: TasksApi & LedgerApi; agents: AgentRow[]; id: string; runId?: string; sessionId?: string; toast: (m: string) => void }) {
   const [events, setEvents] = useState<Event[]>([])
   const [artifacts, setArtifacts] = useState<ArtifactView[]>([])
   const [artifactBatch, setArtifactBatch] = useState<string | null>(null)
@@ -208,7 +208,7 @@ export function TaskReplay({ api, agents, id, runId, toast }: { api: TasksApi & 
 
   const agentName = (aid: string) => agents.find(a => a.id === aid)?.name ?? aid
   if (!task) return <div className="dtc-empty">{error || (events.length ? '没有这个任务' : <><span className="dtc-spin" /> 读取事件流…</>)}</div>
-  if (task.graphMode === 'dynamic-rounds' && selId) return <DynamicTaskReplay api={api} agents={agents} task={task} batches={batches} batchId={selId} toast={toast} />
+  if (task.graphMode === 'dynamic-rounds' && selId) return <DynamicTaskReplay api={api} agents={agents} task={task} batches={batches} batchId={selId} sessionId={sessionId} toast={toast} />
 
   const cardsNow = batchNow ? batchNow.cardIds.map(cid => now.cards.get(cid)).filter(Boolean) as Card[] : []
   const cardsFull = batchFull ? batchFull.cardIds.map(cid => full.cards.get(cid)).filter(Boolean) as Card[] : []
@@ -349,7 +349,7 @@ function CardEvidence({ api, taskId, batchId, card, parents, reworkTargets, gate
       {run?.sessionId ? <button className="dtc-btn sm" onClick={() => { closeConsole(); void api.openSession(run.sessionId) }}>打开会话</button> : null}
     </div>
     {runs.length > 1 ? <div className="dtc-chips">{runs.map(r => <button key={r.id} className={`dtc-chip ${r.id === run?.id ? 'on' : ''}`} onClick={() => setRunId(r.id)}>{labelOf(r.profileId ?? card.agentId)} · 尝试 {r.attempt} · {RUN[r.outcome ?? r.status] ?? r.status}</button>)}</div> : null}
-    <div className="dtc-tabs"><button className={tab === 'handoff' ? 'on' : ''} onClick={() => setTab('handoff')}>交接 Handoff</button><button className={tab === 'claim' ? 'on' : ''} onClick={() => setTab('claim')}>领取 Claim</button><button className={tab === 'ledger' ? 'on' : ''} onClick={() => setTab('ledger')}>会话工具</button><button className={tab === 'gate' ? 'on' : ''} onClick={() => setTab('gate')}>闸门 Gate</button><button className={tab === 'artifacts' ? 'on' : ''} onClick={() => setTab('artifacts')}>产物证据 {artifacts.length}</button></div>
+    <div className="dtc-tabs"><button className={tab === 'handoff' ? 'on' : ''} onClick={() => setTab('handoff')}>交接 Handoff</button><button className={tab === 'claim' ? 'on' : ''} onClick={() => setTab('claim')}>领取 Claim</button><button className={tab === 'ledger' ? 'on' : ''} onClick={() => setTab('ledger')}>Session Trace</button><button className={tab === 'gate' ? 'on' : ''} onClick={() => setTab('gate')}>闸门 Gate</button><button className={tab === 'artifacts' ? 'on' : ''} onClick={() => setTab('artifacts')}>产物证据 {artifacts.length}</button></div>
     {tab === 'handoff' ? <div className="dtc-tabbody">
       <div className="dtc-cartoon-note"><h4>📮 本次运行收到的上游交接</h4>{parents.length ? <ul>{parents.map(parent => <li key={parent.id}><b>角色 {parent.index + 1}</b><span>{parent.summary || '上游尚未交卷'}</span></li>)}</ul> : <p>入口角色没有父交接，直接读取任务书。</p>}</div>
       <h3 className="dtc-section-label">本角色交接输出</h3>{run?.summary ? <div className="dtc-hand">{run.summary}</div> : <div className="dtc-empty">还没有交接单。</div>}

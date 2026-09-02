@@ -1,4 +1,4 @@
-# dsh-task-console
+# dsh-agent-task-console
 
 任务台 for DeepSeek Harness (dsh).
 
@@ -14,7 +14,7 @@ The plugin remains local-first: `~/.dsh/task-console/task.db` is the only runtim
 dsh plugin --profile web add github:ChangfengHU/dsh-task-console
 ```
 
-Opens from the sidebar footer button 「Agent 工作台」; switch between Agent and 任务 inside the workspace. Screens live in the URL hash (`#/tc/agents`, `#/tc/agents/<id>`, `#/tc/tasks`, `#/tc/tasks/<id>`).
+Opens from the sidebar footer buttons Agent and Board. Screens live in the URL hash (`#/tc/agents`, `#/tc/agents/<id>`, `#/tc/tasks`, `#/tc/tasks/<id>`). The SQLite data directory intentionally remains `~/.dsh/task-console/` across the package rename so existing tasks and audit history stay available.
 
 **Talk to an agent from the composer:** type `@` in any composer, pick an agent, type the ask, Enter. That starts a new session on the agent's preset (a session's preset is fixed at creation in dsh, so "@agent" means "a fresh session with that agent") with your text as the first message, pins a readable title, files it under the current workspace, and switches to it. Agent cards also have 「开新会话」.
 

@@ -1,11 +1,11 @@
 /**
- * `dsh-task-console` — host half.
+ * `dsh-agent-task-console` — host half.
  *
  * Function plugin — no default export (the Loader unwraps
  * `exports.default ?? exports`). Mounts the `taskConsole` Remote service the
  * browser console calls.
  *
- * @module dsh-task-console
+ * @module dsh-agent-task-console
  */
 
 import type { Context } from '@deepseek-ai/cordis'

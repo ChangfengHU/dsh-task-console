@@ -24,7 +24,15 @@ export const HASH_PREFIX = '#/tc'
 export function readRoute(): string[] {
   const h = window.location.hash
   if (!h.startsWith(HASH_PREFIX)) return []
-  return h.slice(HASH_PREFIX.length).split('/').filter(Boolean)
+  return h.slice(HASH_PREFIX.length).split('?', 1)[0].split('/').filter(Boolean)
+}
+
+/** Selection state belongs in the shareable hash, separate from the route path. */
+export function readRouteQuery(): URLSearchParams {
+  const h = window.location.hash
+  if (!h.startsWith(HASH_PREFIX)) return new URLSearchParams()
+  const mark = h.indexOf('?')
+  return new URLSearchParams(mark < 0 ? '' : h.slice(mark + 1))
 }
 
 export function go(path: string): void {
@@ -52,12 +60,13 @@ class Boundary extends React.Component<{ children: React.ReactNode }, { error: E
 
 export function Console({ api }: { api: Api }) {
   const [route, setRoute] = useState<string[]>(readRoute())
+  const [query, setQuery] = useState<URLSearchParams>(readRouteQuery())
   const [catalog, setCatalog] = useState<Catalog | null>(null)
   const [agents, setAgents] = useState<AgentRow[] | null>(null)
   const [error, setError] = useState('')
   const [toast, showToast] = useToast()
 
-  useEffect(() => { const on = () => setRoute(readRoute()); window.addEventListener('hashchange', on); return () => window.removeEventListener('hashchange', on) }, [])
+  useEffect(() => { const on = () => { setRoute(readRoute()); setQuery(readRouteQuery()) }; window.addEventListener('hashchange', on); return () => window.removeEventListener('hashchange', on) }, [])
   const loadAgents = useCallback(async () => {
     try { setAgents(await api.agents()); setError('') }
     catch (e) { setError(e instanceof Error ? e.message : String(e)) }
@@ -77,7 +86,7 @@ export function Console({ api }: { api: Api }) {
   let page: JSX.Element
   if (section === 'agents') page = !agents || !catalog ? loading : <AgentsPage api={api} catalog={catalog} agents={agents} id={route[1] === 'new' ? 'new' : (route[1] ?? null)} onSaved={reload} toast={showToast} />
   else if (route[1] === 'new') page = !agents || !catalog ? loading : <div className="dtc-body"><NewTask api={api} agents={agents} toast={showToast} workspaces={catalog.workspaces} /></div>
-  else if (route[1]) page = <div className="dtc-body"><TaskReplay api={api} agents={agents ?? []} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} toast={showToast} /></div>
+  else if (route[1]) page = <div className="dtc-body"><TaskReplay api={api} agents={agents ?? []} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} sessionId={query.get('session') ?? undefined} toast={showToast} /></div>
   else page = <div className="dtc-body"><TaskBoard api={api} agents={agents ?? []} toast={showToast} /></div>
 
   return (

@@ -94,11 +94,11 @@ export function TurnLedgerView({ ledger, compact }: { ledger: Ledger; compact?: 
   return (
     <div className="dtc-ledger">
       <LedgerTotals ledger={ledger} />
-      {ledger.turns.length === 0 ? <div className="dtc-empty">这个会话还没有回合。</div> : null}
+      {ledger.turns.length === 0 ? <div className="dtc-empty">No turns in this session yet.</div> : null}
       {ledger.turns.map(t => (
         <div key={t.turn} className="dtc-turn">
           <div className="dtc-turn-head">
-            <b>回合 {t.turn}</b>
+            <b>Turn {t.turn}</b>
             <span className="dtc-faint dtc-mono">{fmt(t.at)}{t.endedAt ? ` → ${fmt(t.endedAt)}` : ' · 进行中'}</span>
             {t.reason && t.reason !== 'completed' ? <span className="dtc-pill dtc-p-bad">{t.reason}</span> : null}
             <span className="sp" />

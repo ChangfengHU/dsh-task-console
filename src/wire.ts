@@ -7,11 +7,13 @@
  * mode is `strict`, and a JSON string keeps that to one `z.string()` per
  * side while the surface is still moving).
  *
- * @module dsh-task-console/wire
+ * @module dsh-agent-task-console/wire
  */
 
 import { z } from 'zod'
 
+// This key is part of DSH's persisted Typert remote registry. Keep it stable
+// across the product rename so an installed console can still reach its host.
 export const PKG = 'dsh-task-console'
 export const NAMESPACE = 'taskConsole'
 

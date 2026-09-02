@@ -2,7 +2,7 @@
  * Browser half: one sidebar footer button that opens the console as a
  * full-page overlay; the URL hash carries which screen is open.
  *
- * @module dsh-task-console/client
+ * @module dsh-agent-task-console/client
  */
 
 import { useEffect, useState } from 'react'
@@ -109,12 +109,12 @@ export async function apply(ctx: any): Promise<void> {
     inject: () => ({ api }),
   }, FooterEntry))
 
-  // 「回合」beside Chat / Trajectory: this session's MCP / skill / model work, turn by turn.
+  // Trace beside Chat / Trajectory: this session's MCP / skill / model work, turn by turn.
   ctx.slots.inject('conversation.view', () => ctx.slots.register({
     name: 'conversation.view',
-    id: 'task-console-turns',
+    id: 'task-console-trace',
     order: 25,
-    label: () => '回合',
+    label: () => 'Trace',
     inject: (sessionId: string) => ({ api, sessionId }),
   }, SessionLedgerTab))
 }

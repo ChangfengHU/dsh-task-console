@@ -2,7 +2,7 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.18.5):** keeps the plugin focused on Agent and Board. Task-owned Sessions are internal evidence: they stay out of ordinary DSH navigation and search without being archived, and remain directly openable from the task's Related Sessions drawer, Trace, and exact `?session=` links. Historical task-session relationships are reconciled from the append-only event log; logs, task evidence, workspace files, and deliverables are retained.
+**This release (0.18.6):** keeps the plugin focused on Agent and Board. Task-owned Sessions are internal evidence: they stay out of ordinary DSH navigation and search without being archived, and remain directly openable from the task's Related Sessions drawer, Trace, and exact `?session=` links. Historical task-session relationships are reconciled from the append-only event log; logs, task evidence, workspace files, and deliverables are retained. Agent presets that select `todo_write` now emit its required parallel-progress policy and mount cleanly on DSH `0.1.1-rc.2`.
 
 The task list supports search-aware pagination and guarded cleanup of completed or all task records; bulk cleanup never removes DSH sessions or workspace files. The list, Agent editor, task detail, replay DAG, delivery area, and Related Sessions drawer inherit the same DSH light/dark design tokens instead of rendering a hard-coded white cartoon island inside the host shell.
 

@@ -48,7 +48,7 @@ export const NATIVE_TOOLS: readonly (NativeTool & { rows: string })[] = [
     rows: "- id: tool-jobs\n  name: '@deepseek-ai/dsh-tool-jobs'" },
   { id: 'todo', label: 'todo_write', group: '交互', writes: false,
     description: '给自己记待办。',
-    rows: "- id: tool-todo\n  name: '@deepseek-ai/dsh-tool-todo'" },
+    rows: "- id: tool-todo\n  name: '@deepseek-ai/dsh-tool-todo'\n  config:\n    allowParallelInProgress: true" },
 ]
 
 /** Tools that make an agent "可写" rather than merely "受限可写". */

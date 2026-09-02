@@ -30,6 +30,11 @@ test('renderComposition lists only chosen rows and renames a live host MCP', () 
   assert.equal(out.permission, 'limited-write')
 })
 
+test('renderComposition supplies the required todo policy', () => {
+  const preview = renderComposition({ ...base, tools: ['todo'], mcp: [], skills: [] }, [])
+  assert.match(preview.yml, /tool-todo[\s\S]*allowParallelInProgress: true/)
+})
+
 test('permission is derived from tools, not declared', () => {
   const f = () => false
   assert.equal(permissionOf({ tools: ['ask-user'], mcp: [] }, f), 'read-only')

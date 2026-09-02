@@ -168,6 +168,26 @@ function listProjectionSubset(block) {
   ],
 ], ['SESSION_LIST_PROJECTION_KEYS', 'host/internal-sessions-changed', 'internalSessionIds: [...(ctx.workspaceRegistry.internalSessionIds ?? [])]'])) changed.push('host')
 
+// Sessions created by another Host plugin already carry AgentOptions. The Web
+// gateway used to replace those options with its global default while the
+// session was still blank, so an authored Agent visibly said Terra/high but
+// its first request ran on Luna. Preserve the direct creator's selection; a
+// later explicit Web model switch still wins through `picked` above it.
+if (await patchFile(host, [[
+  '\t\t\t\tconst logged = agent.session.requestHeader()?.config;\n\t\t\t\tif (logged === void 0) return defaults.defaultModelSelection();',
+  `\t\t\t\tconst logged = agent.session.requestHeader()?.config;
+\t\t\t\tif (logged === void 0) {
+\t\t\t\t\tconst configured = agent.options;
+\t\t\t\t\tconst fallback = defaults.defaultModelSelection();
+\t\t\t\t\tconst provider = configured.provider ?? fallback.provider;
+\t\t\t\t\tconst model = configured.model ?? fallback.model;
+\t\t\t\t\tconst inheritsDefaultEffort = provider === fallback.provider && model === fallback.model;
+\t\t\t\t\tconst reasoningEffort = configured.reasoningEffort ?? (inheritsDefaultEffort ? fallback.reasoningEffort : void 0);
+\t\t\t\t\treturn { provider, model, ...reasoningEffort === void 0 ? {} : { reasoningEffort } };
+\t\t\t\t}`,
+  'plugin-created Agent model selection',
+]], ['const inheritsDefaultEffort = provider === fallback.provider && model === fallback.model;'])) changed.push('host-agent-model')
+
 if (await patchFile(connection, [
   ['items: array(workspaceViewSchema),\n\t\t\tarchivedSessionIds: array(sessionIdSchema)\n\t\t});', 'items: array(workspaceViewSchema),\n\t\t\tarchivedSessionIds: array(sessionIdSchema),\n\t\t\tinternalSessionIds: array(sessionIdSchema)\n\t\t});', 'client workspace schema'],
   ['type: literal("host/archived-sessions-changed"),\n\t\t\t\tarchivedSessionIds: array(sessionIdSchema)\n\t\t\t}),\n\t\t\tobject({\n\t\t\t\ttype: literal("host/remote-event")', 'type: literal("host/archived-sessions-changed"),\n\t\t\t\tarchivedSessionIds: array(sessionIdSchema)\n\t\t\t}),\n\t\t\tobject({\n\t\t\t\ttype: literal("host/internal-sessions-changed"),\n\t\t\t\tinternalSessionIds: array(sessionIdSchema)\n\t\t\t}),\n\t\t\tobject({\n\t\t\t\ttype: literal("host/remote-event")', 'client host frame schema'],

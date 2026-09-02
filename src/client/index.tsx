@@ -50,18 +50,27 @@ function installSessionUrlSync(ctx: any): () => void {
   const sync = () => {
     const snapshot = ctx.sessions.list.getSnapshot()
     if (requested && snapshot.byId?.[requested]) {
-      try { ctx.sessions.open(requested); requested = null } catch { /* wait for the next list projection */ }
+      try { ctx.sessions.open(requested); requested = null; return } catch { /* wait for the next list projection */ }
     }
     if (window.location.hash.startsWith(HASH_PREFIX)) return
     const url = new URL(window.location.href)
-    const current = snapshot.current
+    const internal = new Set<string>(ctx.workspaces.list.getSnapshot().internalSessionIds ?? [])
+    const addressed = url.searchParams.get('session')
+    if (snapshot.current && internal.has(snapshot.current) && addressed === snapshot.current) return
+    if (!addressed && snapshot.current && internal.has(snapshot.current)) {
+      const visible = snapshot.ids.find((id: string) => !internal.has(id))
+      if (visible) { ctx.sessions.open(visible); return }
+    }
+    const current = snapshot.current && !internal.has(snapshot.current) ? snapshot.current : undefined
     if (current) url.searchParams.set('session', current)
     else url.searchParams.delete('session')
     history.replaceState('', document.title, `${url.pathname}${url.search}${url.hash}`)
   }
-  const stop = ctx.sessions.list.subscribe(sync)
+  const stopSessions = ctx.sessions.list.subscribe(sync)
+  const stopWorkspaces = ctx.workspaces.list.subscribe(sync)
+  window.addEventListener('hashchange', sync)
   sync()
-  return stop
+  return () => { stopSessions(); stopWorkspaces(); window.removeEventListener('hashchange', sync) }
 }
 
 function useHeavy(ctx: any): { heavy?: Heavy; api?: Awaited<ReturnType<Heavy['activate']>>; error?: string } {
@@ -88,7 +97,7 @@ function FooterEntry({ ctx, wide }: { ctx: any; wide?: boolean }) {
   const [open, setOpen] = useState(window.location.hash.startsWith(HASH_PREFIX))
   useEffect(() => { const on = () => setOpen(window.location.hash.startsWith(HASH_PREFIX)); window.addEventListener('hashchange', on); on(); return () => window.removeEventListener('hashchange', on) }, [])
   const narrow = wide === false
-  return <><div className="dtc-footstack"><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}><span className="ic">◎</span>{narrow ? null : <span>Agent</span>}</button><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务看板" aria-label="任务看板" onClick={() => go('tasks')}><span className="ic">▦</span>{narrow ? null : <span>Board</span>}</button><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="会话管理" aria-label="会话管理" onClick={() => go('sessions')}><span className="ic">◫</span>{narrow ? null : <span>Sessions</span>}</button></div>{open ? createPortal(<LazyConsole ctx={ctx} />, document.body) : null}</>
+  return <><div className="dtc-footstack"><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}><span className="ic">◎</span>{narrow ? null : <span>Agent</span>}</button><button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务看板" aria-label="任务看板" onClick={() => go('tasks')}><span className="ic">▦</span>{narrow ? null : <span>Board</span>}</button></div>{open ? createPortal(<LazyConsole ctx={ctx} />, document.body) : null}</>
 }
 
 function currentCwd(ctx: any, action: any): string | undefined {

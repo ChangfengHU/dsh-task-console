@@ -1,10 +1,10 @@
-# dsh-agent-task-console
+# dsh-task-console
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.18):** adds a Sessions lifecycle module beside Agent and Board. It joins DSH's native session summaries with task/run relationships, supports search, filtering, pagination, opening and safe archive, marks every task Session internal immediately after creation, and archives it independently when its batch settles. Internal Sessions stay out of ordinary DSH navigation and search but remain directly openable from Task and Trace links. Historical relationships and completed batches are reconciled on startup; logs, task evidence, workspace files, and deliverables are retained.
+**This release (0.18.5):** keeps the plugin focused on Agent and Board. Task-owned Sessions are internal evidence: they stay out of ordinary DSH navigation and search without being archived, and remain directly openable from the task's Related Sessions drawer, Trace, and exact `?session=` links. Historical task-session relationships are reconciled from the append-only event log; logs, task evidence, workspace files, and deliverables are retained.
 
-The task list supports search-aware pagination and guarded cleanup of completed or all task records; bulk cleanup never removes DSH sessions or workspace files. The list, Agent editor, task detail, replay DAG, delivery area, and Sessions module inherit the same DSH light/dark design tokens instead of rendering a hard-coded white cartoon island inside the host shell.
+The task list supports search-aware pagination and guarded cleanup of completed or all task records; bulk cleanup never removes DSH sessions or workspace files. The list, Agent editor, task detail, replay DAG, delivery area, and Related Sessions drawer inherit the same DSH light/dark design tokens instead of rendering a hard-coded white cartoon island inside the host shell.
 
 The explicit final-delivery contract from 0.15 remains: `task_finalize(summary, artifact)` records which registered file is the approved result; byte-identical executor submissions and reviewer snapshots render as one immutable version, with round, producer, review, and final-state evidence. Existing completed tasks receive a clearly labelled compatibility selection instead of fabricated history. The task list and detail page expose the final result directly, with sandboxed in-panel preview, download, optional public publishing, and event-faithful replay of artifact registration/finalization.
 
@@ -16,7 +16,11 @@ The plugin remains local-first: `~/.dsh/task-console/task.db` is the only runtim
 dsh plugin --profile web add github:ChangfengHU/dsh-task-console
 ```
 
-Opens from the sidebar footer buttons Agent, Board, and Sessions. Screens live in the URL hash (`#/tc/agents`, `#/tc/agents/<id>`, `#/tc/tasks`, `#/tc/tasks/<id>`, `#/tc/sessions`). The SQLite data directory intentionally remains `~/.dsh/task-console/` across the package rename so existing tasks and audit history stay available.
+Opens from the sidebar footer buttons Agent and Board. Screens live in the URL hash (`#/tc/agents`, `#/tc/agents/<id>`, `#/tc/tasks`, `#/tc/tasks/<id>`). Session evidence is subordinate to a task and opens from its Related Sessions drawer or Trace instead of a third top-level screen. The SQLite data directory intentionally remains `~/.dsh/task-console/` across the package rename so existing tasks and audit history stay available.
+
+## DSH host compatibility
+
+DSH `0.1.1-rc.2` needs a small host compatibility patch for internal task Sessions and the lightweight session-list projection. Run `npm run host:patch` after installing or updating DSH. The command is idempotent and fails loudly on any unverified DSH version instead of silently changing unknown bundles. This compatibility layer can be removed once those capabilities ship upstream.
 
 **Talk to an agent from the composer:** type `@` in any composer, pick an agent, type the ask, Enter. That starts a new session on the agent's preset (a session's preset is fixed at creation in dsh, so "@agent" means "a fresh session with that agent") with your text as the first message, pins a readable title, files it under the current workspace, and switches to it. Agent cards also have 「开新会话」.
 

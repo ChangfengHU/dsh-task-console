@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-console",
-  "version": "0.18.3",
+  "version": "0.18.5",
   "description": "Local-first Agent presets and task orchestration for DeepSeek Harness, backed by SQLite.",
   "license": "MIT",
   "type": "module",
@@ -17,6 +17,7 @@
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
+    "host:patch": "node scripts/patch-dsh-host.mjs",
     "test": "NODE_ENV=test tsx --test test/*.test.ts",
     "kernel:check": "npm --prefix cloudflare run check"
   },

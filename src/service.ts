@@ -24,7 +24,7 @@ import {
 import { TaskRunner } from './runner.ts'
 import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask } from './tasks.ts'
 import type { Artifact, Card } from './tasks.ts'
-import type { ArtifactView, BoardView, TaskSessionRow } from './wire.ts'
+import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
 
@@ -304,36 +304,6 @@ export class TaskConsoleService extends TypertRemoteService {
       events = live?.events ?? []; agentPreset = live?.header?.agentPreset
     }
     return JSON.stringify(foldTurns(sessionId, events, agentPreset))
-  }
-
-  /** Task-to-session relationship projection for the Sessions module. */
-  async taskSessions(): Promise<string> {
-    const state = this.runner.store.s
-    const archived = new Set<string>(((this.ctx as any).get('workspaceRegistry')?.archivedSessionIds ?? []).map(String))
-    const internal = new Set<string>(((this.ctx as any).get('workspaceRegistry')?.internalSessionIds ?? []).map(String))
-    const rows: TaskSessionRow[] = [...state.runs.values()].filter(run => run.sessionId).map(run => {
-      const card = state.cards.get(run.cardId)
-      const task = state.tasks.get(run.taskId)
-      return {
-        sessionId: run.sessionId,
-        taskId: run.taskId,
-        taskTitle: task?.title ?? run.taskId,
-        batchId: run.batchId,
-        cardId: run.cardId,
-        runId: run.id,
-        agentId: run.profileId ?? card?.agentId ?? '',
-        role: card?.role ?? card?.kind ?? 'agent',
-        round: card?.round ?? 0,
-        status: run.status,
-        ...(run.outcome ? { outcome: run.outcome } : {}),
-        startedAt: run.startedAt,
-        ...(run.endedAt ? { endedAt: run.endedAt } : {}),
-        archived: archived.has(run.sessionId),
-        internal: internal.has(run.sessionId),
-      }
-    })
-    rows.sort((a, b) => b.startedAt.localeCompare(a.startedAt))
-    return JSON.stringify(rows)
   }
 
   // ── tasks ──────────────────────────────────────────────────────────────

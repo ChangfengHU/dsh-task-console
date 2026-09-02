@@ -1,6 +1,6 @@
 /** Heavy client runtime, fetched only when Board, Agent, or Trace is opened. */
 
-import type { AgentRow, AgentSpec, ArtifactView, Catalog, GraphSnapshot, Preview, LegacyRun as Run, TaskEvent, TaskSessionRow, TaskSnapshot, TaskSpec, TryRunResult, TurnLedger } from '../wire.ts'
+import type { AgentRow, AgentSpec, ArtifactView, Catalog, GraphSnapshot, Preview, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec, TryRunResult, TurnLedger } from '../wire.ts'
 import { Console, type Api } from './Console.tsx'
 import { CONSOLE_REMOTE, unwrap } from './remote.ts'
 import { installStyles } from './styles.ts'
@@ -31,14 +31,6 @@ export function activate(ctx: any): Promise<Api> {
       reviewCard: async (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => { await call('reviewCard', { cardId, decision, note, targetCardId }) }, unblockCard: async (cardId: string) => { await call('unblockCard', { cardId }) },
       startAgentSession: (agentId: string, text?: string, cwd?: string) => call<{ sessionId: string; name: string }>('startAgentSession', { agentId, text, cwd }), openSession: (sessionId: string) => openWhenListed(ctx, sessionId),
       sessionTurns: (sessionId: string) => call<TurnLedger>('sessionTurns', { sessionId }), agentActivity: (agentId: string) => call<any>('agentActivity', { agentId }),
-      taskSessions: () => call<TaskSessionRow[]>('taskSessions'),
-      sessionSnapshot: () => {
-        const sessions = ctx.sessions.list.getSnapshot(); const workspace = ctx.workspaces.list.getSnapshot(); const archived = new Set(workspace.archivedSessionIds); const internal = new Set(workspace.internalSessionIds ?? [])
-        return sessions.ids.map((id: string) => ({ ...sessions.byId[id], archived: archived.has(id), internal: internal.has(id) }))
-      },
-      subscribeSessions: (listener: () => void) => { const a = ctx.sessions.list.subscribe(listener); const b = ctx.workspaces.list.subscribe(listener); return () => { a(); b() } },
-      refreshSessions: async () => { await Promise.all([ctx.sessions.refresh(), ctx.workspaces.refresh()]) },
-      archiveSession: async (sessionId: string) => { await ctx.workspaces.archiveSession(sessionId) },
     }
   })().catch(error => { activation = undefined; throw error })
   return activation
@@ -47,9 +39,11 @@ export function activate(ctx: any): Promise<Api> {
 async function openWhenListed(ctx: any, sessionId: string): Promise<void> {
   const url = new URL(window.location.href)
   url.searchParams.set('session', sessionId)
-  history.pushState('', document.title, `${url.pathname}${url.search}`)
-  window.dispatchEvent(new HashChangeEvent('hashchange'))
-  const open = () => { ctx.sessions.open(sessionId) }
+  const open = () => {
+    ctx.sessions.open(sessionId)
+    history.pushState('', document.title, `${url.pathname}${url.search}`)
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+  }
   try { open(); return } catch { /* wait for the host baseline below */ }
   await ctx.sessions.refresh()
   for (let i = 0; i < 40; i++) {

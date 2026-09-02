@@ -19,6 +19,10 @@ export const inject = ['slots', 'remote', 'sessions', 'inputTriggers']
 export async function apply(ctx: any): Promise<void> {
   ctx.effect(() => installStyles(), 'task-console: stylesheet')
   await ctx.remote.$mount(CONSOLE_REMOTE)
+  // A plugin reload can happen after the browser runtime's initial list pull.
+  // Refresh the official session baseline once; it is read-only and never
+  // creates, modifies, or removes a session.
+  void ctx.sessions.refresh().catch((error: unknown) => console.warn('[task-console] session baseline refresh failed:', error))
 
   const call = async <T,>(method: string, payload?: unknown): Promise<T> => {
     const service = ctx.get('remote.taskConsole')
@@ -139,9 +143,8 @@ async function openWhenListed(ctx: any, sessionId: string): Promise<void> {
 /** Independent Agent and Task entries share the same full-page console shell. */
 function FooterEntry({ api, wide }: { api: Api; wide?: boolean }) {
   const [open, setOpen] = useState(readRoute().length > 0 || window.location.hash.startsWith(HASH_PREFIX))
-  const [section, setSection] = useState(readRoute()[0] ?? '')
   useEffect(() => {
-    const on = () => { setOpen(window.location.hash.startsWith(HASH_PREFIX)); setSection(readRoute()[0] ?? '') }
+    const on = () => setOpen(window.location.hash.startsWith(HASH_PREFIX))
     window.addEventListener('hashchange', on)
     on()
     return () => window.removeEventListener('hashchange', on)
@@ -150,11 +153,11 @@ function FooterEntry({ api, wide }: { api: Api; wide?: boolean }) {
   return (
     <>
       <div className="dtc-footstack">
-        <button type="button" className={`dtc-foot ${section === 'agents' ? 'active' : ''} ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}>
+        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}>
           <span className="ic">◎</span>{narrow ? null : <span>Agent</span>}
         </button>
-        <button type="button" className={`dtc-foot ${section === 'tasks' ? 'active' : ''} ${narrow ? 'narrow' : ''}`} title="任务" aria-label="任务" onClick={() => go('tasks')}>
-          <span className="ic">▦</span>{narrow ? null : <span>任务</span>}
+        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务看板" aria-label="任务看板" onClick={() => go('tasks')}>
+          <span className="ic">▦</span>{narrow ? null : <span>Board</span>}
         </button>
       </div>
       {open ? createPortal(<Console api={api} />, document.body) : null}

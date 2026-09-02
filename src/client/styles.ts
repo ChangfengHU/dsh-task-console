@@ -524,10 +524,9 @@ body[data-ds-dark-theme] .dtc-node .q { color:#a794e0 }
 .dtc-agents { height:calc(100% - 60px) }.dtc-alist { background:color-mix(in srgb,var(--dtc-surface) 94%,var(--dtc-ground)) }.dtc-adetail { background:var(--dtc-ground) }.dtc-ahead { padding:16px 18px; border:1px solid var(--dtc-line); border-radius:12px; background:var(--dtc-surface) }.dtc-aitem.on { border-left-color:transparent; box-shadow:inset 3px 0 var(--dtc-accent) }
 @media (max-width:700px) { .dtc-head { height:auto; min-height:60px; flex-wrap:wrap; gap:8px 12px; padding:9px 12px }.dtc-brand { min-width:0; flex:1 }.dtc-brand small { display:none }.dtc-head-actions { margin-left:0 }.dtc-agents { height:calc(100% - 60px) }.dtc-clean-option { grid-template-columns:1fr }.dtc-clean-option .dtc-btn { justify-content:center }.dtc-pagination { align-items:flex-start; flex-wrap:wrap }.dtc-pagination > span { width:100% }.dtc-pagination > div { margin-left:auto }.dtc-taskgroup-head { grid-template-columns:18px 34px minmax(0,1fr) }.dtc-taskgroup-head .dtc-pill { grid-column:3 }.dtc-taskbulk > div { width:100%; margin-left:0 }.dtc-dag-fullscreen { inset:6px }.dtc-dag-head-actions code { display:none }.dtc-dbdag-tools { align-items:flex-start; flex-direction:column }.dtc-dbdag-tools > div { width:100%; justify-content:flex-end } }
 
-.dtc-foot { display:flex; align-items:center; gap:10px; width:100%; padding:8px 10px; border-radius:7px; font-size:13.5px; text-align:left; color:var(--dtc-muted) }
+.dtc-foot { display:flex; align-items:center; gap:10px; width:100%; padding:8px 10px; border-radius:6px; font-size:13.5px; text-align:left; color:var(--dtc-muted) }
 .dtc-foot:hover { background:var(--dtc-surface-2); color:var(--dtc-ink) }
-.dtc-foot.active { background:var(--dtc-accent-bg); color:var(--dtc-accent); font-weight:650 }
-.dtc-foot .ic { width:20px; height:20px; border-radius:5px; display:inline-grid; place-items:center; font-size:12px; background:var(--dtc-surface-2); color:var(--dtc-muted); flex:0 0 auto }.dtc-foot.active .ic { background:var(--dtc-accent); color:var(--dtc-accent-ink) }
+.dtc-foot .ic { width:20px; height:20px; display:inline-grid; place-items:center; font-size:14px; color:currentColor; flex:0 0 auto }
 .dtc-foot.narrow { justify-content:center; padding:8px 0 }
 `
 

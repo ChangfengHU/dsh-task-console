@@ -47,13 +47,9 @@ export class TaskConsoleService extends TypertRemoteService {
     super(ctx, NAMESPACE)
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
-      onBatchSettled: batch => this.archiveBatchSessions(batch.id),
     })
     void this.runner.start()
-      .then(async () => {
-        await this.markExistingTaskSessionsInternal()
-        await this.archiveSettledTaskSessions()
-      })
+      .then(() => this.markExistingTaskSessionsInternal())
       .catch(err => console.error('[task-console] runner failed to start:', err))
   }
 
@@ -73,24 +69,6 @@ export class TaskConsoleService extends TypertRemoteService {
       .flatMap(event => event.t === 'run/claimed' || event.t === 'run/session_created' ? [event.sessionId] : [])
     const sessionIds = [...new Set([...projected, ...historical])]
     for (const sessionId of sessionIds) await this.markTaskSessionInternal(sessionId)
-  }
-
-  /** Task sessions leave the normal sidebar when their batch settles; logs remain owned by DSH. */
-  private async archiveBatchSessions(batchId: string): Promise<void> {
-    const registry = (this.ctx as any).get('workspaceRegistry')
-    if (!registry?.archiveSession) return
-    const sessionIds = [...new Set([...this.runner.store.s.runs.values()]
-      .filter(run => run.batchId === batchId && run.sessionId)
-      .map(run => run.sessionId))]
-    for (const sessionId of sessionIds) {
-      try { await registry.archiveSession(sessionId) }
-      catch (error) { console.warn(`[task-console] could not archive task session ${sessionId}:`, error) }
-    }
-  }
-
-  /** Reconcile batches completed by older plugin versions on startup. */
-  private async archiveSettledTaskSessions(): Promise<void> {
-    for (const batch of this.runner.store.s.batches.values()) if (batch.settled) await this.archiveBatchSessions(batch.id)
   }
 
   // ── facts ──────────────────────────────────────────────────────────────

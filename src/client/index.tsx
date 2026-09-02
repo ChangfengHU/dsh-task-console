@@ -36,6 +36,7 @@ export async function apply(ctx: any): Promise<void> {
     createTask: (spec: Partial<TaskSpec>) => call<{ id: string }>('createTask', spec),
     setTaskEnabled: async (id: string, enabled: boolean) => { await call('setTaskEnabled', { id, enabled }) },
     deleteTask: async (id: string) => { await call('deleteTask', { id }) },
+    deleteTasks: async (ids: string[]) => { await call('deleteTasks', { ids }) },
     fireTask: (id: string, by?: 'manual' | 'retry') => call<{ runId: string }>('fireTask', { id, by }),
     cancelRun: async (runId: string) => { await call('cancelRun', { runId }) },
     taskSnapshot: (id: string, batchId?: string) => call<TaskSnapshot>('taskSnapshot', { id, batchId }),
@@ -135,7 +136,7 @@ async function openWhenListed(ctx: any, sessionId: string): Promise<void> {
   throw new Error('会话已建好,但列表还没刷出来;在左侧找一下')
 }
 
-/** One sidebar entry opens the unified Agent + Task workspace. */
+/** Independent Agent and Task entries share the same full-page console shell. */
 function FooterEntry({ api, wide }: { api: Api; wide?: boolean }) {
   const [open, setOpen] = useState(readRoute().length > 0 || window.location.hash.startsWith(HASH_PREFIX))
   useEffect(() => {
@@ -147,9 +148,14 @@ function FooterEntry({ api, wide }: { api: Api; wide?: boolean }) {
   const narrow = wide === false
   return (
     <>
-      <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent 工作台" aria-label="Agent 工作台" onClick={() => go('tasks')}>
-        <span className="ic">◆</span>{narrow ? null : <span>Agent 工作台</span>}
-      </button>
+      <div className="dtc-footstack">
+        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="Agent" aria-label="Agent" onClick={() => go('agents')}>
+          <span className="ic">◎</span>{narrow ? null : <span>Agent</span>}
+        </button>
+        <button type="button" className={`dtc-foot ${narrow ? 'narrow' : ''}`} title="任务" aria-label="任务" onClick={() => go('tasks')}>
+          <span className="ic">▦</span>{narrow ? null : <span>任务</span>}
+        </button>
+      </div>
       {open ? createPortal(<Console api={api} />, document.body) : null}
     </>
   )

@@ -318,11 +318,13 @@ export class TaskConsoleService extends TypertRemoteService {
       const cards = b.cardIds.map(id => st.cards.get(id)).filter(Boolean)
       const artifacts = withFinalArtifact([...st.artifacts.values()].filter(a => a.batchId === b.id), cards as Card[], b)
       const final = artifacts.find(a => a.final)
+      const latestArtifact = final ?? artifacts.at(-1)
       const rounds = cards.filter(card => card?.kind === 'gate').length
       return {
         id: b.id, taskId: b.taskId, firedAt: b.firedAt, by: b.by, legs,
         ...(b.settled ? { settled: b.settled } : bs === 'done' ? { settled: { at: b.firedAt, outcome: 'done' } } : {}),
         ...(final ? { finalArtifact: this.artifactView(final) } : {}),
+        ...(latestArtifact ? { resultArtifact: this.artifactView(latestArtifact) } : {}),
         ...(rounds ? { rounds, reworks: Math.max(0, rounds - 1) } : {}),
       }
     })
@@ -347,11 +349,27 @@ export class TaskConsoleService extends TypertRemoteService {
     return JSON.stringify({ ok: true })
   }
 
-  async deleteTask(payload: string): Promise<string> {
-    const { id } = JSON.parse(payload) as { id: string }
+  private async removeTask(id: string): Promise<void> {
+    if (!this.runner.store.tasks.has(id)) throw new Error('没有这个任务')
     for (const b of this.runner.store.s.batches.values()) if (b.taskId === id && !b.settled) await this.runner.cancelBatch(b.id)
     await this.runner.store.append({ t: 'task/deleted', at: new Date().toISOString(), taskId: id })
+  }
+
+  async deleteTask(payload: string): Promise<string> {
+    const { id } = JSON.parse(payload) as { id: string }
+    await this.removeTask(id)
     return JSON.stringify({ ok: true })
+  }
+
+  /** Deletes only selected task-console records. DSH sessions and workspace files are never targets. */
+  async deleteTasks(payload: string): Promise<string> {
+    const { ids } = JSON.parse(payload) as { ids?: unknown }
+    const unique = [...new Set(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string' && id) : [])]
+    if (!unique.length) throw new Error('请选择至少一个任务')
+    const missing = unique.find(id => !this.runner.store.tasks.has(id))
+    if (missing) throw new Error(`没有这个任务：${missing}`)
+    for (const id of unique) await this.removeTask(id)
+    return JSON.stringify({ ok: true, deleted: unique.length })
   }
 
   async fireTask(payload: string): Promise<string> {

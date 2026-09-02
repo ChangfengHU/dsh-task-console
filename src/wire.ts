@@ -43,7 +43,7 @@ function descriptor(method: string, argc: 0 | 1) {
 export const METHODS = [
   ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
   ['startAgentSession', 1], ['sessionTurns', 1],
-  ['board', 0], ['tasks', 0], ['createTask', 1], ['setTaskEnabled', 1], ['deleteTask', 1], ['fireTask', 1], ['cancelRun', 1], ['taskEvents', 1],
+  ['board', 0], ['tasks', 0], ['createTask', 1], ['setTaskEnabled', 1], ['deleteTask', 1], ['deleteTasks', 1], ['fireTask', 1], ['cancelRun', 1], ['taskEvents', 1],
   ['taskSnapshot', 1], ['taskGraph', 1], ['taskArtifacts', 1], ['artifactContent', 1], ['publishArtifact', 1], ['reviewCard', 1], ['unblockCard', 1], ['agentActivity', 1],
 ] as const
 
@@ -169,6 +169,8 @@ export interface LegacyRun {
   legs: LegacyLeg[]
   settled?: { at: string; outcome: 'done' | 'failed' | 'cancelled' }
   finalArtifact?: ArtifactView
+  /** Most recent registered delivery, even when it is not an HTML file. */
+  resultArtifact?: ArtifactView
   rounds?: number
   reworks?: number
 }

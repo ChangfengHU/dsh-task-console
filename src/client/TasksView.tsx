@@ -8,12 +8,14 @@ import { useEffect, useMemo, useState } from 'react'
 import { cronHuman, nextFire, parseCron } from '../cron.ts'
 import type { AgentRow, ArtifactView, GraphSnapshot, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
+import { ArtifactResultAction } from './ArtifactDelivery.tsx'
 
 export interface TasksApi {
   tasks: () => Promise<{ tasks: (TaskSpec & { nextFire: string | null })[]; runs: Run[] }>
   createTask: (spec: Partial<TaskSpec>) => Promise<{ id: string }>
   setTaskEnabled: (id: string, enabled: boolean) => Promise<void>
   deleteTask: (id: string) => Promise<void>
+  deleteTasks: (ids: string[]) => Promise<void>
   fireTask: (id: string, by?: 'manual' | 'retry') => Promise<{ runId: string }>
   cancelRun: (runId: string) => Promise<void>
   taskSnapshot: (id: string, batchId?: string) => Promise<TaskSnapshot>
@@ -81,6 +83,9 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
   const [confirmText, setConfirmText] = useState('')
   const [clearing, setClearing] = useState<'ended' | 'all' | ''>('')
   const [clearError, setClearError] = useState('')
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [deleteSelectedOpen, setDeleteSelectedOpen] = useState(false)
+  const [deletingSelected, setDeletingSelected] = useState(false)
   const rows = useMemo(() => {
     const history = new Map<string, Run[]>()
     for (const run of runs) history.set(run.taskId, [...(history.get(run.taskId) ?? []), run])
@@ -109,16 +114,40 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
   const from = visible.length ? (currentPage - 1) * pageSize + 1 : 0
   const to = Math.min(currentPage * pageSize, visible.length)
   useEffect(() => setPage(1), [filter, query, pageSize])
+  useEffect(() => setSelected(previous => {
+    const known = new Set(rows.map(row => row.task.id))
+    const next = new Set([...previous].filter(id => known.has(id)))
+    return next.size === previous.size ? previous : next
+  }), [rows])
+  const pageIds = pageRows.map(row => row.task.id)
+  const visibleIds = visible.map(row => row.task.id)
+  const setManySelected = (ids: string[], checked: boolean) => setSelected(previous => {
+    const next = new Set(previous)
+    for (const id of ids) checked ? next.add(id) : next.delete(id)
+    return next
+  })
+  const toggleSelected = (id: string) => setManySelected([id], !selected.has(id))
   const clearTasks = async (scope: 'ended' | 'all') => {
     const target = scope === 'ended' ? ended : rows
     if (!target.length || clearing) return
     setClearing(scope); setClearError('')
     try {
-      for (const row of target) await api.deleteTask(row.task.id)
+      await api.deleteTasks(target.map(row => row.task.id))
       toast(`已删除 ${target.length} 个任务记录；会话和工作区文件未改动`)
       setManageOpen(false); setConfirmText(''); setPage(1)
       await reload()
     } catch (e) { setClearError(String((e as Error).message ?? e)) } finally { setClearing('') }
+  }
+  const deleteSelection = async () => {
+    const ids = [...selected]
+    if (!ids.length || deletingSelected) return
+    setDeletingSelected(true); setClearError('')
+    try {
+      await api.deleteTasks(ids)
+      toast(`已删除选中的 ${ids.length} 个任务记录；DSH 会话和工作区文件未改动`)
+      setSelected(new Set()); setDeleteSelectedOpen(false); setPage(1)
+      await reload()
+    } catch (e) { setClearError(String((e as Error).message ?? e)) } finally { setDeletingSelected(false) }
   }
   return (
     <div className="dtc-taskhome">
@@ -140,8 +169,9 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
         <div className="dtc-taskfilters">{FILTERS.map(item => <button key={item.id} className={filter === item.id ? 'on' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>)}</div>
         <div className="dtc-tasktool-actions"><label className="dtc-tasksearch"><span>⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务或 Agent" /></label><button className="dtc-btn" onClick={() => { setManageOpen(true); setClearError(''); setConfirmText('') }}>管理任务</button></div>
       </div>
+      {selected.size ? <div className="dtc-taskbulk" aria-label="已选择任务操作"><b>已选 {selected.size} 个任务</b><span>只删除任务台记录；不会删除 DSH 会话或工作区文件。</span><div><button className="dtc-btn sm" onClick={() => setManySelected(pageIds, true)}>选择本页</button><button className="dtc-btn sm" onClick={() => setManySelected(visibleIds, true)}>选择筛选结果 ({visibleIds.length})</button><button className="dtc-btn sm" onClick={() => setSelected(new Set())}>取消选择</button><button className="dtc-btn sm danger" onClick={() => { setClearError(''); setDeleteSelectedOpen(true) }}>删除所选</button></div></div> : null}
       {error ? <div className="dtc-err">{error}</div> : null}
-      {!loaded ? <div className="dtc-empty"><span className="dtc-spin" /> 读取任务…</div> : visible.length ? <><div className="dtc-taskgrid">{pageRows.map(row => <TaskGroupCard key={row.task.id} {...row} agents={agents} api={api} reload={reload} toast={toast} />)}</div><div className="dtc-pagination"><span>第 {from}–{to} 条，共 {visible.length} 条</span><label>每页<select value={pageSize} onChange={event => setPageSize(Number(event.target.value))}><option value={8}>8</option><option value={16}>16</option><option value={32}>32</option></select></label><div><button className="dtc-btn sm" disabled={currentPage <= 1} onClick={() => setPage(1)}>首页</button><button className="dtc-btn sm" disabled={currentPage <= 1} onClick={() => setPage(value => Math.max(1, value - 1))}>上一页</button><b>{currentPage} / {pages}</b><button className="dtc-btn sm" disabled={currentPage >= pages} onClick={() => setPage(value => Math.min(pages, value + 1))}>下一页</button></div></div></> : <div className="dtc-taskempty"><span>▦</span><b>{query ? '没有匹配的任务' : '这个视图还没有任务'}</b><p>{query ? '换一个关键词试试。' : '新建任务后，角色、依赖和运行状态会显示在这里。'}</p>{!query ? <button className="dtc-btn pri" onClick={() => go('tasks/new')}>＋ 新建任务</button> : null}</div>}
+      {!loaded ? <div className="dtc-empty"><span className="dtc-spin" /> 读取任务…</div> : visible.length ? <><div className="dtc-selectline"><label><input type="checkbox" checked={pageIds.length > 0 && pageIds.every(id => selected.has(id))} onChange={event => setManySelected(pageIds, event.target.checked)} /> 选择本页 {pageIds.length} 个</label><button onClick={() => setManySelected(visibleIds, true)}>选择全部筛选结果 ({visibleIds.length})</button></div><div className="dtc-taskgrid">{pageRows.map(row => <TaskGroupCard key={row.task.id} {...row} selected={selected.has(row.task.id)} onSelect={() => toggleSelected(row.task.id)} agents={agents} api={api} reload={reload} toast={toast} />)}</div><div className="dtc-pagination"><span>第 {from}–{to} 条，共 {visible.length} 条</span><label>每页<select value={pageSize} onChange={event => setPageSize(Number(event.target.value))}><option value={8}>8</option><option value={16}>16</option><option value={32}>32</option></select></label><div><button className="dtc-btn sm" disabled={currentPage <= 1} onClick={() => setPage(1)}>首页</button><button className="dtc-btn sm" disabled={currentPage <= 1} onClick={() => setPage(value => Math.max(1, value - 1))}>上一页</button><b>{currentPage} / {pages}</b><button className="dtc-btn sm" disabled={currentPage >= pages} onClick={() => setPage(value => Math.min(pages, value + 1))}>下一页</button></div></div></> : <div className="dtc-taskempty"><span>▦</span><b>{query ? '没有匹配的任务' : '这个视图还没有任务'}</b><p>{query ? '换一个关键词试试。' : '新建任务后，角色、依赖和运行状态会显示在这里。'}</p>{!query ? <button className="dtc-btn pri" onClick={() => go('tasks/new')}>＋ 新建任务</button> : null}</div>}
       {manageOpen ? <div className="dtc-modal" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !clearing) setManageOpen(false) }}><section className="dtc-mbox dtc-cleanbox" role="dialog" aria-modal="true" aria-labelledby="dtc-clean-title">
         <header className="mh"><div><b id="dtc-clean-title">管理任务记录</b><small>只处理任务台数据，不删除 DSH 会话或工作区文件</small></div><button className="dtc-close" aria-label="关闭" disabled={!!clearing} onClick={() => setManageOpen(false)}>×</button></header>
         <div className="mb">
@@ -150,6 +180,7 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
           <div className="dtc-clean-option danger"><div><b>清空全部任务</b><p>包括当前活跃任务；正在执行的运行会先取消。此操作无法从任务台撤销。</p><label>输入“清空全部”确认<input value={confirmText} onChange={event => setConfirmText(event.target.value)} placeholder="清空全部" disabled={!!clearing} /></label></div><button className="dtc-btn danger" disabled={!rows.length || confirmText !== '清空全部' || !!clearing} onClick={() => void clearTasks('all')}>{clearing === 'all' ? '清空中…' : `清空 ${rows.length} 个`}</button></div>
         </div>
       </section></div> : null}
+      {deleteSelectedOpen ? <div className="dtc-modal" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !deletingSelected) setDeleteSelectedOpen(false) }}><section className="dtc-mbox dtc-cleanbox" role="dialog" aria-modal="true" aria-labelledby="dtc-delete-selected-title"><header className="mh"><div><b id="dtc-delete-selected-title">删除所选任务</b><small>将删除 {selected.size} 个任务及其运行记录</small></div><button className="dtc-close" aria-label="关闭" disabled={deletingSelected} onClick={() => setDeleteSelectedOpen(false)}>×</button></header><div className="mb"><p>此操作只影响任务台 SQLite 数据。DSH 会话、Agent 配置和工作区文件不会被删除。</p>{clearError ? <div className="dtc-err">{clearError}</div> : null}<div className="dtc-modal-actions"><button className="dtc-btn" disabled={deletingSelected} onClick={() => setDeleteSelectedOpen(false)}>取消</button><button className="dtc-btn danger" disabled={deletingSelected} onClick={() => void deleteSelection()}>{deletingSelected ? '删除中…' : `确认删除 ${selected.size} 个`}</button></div></div></section></div> : null}
     </div>
   )
 }
@@ -161,8 +192,8 @@ function flowOf(r: Run, agents: AgentRow[]) {
   return <span className="dtc-flow">{r.legs.map((l, i) => <span key={i}>{i ? <span className="ar">→</span> : null}<span className={`dot ${l.status}`} /><span className="nm">{agentName(agents, l.agentId)}</span></span>)}</span>
 }
 
-function TaskGroupCard({ task, latest, history, state, agents, api, reload, toast }: {
-  task: TaskRow; latest?: Run; history: number; state: ReturnType<typeof taskState>; agents: AgentRow[]; api: TasksApi; reload: () => Promise<void>; toast: (m: string) => void
+function TaskGroupCard({ task, latest, history, state, selected, onSelect, agents, api, reload, toast }: {
+  task: TaskRow; latest?: Run; history: number; state: ReturnType<typeof taskState>; selected: boolean; onSelect: () => void; agents: AgentRow[]; api: TasksApi; reload: () => Promise<void>; toast: (m: string) => void
 }) {
   const current = latest?.legs.find(leg => leg.status === 'running' || leg.status === 'blocked' || leg.status === 'review') ?? latest?.legs.at(-1)
   const done = latest?.legs.filter(leg => leg.status === 'done').length ?? 0
@@ -171,21 +202,24 @@ function TaskGroupCard({ task, latest, history, state, agents, api, reload, toas
   const progress = total ? Math.round(done / total * 100) : 0
   const toggleSchedule = async () => { await api.setTaskEnabled(task.id, !task.enabled); toast(task.enabled ? '已停用时间表' : '已启用时间表'); await reload() }
   const retry = async () => { await api.fireTask(task.id, 'retry'); toast('已创建重试运行'); await reload() }
+  const rerun = async () => { await api.fireTask(task.id, 'manual'); toast('已创建新的执行批次，历史运行已保留'); await reload() }
+  const resultArtifact = latest?.finalArtifact ?? latest?.resultArtifact
   return (
-    <div className={`dtc-taskgroup s-${state}`} role="button" tabIndex={0} data-task-id={task.id} onClick={() => go(`tasks/${task.id}`)} onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) go(`tasks/${task.id}`) }}>
-      <div className="dtc-taskgroup-head"><div className="mark">{task.title.trim().charAt(0) || '任'}</div><div className="copy"><h2>{task.title}</h2><span className="dtc-mono">{task.id}</span></div><span className={`dtc-pill ${status[1]}`}>{status[0]}</span></div>
+    <div className={`dtc-taskgroup s-${state} ${selected ? 'selected' : ''}`} role="button" tabIndex={0} data-task-id={task.id} onClick={() => go(`tasks/${task.id}`)} onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) go(`tasks/${task.id}`) }}>
+      <div className="dtc-taskgroup-head"><label className="dtc-taskselect" aria-label={`选择任务 ${task.title}`} onClick={event => event.stopPropagation()}><input type="checkbox" checked={selected} onChange={onSelect} /></label><div className="mark">{task.title.trim().charAt(0) || '任'}</div><div className="copy"><h2>{task.title}</h2><span className="dtc-mono">{task.id}</span></div><span className={`dtc-pill ${status[1]}`}>{status[0]}</span></div>
       <p className="brief">{task.brief}</p>
       <div className="dtc-taskgroup-flow">{latest ? flowOf(latest, agents) : pipe(task, agents)}</div>
       {latest ? <div className="dtc-taskprogress"><div><span>最近一次进度</span><b>{done}/{total}</b></div><div className="track"><i style={{ width: `${progress}%` }} /></div></div> : null}
       {state === 'park' && current?.question ? <div className="dtc-tasknotice ask"><b>{agentName(agents, current.agentId)} 正在等你</b><span>{current.question}</span></div> : null}
       {state === 'review' && current ? <div className="dtc-tasknotice review"><b>{agentName(agents, current.agentId)} 已提交</b><span>验收通过后才会启动下游任务。</span></div> : null}
       {state === 'bad' && current ? <div className="dtc-tasknotice bad"><b>{agentName(agents, current.agentId)} 执行失败</b><span>{current.error || LEG[current.status] || current.status}</span></div> : null}
-      {state === 'done' && latest?.finalArtifact ? <div className="dtc-tasknotice result"><div><b>最终产物 · {latest.finalArtifact.name}</b><span>{latest.reworks ? `经历 ${latest.reworks} 次返工 · ` : ''}SHA256 {latest.finalArtifact.sha256.slice(0, 10)}…</span></div><button className="dtc-btn sm pri" onClick={event => { event.stopPropagation(); go(`tasks/${task.id}/runs/${latest.id}`) }}>查看最终结果</button></div> : null}
+      {state === 'done' && resultArtifact && latest ? <div className="dtc-tasknotice result"><div><b>{latest.finalArtifact ? '最终交付' : '最近交付'} · {resultArtifact.name}</b><span>{latest.reworks ? `经历 ${latest.reworks} 次返工 · ` : ''}{resultArtifact.mime || '未知类型'} · SHA256 {resultArtifact.sha256.slice(0, 10)}…</span></div><ArtifactResultAction api={api} taskId={task.id} batchId={latest.id} artifact={resultArtifact} toast={toast} label={resultArtifact.mime === 'text/html' || /\.html?$/i.test(resultArtifact.name) ? '查看 / View' : '查看交付物'} /></div> : null}
       <div className="dtc-taskgroup-foot"><div>
         {task.trigger.kind === 'cron' ? <><span className="dtc-mono">{cronHuman(task.trigger.expr)}</span><span>{task.enabled && task.nextFire ? `下次 ${fmt(task.nextFire)}` : '时间表已停用'}</span></> : latest ? <><span>{ago(latest.firedAt)} · {BY[latest.by]}</span><span>{history} 次运行</span></> : <span>单次任务</span>}
         </div><div className="acts">
           {task.trigger.kind === 'cron' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void toggleSchedule() }}>{task.enabled ? '停用' : '启用'}</button> : null}
           {state === 'bad' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void retry() }}>重试</button> : null}
+          {state === 'done' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void rerun() }}>再次执行</button> : null}
           {state === 'park' && current?.sessionId ? <button className="dtc-btn sm pri" onClick={event => { event.stopPropagation(); closeConsole(); void api.openSession(current.sessionId!) }}>去回答</button> : null}
           <span className="open">查看详情 →</span>
         </div>

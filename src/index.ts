@@ -23,6 +23,7 @@ export {
 } from './presets.ts'
 export { CONSOLE_INVOCATIONS, METHODS, NAMESPACE, PKG } from './wire.ts'
 export type { AgentRow, AgentSpec, Catalog, McpServer, NativeTool, Preview, SkillEntry, TryRunResult } from './wire.ts'
+export { applyAgentPermission } from './agent-session.ts'
 
 export async function apply(ctx: Context): Promise<void> {
   await ctx.plugin(TaskConsoleService)

@@ -14,6 +14,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
+import { applyAgentPermission } from './agent-session.ts'
 import { captureArtifacts } from './artifacts.ts'
 import { readSpec } from './presets.ts'
 import { EventStore, NUDGE, cardMessage, cronMatches, parseCron, type Batch, type BlockKind, type Card, type TaskSpec } from './tasks.ts'
@@ -270,6 +271,7 @@ export class TaskRunner {
         meta: { cwd: task.cwd, agentPreset: preset.id },
         setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
       })
+      applyAgentPermission(this.ctx, spec, flight.handle.agent.session)
       await this.onSessionCreated?.(sessionId)
       this.store.kernel.recordEvent(card.id, 'session_created', { session_id: sessionId }, flight.coreRunId)
       await this.append({ t: 'run/session_created', taskId: task.id, runId, sessionId })
@@ -325,6 +327,7 @@ export class TaskRunner {
       await this.append({ t: 'run/prompt_dispatched', taskId: task.id, runId, messageId })
       this.arm(flight)
     } catch (error) {
+      try { await flight.handle?.dispose?.() } catch { /* original startup error wins */ }
       this.flights.delete(sessionId)
       this.stopHeartbeat(flight)
       this.store.kernel.failRun(card.id, { expectedRunId: flight.coreRunId, outcome: 'failed', error: error instanceof Error ? error.message : String(error) })

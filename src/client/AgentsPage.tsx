@@ -8,7 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wire.ts'
 import { closeConsole, go, type Api } from './Console.tsx'
 
-const EMPTY: AgentSpec = { id: '', name: '', description: '', persona: '', model: '', effort: 'medium', tools: ['ask-user'], mcpTools: {}, mcpPolicy: {}, skills: [] }
+const EMPTY: AgentSpec = { id: '', name: '', description: '', persona: '', model: '', effort: 'medium', permissionPreset: 'workspace-write', tools: ['ask-user'], mcpTools: {}, mcpPolicy: {}, skills: [] }
 const PERM: Record<Preview['permission'], { label: string; cls: string; dot: string }> = {
   'read-only': { label: '只读', cls: 'dtc-p-ok', dot: 'ro' },
   'limited-write': { label: '受限可写', cls: 'dtc-p-warn', dot: 'lw' },
@@ -169,7 +169,10 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
                 <datalist id="dtc-models">{catalog.models.map(m => <option key={m} value={m} />)}</datalist></label>
               <label>推理强度<select value={spec.effort} disabled={readOnly} onChange={e => set('effort', e.target.value as AgentSpec['effort'])}>
                 <option value="">默认</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
+              <label>会话权限<select value={spec.permissionPreset} disabled={readOnly} onChange={e => set('permissionPreset', e.target.value as AgentSpec['permissionPreset'])}>
+                <option value="workspace-write">工作区写入 · 需审批</option><option value="danger-full-access">完全主机访问 · 无审批</option></select></label>
             </div>
+            {spec.permissionPreset === 'danger-full-access' ? <div className="dtc-warn">该 Agent 的 bash 可直接访问宿主机，且不会弹出权限确认。仅用于装机等必须控制系统服务的受信角色。</div> : null}
           </div>
           <div className="dtc-panel"><h3>人设 <span className="dtc-faint" style={{ fontWeight: 400 }}>→ dsh-persona 行</span></h3>
             <textarea value={spec.persona} disabled={readOnly} onChange={e => set('persona', e.target.value)} placeholder="职责、边界、交卷格式" style={{ minHeight: 140 }} />

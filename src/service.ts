@@ -15,6 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { applyAgentPermission } from './agent-session.ts'
 import { discoverLegacyArtifacts, publishHtml, readArtifact } from './artifacts.ts'
 import { withFinalArtifact } from './artifact-delivery.ts'
 import {
@@ -39,7 +40,7 @@ const KNOWN_MODELS = [
 ]
 
 export class TaskConsoleService extends TypertRemoteService {
-  static inject = ['loader', 'tools', 'agents', 'workspaceRegistry']
+  static inject = ['loader', 'tools', 'agents', 'workspaceRegistry', 'permissionPresets']
 
   readonly runner: TaskRunner
 
@@ -238,6 +239,7 @@ export class TaskConsoleService extends TypertRemoteService {
         meta: { cwd: homedir(), agentPreset: preset.id },
         setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
       })
+      applyAgentPermission(this.ctx, spec, handle.agent.session)
       messageId = randomUUID()
       handle.agent.followup({ id: messageId, role: 'user', content: [{ type: 'text', text: question }], source: { kind: 'user' } })
       const timeout = new Promise<void>((_, reject) => setTimeout(() => reject(new Error('120 秒没等到回合结束')), 120_000))
@@ -281,6 +283,12 @@ export class TaskConsoleService extends TypertRemoteService {
       meta: { cwd: dir, agentPreset: preset.id },
       setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
     })
+    try {
+      applyAgentPermission(this.ctx, spec, handle.agent.session)
+    } catch (error) {
+      try { await handle.dispose?.() } catch { /* creation error wins */ }
+      throw error
+    }
     this.chats.set(sessionId, handle)
     const head = (text ?? '').trim().replace(/\s+/g, ' ').slice(0, 28)
     try { (this.ctx as any).get('sessionTitle')?.rename?.(handle.agent.session, head ? `${name} · ${head}` : `${name} · 新会话`) } catch { /* cosmetic */ }

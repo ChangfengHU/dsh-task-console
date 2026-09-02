@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { mask, permissionOf, readSpec, removePreset, renderComposition, validateSpec, writePreset } from '../src/presets.ts'
 
-const base = { id: 'inspector', name: '巡检员', description: '只看不动', persona: '你是巡检员。\n只读。', model: 'codex-local/gpt-5.6-mini', effort: 'medium' as const }
+const base = { id: 'inspector', name: '巡检员', description: '只看不动', persona: '你是巡检员。\n只读。', model: 'codex-local/gpt-5.6-mini', effort: 'medium' as const, permissionPreset: 'workspace-write' as const }
 
 test('validateSpec rejects bad ids and keeps only known native tools', () => {
   assert.throws(() => validateSpec({ ...base, id: '../x' }), /id/)
@@ -14,6 +14,8 @@ test('validateSpec rejects bad ids and keeps only known native tools', () => {
   assert.deepEqual(spec.tools, ['bash'])
   assert.deepEqual(spec.mcpTools, { vault: ['*'] })
   assert.deepEqual(spec.mcpPolicy, {})
+  assert.equal(validateSpec({ ...base, permissionPreset: undefined }).permissionPreset, 'workspace-write')
+  assert.equal(validateSpec({ ...base, permissionPreset: 'danger-full-access' }).permissionPreset, 'danger-full-access')
 })
 
 test('renderComposition lists only chosen rows and renames a live host MCP', () => {

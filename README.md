@@ -2,7 +2,9 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.19.0):** makes Agent permissions tool-granular. Native and MCP tools now live in one capability matrix; MCP servers are only grouping labels, while each advertised tool is independently selectable. Generated presets hide every inherited host tool, mount only the chosen MCP definitions through a filtered client, and may enforce per-tool argument policies such as Vault key prefixes and Fleet hostname patterns. A real try-run still reports the exact request header, so the UI claim is verifiable against what the model actually received.
+**This release (0.20.0):** adds an explicit per-Agent DSH session permission preset alongside tool-granular capabilities. `workspace-write` remains the safe default; trusted system operators such as `装机者` can pin `danger-full-access`, and the plugin writes that sandbox/approval bundle before the first user message is dispatched. A missing permission service now fails closed instead of silently starting the Agent under a different boundary.
+
+Native and MCP tools still live in one capability matrix; MCP servers are only grouping labels, while each advertised tool is independently selectable. Generated presets hide every inherited host tool, mount only the chosen MCP definitions through a filtered client, and may enforce per-tool argument policies such as Vault key prefixes and Fleet hostname patterns. A real try-run reports the exact request header and uses the same session permission path as a normal Agent chat.
 
 The deployed `装机者` preset now defaults to a base Fleet node: SSH/`claude`, Clash/Mihomo, Controller/Dashboard, browser/VNC, Cloudflare hostnames, Fleet registration and evidence. `chatgpt-image-service`, `imggen-*`, browser-login identity and a pinned image job are an explicit image-worker extension rather than a false prerequisite of ordinary machine onboarding.
 

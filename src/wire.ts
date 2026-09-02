@@ -103,6 +103,8 @@ export interface AgentSpec {
   /** `provider/model`. */
   model: string
   effort: 'low' | 'medium' | 'high' | ''
+  /** DSH sandbox + approval bundle pinned before this Agent receives its first message. */
+  permissionPreset: 'workspace-write' | 'danger-full-access'
   tools: string[]
   /** Exact raw MCP tool names selected under each server. `*` reads legacy whole-server specs. */
   mcpTools: Record<string, string[]>

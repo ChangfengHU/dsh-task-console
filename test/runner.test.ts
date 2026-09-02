@@ -11,12 +11,14 @@ import { groupArtifacts } from '../src/artifact-delivery.ts'
 function fakeHost(presetDir: string) {
   const listeners: ((s: any, e: any) => void)[] = []
   const sessions = new Map<string, { agent: any; tools: any[]; disposed: boolean; followups: any[] }>()
+  const permissions: string[] = []
   const ctx: any = {
     on: (name: string, fn: any) => { if (name === 'session/event') listeners.push(fn); return () => { const i = listeners.indexOf(fn); if (i >= 0) listeners.splice(i, 1) } },
     effect: () => undefined,
     get: (key: string) => {
       if (key === 'agentPresets') return { resolve: async (id: string) => ({ id, name: id, path: join(presetDir, id, 'agent.cordis.yml') }), mount: async () => undefined }
       if (key === 'agentDefaultModel') return { currentSelection: () => ({ provider: 'p', model: 'm' }) }
+      if (key === 'permissionPresets') return { set: (_session: unknown, preset: string) => { permissions.push(preset) } }
       return undefined
     },
     agents: {
@@ -34,7 +36,7 @@ function fakeHost(presetDir: string) {
   const consumeFirst = (sessionId: string) => { const s = sessions.get(sessionId)!; emit(sessionId, { type: 'user/message', data: { id: s.followups[0].id, source: { kind: 'user' } } }) }
   const callTool = async (sessionId: string, name: string, args: any) => { const s = sessions.get(sessionId)!; const t = s.tools.find(x => x.name === name); assert.ok(t, `tool ${name} registered`); return t.execute(args, {}) }
   const endTurn = (sessionId: string) => emit(sessionId, { type: 'turn/end', data: { reason: { kind: 'completed' } } })
-  return { ctx, sessions, emit, consumeFirst, callTool, endTurn }
+  return { ctx, sessions, permissions, emit, consumeFirst, callTool, endTurn }
 }
 
 async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: ConstructorParameters<typeof TaskRunner>[2] = {}) {
@@ -50,13 +52,14 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
 
-test('runner: marks each task session internal immediately after DSH creates it', async () => {
+test('runner: pins Agent permission and marks each task session internal before dispatch', async () => {
   const internal: string[] = []
-  const { runner } = await setup({}, { onSessionCreated: sessionId => { internal.push(sessionId) } })
+  const { host, runner } = await setup({}, { onSessionCreated: sessionId => { internal.push(sessionId) } })
   const batch = await runner.fire('T', 'manual')
   await tick()
 
   assert.deepEqual(internal, [`task-t-${batch.id}-1`])
+  assert.deepEqual(host.permissions, ['workspace-write'])
   runner.stop()
 })
 

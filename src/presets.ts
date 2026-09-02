@@ -198,6 +198,7 @@ export function validateSpec(raw: unknown): AgentSpec {
   if (!name) throw new Error('名字必填')
   const list = (v: unknown) => Array.isArray(v) ? [...new Set(v.map(String).filter(Boolean))] : []
   const effort = s.effort === 'low' || s.effort === 'medium' || s.effort === 'high' ? s.effort : ''
+  const permissionPreset = s.permissionPreset === 'danger-full-access' ? 'danger-full-access' : 'workspace-write'
   const mcpTools: Record<string, string[]> = {}
   if (s.mcpTools && typeof s.mcpTools === 'object' && !Array.isArray(s.mcpTools)) {
     for (const [server, tools] of Object.entries(s.mcpTools)) {
@@ -247,6 +248,7 @@ export function validateSpec(raw: unknown): AgentSpec {
     persona: String(s.persona ?? ''),
     model: String(s.model ?? '').trim(),
     effort,
+    permissionPreset,
     tools: list(s.tools).filter(t => NATIVE_TOOLS.some(n => n.id === t)),
     mcpTools,
     mcpPolicy,

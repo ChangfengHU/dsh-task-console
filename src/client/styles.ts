@@ -293,9 +293,8 @@ body[data-ds-dark-theme] .dtc-node .q { color:#a794e0 }
 .dtc-ask { border-left:3px solid #6b4fbb; background:rgba(107,79,187,.12); border-radius:5px; padding:8px 12px; margin-top:6px }
 .dtc-body { padding-bottom:80px }
 
-/* ── sidebar: two stacked entries ── */
-.dtc-footstack { display:flex; flex-direction:column; gap:2px; width:100% }
-.dtc-foot .ic { background:var(--dtc-accent-bg, #e2f0f1); color:#1f6f78 }
+/* ── sidebar: mirror the host Settings trigger, never a separate visual language ── */
+.dtc-footstack { display:flex; flex-direction:column; width:100% }
 
 /* ── agents master-detail ── */
 .dtc-agents { display:grid; grid-template-columns:280px minmax(0,1fr); height:calc(100% - 52px); min-height:0 }
@@ -524,10 +523,11 @@ body[data-ds-dark-theme] .dtc-node .q { color:#a794e0 }
 .dtc-agents { height:calc(100% - 60px) }.dtc-alist { background:color-mix(in srgb,var(--dtc-surface) 94%,var(--dtc-ground)) }.dtc-adetail { background:var(--dtc-ground) }.dtc-ahead { padding:16px 18px; border:1px solid var(--dtc-line); border-radius:12px; background:var(--dtc-surface) }.dtc-aitem.on { border-left-color:transparent; box-shadow:inset 3px 0 var(--dtc-accent) }
 @media (max-width:700px) { .dtc-head { height:auto; min-height:60px; flex-wrap:wrap; gap:8px 12px; padding:9px 12px }.dtc-brand { min-width:0; flex:1 }.dtc-brand small { display:none }.dtc-head-actions { margin-left:0 }.dtc-agents { height:calc(100% - 60px) }.dtc-clean-option { grid-template-columns:1fr }.dtc-clean-option .dtc-btn { justify-content:center }.dtc-pagination { align-items:flex-start; flex-wrap:wrap }.dtc-pagination > span { width:100% }.dtc-pagination > div { margin-left:auto }.dtc-taskgroup-head { grid-template-columns:18px 34px minmax(0,1fr) }.dtc-taskgroup-head .dtc-pill { grid-column:3 }.dtc-taskbulk > div { width:100%; margin-left:0 }.dtc-dag-fullscreen { inset:6px }.dtc-dag-head-actions code { display:none }.dtc-dbdag-tools { align-items:flex-start; flex-direction:column }.dtc-dbdag-tools > div { width:100%; justify-content:flex-end } }
 
-.dtc-foot { display:flex; align-items:center; gap:10px; width:100%; padding:8px 10px; border-radius:6px; font-size:13.5px; text-align:left; color:var(--dtc-muted) }
-.dtc-foot:hover { background:var(--dtc-surface-2); color:var(--dtc-ink) }
-.dtc-foot .ic { width:20px; height:20px; display:inline-grid; place-items:center; font-size:14px; color:currentColor; flex:0 0 auto }
-.dtc-foot.narrow { justify-content:center; padding:8px 0 }
+.dtc-foot { box-sizing:border-box; cursor:pointer; display:flex; flex:none; align-items:center; gap:8px; width:calc(100% + 4px); height:42px; margin:4px -2px; padding:0 10px 0 8px; overflow:hidden; color:var(--dsw-alias-label-primary); background:transparent; border:0; border-radius:12px; font-family:inherit; font-size:14px; line-height:22px; text-align:left }
+.dtc-foot:hover { background:var(--dsw-alias-interactive-bg-hover) }
+.dtc-foot .ic { display:inline-grid; flex:none; place-items:center; width:16px; height:16px; color:currentColor; background:transparent; font-size:16px; line-height:1 }
+.dtc-foot.narrow { justify-content:center; gap:0; width:36px; height:36px; margin:8px 0 10px; padding:0; border-radius:50% }
+.dtc-foot.narrow .ic { width:18px; height:18px; font-size:18px }
 `
 
 export function installStyles(): () => void {

@@ -67,8 +67,11 @@ export class TaskConsoleService extends TypertRemoteService {
 
   /** Migrate every historical task-session relation into the internal set. */
   private async markExistingTaskSessionsInternal(): Promise<void> {
-    const sessionIds = [...new Set([...this.runner.store.s.runs.values()]
-      .map(run => run.sessionId).filter((id): id is string => Boolean(id)))]
+    const projected = [...this.runner.store.s.runs.values()]
+      .map(run => run.sessionId).filter((id): id is string => Boolean(id))
+    const historical = this.runner.store.all()
+      .flatMap(event => event.t === 'run/claimed' || event.t === 'run/session_created' ? [event.sessionId] : [])
+    const sessionIds = [...new Set([...projected, ...historical])]
     for (const sessionId of sessionIds) await this.markTaskSessionInternal(sessionId)
   }
 

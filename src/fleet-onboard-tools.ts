@@ -1043,6 +1043,10 @@ function isCloudStage(stage: number): stage is 5 | 6 | 7 | 8 | 10 {
   return [5, 6, 7, 8, 10].includes(stage)
 }
 
+function isHostStage(stage: number): stage is 2 | 4 {
+  return stage === 2 || stage === 4
+}
+
 function projectLedger(operation: 'status' | 'report', ip: string, value: FleetLedgerStatus, executionAvailable: boolean): FleetToolResult {
   if (!value.ok || !value.run) return { ...blockedResult(operation, ip, 'onboarding-run-not-found'), execution_available: executionAvailable }
   const run = value.run
@@ -1081,11 +1085,14 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
           Math.min(prepared.timeoutMs ?? DEFAULT_ADAPTER_TIMEOUT_MS, 10_000),
         )
         const stages = Array.isArray(capabilities.stages) ? capabilities.stages : []
-        const stage = stages.find(capability => capability?.stage === 2)
-        const expected = contractStages(prepared)[1]
+        const expectedStages = contractStages(prepared).filter(stage => isHostStage(stage.stage))
+        const configured = expectedStages.every(expected => {
+          const stage = stages.find(capability => capability?.stage === expected.stage)
+          return stage?.component === expected.id && stage.executor_id === expected.executor_id
+            && stage.execution_mode === 'reconcile' && stage.execution === 'configured'
+        })
         if (capabilities.schema !== 1 || capabilities.ok !== true || capabilities.probe !== 'configured'
-          || stage?.component !== expected.id || stage.executor_id !== expected.executor_id
-          || stage.execution_mode !== 'reconcile' || stage.execution !== 'configured') prepared.executor = undefined
+          || !configured) prepared.executor = undefined
       } catch { prepared.executor = undefined }
     }
     return new SubprocessFleetOnboardAdapter(prepared)
@@ -1153,7 +1160,7 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
     }
     const operationId = `onboard-${createHash('sha256').update(`${run.id}\0${run.targetFingerprint}\0${stage.stage}\0${attempt}\0${run.executorVersion}`).digest('hex').slice(0, 32)}`
     let actionResult: Record<string, unknown>
-    if (stage.stage === 2) {
+    if (isHostStage(stage.stage)) {
       const request: Record<string, unknown> = {
         schema: 1, ip: run.ip, contract_sha256: this.config.contractSha256,
         action: { stage: stage.stage, component: stage.id, executor_id: stage.executor_id, operation_id: operationId, reason: safeReason(assessment.reason, 'component-drifted') },
@@ -1199,7 +1206,7 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
     }
     if (actionResult.outcome === 'succeeded' || actionResult.outcome === 'noop') {
       let nextInventory: Record<string, unknown>
-      if (stage.stage === 2) {
+      if (isHostStage(stage.stage)) {
         if (!actionResult.inventory || typeof actionResult.inventory !== 'object' || Array.isArray(actionResult.inventory)) throw new Error('executor-result-inventory-required')
         nextInventory = verifiedProbeInventory({ schema: 1, ok: true, operation: 'probe', ip: run.ip, inventory: actionResult.inventory }, run.ip, 'base', this.config)
       } else {
@@ -1253,7 +1260,7 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
         continue
       }
       const probeGate = stage.execution_mode === 'probe-gate'
-      const executionConfigured = stage.stage === 2
+      const executionConfigured = isHostStage(stage.stage)
         ? Boolean(this.config.executor)
         : isCloudStage(stage.stage) ? Boolean(this.config.cloud) : false
       if (observed.disposition !== 'repairable' || !executionConfigured || probeGate) {

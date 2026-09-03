@@ -624,6 +624,7 @@ def execute(config: Dict[str, Any], request: Dict[str, Any]) -> Dict[str, Any]:
                                 "FLEET_ONBOARD_JOB_REQUEST_FILE": str(paths["request"]),
                                 "FLEET_ONBOARD_JOB_RESULT_FILE": str(paths["result"]),
                                 "FLEET_ONBOARD_CREDENTIAL_FD": str(credential_fd),
+                                "FLEET_ONBOARD_KNOWN_HOSTS_FILE": str(Path(config["state_dir"]) / "known_hosts"),
                             }, vault=action["stage"] == 2),
                             pass_fds=(credential_fd,),
                             close_fds=True,

@@ -31,7 +31,7 @@ const COMPONENTS = [
   ['ssh-preflight', 'fleet.ssh-preflight.v1', ['reachable', 'admin', 'systemd', 'tun', 'resources'], []],
   ['standard-account', 'fleet.standard-account.v1', ['login', 'passwordless_sudo', 'vault_writeback'], []],
   ['vault-login', 'fleet.vault-login.v1', ['login', 'passwordless_sudo', 'vault_readback'], []],
-  ['resource-snapshot', 'fleet.resource-snapshot.v1', ['captured', 'ports_inspected', 'services_inspected'], []],
+  ['resource-snapshot', 'fleet.machine-runtime-reconcile.v1', ['captured', 'ports_inspected', 'services_inspected', 'machined_ready'], []],
   ['mihomo', 'fleet.mihomo-reconcile.v1', ['tun', 'tcp_exit', 'udp_exit', 'line_100'], ['mihomo.service']],
   ['clash-control-plane', 'fleet.clash-control-plane-reconcile.v1', ['controller_health', 'dashboard_health'], ['linux-clash-node-controller.service', 'linux-clash-dashboard.service']],
   ['browser-vnc', 'fleet.browser-vnc-reconcile.v1', ['browser_instances', 'loopback_only', 'https_exit', 'webrtc_exit'], ['linux-browser-vnc-xvfb.service', 'linux-browser-vnc-openbox.service', 'linux-browser-vnc-x11vnc.service', 'linux-browser-vnc-novnc.service', 'linux-browser-vnc-health.service']],
@@ -45,7 +45,7 @@ const CONTRACT = {
   dispositions: ['reusable', 'repairable', 'needs-user', 'fatal'],
   stages: COMPONENTS.map(([id, executor_id, required_checks, required_units], index) => ({
     stage: index + 1, id, executor_id, required_checks, required_units,
-    execution_mode: [0, 2, 3, 8].includes(index) ? 'probe-gate' : 'reconcile',
+    execution_mode: [0, 2, 8].includes(index) ? 'probe-gate' : 'reconcile',
     ...(index === 4 ? { allowed_facts: { desiredLine: {}, actualLine: {}, tcpExit: {}, udpExit: {} } } : {}),
     ...(index === 6 ? { required_unit_template: { format: 'linux-browser-vnc-browser@{index}.service', count_from: 'desired.browser_count' } } : {}),
   })),
@@ -431,7 +431,7 @@ test('a bare host is classified as new, not adopt, before central start', async 
   assert.equal(ledger.calls.find(call => call.tool === 'onboard_start')!.args.mode, 'new')
 })
 
-test('execution availability requires ledger, probe, stage 2 executor and Cloud transport', async t => {
+test('execution availability requires ledger, probe, host executors and Cloud transport', async t => {
   const files = await fixtureFiles()
   const ledger = await ledgerFixture(files.log)
   t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))

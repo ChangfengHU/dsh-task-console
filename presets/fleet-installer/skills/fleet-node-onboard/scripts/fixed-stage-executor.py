@@ -51,8 +51,8 @@ STAGE_CAPABILITIES = {
     "fleet.vault-login.v1": (
         3, "vault-login", False, "read-only-gate-has-no-mutation"
     ),
-    "fleet.resource-snapshot.v1": (
-        4, "resource-snapshot", False, "read-only-gate-has-no-mutation"
+    "fleet.machine-runtime-reconcile.v1": (
+        4, "resource-snapshot", False, "dedicated-machine-runtime-reconciler-required"
     ),
     "fleet.mihomo-reconcile.v1": (
         5, "mihomo", False, "component-scoped-rollback-driver-not-shipped"

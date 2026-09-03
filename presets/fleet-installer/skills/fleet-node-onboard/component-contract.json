@@ -46,9 +46,9 @@
     {
       "stage": 4,
       "id": "resource-snapshot",
-      "execution_mode": "probe-gate",
-      "executor_id": "fleet.resource-snapshot.v1",
-      "required_checks": ["captured", "ports_inspected", "services_inspected"]
+      "execution_mode": "reconcile",
+      "executor_id": "fleet.machine-runtime-reconcile.v1",
+      "required_checks": ["captured", "ports_inspected", "services_inspected", "machined_ready"]
     },
     {
       "stage": 5,

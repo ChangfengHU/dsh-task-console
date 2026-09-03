@@ -127,13 +127,14 @@ per IP, and persists only secret-free job metadata. Every invocation probes befo
 after an interrupted write converges to `noop` when the target is healthy and otherwise fails closed
 instead of blindly replaying the mutation. `operation=poll` exposes only the durable job status.
 
-Install the read-only production boundary with `sudo scripts/install-host-adapter.sh --service-user <dsh-user>`. It installs
-`ssh-inventory-probe.py` and `vault-credential-provider.py`, creates the service-private HMAC key/config, and
-leaves every mutating executor disabled. The provider keeps Vault Authorization and response values out
+Install the production host boundary with `sudo scripts/install-host-adapter.sh --service-user <dsh-user>`. It installs
+the probe, credential provider, Stage 2 account reconciler and Stage 4 pinned machined reconciler, then creates
+the service-private HMAC key/config. The provider keeps Vault Authorization and response values out
 of argv/stdout; the SSH probe passes passwords/private keys through inherited FDs and hashes the SSH
 host key plus machine-id before returning. See `host-adapter-capabilities.json` before enabling an
-executor. The current checked-in installers do not yet provide crash-safe, component-scoped receipts
-for all ten stages, so the default production config can assess/adopt/plan but repairs remain blocked.
+executor. Stages 5–8 and 10 are executed through the scoped Workflow/machined control path; Stage 9 is
+a fresh probe gate. DSH must advertise one-shot execution only when both fixed host executors and the
+scoped ledger/Workflow transports are configured.
 Adding a generic shell, `ssh-fleet.sh`, or the cross-stage `install-clash.sh` as an executor is forbidden.
 For the current `dsh-task-console` subprocess adapter, set the fixed probe executable to
 `/usr/local/lib/dsh-fleet-onboard/scripts/host-adapter.py`, runtime to
@@ -145,10 +146,6 @@ The key is exactly 64 lowercase hexadecimal characters. Provision that same valu
 argv, logs, or DSH configuration. Reinstallation preserves an existing valid key and refuses to replace an
 invalid/legacy key silently. Program and contract files stay root-owned; key/config are root-owned and
 read-only to the dedicated `dsh-onboard` group, while runtime state is owned by the DSH service user.
-Leave `executor` omitted;
-therefore `execution_available` remains false. The installed default must never advertise one-shot
-repair until the missing fixed mutators in `host-adapter-capabilities.json` have been implemented and
-reviewed.
 
 When no local transaction exists but Fleet or managed components prove that the machine already exists,
 the runtime selects `adopt`; it does not silently select `new`. A retry records `resume` and keeps prior

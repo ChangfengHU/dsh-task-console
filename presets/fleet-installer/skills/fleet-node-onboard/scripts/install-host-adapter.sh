@@ -28,7 +28,7 @@ state_root=/var/lib/dsh-fleet-onboard-host
 install -d -o root -g root -m 0755 "$install_root" "$scripts_root"
 install -d -o root -g "$adapter_group" -m 0750 "$config_root"
 install -d -o "$service_user" -g "$adapter_group" -m 0700 "$state_root"
-for name in onboard-runtime.py host-adapter.py vault-credential-provider.py ssh-inventory-probe.py standard-account-reconciler.py stage-gate.sh; do
+for name in onboard-runtime.py host-adapter.py vault-credential-provider.py ssh-inventory-probe.py standard-account-reconciler.py machine-runtime-reconciler.py stage-gate.sh; do
   install -o root -g root -m 0755 "$here/$name" "$scripts_root/$name"
 done
 install -o root -g root -m 0644 "$skill/component-contract.json" "$install_root/component-contract.json"
@@ -52,7 +52,7 @@ if [[ ! -e "$config" ]]; then
 fi
 chown "root:$adapter_group" "$config"; chmod 0640 "$config"
 
-echo "host adapter installed; stage 2 is fixed and enabled in newly generated configs; other mutations remain fail-closed"
+echo "host adapter installed; fixed stage 2 and stage 4 executors are enabled in newly generated configs"
 echo "service user: $service_user"
 echo "config: $config"
 echo "hmac key file: $key (value is never printed; provision the same value as the fleet-console Worker secret)"

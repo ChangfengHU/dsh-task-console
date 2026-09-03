@@ -4,7 +4,8 @@
   "credential_provider": "/usr/local/lib/dsh-fleet-onboard/scripts/vault-credential-provider.py",
   "probe_executor": "/usr/local/lib/dsh-fleet-onboard/scripts/ssh-inventory-probe.py",
   "stage_executors": {
-    "fleet.standard-account.v1": "/usr/local/lib/dsh-fleet-onboard/scripts/standard-account-reconciler.py"
+    "fleet.standard-account.v1": "/usr/local/lib/dsh-fleet-onboard/scripts/standard-account-reconciler.py",
+    "fleet.machine-runtime-reconcile.v1": "/usr/local/lib/dsh-fleet-onboard/scripts/machine-runtime-reconciler.py"
   },
   "wait_timeout_seconds": 300,
   "poll_interval_ms": 250,

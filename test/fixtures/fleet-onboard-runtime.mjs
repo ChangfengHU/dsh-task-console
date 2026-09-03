@@ -15,7 +15,7 @@ await appendFile(process.env.FLEET_FIXTURE_LOG, `${JSON.stringify({ role: `runti
 if (operation === 'capabilities') {
   const components = [
     ['ssh-preflight', 'fleet.ssh-preflight.v1'], ['standard-account', 'fleet.standard-account.v1'],
-    ['vault-login', 'fleet.vault-login.v1'], ['resource-snapshot', 'fleet.resource-snapshot.v1'],
+    ['vault-login', 'fleet.vault-login.v1'], ['resource-snapshot', 'fleet.machine-runtime-reconcile.v1'],
     ['mihomo', 'fleet.mihomo-reconcile.v1'], ['clash-control-plane', 'fleet.clash-control-plane-reconcile.v1'],
     ['browser-vnc', 'fleet.browser-vnc-reconcile.v1'], ['cloudflare-publication', 'fleet.cloudflare-publication-reconcile.v1'],
     ['acceptance', 'fleet.acceptance-reconcile.v1'], ['fleet-registration', 'fleet.registration-reconcile.v1'],
@@ -23,7 +23,7 @@ if (operation === 'capabilities') {
   process.stdout.write(`${JSON.stringify({
     schema: 1, ok: true, operation: 'capabilities', probe: 'configured',
     stages: components.map(([component, executor_id], index) => {
-      const execution_mode = [0, 2, 3, 8].includes(index) ? 'probe-gate' : 'reconcile'
+      const execution_mode = [0, 2, 8].includes(index) ? 'probe-gate' : 'reconcile'
       return { stage: index + 1, component, executor_id, execution_mode, execution: execution_mode === 'probe-gate' ? 'probe-gated' : 'configured' }
     }),
   })}\n`)

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "status": "production-probe-and-stage2-ready-other-execution-fail-closed",
+  "status": "production-probe-stage2-stage4-ready-machine-stages-cloud-owned",
   "dsh_task_console": {
     "probe_executable": "/usr/local/lib/dsh-fleet-onboard/scripts/host-adapter.py",
     "runtime_executable": "/usr/local/lib/dsh-fleet-onboard/scripts/onboard-runtime.py",
@@ -10,8 +10,8 @@
       "FLEET_ONBOARD_INVENTORY_HMAC_KEY_FILE": "/etc/dsh-fleet-onboard/inventory-hmac.key"
     },
     "execution_available": false,
-    "available_stages": [2],
-    "note": "Stage 2 has a fixed executor. End-to-end execution remains false until every other reconcile stage is shipped; consumers must honor the per-stage capability matrix."
+    "available_stages": [2, 4],
+    "note": "Stage 2 reconciles the managed account; Stage 4 upgrades or installs the pinned machined runtime and line-100 declaration. Stages 5-8 and 10 are cloud-owned."
   },
   "probe": {
     "implementation": "scripts/ssh-inventory-probe.py",
@@ -34,7 +34,7 @@
     {"stage": 1, "executor_id": "fleet.ssh-preflight.v1", "execution_mode": "probe-gate", "shipped_executor": false, "reason": "a fresh signed probe is the complete gate; an unreachable or unsupported target cannot be repaired by this stage"},
     {"stage": 2, "executor_id": "fleet.standard-account.v1", "execution_mode": "reconcile", "shipped_executor": true, "implementation": "scripts/standard-account-reconciler.py", "reason": "fixed claude account, operator key, validated sudoers, external key-login proof and scoped full-IP Vault commit/readback"},
     {"stage": 3, "executor_id": "fleet.vault-login.v1", "execution_mode": "probe-gate", "shipped_executor": false, "reason": "a fresh signed managed-login and vault readback observation is the complete gate"},
-    {"stage": 4, "executor_id": "fleet.resource-snapshot.v1", "execution_mode": "probe-gate", "shipped_executor": false, "reason": "a fresh signed resource and conflict snapshot is the complete gate"},
+    {"stage": 4, "executor_id": "fleet.machine-runtime-reconcile.v1", "execution_mode": "reconcile", "shipped_executor": true, "implementation": "scripts/machine-runtime-reconciler.py", "reason": "fresh resource evidence plus pinned machined 0.15.1 is required before cloud-owned machine stages"},
     {"stage": 5, "executor_id": "fleet.mihomo-reconcile.v1", "execution_mode": "reconcile", "shipped_executor": false, "reason": "install-clash-currently-crosses-component-boundaries-and-does-not-persist-line-100-identity"},
     {"stage": 6, "executor_id": "fleet.clash-control-plane-reconcile.v1", "execution_mode": "reconcile", "shipped_executor": false, "reason": "needs-versioned-artifact-staging-and-an-independent-rollback-receipt"},
     {"stage": 7, "executor_id": "fleet.browser-vnc-reconcile.v1", "execution_mode": "reconcile", "shipped_executor": false, "reason": "arm64-download-and-browser-network-identity-require-a-resumable-target-job"},

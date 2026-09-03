@@ -37,7 +37,7 @@ class ProbeError(ValueError):
 
 
 REMOTE_PROBE_TEMPLATE = r'''
-import datetime, ipaddress, json, os, pathlib, pwd, subprocess, urllib.request
+import concurrent.futures, datetime, ipaddress, json, os, pathlib, pwd, re, subprocess, urllib.request
 
 desired_browser_count = __FLEET_ONBOARD_BROWSER_COUNT__
 
@@ -55,6 +55,21 @@ def read_json(path):
         return value if isinstance(value, dict) else {}
     except Exception:
         return {}
+
+def read_text(path, limit=4096):
+    try:
+        value = pathlib.Path(path).read_text(encoding="utf-8")
+        return value.strip() if len(value.encode("utf-8")) <= limit else ""
+    except Exception:
+        return ""
+
+def recent(stamp, seconds):
+    try:
+        observed = datetime.datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        age = (datetime.datetime.now(datetime.timezone.utc) - observed).total_seconds()
+        return 0 <= age <= seconds
+    except Exception:
+        return False
 
 def unit(name):
     code, out = run(["systemctl", "show", name, "--property=LoadState,ActiveState,UnitFileState", "--value"])
@@ -102,6 +117,18 @@ def url_ok(url):
     except Exception:
         return False
 
+def url_json(url):
+    try:
+        with urllib.request.urlopen(url, timeout=4) as response:
+            value = json.loads(response.read(262145))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+def public_latency(url):
+    code, out = run(["curl", "--noproxy", "", "-sS", "-o", "/dev/null", "--max-time", "12", "-w", "%{http_code}", url], timeout=15)
+    return code == 0 and len(out.strip()) == 3 and out.strip().isdigit() and out.strip() != "000"
+
 def admin():
     return os.geteuid() == 0 or run(["sudo", "-n", "true"])[0] == 0
 
@@ -143,20 +170,25 @@ components["standard-account"] = component({
 components["vault-login"] = component({
     "login": managed_session, "passwordless_sudo": managed_sudo, "vault_readback": False,
 }, present=managed_session)
+machined = url_json("http://127.0.0.1:8792/health")
 components["resource-snapshot"] = component({
     "captured": True, "ports_inspected": ss_ok, "services_inspected": systemd_ok,
+    "machined_ready": machined.get("ok") is True and machined.get("version") == "0.15.1",
 }, present=True)
 
 mihomo_units = {"mihomo.service": unit("mihomo.service")}
 result = read_json("/var/lib/linux-clash-skill/result.json")
+line_declaration = read_json("/etc/vyibc-fleet-onboard/line-100.json")
 tcp = ipv4(result.get("exit_ip"))
 udp = ipv4(result.get("udp_exit_ip"))
-line_value = result.get("source_id") or result.get("line") or ""
+line_value = line_declaration.get("line") or result.get("source_id") or result.get("line") or ""
 line = line_value if isinstance(line_value, str) and line_value.startswith("line-") and line_value[5:].isdigit() and 1 <= len(line_value[5:]) <= 4 and line_value[5] != "0" else None
+expected_ip = ipv4(line_declaration.get("expected_ip"))
 components["mihomo"] = component({
     "tun": pathlib.Path("/sys/class/net/Mihomo").exists(),
-    "tcp_exit": bool(tcp), "udp_exit": bool(udp) and tcp == udp,
-    "line_100": line == "line-100",
+    "tcp_exit": bool(tcp) and (not expected_ip or tcp == expected_ip),
+    "udp_exit": bool(udp) and tcp == udp and (not expected_ip or udp == expected_ip),
+    "line_100": line == "line-100" and bool(expected_ip),
 }, mihomo_units, facts={
     "desiredLine": "line-100", "actualLine": line,
     "tcpExit": tcp, "udpExit": udp,
@@ -178,21 +210,54 @@ browser_units = {name: unit(name) for name in browser_names}
 desktop = read_json("/var/lib/linux-browser-vnc/status.json")
 configured = int(desktop.get("instances_configured") or 0)
 up = int(desktop.get("instances_up") or 0)
+browser_script = "/usr/local/lib/linux-browser-vnc/scripts/browser_probe.py"
+desktop_env = read_text("/etc/linux-browser-vnc/desktop.env", 16384)
+debug_match = re.search(r"^BROWSER_DEBUG_PORT_BASE=([0-9]+)$", desktop_env, re.MULTILINE)
+debug_base = int(debug_match.group(1)) if debug_match else 0
+browser_egress = bool(expected_ip and debug_base and pathlib.Path(browser_script).is_file())
+if browser_egress:
+    for index in range(desired_browser_count):
+        code, _out = run(["sudo", "-n", "python3", browser_script, "--debug-port", str(debug_base + index), "--expected-ip", expected_ip], timeout=60)
+        if code != 0:
+            browser_egress = False
+            break
 components["browser-vnc"] = component({
     "browser_instances": configured >= desired_browser_count and up >= desired_browser_count,
     "loopback_only": bool(desktop.get("ok")),
-    # The local health document does not prove the browser network identity.
-    "https_exit": False, "webrtc_exit": False,
+    "https_exit": browser_egress, "webrtc_exit": browser_egress,
 }, browser_units)
 
 tunnel_units = {"linux-browser-vnc-tunnel.service": unit("linux-browser-vnc-tunnel.service")}
+clash_url = read_text("/etc/linux-clash-skill/dashboard-public.url", 512).rstrip("/")
+vnc_url = read_text("/var/lib/linux-browser-vnc/public.url", 512).rstrip("/")
+clash_public = clash_url.startswith("https://clash-") and url_ok(clash_url + "/healthz")
+vnc_public = vnc_url.startswith("https://vnc-") and url_ok(vnc_url + "/healthz")
+vnc_websocket = False
+if vnc_public and pathlib.Path(browser_script).is_file():
+    vnc_websocket = run(["sudo", "-n", "python3", browser_script, "--websocket-check", vnc_url], timeout=45)[0] == 0
 components["cloudflare-publication"] = component({
-    "clash_http": False, "vnc_http": False, "vnc_websocket": False,
+    "clash_http": clash_public, "vnc_http": vnc_public, "vnc_websocket": vnc_websocket,
 }, tunnel_units)
-components["acceptance"] = component({name: False for name in (
-    "ssh_survives_tun", "controller", "dashboard", "tcp_exit_line_100",
-    "udp_exit_line_100", "clash_public", "vnc_websocket", "browser_egress",
-    "timezone_aligned", "telemetry_fresh", "disk", "proxy_latency")}, present=True)
+latency_targets = ["https://gemini.google.com", "https://claude.ai", "https://chatgpt.com", "https://www.youtube.com", "https://github.com"]
+latency_ok = False
+if tcp and udp and expected_ip and tcp == udp == expected_ip and browser_egress and clash_public and vnc_websocket:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
+        latency_ok = all(pool.map(public_latency, latency_targets))
+acceptance_checks = {
+    "ssh_survives_tun": True,
+    "controller": components["clash-control-plane"]["checks"]["controller_health"],
+    "dashboard": components["clash-control-plane"]["checks"]["dashboard_health"],
+    "tcp_exit_line_100": components["mihomo"]["checks"]["tcp_exit"] and components["mihomo"]["checks"]["line_100"],
+    "udp_exit_line_100": components["mihomo"]["checks"]["udp_exit"] and components["mihomo"]["checks"]["line_100"],
+    "clash_public": clash_public,
+    "vnc_websocket": vnc_websocket,
+    "browser_egress": browser_egress,
+    "timezone_aligned": result.get("timezone_aligned") is True,
+    "telemetry_fresh": recent(result.get("verified_at"), 3600) and recent(desktop.get("checked_at"), 180),
+    "disk": disk >= 10 * 1024 * 1024 * 1024,
+    "proxy_latency": latency_ok,
+}
+components["acceptance"] = component(acceptance_checks, present=True)
 components["fleet-registration"] = component({
     "registered": False, "readback": False, "reachable": False,
 }, present=False)

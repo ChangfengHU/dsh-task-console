@@ -114,6 +114,8 @@ export interface AgentSpec {
 }
 
 export interface McpToolPolicy {
+  /** These arguments must be present before any value/pattern checks run. */
+  requiredArguments?: string[]
   /** Argument must equal one of these values or start with one of these prefixes. */
   valuesOrPrefixes?: Record<string, string[]>
   /** Argument must match this regular expression when present. */

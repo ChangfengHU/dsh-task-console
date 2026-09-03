@@ -4,9 +4,19 @@
 
 **This release (0.20.2):** adds an explicit per-Agent DSH session permission preset alongside tool-granular capabilities. `workspace-write` remains the safe default; trusted system operators such as `装机者` can pin `danger-full-access`, and the plugin writes that sandbox/approval bundle before the first user message is dispatched. A missing permission service now fails closed instead of silently starting the Agent under a different boundary. The DSH compatibility patch also preserves a plugin-created Agent's configured model and reasoning effort on its blank first turn instead of replacing them with the Web profile default. Every filtered MCP mount now uses a unique internal namespace while preserving stable model-facing tool names, so multiple live sessions of one Agent preset can coexist without weakening their tool policy.
 
-Native and MCP tools still live in one capability matrix; MCP servers are only grouping labels, while each advertised tool is independently selectable. Generated presets hide every inherited host tool, mount only the chosen MCP definitions through a filtered client, and may enforce per-tool argument policies such as Vault key prefixes and Fleet hostname patterns. A real try-run reports the exact request header and uses the same session permission path as a normal Agent chat.
+Native and MCP tools still live in one capability matrix; MCP servers are only grouping labels, while each advertised tool is independently selectable. Generated presets deny the complete live inherited host surface (including host tools added after the preset was saved), then merge only their own native/runtime/Skill registrations and chosen MCP definitions. Filtered MCP presets persist a host entry reference rather than copying its URL or authorization headers, and may enforce per-tool argument policies such as required arguments, key prefixes, and Fleet hostname patterns. A real try-run reports the exact request header and uses the same session permission path as a normal Agent chat.
 
-The deployed `装机者` preset now defaults to a base Fleet node: SSH/`claude`, Clash/Mihomo, Controller/Dashboard, browser/VNC, Cloudflare hostnames, Fleet registration and evidence. `chatgpt-image-service`, `imggen-*`, browser-login identity and a pinned image job are an explicit image-worker extension rather than a false prerequisite of ordinary machine onboarding.
+The managed `装机者` source lives under `presets/fleet-installer/`. It exposes `ask_user_question`, `todo_write`, Skill discovery, and the four typed `fleet_onboard_*` runtime tools; it does not expose host Bash/filesystem/jobs, Schedule, Vault, or Fleet MCP tools. The model supplies only the target IP. Trusted inventory and provenance belong to the host runtime, so a planning-only runtime cannot be presented as a completed repair. Base onboarding remains SSH/`claude`, Clash/Mihomo, Controller/Dashboard, browser/VNC, Cloudflare hostnames, Fleet registration and evidence; image-worker provisioning is a separate extension.
+
+The managed preset also pins its Skill source repository and revision in `presets/fleet-installer/skills.sources.json`. Every copy receives `skills.lock.json` with content hashes. Check or explicitly refresh an existing copy from the pinned clean checkout with:
+
+```sh
+npm run build
+npm run preset:skills -- --check --source-root /exact/path/to/linux-clash-skill
+npm run preset:skills -- --sync --source-root /exact/path/to/linux-clash-skill
+```
+
+The sync refuses a different remote, revision, dirty Skill tree, or incomplete Skill set. It changes only the copied `skills/` tree and its lock; it never reads or rewrites MCP headers.
 
 Task-owned Sessions remain internal evidence: they stay out of ordinary DSH navigation and search without being archived, and remain directly openable from the task's Related Sessions drawer, Trace, and exact `?session=` links. Historical task-session relationships are reconciled from the append-only event log; logs, task evidence, workspace files, and deliverables are retained.
 

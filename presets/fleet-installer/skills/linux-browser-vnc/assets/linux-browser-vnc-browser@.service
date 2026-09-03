@@ -1,0 +1,60 @@
+[Unit]
+Description=Visible desktop browser instance %i for linux-browser-vnc
+After=linux-browser-vnc-openbox.service
+Requires=linux-browser-vnc-xvfb.service linux-browser-vnc-openbox.service
+PartOf=linux-browser-vnc-xvfb.service
+# A crashed browser must always be revived — never let a burst of fast crashes
+# trip the start limiter into giving up (that once left a node dead for hours,
+# and this directive only takes effect in [Unit], not [Service]). Unlimited
+# restarts + RestartSec self-heal within seconds; the DevTools watchdog
+# (linux-browser-vnc-cdpguard) additionally recovers a hung-but-alive browser,
+# which Restart=always cannot detect. Liveness is reported by the health
+# endpoint, not enforced by refusing to restart.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=linux-browser-vnc
+Group=linux-browser-vnc
+EnvironmentFile=/etc/linux-browser-vnc/desktop.env
+# %i is the instance number; start_browser.sh derives this instance's profile,
+# DevTools port and tiled window from it.
+ExecStart=/usr/local/lib/linux-browser-vnc/scripts/start_browser.sh %i
+Restart=always
+RestartSec=5s
+TimeoutStopSec=20s
+# Every renderer, zygote, and crashpad helper belongs to this instance's cgroup
+# and is killed with it. Without this a restart loop accumulates orphaned
+# processes, which is how node 95 reached 144 stray Chrome processes.
+KillMode=control-group
+KillSignal=SIGTERM
+
+# systemd expands ${...} only inside ExecStart, so the installer substitutes
+# these @...@ tokens when it renders the unit. The limits are per instance.
+MemoryHigh=@BROWSER_MEMORY_HIGH@
+MemoryMax=@BROWSER_MEMORY_MAX@
+TasksMax=@BROWSER_TASKS_MAX@
+
+UMask=0022
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+# The browser sandbox helper needs to raise privileges; every other unit in this
+# skill keeps NoNewPrivileges enabled.
+NoNewPrivileges=false
+RestrictRealtime=true
+LockPersonality=true
+# Mihomo's Fleet profile intentionally handles IPv4 only. Letting the desktop
+# browser create AF_INET6 sockets gives HTTPS and WebRTC a direct host route
+# around that TUN. Keep IPv6 available to host services (notably cloudflared),
+# but fail it closed for this browser cgroup so Chromium falls back to proxied
+# IPv4.
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
+ReadWritePaths=/var/lib/linux-browser-vnc
+
+[Install]
+WantedBy=multi-user.target

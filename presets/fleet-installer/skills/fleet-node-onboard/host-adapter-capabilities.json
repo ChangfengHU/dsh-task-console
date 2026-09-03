@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "status": "production-probe-and-stage2-ready-other-execution-fail-closed",
+  "dsh_task_console": {
+    "probe_executable": "/usr/local/lib/dsh-fleet-onboard/scripts/host-adapter.py",
+    "runtime_executable": "/usr/local/lib/dsh-fleet-onboard/scripts/onboard-runtime.py",
+    "executor": "/usr/local/lib/dsh-fleet-onboard/scripts/host-adapter.py",
+    "environment": {
+      "FLEET_ONBOARD_HOST_CONFIG_FILE": "/etc/dsh-fleet-onboard/host-adapter.json",
+      "FLEET_ONBOARD_INVENTORY_HMAC_KEY_FILE": "/etc/dsh-fleet-onboard/inventory-hmac.key"
+    },
+    "execution_available": false,
+    "available_stages": [2],
+    "note": "Stage 2 has a fixed executor. End-to-end execution remains false until every other reconcile stage is shipped; consumers must honor the per-stage capability matrix."
+  },
+  "probe": {
+    "implementation": "scripts/ssh-inventory-probe.py",
+    "credential_provider": "scripts/vault-credential-provider.py",
+    "truths": [
+      "ssh-host-key-plus-machine-id-fingerprint",
+      "systemd-units",
+      "resource-and-port-snapshot",
+      "mihomo-result-file",
+      "browser-vnc-status-file",
+      "fleet-public-readback"
+    ],
+    "known_gaps": [
+      "existing-mihomo-result-does-not-record-line-id",
+      "browser-status-does-not-prove-https-or-webrtc-exit",
+      "cloudflare-websocket-and-ingress-ownership-need-a-control-plane-probe"
+    ]
+  },
+  "stages": [
+    {"stage": 1, "executor_id": "fleet.ssh-preflight.v1", "execution_mode": "probe-gate", "shipped_executor": false, "reason": "a fresh signed probe is the complete gate; an unreachable or unsupported target cannot be repaired by this stage"},
+    {"stage": 2, "executor_id": "fleet.standard-account.v1", "execution_mode": "reconcile", "shipped_executor": true, "implementation": "scripts/standard-account-reconciler.py", "reason": "fixed claude account, operator key, validated sudoers, external key-login proof and scoped full-IP Vault commit/readback"},
+    {"stage": 3, "executor_id": "fleet.vault-login.v1", "execution_mode": "probe-gate", "shipped_executor": false, "reason": "a fresh signed managed-login and vault readback observation is the complete gate"},
+    {"stage": 4, "executor_id": "fleet.resource-snapshot.v1", "execution_mode": "probe-gate", "shipped_executor": false, "reason": "a fresh signed resource and conflict snapshot is the complete gate"},
+    {"stage": 5, "executor_id": "fleet.mihomo-reconcile.v1", "execution_mode": "reconcile", "shipped_executor": false, "reason": "install-clash-currently-crosses-component-boundaries-and-does-not-persist-line-100-identity"},
+    {"stage": 6, "executor_id": "fleet.clash-control-plane-reconcile.v1", "execution_mode": "reconcile", "shipped_executor": false, "reason": "needs-versioned-artifact-staging-and-an-independent-rollback-receipt"},
+    {"stage": 7, "executor_id": "fleet.browser-vnc-reconcile.v1", "execution_mode": "reconcile", "shipped_executor": false, "reason": "arm64-download-and-browser-network-identity-require-a-resumable-target-job"},
+    {"stage": 8, "executor_id": "fleet.cloudflare-publication-reconcile.v1", "execution_mode": "reconcile", "shipped_executor": false, "reason": "must-atomically-merge-one-tunnel-ingress-and-dns-with-control-plane-cas"},
+    {"stage": 9, "executor_id": "fleet.acceptance-reconcile.v1", "execution_mode": "probe-gate", "shipped_executor": false, "reason": "a fresh signed full acceptance observation is the complete gate; failed checks must reopen their owning reconcile stage"},
+    {"stage": 10, "executor_id": "fleet.registration-reconcile.v1", "execution_mode": "reconcile", "shipped_executor": false, "reason": "fleet-register-needs-audited-control-plane-cas-and-readback-adapter"}
+  ]
+}

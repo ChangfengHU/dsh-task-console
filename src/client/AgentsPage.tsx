@@ -213,7 +213,7 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
             <div className="dtc-note">{writes.length || selectedMcpCount
               ? <>推出来的权限:<b>{PERM[perm].label}</b>{writes.length ? <> —— 原生可写工具 {writes.map(w => <span key={w} className="dtc-mono">{w} </span>)}</> : null}{selectedMcpCount ? <>；已授权 <b>{selectedMcpCount}</b> 个 MCP 工具</> : null}</>
               : <>推出来的权限:<b>只读</b> —— 没有任何可写工具,它不可能改任何东西。</>}</div>
-            <div className="dtc-faint" style={{ marginTop: 8, fontSize: 12.5 }}>试跑时 DSH 可能按会话附加 schedule_* 等运行器内置工具；它们不来自 Agent preset，也不属于 MCP 授权。</div>
+            <div className="dtc-faint" style={{ marginTop: 8, fontSize: 12.5 }}>宿主 schedule_* 和未授权 MCP 会被正向围栏隐藏；任务运行器在子作用域注册的交卷工具仍可用。</div>
           </div>
           {preview?.renamed.length ? <div className="dtc-note">宿主 MCP 在此 Agent 内使用独立命名空间；继承的宿主副本已由 preset 围栏隐藏。</div> : null}
           <div className="dtc-panel"><h3>Skill <span className="dtc-faint" style={{ fontWeight: 400 }}>拷进 preset 的 skills/,随它走</span></h3>
@@ -232,7 +232,7 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
             <button className="sum" onClick={() => setShowYml(v => !v)}>{showYml ? '▾' : '▸'} 生成的 preset 文件 <span className="dtc-mono dtc-faint" style={{ fontWeight: 400, fontSize: 11 }}>agent.cordis.yml</span></button>
             {showYml ? (readOnly ? <div className="dtc-note" style={{ padding: '0 14px 12px' }}>出厂 preset 的组合文件在 dsh 安装目录里,任务台不展示、不改。</div> : <div className="dtc-yml">{preview?.yml ?? (spec.id && spec.name ? '生成中…' : '填好 id 和名字后生成')}</div>) : null}
           </div>
-          <p className="dtc-note">保存即写目录;dsh 热读取 preset 根,新会话立刻能选到,不重启。令牌在预览里打码,文件里是原样。</p>
+          <p className="dtc-note">保存即写目录;dsh 热读取 preset 根,新会话立刻能选到,不重启。MCP 认证始终由宿主条目保管，preset 只保存条目引用和工具白名单。</p>
         </div>
       </div>
 

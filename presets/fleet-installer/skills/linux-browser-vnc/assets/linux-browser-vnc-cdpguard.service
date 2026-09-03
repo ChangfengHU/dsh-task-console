@@ -1,0 +1,12 @@
+[Unit]
+Description=DevTools liveness watchdog for linux-browser-vnc browsers
+After=linux-browser-vnc-xvfb.service
+PartOf=linux-browser-vnc-xvfb.service
+
+[Service]
+Type=oneshot
+# Runs as root: restarting a browser@ unit needs privilege the unprivileged
+# health reporter does not have. It touches nothing else.
+EnvironmentFile=/etc/linux-browser-vnc/desktop.env
+ExecStart=/usr/local/lib/linux-browser-vnc/scripts/browser_cdpguard.sh
+TimeoutStartSec=60s

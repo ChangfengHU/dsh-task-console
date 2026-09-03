@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fleet Node Onboard"
+  short_description: "Safely add and validate a Linux machine in Fleet"
+  default_prompt: "Use $fleet-node-onboard to add this Linux server to the Fleet safely and verify every capability."

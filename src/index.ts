@@ -18,8 +18,8 @@ export const inject = ['loader', 'tools', 'agents', 'webServer', 'workspaceRegis
 
 export { TaskConsoleService } from './service.ts'
 export {
-  ID_RE, NATIVE_TOOLS, mask, permissionOf, readSpec, removePreset, renderComposition, scanSkills, userPresetRoot,
-  validateSpec, writePreset,
+  ID_RE, NATIVE_TOOLS, SKILL_LOCK_FILE, hashSkillTree, mask, permissionOf, readSpec, removePreset, renderComposition,
+  scanSkills, syncPresetSkills, userPresetRoot, validateSpec, verifyPresetSkills, writePreset,
 } from './presets.ts'
 export { CONSOLE_INVOCATIONS, METHODS, NAMESPACE, PKG } from './wire.ts'
 export type { AgentRow, AgentSpec, Catalog, McpServer, NativeTool, Preview, SkillEntry, TryRunResult } from './wire.ts'

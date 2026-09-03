@@ -1,0 +1,44 @@
+[Unit]
+Description=Loopback RFB server for the linux-browser-vnc desktop
+After=linux-browser-vnc-xvfb.service
+Requires=linux-browser-vnc-xvfb.service
+PartOf=linux-browser-vnc-xvfb.service
+
+[Service]
+Type=simple
+User=linux-browser-vnc
+Group=linux-browser-vnc
+EnvironmentFile=/etc/linux-browser-vnc/desktop.env
+# -localhost binds IPv4 loopback and -noipv6 closes the [::]:PORT wildcard that
+# x11vnc otherwise opens even when a loopback listen address was requested.
+ExecStart=/usr/bin/x11vnc -display ${VNC_DISPLAY} -rfbport ${VNC_RFB_PORT} \
+  -localhost -noipv6 -listen 127.0.0.1 \
+  -forever -shared -nopw -norepeat -xkb -ncache 0 \
+  -o /dev/null -q
+Restart=always
+RestartSec=2s
+TimeoutStopSec=15s
+KillMode=control-group
+
+MemoryHigh=192M
+MemoryMax=256M
+TasksMax=32
+
+UMask=0077
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+NoNewPrivileges=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_UNIX
+ReadWritePaths=/var/lib/linux-browser-vnc
+
+[Install]
+WantedBy=multi-user.target

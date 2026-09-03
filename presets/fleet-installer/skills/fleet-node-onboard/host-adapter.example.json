@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "state_dir": "/var/lib/dsh-fleet-onboard-host",
+  "credential_provider": "/usr/local/lib/dsh-fleet-onboard/scripts/vault-credential-provider.py",
+  "probe_executor": "/usr/local/lib/dsh-fleet-onboard/scripts/ssh-inventory-probe.py",
+  "stage_executors": {
+    "fleet.standard-account.v1": "/usr/local/lib/dsh-fleet-onboard/scripts/standard-account-reconciler.py"
+  },
+  "wait_timeout_seconds": 300,
+  "poll_interval_ms": 250,
+  "desired": {
+    "line": "line-100",
+    "browser_count": 2,
+    "profile": "base"
+  }
+}

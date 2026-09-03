@@ -1,0 +1,132 @@
+{
+  "schema": 1,
+  "default_line": "line-100",
+  "health_states": ["healthy", "drifted", "missing", "blocked"],
+  "dispositions": ["reusable", "repairable", "needs-user", "fatal"],
+  "executor_protocol": {
+    "schema": 1,
+    "transport": "single-json-line-stdin-stdout",
+    "allowed_outcomes": ["succeeded", "noop", "blocked", "failed"],
+    "request_attestation": "HMAC-SHA256 over the canonical executor request without action_attestation; the same host-owned inventory key is used",
+    "idempotency": "executor must resume or return the prior terminal result for the same operation_id",
+    "secrets_allowed": false
+  },
+  "inventory_protocol": {
+    "origin": "dsh-fleet-probe-v1",
+    "executor_id": "fleet.inventory-probe.v1",
+    "max_age_seconds": 600,
+    "attestation": "HMAC-SHA256 over canonical inventory without provenance.attestation; key is host-owned and supplied through FLEET_ONBOARD_INVENTORY_HMAC_KEY_FILE (regular owner-only file)",
+    "target_fingerprint": "sha256 of the observed SSH host key plus machine-id; raw identifiers are never persisted"
+  },
+  "stages": [
+    {
+      "stage": 1,
+      "id": "ssh-preflight",
+      "execution_mode": "probe-gate",
+      "credential_gate": true,
+      "executor_id": "fleet.ssh-preflight.v1",
+      "required_checks": ["reachable", "admin", "systemd", "tun", "resources"]
+    },
+    {
+      "stage": 2,
+      "id": "standard-account",
+      "execution_mode": "reconcile",
+      "credential_gate": true,
+      "executor_id": "fleet.standard-account.v1",
+      "required_checks": ["login", "passwordless_sudo", "vault_writeback"]
+    },
+    {
+      "stage": 3,
+      "id": "vault-login",
+      "execution_mode": "probe-gate",
+      "credential_gate": true,
+      "executor_id": "fleet.vault-login.v1",
+      "required_checks": ["login", "passwordless_sudo", "vault_readback"]
+    },
+    {
+      "stage": 4,
+      "id": "resource-snapshot",
+      "execution_mode": "probe-gate",
+      "executor_id": "fleet.resource-snapshot.v1",
+      "required_checks": ["captured", "ports_inspected", "services_inspected"]
+    },
+    {
+      "stage": 5,
+      "id": "mihomo",
+      "execution_mode": "reconcile",
+      "executor_id": "fleet.mihomo-reconcile.v1",
+      "required_units": ["mihomo.service"],
+      "required_checks": ["tun", "tcp_exit", "udp_exit", "line_100"],
+      "allowed_facts": {
+        "desiredLine": {"type": "line-id", "nullable": false},
+        "actualLine": {"type": "line-id", "nullable": true},
+        "tcpExit": {"type": "public-ipv4", "nullable": true},
+        "udpExit": {"type": "public-ipv4", "nullable": true}
+      }
+    },
+    {
+      "stage": 6,
+      "id": "clash-control-plane",
+      "execution_mode": "reconcile",
+      "executor_id": "fleet.clash-control-plane-reconcile.v1",
+      "required_units": [
+        "linux-clash-node-controller.service",
+        "linux-clash-dashboard.service"
+      ],
+      "required_checks": ["controller_health", "dashboard_health"]
+    },
+    {
+      "stage": 7,
+      "id": "browser-vnc",
+      "execution_mode": "reconcile",
+      "executor_id": "fleet.browser-vnc-reconcile.v1",
+      "required_units": [
+        "linux-browser-vnc-xvfb.service",
+        "linux-browser-vnc-openbox.service",
+        "linux-browser-vnc-x11vnc.service",
+        "linux-browser-vnc-novnc.service",
+        "linux-browser-vnc-health.service"
+      ],
+      "required_unit_template": {
+        "format": "linux-browser-vnc-browser@{index}.service",
+        "count_from": "desired.browser_count"
+      },
+      "required_checks": ["browser_instances", "loopback_only", "https_exit", "webrtc_exit"]
+    },
+    {
+      "stage": 8,
+      "id": "cloudflare-publication",
+      "execution_mode": "reconcile",
+      "executor_id": "fleet.cloudflare-publication-reconcile.v1",
+      "required_units": ["linux-browser-vnc-tunnel.service"],
+      "required_checks": ["clash_http", "vnc_http", "vnc_websocket"]
+    },
+    {
+      "stage": 9,
+      "id": "acceptance",
+      "execution_mode": "probe-gate",
+      "executor_id": "fleet.acceptance-reconcile.v1",
+      "required_checks": [
+        "ssh_survives_tun",
+        "controller",
+        "dashboard",
+        "tcp_exit_line_100",
+        "udp_exit_line_100",
+        "clash_public",
+        "vnc_websocket",
+        "browser_egress",
+        "timezone_aligned",
+        "telemetry_fresh",
+        "disk",
+        "proxy_latency"
+      ]
+    },
+    {
+      "stage": 10,
+      "id": "fleet-registration",
+      "execution_mode": "reconcile",
+      "executor_id": "fleet.registration-reconcile.v1",
+      "required_checks": ["registered", "readback", "reachable"]
+    }
+  ]
+}

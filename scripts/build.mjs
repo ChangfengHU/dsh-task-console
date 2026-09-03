@@ -34,6 +34,7 @@ await build({
     join(root, 'src/typert.host.ts'),
     join(root, 'src/agent-tool-fence.ts'),
     join(root, 'src/filtered-mcp-client.ts'),
+    join(root, 'src/fleet-onboard-tools.ts'),
   ],
   outdir: out,
   bundle: true,

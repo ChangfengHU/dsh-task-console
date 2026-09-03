@@ -1,0 +1,42 @@
+[Unit]
+Description=Loopback noVNC/websockify bridge for linux-browser-vnc
+After=linux-browser-vnc-x11vnc.service
+Requires=linux-browser-vnc-x11vnc.service
+PartOf=linux-browser-vnc-xvfb.service
+
+[Service]
+Type=simple
+User=linux-browser-vnc
+Group=linux-browser-vnc
+EnvironmentFile=/etc/linux-browser-vnc/desktop.env
+# The bridge is bound to 127.0.0.1 on purpose. Public reach is provided only by
+# the Cloudflare-fronted tunnel unit, never by a wildcard bind.
+ExecStart=/usr/bin/env websockify --web ${VNC_WEB_ROOT} \
+  127.0.0.1:${VNC_NOVNC_PORT} 127.0.0.1:${VNC_RFB_PORT}
+Restart=always
+RestartSec=2s
+TimeoutStopSec=15s
+KillMode=control-group
+
+MemoryHigh=192M
+MemoryMax=256M
+TasksMax=64
+
+UMask=0022
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+NoNewPrivileges=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_UNIX
+ReadWritePaths=/var/lib/linux-browser-vnc
+
+[Install]
+WantedBy=multi-user.target

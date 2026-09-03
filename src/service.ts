@@ -92,7 +92,7 @@ export class TaskConsoleService extends TypertRemoteService {
         ? config.url.replace(/\/\/[^@/]+@/, '//••••@')
         : [config.command, ...(Array.isArray(config.args) ? config.args : [])].filter(Boolean).join(' ')
       const disabled = entry.disabled === true || entry.options.disabled === true
-      rows.push({ entryId: String(entry.options.id), serverName, target, tools: registered.get(serverName) ?? [], disabled, config, live: !disabled })
+      rows.push({ entryId: String(entry.options.id), sourceEntryId: String(entry.options.id), serverName, target, tools: registered.get(serverName) ?? [], disabled, config, live: !disabled })
     }
     return rows
   }

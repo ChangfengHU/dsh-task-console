@@ -1,0 +1,18 @@
+# Ubuntu 23.10+ denies unprivileged user namespaces by default, so a Chromium
+# build that is not shipped by a distribution package cannot create its sandbox
+# and aborts with "No usable sandbox!". Google Chrome's own .deb installs an
+# equivalent profile; a staged Playwright build has none.
+#
+# This grants exactly one thing — the ability to create a user namespace — to
+# exactly one binary path. It is deliberately narrower than the alternatives:
+# `--no-sandbox` would remove the browser's sandbox entirely, and setting
+# kernel.apparmor_restrict_unprivileged_userns=0 would lift the restriction for
+# every process on the machine.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile linux-browser-vnc-browser @BROWSER_BIN@ flags=(unconfined) {
+  userns,
+
+  include if exists <local/linux-browser-vnc-browser>
+}

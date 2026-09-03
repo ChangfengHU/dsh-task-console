@@ -1,0 +1,33 @@
+[Unit]
+Description=Linux Clash Skill local dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=linux-clash-dashboard
+Group=linux-clash-dashboard
+EnvironmentFile=/etc/linux-clash-skill/dashboard.env
+ExecStart=/usr/bin/python3 /usr/local/lib/linux-clash-skill/scripts/dashboard.py --port ${DASHBOARD_PORT}
+Restart=on-failure
+RestartSec=3s
+UMask=0077
+StateDirectory=linux-clash-dashboard
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+NoNewPrivileges=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

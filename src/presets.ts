@@ -14,7 +14,8 @@
  * @module dsh-task-console/presets
  */
 
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile, chmod } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile, chmod } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { stringify as toYaml } from 'yaml'
@@ -57,6 +58,10 @@ export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: s
     description: '给自己记待办。',
     schemaNames: ['todo_write'],
     rows: "- id: tool-todo\n  name: '@deepseek-ai/dsh-tool-todo'\n  config:\n    allowParallelInProgress: true" },
+  { id: 'fleet-onboard-runtime', label: 'Fleet onboard runtime', group: 'Fleet', writes: true,
+    description: '确定性的节点评估、事务恢复与报告；不向模型暴露任意 shell。',
+    schemaNames: ['fleet_onboard_start', 'fleet_onboard_status', 'fleet_onboard_resume', 'fleet_onboard_report'],
+    rows: "- id: fleet-onboard-runtime\n  name: 'dsh-task-console/fleet-onboard-tools'" },
 ]
 
 /** Tools that make an agent "可写" rather than merely "受限可写". */
@@ -132,9 +137,11 @@ export function mask(text: string): string {
 /** Host MCP entries the generator copies rows from. */
 export interface HostMcp {
   serverName: string
+  /** Loader entry holding the real transport configuration. New presets persist only this reference. */
+  sourceEntryId?: string
   /** Raw tools currently advertised by this server. */
   tools?: string[]
-  /** The entry's full `config` block, headers included — copied verbatim. */
+  /** Legacy inline config. New generated presets reference sourceEntryId instead of copying it. */
   config: Record<string, unknown>
   /** Whether the host still runs it, which forces a rename to avoid the name clash. */
   live: boolean
@@ -163,7 +170,11 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
     let name = serverName
     if (host.live) { name = `${serverName}-${spec.id}`; renamed.push({ from: serverName, to: name }) }
     const toolRules = spec.mcpPolicy[serverName] ?? {}
-    const config = { ...host.config, serverName: name, allowedTools, ...(Object.keys(toolRules).length ? { toolRules } : {}) }
+    // Never copy credentials or transport headers into a generated preset.
+    // The scoped adapter resolves the authoritative host entry at mount time.
+    const config = host.sourceEntryId
+      ? { sourceEntryId: host.sourceEntryId, serverName: name, allowedTools, ...(Object.keys(toolRules).length ? { toolRules } : {}) }
+      : { ...host.config, serverName: name, allowedTools, ...(Object.keys(toolRules).length ? { toolRules } : {}) }
     const body = toYaml(config, { lineWidth: 0 }).trimEnd()
     parts.push(`${host.live ? `# 宿主层仍有同名 ${serverName},preset 围栏会隐藏宿主副本\n` : ''}- id: mcp-${name}\n  name: 'dsh-task-console/filtered-mcp-client'\n  config:\n${indent(body, 4)}`)
   }
@@ -172,23 +183,164 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
     parts.push(`# skills/ 随 preset 走;baseUrl 是 preset 自己的目录\n- id: skill-filesystem\n  name: '@deepseek-ai/dsh-skill-filesystem'\n  config:\n    providerName: preset-${spec.id}\n    includeDefaultRoots: false\n    customSkillDirs:\n      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"\n- id: tool-skill\n  name: '@deepseek-ai/dsh-tool-skill'`)
   }
 
-  const inherited = inheritedTools.length ? inheritedTools : hostMcp.flatMap(host => (host.tools ?? []).map(tool => `mcp__${host.serverName}__${tool}`))
-  // A preset-local tool shadows a byte-equal global. Do not deny that name:
-  // child chat scopes inherit the preset layer, so its own restriction would
-  // otherwise hide the selected shadow along with the global definition.
-  const selectedLocalNames = new Set(spec.tools.flatMap(id => NATIVE_TOOLS.find(tool => tool.id === id)?.schemaNames ?? []))
-  if (spec.skills.length) selectedLocalNames.add('skill')
-  const deniedInherited = [...new Set(inherited)].filter(name => !selectedLocalNames.has(name))
-  if (deniedInherited.length) {
-    const fence = toYaml({ deny: deniedInherited }, { lineWidth: 0 }).trimEnd()
-    parts.push(`- id: inherited-tool-fence\n  name: 'dsh-task-console/agent-tool-fence'\n  config:\n${indent(fence, 4)}`)
-  }
+  // Fail closed over the *live* inherited surface. `allow: []` keeps no host
+  // tool, including tools added after this YAML was generated. DSH merges the
+  // preset scope's own native/runtime/MCP/Skill registrations after applying
+  // this inherited restriction, so ask_user_question and filtered MCP remain
+  // visible without also admitting their global counterparts.
+  void inheritedTools // retained as an API-compatible argument for older callers
+  const fence = toYaml({ allow: [] }, { lineWidth: 0 }).trimEnd()
+  parts.push(`- id: inherited-tool-fence\n  name: 'dsh-task-console/agent-tool-fence'\n  config:\n${indent(fence, 4)}`)
 
   return { yml: parts.join('\n\n') + '\n', renamed, permission: permissionOf(spec, () => true) }
 }
 
 /** The spec file we keep beside the composition. */
 const SPEC_FILE = 'task-console.json'
+export const SKILL_LOCK_FILE = 'skills.lock.json'
+
+export interface SkillLockEntry {
+  name: string
+  sourceRoot: string
+  sourceBasename: string
+  sha256: string
+}
+
+export interface SkillCopyStatus {
+  name: string
+  status: 'in-sync' | 'unlocked' | 'missing-source' | 'missing-copy' | 'source-drift' | 'copy-drift' | 'source-and-copy-drift'
+  lockedSha256?: string
+  sourceSha256?: string
+  copySha256?: string
+}
+
+interface SkillLock { version: 1; skills: SkillLockEntry[] }
+
+function managedSkillEntry(name: string): boolean {
+  return name !== '__pycache__' && name !== '.DS_Store' && !name.endsWith('.pyc') && !name.endsWith('.pyo')
+}
+
+function selectedSkill(specName: string, library: SkillEntry[]): SkillEntry | undefined {
+  return library.find(skill => skill.name === specName) ?? library.find(skill => basename(skill.dir) === specName)
+}
+
+/** Stable content digest of a skill tree; paths and bytes count, timestamps do not. */
+export async function hashSkillTree(root: string): Promise<string> {
+  const digest = createHash('sha256')
+  async function walk(dir: string, prefix: string): Promise<void> {
+    const entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))
+    for (const entry of entries) {
+      if (!managedSkillEntry(entry.name)) continue
+      const path = join(dir, entry.name)
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name
+      const info = await stat(path) // follows selected skill symlinks, matching cp({ dereference: true })
+      if (info.isDirectory()) {
+        digest.update(`d\0${relative}\0`)
+        await walk(path, relative)
+      } else if (info.isFile()) {
+        const body = await readFile(path)
+        digest.update(`f\0${relative}\0${body.length}\0`)
+        digest.update(body)
+      }
+    }
+  }
+  await walk(root, '')
+  return digest.digest('hex')
+}
+
+function parseSkillLock(raw: string): SkillLock | null {
+  try {
+    const value = JSON.parse(raw) as Partial<SkillLock>
+    if (value.version !== 1 || !Array.isArray(value.skills)) return null
+    if (value.skills.some(row => !row || typeof row.name !== 'string' || typeof row.sourceRoot !== 'string' || typeof row.sourceBasename !== 'string' || !/^[a-f0-9]{64}$/.test(row.sha256))) return null
+    return value as SkillLock
+  } catch { return null }
+}
+
+/** Compare selected source skills, copied preset skills, and the save-time lock. */
+export async function verifyPresetSkills(spec: Pick<AgentSpec, 'skills'>, library: SkillEntry[], dir: string): Promise<SkillCopyStatus[]> {
+  const lock = await readFile(join(dir, SKILL_LOCK_FILE), 'utf8').then(parseSkillLock).catch(() => null)
+  const locked = new Map((lock?.skills ?? []).map(row => [row.name, row]))
+  const rows: SkillCopyStatus[] = []
+  for (const name of spec.skills) {
+    const source = selectedSkill(name, library)
+    const copied = join(dir, 'skills', source ? basename(source.dir) : name)
+    const sourceSha256 = source ? await hashSkillTree(source.dir).catch(() => undefined) : undefined
+    const copySha256 = await hashSkillTree(copied).catch(() => undefined)
+    const lockedSha256 = locked.get(name)?.sha256
+    let status: SkillCopyStatus['status']
+    if (!sourceSha256) status = 'missing-source'
+    else if (!copySha256) status = 'missing-copy'
+    else if (!lockedSha256) status = 'unlocked'
+    else if (sourceSha256 !== lockedSha256 && copySha256 !== lockedSha256) status = 'source-and-copy-drift'
+    else if (sourceSha256 !== lockedSha256) status = 'source-drift'
+    else if (copySha256 !== lockedSha256) status = 'copy-drift'
+    else status = 'in-sync'
+    rows.push({ name, status, ...(lockedSha256 ? { lockedSha256 } : {}), ...(sourceSha256 ? { sourceSha256 } : {}), ...(copySha256 ? { copySha256 } : {}) })
+  }
+  return rows
+}
+
+/** Replace only a preset's copied skills and lock; never touches MCP config or credentials. */
+export async function syncPresetSkills(spec: Pick<AgentSpec, 'skills'>, library: SkillEntry[], dir: string): Promise<SkillLock> {
+  const sources = spec.skills.map(name => {
+    const entry = selectedSkill(name, library)
+    if (!entry) throw new Error(`Skill 不存在:${name}`)
+    return { name, entry }
+  })
+  const skillsDir = join(dir, 'skills')
+  const lockPath = join(dir, SKILL_LOCK_FILE)
+  const staged = join(dir, `.skills-next-${randomUUID()}`)
+  const stagedLock = join(dir, `.skills-lock-next-${randomUUID()}`)
+  const backup = join(dir, `.skills-backup-${randomUUID()}`)
+  const backupLock = join(dir, `.skills-lock-backup-${randomUUID()}`)
+  const lock: SkillLock = { version: 1, skills: [] }
+  let skillsBackedUp = false
+  let lockBackedUp = false
+  let newSkillsInstalled = false
+  let newLockInstalled = false
+  await mkdir(staged, { recursive: true, mode: 0o700 })
+  try {
+    for (const { name, entry } of sources) {
+      const target = join(staged, basename(entry.dir))
+      await cp(entry.dir, target, {
+        recursive: true,
+        dereference: true,
+        filter: source => managedSkillEntry(basename(source)),
+      })
+      const sourceSha256 = await hashSkillTree(entry.dir)
+      const copySha256 = await hashSkillTree(target)
+      if (sourceSha256 !== copySha256) throw new Error(`Skill 拷贝校验失败:${name}`)
+      lock.skills.push({ name, sourceRoot: entry.root, sourceBasename: basename(entry.dir), sha256: sourceSha256 })
+    }
+    await writeFile(stagedLock, JSON.stringify(lock, null, 2) + '\n', { mode: 0o600 })
+    const hadSkills = await stat(skillsDir).then(() => true).catch(() => false)
+    const hadLock = await stat(lockPath).then(() => true).catch(() => false)
+    if (hadSkills) { await rename(skillsDir, backup); skillsBackedUp = true }
+    if (hadLock) { await rename(lockPath, backupLock); lockBackedUp = true }
+    try {
+      if (sources.length) { await rename(staged, skillsDir); newSkillsInstalled = true }
+      else await rm(staged, { recursive: true, force: true })
+      await rename(stagedLock, lockPath); newLockInstalled = true
+    } catch (error) {
+      if (newSkillsInstalled) await rm(skillsDir, { recursive: true, force: true })
+      if (newLockInstalled) await rm(lockPath, { force: true })
+      if (skillsBackedUp) { await rename(backup, skillsDir); skillsBackedUp = false }
+      if (lockBackedUp) { await rename(backupLock, lockPath); lockBackedUp = false }
+      throw error
+    }
+    if (skillsBackedUp) { await rm(backup, { recursive: true, force: true }); skillsBackedUp = false }
+    if (lockBackedUp) { await rm(backupLock, { force: true }); lockBackedUp = false }
+    return lock
+  } catch (error) {
+    await rm(staged, { recursive: true, force: true })
+    await rm(stagedLock, { force: true })
+    // If restoring the original copy failed, keep the backups for recovery.
+    if (!skillsBackedUp) await rm(backup, { recursive: true, force: true })
+    if (!lockBackedUp) await rm(backupLock, { force: true })
+    throw error
+  }
+}
 
 export function validateSpec(raw: unknown): AgentSpec {
   const s = (raw ?? {}) as Partial<AgentSpec> & { mcp?: unknown }
@@ -216,7 +368,7 @@ export function validateSpec(raw: unknown): AgentSpec {
       const serverPolicies: AgentSpec['mcpPolicy'][string] = {}
       for (const [tool, candidate] of Object.entries(policies)) {
         if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue
-        const rule = candidate as { valuesOrPrefixes?: unknown; patterns?: unknown }
+        const rule = candidate as { requiredArguments?: unknown; valuesOrPrefixes?: unknown; patterns?: unknown }
         const cleanMap = (value: unknown): Record<string, string[]> => {
           const out: Record<string, string[]> = {}
           if (!value || typeof value !== 'object' || Array.isArray(value)) return out
@@ -234,7 +386,9 @@ export function validateSpec(raw: unknown): AgentSpec {
           }
         }
         const valuesOrPrefixes = cleanMap(rule.valuesOrPrefixes)
-        if (Object.keys(valuesOrPrefixes).length || Object.keys(patterns).length) serverPolicies[tool] = {
+        const requiredArguments = list(rule.requiredArguments)
+        if (requiredArguments.length || Object.keys(valuesOrPrefixes).length || Object.keys(patterns).length) serverPolicies[tool] = {
+          ...(requiredArguments.length ? { requiredArguments } : {}),
           ...(Object.keys(valuesOrPrefixes).length ? { valuesOrPrefixes } : {}),
           ...(Object.keys(patterns).length ? { patterns } : {}),
         }
@@ -260,24 +414,35 @@ export function validateSpec(raw: unknown): AgentSpec {
 export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root = userPresetRoot(), inheritedTools: string[] = []): Promise<{ path: string; preview: Preview }> {
   const dir = resolve(root, spec.id)
   if (!dir.startsWith(resolve(root) + '/')) throw new Error('非法 id')
-  await mkdir(dir, { recursive: true, mode: 0o700 })
+  // Fail before changing any authored files if a selected source vanished.
+  for (const name of spec.skills) if (!selectedSkill(name, library)) throw new Error(`Skill 不存在:${name}`)
+  await mkdir(root, { recursive: true, mode: 0o700 })
   await chmod(root, 0o700).catch(() => undefined)
 
   const preview = renderComposition(spec, hostMcp, inheritedTools)
-  await writeFile(join(dir, 'agent.cordis.yml'), preview.yml, { mode: 0o600 })
-  await writeFile(join(dir, 'preset.yml'), `name: ${JSON.stringify(spec.name)}\ndescription: ${JSON.stringify(spec.description)}\n`, { mode: 0o600 })
-  await writeFile(join(dir, SPEC_FILE), JSON.stringify(spec, null, 2) + '\n', { mode: 0o600 })
-
-  // skills/: exactly the chosen bundles, nothing stale from a previous save.
-  const skillsDir = join(dir, 'skills')
-  await rm(skillsDir, { recursive: true, force: true })
-  if (spec.skills.length) {
-    await mkdir(skillsDir, { recursive: true, mode: 0o700 })
-    for (const name of spec.skills) {
-      const entry = library.find(s => s.name === name) ?? library.find(s => basename(s.dir) === name)
-      if (!entry) continue
-      await cp(entry.dir, join(skillsDir, basename(entry.dir)), { recursive: true, dereference: true })
+  const staged = resolve(root, `.${spec.id}-next-${randomUUID()}`)
+  const backup = resolve(root, `.${spec.id}-backup-${randomUUID()}`)
+  let backedUp = false
+  await mkdir(staged, { recursive: true, mode: 0o700 })
+  try {
+    await writeFile(join(staged, 'agent.cordis.yml'), preview.yml, { mode: 0o600 })
+    await writeFile(join(staged, 'preset.yml'), `name: ${JSON.stringify(spec.name)}\ndescription: ${JSON.stringify(spec.description)}\n`, { mode: 0o600 })
+    await writeFile(join(staged, SPEC_FILE), JSON.stringify(spec, null, 2) + '\n', { mode: 0o600 })
+    await syncPresetSkills(spec, library, staged)
+    const existed = await stat(dir).then(() => true).catch(() => false)
+    if (existed) { await rename(dir, backup); backedUp = true }
+    try {
+      await rename(staged, dir)
+    } catch (error) {
+      if (backedUp) { await rename(backup, dir); backedUp = false }
+      throw error
     }
+    if (backedUp) { await rm(backup, { recursive: true, force: true }); backedUp = false }
+  } catch (error) {
+    await rm(staged, { recursive: true, force: true })
+    // Keep an irreplaceable backup if restoration itself failed.
+    if (!backedUp) await rm(backup, { recursive: true, force: true })
+    throw error
   }
   return { path: dir, preview }
 }

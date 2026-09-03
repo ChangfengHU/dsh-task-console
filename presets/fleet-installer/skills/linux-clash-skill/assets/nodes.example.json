@@ -1,0 +1,10 @@
+{
+  "nodes": [
+    {
+      "id": "linux-01",
+      "name": "Linux 01",
+      "url": "https://linux-01-proxy.example.com",
+      "token_file": "/etc/linux-clash-skill/node-tokens/linux-01.token"
+    }
+  ]
+}

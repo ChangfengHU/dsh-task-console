@@ -1,0 +1,40 @@
+[Unit]
+Description=Anonymous Cloudflare preview tunnel for one Linux Clash Dashboard
+After=network-online.target linux-clash-dashboard.service
+Wants=network-online.target
+Requires=linux-clash-dashboard.service
+
+[Service]
+Type=notify
+NotifyAccess=all
+WatchdogSec=90s
+TimeoutStartSec=90s
+User=linux-clash-tunnel
+Group=linux-clash-tunnel
+Environment=HOME=/var/lib/linux-clash-tunnel
+EnvironmentFile=/etc/linux-clash-skill/dashboard-public.env
+WorkingDirectory=/var/lib/linux-clash-tunnel
+ExecStartPre=/usr/bin/truncate -s 0 /var/lib/linux-clash-tunnel/dashboard-public.url
+ExecStart=/usr/local/lib/linux-clash-skill/scripts/dashboard_public_tunnel.sh
+Restart=always
+RestartSec=5s
+UMask=0077
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+NoNewPrivileges=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/linux-clash-tunnel
+
+[Install]
+WantedBy=multi-user.target

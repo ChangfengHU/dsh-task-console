@@ -21,12 +21,17 @@
     "./filtered-mcp-client": {
       "default": "./lib/filtered-mcp-client.js"
     },
+    "./fleet-onboard-tools": {
+      "default": "./lib/fleet-onboard-tools.js"
+    },
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "files": [
     "lib",
     "src",
+    "presets",
+    "scripts/preset-skills.mjs",
     "prototype",
     "cordis.patch.yml",
     "README.md",
@@ -36,6 +41,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "host:patch": "node scripts/patch-dsh-host.mjs",
+    "preset:skills": "node scripts/preset-skills.mjs",
     "test": "NODE_ENV=test tsx --test test/*.test.ts",
     "kernel:check": "npm --prefix cloudflare run check"
   },

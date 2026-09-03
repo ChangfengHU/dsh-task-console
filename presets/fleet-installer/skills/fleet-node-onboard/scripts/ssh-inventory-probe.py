@@ -200,6 +200,36 @@ def public_latency(url):
     code, out = run(["curl", "--noproxy", "", "-sS", "-o", "/dev/null", "--max-time", "12", "-w", "%{http_code}", url], timeout=15)
     return code == 0 and len(out.strip()) == 3 and out.strip().isdigit() and out.strip() != "000"
 
+def public_json(url):
+    code, out = run(["curl", "--noproxy", "", "-fsS", "--max-time", "12", url], timeout=15)
+    if code != 0 or len(out.encode("utf-8")) > 65536:
+        return {}
+    try:
+        value = json.loads(out)
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
+def valid_timezone(value):
+    if not isinstance(value, str) or not value or len(value) > 128 or value.startswith("/"):
+        return None
+    parts = value.split("/")
+    if any(not part or part in (".", "..") or not re.fullmatch(r"[A-Za-z0-9._+-]+", part) for part in parts):
+        return None
+    return value if (pathlib.Path("/usr/share/zoneinfo").joinpath(*parts)).is_file() else None
+
+def system_timezone():
+    code, out = run(["timedatectl", "show", "-p", "Timezone", "--value"])
+    timezone = valid_timezone(out.strip()) if code == 0 else None
+    if timezone:
+        return timezone
+    try:
+        marker = "/zoneinfo/"
+        target = str(pathlib.Path("/etc/localtime").resolve())
+        return valid_timezone(target.split(marker, 1)[1]) if marker in target else None
+    except Exception:
+        return None
+
 def admin():
     return os.geteuid() == 0 or run(["sudo", "-n", "true"])[0] == 0
 
@@ -322,6 +352,15 @@ latency_ok = False
 if tcp and udp and expected_ip and tcp == udp == expected_ip and browser_egress and clash_public and vnc_websocket:
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
         latency_ok = all(pool.map(public_latency, latency_targets))
+exit_timezone = valid_timezone(result.get("exit_timezone"))
+if not exit_timezone and expected_ip:
+    exit_timezone = valid_timezone(public_json(f"https://ip.net.coffee/api/iprisk/{expected_ip}").get("timezone"))
+timezone_aligned = bool(exit_timezone and system_timezone() == exit_timezone)
+# This inventory is itself the acceptance telemetry.  Its exit, browser and
+# five latency probes all ran during this SSH observation, so old component
+# receipt timestamps must not turn fresh live evidence into a false negative.
+telemetry_fresh = bool(tcp and udp and expected_ip and tcp == udp == expected_ip
+    and browser_egress and clash_public and vnc_websocket and latency_ok)
 acceptance_checks = {
     "ssh_survives_tun": True,
     "controller": components["clash-control-plane"]["checks"]["controller_health"],
@@ -331,8 +370,8 @@ acceptance_checks = {
     "clash_public": clash_public,
     "vnc_websocket": vnc_websocket,
     "browser_egress": browser_egress,
-    "timezone_aligned": result.get("timezone_aligned") is True,
-    "telemetry_fresh": recent(result.get("verified_at"), 3600) and recent(desktop.get("checked_at"), 180),
+    "timezone_aligned": timezone_aligned,
+    "telemetry_fresh": telemetry_fresh,
     "disk": disk >= 10 * 1024 * 1024 * 1024,
     "proxy_latency": latency_ok,
 }

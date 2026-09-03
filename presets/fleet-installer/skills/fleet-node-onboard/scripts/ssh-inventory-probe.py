@@ -40,6 +40,7 @@ REMOTE_PROBE_TEMPLATE = r'''
 import concurrent.futures, datetime, ipaddress, json, os, pathlib, pwd, re, subprocess, urllib.request
 
 desired_browser_count = __FLEET_ONBOARD_BROWSER_COUNT__
+target_ip = "__FLEET_ONBOARD_IP__"
 
 def run(argv, timeout=8):
     try:
@@ -63,6 +64,30 @@ def read_text(path, limit=4096):
     except Exception:
         return ""
 
+def read_fixed_root_text(path, limit=4096):
+    allowed = {
+        "/var/lib/linux-clash-skill/result.json",
+        "/etc/vyibc-fleet-onboard/line-100.json",
+        "/var/lib/linux-browser-vnc/status.json",
+        "/etc/linux-browser-vnc/desktop.env",
+        "/etc/linux-clash-skill/dashboard-public.url",
+        "/var/lib/linux-browser-vnc/public.url",
+    }
+    if path not in allowed:
+        return ""
+    value = read_text(path, limit)
+    if value:
+        return value
+    code, value = run(["sudo", "-n", "cat", "--", path])
+    return value.strip() if code == 0 and len(value.encode("utf-8")) <= limit else ""
+
+def read_fixed_root_json(path):
+    try:
+        value = json.loads(read_fixed_root_text(path, 262144))
+        return value if isinstance(value, dict) else {}
+    except Exception:
+        return {}
+
 def recent(stamp, seconds):
     try:
         observed = datetime.datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
@@ -76,6 +101,44 @@ def unit(name):
     values = out.splitlines()
     exists = code == 0 and bool(values) and values[0] != "not-found"
     return {"exists": exists, "active": "active" in values, "enabled": "enabled" in values}
+
+def machine_service_home():
+    code, out = run(["ps", "-eo", "uid=,args="])
+    if code == 0:
+        suffix = "/services/machined/machined.py"
+        for line in out.splitlines():
+            fields = line.strip().split(None, 1)
+            if len(fields) != 2 or not fields[0].isdigit():
+                continue
+            try:
+                account = pwd.getpwuid(int(fields[0]))
+            except (KeyError, ValueError):
+                continue
+            expected = str(pathlib.Path(account.pw_dir) / suffix.lstrip("/"))
+            if expected in fields[1].split():
+                return pathlib.Path(account.pw_dir)
+    return pathlib.Path(pwd.getpwuid(os.geteuid()).pw_dir)
+
+def user_unit(name, active):
+    root = machine_service_home() / ".config/systemd/user"
+    unit_path = root / name
+    wants_path = root / "default.target.wants" / name
+    try:
+        text = unit_path.read_text(encoding="utf-8")
+    except Exception:
+        code, text = run(["sudo", "-n", "cat", "--", str(unit_path)])
+        if code != 0:
+            text = ""
+    exists = "Description=SOP Machine Tunnel" in text
+    try:
+        enabled = wants_path.is_symlink() and wants_path.resolve() == unit_path.resolve()
+    except Exception:
+        enabled = False
+    if not enabled:
+        linked = run(["sudo", "-n", "test", "-L", str(wants_path)])[0] == 0
+        code, resolved = run(["sudo", "-n", "readlink", "-f", "--", str(wants_path)])
+        enabled = linked and code == 0 and resolved.strip() == str(unit_path)
+    return {"exists": exists, "active": bool(active), "enabled": enabled}
 
 def component(checks, units=None, present=None, facts=None):
     units = units or {}
@@ -116,6 +179,14 @@ def url_ok(url):
             return 200 <= response.status < 400
     except Exception:
         return False
+
+def public_url_ok(url):
+    code, out = run([
+        "curl", "--noproxy", "", "-sS", "-o", "/dev/null", "--max-time", "12",
+        "-w", "%{http_code}", url,
+    ], timeout=15)
+    status = out.strip()
+    return code == 0 and len(status) == 3 and status.isdigit() and status.startswith(("2", "3"))
 
 def url_json(url):
     try:
@@ -177,8 +248,8 @@ components["resource-snapshot"] = component({
 }, present=True)
 
 mihomo_units = {"mihomo.service": unit("mihomo.service")}
-result = read_json("/var/lib/linux-clash-skill/result.json")
-line_declaration = read_json("/etc/vyibc-fleet-onboard/line-100.json")
+result = read_fixed_root_json("/var/lib/linux-clash-skill/result.json")
+line_declaration = read_fixed_root_json("/etc/vyibc-fleet-onboard/line-100.json")
 tcp = ipv4(result.get("exit_ip"))
 udp = ipv4(result.get("udp_exit_ip"))
 line_value = line_declaration.get("line") or result.get("source_id") or result.get("line") or ""
@@ -198,7 +269,9 @@ control_units = {name: unit(name) for name in (
     "linux-clash-node-controller.service", "linux-clash-dashboard.service")}
 components["clash-control-plane"] = component({
     "controller_health": url_ok("http://127.0.0.1:8788/healthz"),
-    "dashboard_health": url_ok("http://127.0.0.1:8787/healthz") or url_ok("http://127.0.0.1:8789/api/health"),
+    "dashboard_health": url_ok("http://127.0.0.1:8789/healthz")
+        or url_ok("http://127.0.0.1:8787/healthz")
+        or url_ok("http://127.0.0.1:8789/api/health"),
 }, control_units)
 
 browser_names = [
@@ -207,11 +280,11 @@ browser_names = [
     "linux-browser-vnc-health.service",
 ] + [f"linux-browser-vnc-browser@{index}.service" for index in range(1, desired_browser_count + 1)]
 browser_units = {name: unit(name) for name in browser_names}
-desktop = read_json("/var/lib/linux-browser-vnc/status.json")
+desktop = read_fixed_root_json("/var/lib/linux-browser-vnc/status.json")
 configured = int(desktop.get("instances_configured") or 0)
 up = int(desktop.get("instances_up") or 0)
 browser_script = "/usr/local/lib/linux-browser-vnc/scripts/browser_probe.py"
-desktop_env = read_text("/etc/linux-browser-vnc/desktop.env", 16384)
+desktop_env = read_fixed_root_text("/etc/linux-browser-vnc/desktop.env", 16384)
 debug_match = re.search(r"^BROWSER_DEBUG_PORT_BASE=([0-9]+)$", desktop_env, re.MULTILINE)
 debug_base = int(debug_match.group(1)) if debug_match else 0
 browser_egress = bool(expected_ip and debug_base and pathlib.Path(browser_script).is_file())
@@ -227,14 +300,20 @@ components["browser-vnc"] = component({
     "https_exit": browser_egress, "webrtc_exit": browser_egress,
 }, browser_units)
 
-tunnel_units = {"linux-browser-vnc-tunnel.service": unit("linux-browser-vnc-tunnel.service")}
-clash_url = read_text("/etc/linux-clash-skill/dashboard-public.url", 512).rstrip("/")
-vnc_url = read_text("/var/lib/linux-browser-vnc/public.url", 512).rstrip("/")
-clash_public = clash_url.startswith("https://clash-") and url_ok(clash_url + "/healthz")
-vnc_public = vnc_url.startswith("https://vnc-") and url_ok(vnc_url + "/healthz")
+# Contract v1 retained the old dedicated-tunnel evidence key. Current nodes use
+# one machine-level named tunnel for machined, Clash and VNC, so attest that
+# connector while keeping the persisted v1 receipt shape stable.
+dashed_ip = target_ip.replace(".", "-")
+clash_url = f"https://clash-{dashed_ip}.vyibc.com"
+vnc_url = f"https://vnc-{dashed_ip}.vyibc.com"
+clash_public = clash_url.startswith("https://clash-") and public_url_ok(clash_url + "/healthz")
+vnc_public = vnc_url.startswith("https://vnc-") and public_url_ok(vnc_url + "/healthz")
 vnc_websocket = False
 if vnc_public and pathlib.Path(browser_script).is_file():
     vnc_websocket = run(["sudo", "-n", "python3", browser_script, "--websocket-check", vnc_url], timeout=45)[0] == 0
+tunnel_units = {"linux-browser-vnc-tunnel.service": user_unit(
+    "sop-machine-tunnel.service", clash_public and vnc_public and vnc_websocket,
+)}
 components["cloudflare-publication"] = component({
     "clash_http": clash_public, "vnc_http": vnc_public, "vnc_websocket": vnc_websocket,
 }, tunnel_units)
@@ -272,10 +351,15 @@ print(json.dumps({
 '''
 
 
-def render_remote_probe(browser_count: int) -> str:
+def render_remote_probe(browser_count: int, ip: str) -> str:
     if browser_count not in {1, 2}:
         raise ProbeError("browser-count-invalid")
-    return REMOTE_PROBE_TEMPLATE.replace("__FLEET_ONBOARD_BROWSER_COUNT__", str(browser_count))
+    canonical = str(ipaddress.IPv4Address(ip))
+    if canonical != ip:
+        raise ProbeError("ip-invalid")
+    return REMOTE_PROBE_TEMPLATE.replace("__FLEET_ONBOARD_BROWSER_COUNT__", str(browser_count)).replace(
+        "__FLEET_ONBOARD_IP__", canonical,
+    )
 
 
 def read_request():
@@ -401,7 +485,7 @@ def run_ssh(ip: str, auth, browser_count: int):
         env["SSH_AUTH_SOCK"] = str(auth["ssh_agent_socket"])
     try:
         result = subprocess.run(
-            argv, input=render_remote_probe(browser_count), text=True, stdout=subprocess.PIPE,
+            argv, input=render_remote_probe(browser_count, ip), text=True, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, timeout=90, env=env,
             pass_fds=tuple(pass_fds), check=False,
         )

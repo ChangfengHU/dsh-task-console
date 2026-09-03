@@ -70,7 +70,11 @@ def safe_file(path: Path, label: str, limit: int = MAX_BYTES, *, public: bool = 
     except OSError as exc:
         raise ReconcilerBlocked(label + "-unavailable") from exc
     groups = set(os.getgroups()) | {os.getegid()}
-    readable = metadata.st_uid == os.geteuid() or (metadata.st_gid in groups and metadata.st_mode & 0o040)
+    readable = (
+        metadata.st_uid == os.geteuid()
+        or (metadata.st_gid in groups and metadata.st_mode & 0o040)
+        or bool(metadata.st_mode & 0o004)
+    )
     forbidden_mode = 0o022 if public else 0o027
     if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid not in {0, os.geteuid()}
             or metadata.st_mode & forbidden_mode or not readable or not 0 < metadata.st_size <= limit):

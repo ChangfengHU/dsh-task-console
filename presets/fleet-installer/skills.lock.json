@@ -3,19 +3,19 @@
   "skills": [
     {
       "name": "fleet-node-onboard",
-      "sourceRoot": "git:fed3d6f5f1c158d441706b80c54e9aaf3a7d4434",
+      "sourceRoot": "git:a64e9891a9f5f052fa87bdba53fd7f9ffe2c5c6a",
       "sourceBasename": "fleet-node-onboard",
-      "sha256": "cee08b18bb611862a8abc677790b06acb5e0ef125bc7df38eca57b7455e9766c"
+      "sha256": "769ea09899aa9211674ab9ec4e7a8217d3aa0ee8aed01c94c0a90ff270b5d2eb"
     },
     {
       "name": "linux-clash-skill",
-      "sourceRoot": "git:fed3d6f5f1c158d441706b80c54e9aaf3a7d4434",
+      "sourceRoot": "git:a64e9891a9f5f052fa87bdba53fd7f9ffe2c5c6a",
       "sourceBasename": "linux-clash-skill",
       "sha256": "a3b02ca7b32030531fe955de41fa0bdf7be71a2c39437e85b0d7d17f0139d4e3"
     },
     {
       "name": "linux-browser-vnc",
-      "sourceRoot": "git:fed3d6f5f1c158d441706b80c54e9aaf3a7d4434",
+      "sourceRoot": "git:a64e9891a9f5f052fa87bdba53fd7f9ffe2c5c6a",
       "sourceBasename": "linux-browser-vnc",
       "sha256": "5efa3c4a28485c770f55d5188e58badf0e0c920cc4e9f52f7aa29e66745c3cf3"
     }

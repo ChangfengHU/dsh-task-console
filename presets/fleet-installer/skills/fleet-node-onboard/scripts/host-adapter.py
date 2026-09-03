@@ -480,8 +480,12 @@ def validate_action_request(request: Dict[str, Any], contract: Dict[str, Any]) -
 
 def process_start_ticks(pid: int) -> Optional[str]:
     try:
-        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
-        return fields[21]
+        # comm is parenthesized and may contain spaces, so split after its final
+        # closing parenthesis. The remaining fields start at proc field 3.
+        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(") ", 1)[1].split()
+        if fields[0] == "Z":
+            return None
+        return fields[19]
     except (OSError, IndexError):
         return None
 

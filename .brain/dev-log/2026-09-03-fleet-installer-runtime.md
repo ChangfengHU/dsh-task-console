@@ -9,3 +9,4 @@
 - The DSH adapter now requires both fixed host stages (account and machined convergence) before advertising execution availability, and routes both through the same attested host adapter.
 - Verification: `npm test` passed 81/81, `npm run build` passed, managed Skill check passed for all three Skills, and `git diff --check` passed.
 - Production smoke found that `allow: []` was evaluated at the final Agent scope and hid the preset's own runtime and Skill registrations. The generator now emits the exact selected native/runtime/MCP/Skill schemas; the fence derives a deny-list from the live inherited surface and guards later unselected calls. The same 81-test suite and build pass with regression coverage.
+- Refreshed the managed Skill lock to linux-clash-skill commit `a64e9891a9f5f052fa87bdba53fd7f9ffe2c5c6a`, which accepts the root-owned public Stage 4 contract and stops treating zombie workers as running.

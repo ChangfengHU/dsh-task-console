@@ -10,7 +10,7 @@ test('managed installer declares the reviewed canonical Skill revision', async (
   const manifest = JSON.parse(await readFile(skillSources, 'utf8'))
   assert.equal(manifest.version, 1)
   assert.match(manifest.repository, /^https:\/\/github\.com\/ChangfengHU\/linux-clash-skill$/)
-  assert.equal(manifest.revision, 'cbd688fc103a0baceb979eb5b19be79c33e511ba')
+  assert.equal(manifest.revision, '479774a6d88dd87edb5ecd5d81eb32d01bec7259')
   assert.equal('revisionPending' in manifest, false)
   assert.deepEqual(manifest.skills.map((row: any) => row.name).sort(), ['fleet-node-onboard', 'linux-browser-vnc', 'linux-clash-skill'])
   assert.ok(manifest.skills.every((row: any) => row.path === `skills/${row.name}`))

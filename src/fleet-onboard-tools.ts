@@ -1043,8 +1043,8 @@ function isCloudStage(stage: number): stage is 5 | 6 | 7 | 8 | 10 {
   return [5, 6, 7, 8, 10].includes(stage)
 }
 
-function isHostStage(stage: number): stage is 2 | 4 {
-  return stage === 2 || stage === 4
+function isHostStage(stage: number): stage is 2 | 4 | 9 {
+  return stage === 2 || stage === 4 || stage === 9
 }
 
 function projectLedger(operation: 'status' | 'report', ip: string, value: FleetLedgerStatus, executionAvailable: boolean): FleetToolResult {
@@ -1088,8 +1088,9 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
         const expectedStages = contractStages(prepared).filter(stage => isHostStage(stage.stage))
         const configured = expectedStages.every(expected => {
           const stage = stages.find(capability => capability?.stage === expected.stage)
+          const expectedMode = expected.stage === 9 ? 'probe-gate' : 'reconcile'
           return stage?.component === expected.id && stage.executor_id === expected.executor_id
-            && stage.execution_mode === 'reconcile' && stage.execution === 'configured'
+            && stage.execution_mode === expectedMode && stage.execution === 'configured'
         })
         if (capabilities.schema !== 1 || capabilities.ok !== true || capabilities.probe !== 'configured'
           || !configured) prepared.executor = undefined
@@ -1263,13 +1264,14 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
       const executionConfigured = isHostStage(stage.stage)
         ? Boolean(this.config.executor)
         : isCloudStage(stage.stage) ? Boolean(this.config.cloud) : false
-      if (observed.disposition !== 'repairable' || !executionConfigured || probeGate) {
-        const reason = probeGate && observed.disposition === 'repairable'
+      const unattendedProbeRepair = stage.stage === 9 && probeGate && executionConfigured
+      if (observed.disposition !== 'repairable' || !executionConfigured || (probeGate && !unattendedProbeRepair)) {
+        const reason = probeGate && !unattendedProbeRepair && observed.disposition === 'repairable'
           ? 'probe-gate-not-satisfied'
           : !executionConfigured && observed.disposition === 'repairable'
             ? (isCloudStage(stage.stage) ? 'cloud-transport-not-configured' : 'executor-not-configured')
             : safeReason(observed.reason, 'component-blocked')
-        const classified = probeGate && observed.disposition === 'repairable'
+        const classified = probeGate && !unattendedProbeRepair && observed.disposition === 'repairable'
           ? 'needs-user'
           : !executionConfigured && observed.disposition === 'repairable' ? 'repairable' : failureClass(observed.disposition)
         const stageStatus = classified === 'fatal' ? 'failed' : 'blocked'

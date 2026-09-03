@@ -584,6 +584,20 @@ test('a durable executor still running keeps the same ledger attempt open', asyn
   assert.deepEqual(stage.map(call => call.args.evidence.status), ['running'])
 })
 
+test('configured Stage 9 remediation runs before the acceptance probe gate is retried', async t => {
+  const files = await fixtureFiles()
+  const ledger = await ledgerFixture(files.log)
+  t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
+  const adapter = await createAdapter(files, ledger, { vaultAvailable: true, healthyThrough: 8, executorAvailable: true })
+  const value = await adapter.start(IP, 'base', execution(`验收并修复 ${IP}`))
+  assert.equal(value.phase, 'running')
+  assert.equal(value.reason, 'operation-still-running')
+  assert.equal(value.current_stage, 8)
+  assert.equal(value.needs_input, false)
+  const stage = ledger.calls.filter(call => call.tool === 'onboard_record' && call.args.evidence.stage === 9)
+  assert.deepEqual(stage.map(call => call.args.evidence.status), ['running'])
+})
+
 test('already-healthy node records ten verified stages and binds final inventory to finish', async t => {
   const files = await fixtureFiles()
   const ledger = await ledgerFixture(files.log)

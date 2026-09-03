@@ -24,7 +24,8 @@ if (operation === 'capabilities') {
     schema: 1, ok: true, operation: 'capabilities', probe: 'configured',
     stages: components.map(([component, executor_id], index) => {
       const execution_mode = [0, 2, 8].includes(index) ? 'probe-gate' : 'reconcile'
-      return { stage: index + 1, component, executor_id, execution_mode, execution: execution_mode === 'probe-gate' ? 'probe-gated' : 'configured' }
+      const execution = index === 8 ? 'configured' : execution_mode === 'probe-gate' ? 'probe-gated' : 'configured'
+      return { stage: index + 1, component, executor_id, execution_mode, execution }
     }),
   })}\n`)
   process.exit(0)

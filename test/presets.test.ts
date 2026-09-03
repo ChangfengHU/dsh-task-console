@@ -45,15 +45,15 @@ test('renderComposition supplies the required todo policy', () => {
   assert.match(preview.yml, /tool-todo[\s\S]*allowParallelInProgress: true/)
 })
 
-test('the inherited fence fails closed without naming selected local or current host tools', () => {
+test('the inherited fence admits exactly the selected preset tools', () => {
   const preview = renderComposition(
     { ...base, tools: ['ask-user'], mcpTools: {}, mcpPolicy: {}, skills: [] },
     [],
     ['ask_user_question', 'publish_public_html'],
   )
   const fence = preview.yml.slice(preview.yml.indexOf('inherited-tool-fence'))
-  assert.match(fence, /allow: \[\]/)
-  assert.doesNotMatch(fence, /ask_user_question|publish_public_html/)
+  assert.match(fence, /allow:\n\s+- ask_user_question/)
+  assert.doesNotMatch(fence, /publish_public_html/)
 })
 
 test('permission is derived from tools, not declared', () => {

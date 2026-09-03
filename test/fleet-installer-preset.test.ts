@@ -35,7 +35,10 @@ test('managed installer composition is secret-free and request-header surface is
     { sourceEntryId: 'host-fleet', serverName: 'vyibc-fleet', tools: ['vyibc-fleet_node_detail', 'vyibc-fleet_node_audit', 'vyibc-fleet_disable_node'], live: true, config: { headers: { Authorization: 'Bearer fleet-secret' }, url: 'https://fleet.invalid' } },
   ]
   const preview = renderComposition(spec, hosts)
-  assert.match(preview.yml, /allow: \[\]/)
+  for (const name of ['ask_user_question', 'todo_write', 'skill', 'fleet_onboard_start', 'fleet_onboard_status', 'fleet_onboard_resume', 'fleet_onboard_report']) {
+    assert.match(preview.yml, new RegExp(`\\s- ${name}`))
+  }
+  assert.doesNotMatch(preview.yml, /\s- bash|\s- mcp__/)
   assert.match(preview.yml, /dsh-tool-ask-user/)
   assert.match(preview.yml, /dsh-task-console\/fleet-onboard-tools/)
   assert.doesNotMatch(preview.yml, /sourceEntryId:|vault-secret|fleet-secret|Authorization|headers:|https:\/\/.*\.invalid/)

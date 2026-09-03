@@ -19,6 +19,7 @@ import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile, chmod } from
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { stringify as toYaml } from 'yaml'
+import { publicToolName } from './filtered-mcp-client.ts'
 import type { AgentSpec, NativeTool, Preview, SkillEntry } from './wire.ts'
 
 /** Preset ids become directory names, so containment is a property of the id. */
@@ -151,6 +152,7 @@ export interface HostMcp {
 export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inheritedTools: string[] = []): Preview {
   const parts: string[] = []
   const renamed: Preview['renamed'] = []
+  const allowedToolNames = new Set<string>()
   parts.push(`# ${spec.name || spec.id} — 由 dsh-task-console 生成。可以直接改;dsh 热读取 preset 根,保存即生效。`)
   parts.push(`# 只有列在这里的工具会有 schema;没写的,模型看不到。`)
 
@@ -159,7 +161,10 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
 
   for (const id of spec.tools) {
     const tool = NATIVE_TOOLS.find(t => t.id === id)
-    if (tool) parts.push(tool.rows)
+    if (tool) {
+      parts.push(tool.rows)
+      for (const name of tool.schemaNames) allowedToolNames.add(name)
+    }
   }
 
   for (const [serverName, selected] of Object.entries(spec.mcpTools)) {
@@ -169,6 +174,7 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
     if (!allowedTools.length) { parts.push(`# mcp ${serverName}: 没有选择工具,跳过`); continue }
     let name = serverName
     if (host.live) { name = `${serverName}-${spec.id}`; renamed.push({ from: serverName, to: name }) }
+    for (const tool of allowedTools) allowedToolNames.add(publicToolName(name, tool))
     const toolRules = spec.mcpPolicy[serverName] ?? {}
     // Never copy credentials or transport headers into a generated preset.
     // The scoped adapter resolves the authoritative host entry at mount time.
@@ -180,16 +186,16 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
   }
 
   if (spec.skills.length) {
+    allowedToolNames.add('skill')
     parts.push(`# skills/ 随 preset 走;baseUrl 是 preset 自己的目录\n- id: skill-filesystem\n  name: '@deepseek-ai/dsh-skill-filesystem'\n  config:\n    providerName: preset-${spec.id}\n    includeDefaultRoots: false\n    customSkillDirs:\n      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"\n- id: tool-skill\n  name: '@deepseek-ai/dsh-tool-skill'`)
   }
 
-  // Fail closed over the *live* inherited surface. `allow: []` keeps no host
-  // tool, including tools added after this YAML was generated. DSH merges the
-  // preset scope's own native/runtime/MCP/Skill registrations after applying
-  // this inherited restriction, so ask_user_question and filtered MCP remain
-  // visible without also admitting their global counterparts.
+  // Preset plugins are ancestor scopes of the final Agent tool view. Therefore
+  // the inherited allow-list must name this preset's registrations explicitly;
+  // `allow: []` would also hide its own native/runtime/MCP/Skill tools. Host
+  // tools added later remain absent because they are not in this exact list.
   void inheritedTools // retained as an API-compatible argument for older callers
-  const fence = toYaml({ allow: [] }, { lineWidth: 0 }).trimEnd()
+  const fence = toYaml({ allow: [...allowedToolNames].sort() }, { lineWidth: 0 }).trimEnd()
   parts.push(`- id: inherited-tool-fence\n  name: 'dsh-task-console/agent-tool-fence'\n  config:\n${indent(fence, 4)}`)
 
   return { yml: parts.join('\n\n') + '\n', renamed, permission: permissionOf(spec, () => true) }

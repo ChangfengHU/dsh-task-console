@@ -1,7 +1,7 @@
 {
   "version": 1,
   "repository": "https://github.com/ChangfengHU/linux-clash-skill",
-  "revision": "29a5f17a24cdf0f70ec10f8bda8c7d8d04f1fb85",
+  "revision": "a4dba3d993024abed6b45b0da864c37ec0a2e419",
   "skills": [
     {
       "name": "fleet-node-onboard",

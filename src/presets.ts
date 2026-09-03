@@ -20,6 +20,7 @@ import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { stringify as toYaml } from 'yaml'
 import { publicToolName } from './filtered-mcp-client.ts'
+import { WORKER_TOOL_NAMES } from './worker-tools.ts'
 import type { AgentSpec, NativeTool, Preview, SkillEntry } from './wire.ts'
 
 /** Preset ids become directory names, so containment is a property of the id. */
@@ -190,12 +191,13 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
     parts.push(`# skills/ 随 preset 走;baseUrl 是 preset 自己的目录\n- id: skill-filesystem\n  name: '@deepseek-ai/dsh-skill-filesystem'\n  config:\n    providerName: preset-${spec.id}\n    includeDefaultRoots: false\n    customSkillDirs:\n      - !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('skills/', baseUrl))"\n- id: tool-skill\n  name: '@deepseek-ai/dsh-tool-skill'`)
   }
 
-  // Preset plugins are ancestor scopes of the final Agent tool view. Therefore
-  // the inherited allow-list must name this preset's registrations explicitly;
-  // `allow: []` would also hide its own native/runtime/MCP/Skill tools. Host
-  // tools added later remain absent because they are not in this exact list.
+  // Preset plugins are ancestor scopes of the final Agent tool view. The fence
+  // snapshots current inherited names into a deny-list, while its guard keeps
+  // later registrations fail-closed. Task terminators are admitted only when
+  // the runner registers them inside a task-owned session.
   void inheritedTools // retained as an API-compatible argument for older callers
-  const fence = toYaml({ allow: [...allowedToolNames].sort() }, { lineWidth: 0 }).trimEnd()
+  for (const name of WORKER_TOOL_NAMES) allowedToolNames.add(name)
+  const fence = toYaml({ selected: [...allowedToolNames].sort() }, { lineWidth: 0 }).trimEnd()
   parts.push(`- id: inherited-tool-fence\n  name: 'dsh-task-console/agent-tool-fence'\n  config:\n${indent(fence, 4)}`)
 
   return { yml: parts.join('\n\n') + '\n', renamed, permission: permissionOf(spec, () => true) }

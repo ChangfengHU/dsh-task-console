@@ -52,7 +52,7 @@ test('the inherited fence admits exactly the selected preset tools', () => {
     ['ask_user_question', 'publish_public_html'],
   )
   const fence = preview.yml.slice(preview.yml.indexOf('inherited-tool-fence'))
-  assert.match(fence, /allow:\n\s+- ask_user_question/)
+  assert.match(fence, /selected:\n\s+- ask_user_question/)
   assert.doesNotMatch(fence, /publish_public_html/)
 })
 

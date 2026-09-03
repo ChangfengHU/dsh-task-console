@@ -13,12 +13,19 @@ import type { Context } from '@deepseek-ai/cordis'
 export const name = 'task-console-agent-tool-fence'
 export const inject = ['tools']
 
-export interface Config { allow?: string[]; deny?: string[] }
+export interface Config { selected?: string[]; allow?: string[]; deny?: string[] }
 
 export function apply(ctx: Context, config: Config): void {
+  if (Array.isArray(config?.selected)) {
+    const selected = new Set(config.selected)
+    const inherited = ctx.tools.schemas().map(schema => schema.name)
+    const deny = inherited.filter(name => !selected.has(name))
+    if (deny.length) ctx.tools.restrict({ deny })
+    ctx.tools.guard(exec => selected.has(exec.name) ? undefined : 'This Agent has not been granted that tool.')
+    return
+  }
   if (Array.isArray(config?.allow)) {
-    // An empty allow-list is intentional: DSH restrictions apply only to the
-    // inherited surface, then merge this Agent scope's local registrations.
+    // Legacy 0.20.2 presets remain parseable until explicitly regenerated.
     ctx.tools.restrict({ allow: [...new Set(config.allow)] })
     return
   }
@@ -27,5 +34,5 @@ export function apply(ctx: Context, config: Config): void {
     ctx.tools.restrict({ deny: [...new Set(config.deny)] })
     return
   }
-  throw new Error('agent-tool-fence: expected allow (empty is valid) or a non-empty legacy deny')
+  throw new Error('agent-tool-fence: expected selected, allow, or a non-empty legacy deny')
 }

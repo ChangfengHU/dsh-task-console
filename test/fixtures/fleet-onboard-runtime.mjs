@@ -46,9 +46,11 @@ if (operation === 'assess') {
   ].map((component, index) => {
     const observed = input.components?.[component]
     const healthy = observed?.healthy === true || (index === 9 && input.fleet?.registered === true && input.fleet?.reachable === true)
+    const probeGate = [0, 2, 8].includes(index)
     return {
       stage: index + 1, component, health: healthy ? 'healthy' : 'missing',
-      disposition: healthy ? 'reusable' : 'repairable', reason: healthy ? 'verified-healthy' : 'component-missing',
+      disposition: healthy ? 'reusable' : probeGate ? 'needs-user' : 'repairable',
+      reason: healthy ? 'verified-healthy' : probeGate ? 'probe-gate-not-satisfied' : 'component-missing',
     }
   })
   const issue = components.find(item => item.health !== 'healthy')

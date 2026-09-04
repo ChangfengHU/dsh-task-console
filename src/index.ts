@@ -12,6 +12,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { readFile } from 'node:fs/promises'
 import { TaskConsoleService } from './service.ts'
 import { registerPublicHtmlTool } from './public-upload.ts'
+import { registerTaskSignalHttp } from './task-intake-http.ts'
 
 export const name = 'task-console'
 export const inject = ['loader', 'tools', 'agents', 'webServer', 'workspaceRegistry']
@@ -24,10 +25,13 @@ export {
 export { CONSOLE_INVOCATIONS, METHODS, NAMESPACE, PKG } from './wire.ts'
 export type { AgentRow, AgentSpec, Catalog, McpServer, NativeTool, Preview, SkillEntry, TryRunResult } from './wire.ts'
 export { applyAgentPermission } from './agent-session.ts'
+export { TaskIntakeCoordinator, validateTaskIntakeDecision, validateTaskSignal } from './task-intake.ts'
+export { TASK_INTAKE_AGENT_ID } from './task-intake-agent.ts'
 
 export async function apply(ctx: Context): Promise<void> {
   await ctx.plugin(TaskConsoleService)
   ctx.effect(() => registerPublicHtmlTool(ctx), 'task-console: public HTML publisher')
+  ctx.effect(() => registerTaskSignalHttp(ctx), 'task-console: authenticated Task Signal API')
   ctx.effect(() => (ctx as any).webServer.register({
     kind: 'exact',
     path: '/dsh-task-console/client-heavy.js',

@@ -345,6 +345,7 @@ export class HermesKernel {
     ensure('task_links', 'kind', `kind TEXT NOT NULL DEFAULT 'dependency'`)
     ensure('task_links', 'created_at', 'created_at INTEGER')
     ensure('task_events', 'graph_id', 'graph_id TEXT')
+    ensure('dsh_batches', 'turn_json', 'turn_json TEXT')
     this.db.exec('CREATE INDEX IF NOT EXISTS idx_events_graph_id ON task_events(graph_id, id)')
   }
 

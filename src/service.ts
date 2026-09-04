@@ -24,6 +24,8 @@ import {
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
 import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask } from './tasks.ts'
+import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
+import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
 import type { Artifact, Card } from './tasks.ts'
 import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
@@ -43,15 +45,22 @@ export class TaskConsoleService extends TypertRemoteService {
   static inject = ['loader', 'tools', 'agents', 'workspaceRegistry', 'permissionPresets']
 
   readonly runner: TaskRunner
+  readonly intake: TaskIntakeCoordinator
+  private readonly ready: Promise<void>
 
   constructor(ctx: Context) {
     super(ctx, NAMESPACE)
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
     })
-    void this.runner.start()
+    this.intake = new TaskIntakeCoordinator(this.runner, {
+      agents: () => this.intakeAgents(),
+      decide: (signal, context) => decideTaskSignalWithAgent(this.ctx as any, signal, context, { markInternal: sessionId => this.markTaskSessionInternal(sessionId) }),
+    })
+    this.ready = this.runner.start()
       .then(() => this.markExistingTaskSessionsInternal())
-      .catch(err => console.error('[task-console] runner failed to start:', err))
+      .then(() => this.intake.start())
+    void this.ready.catch(err => console.error('[task-console] runner failed to start:', err))
   }
 
   /** Hide task-owned sessions from ordinary DSH discovery while retaining direct access. */
@@ -116,6 +125,24 @@ export class TaskConsoleService extends TypertRemoteService {
       if (sel?.provider && sel?.model) return sel
     } catch { /* no default composed */ }
     return undefined
+  }
+
+  /** Only authored, tool-compatible presets enter the Task Agent's trusted roster. */
+  private async intakeAgents(): Promise<IntakeAgent[]> {
+    const presets = (this.ctx as any).get('agentPresets')
+    if (!presets) return []
+    const rows: IntakeAgent[] = []
+    for (const preset of await presets.list() as any[]) {
+      if (preset.broken || preset.trust !== 'user') continue
+      const spec = await readSpec(dirname(String(preset.path)))
+      if (!spec || spec.model.startsWith('claude-local')) continue
+      rows.push({
+        id: spec.id, name: spec.name, description: spec.description, model: spec.model,
+        permission: spec.permissionPreset, tools: spec.tools, mcpTools: spec.mcpTools, skills: spec.skills,
+      })
+      this.runner.rememberName(spec.id, spec.name)
+    }
+    return rows
   }
 
   async catalog(): Promise<string> {
@@ -319,6 +346,30 @@ export class TaskConsoleService extends TypertRemoteService {
   }
 
   // ── tasks ──────────────────────────────────────────────────────────────
+
+  /** Submit one generic, credential-free Signal; the Task Agent routes it asynchronously. */
+  async submitTaskSignal(payload: string): Promise<string> {
+    await this.ready
+    const input = JSON.parse(payload) as { signal?: unknown; wait?: boolean; timeoutMs?: number }
+    const view = await this.intake.submit(input && Object.hasOwn(input, 'signal') ? input.signal : input)
+    if (input?.wait) return JSON.stringify(await this.intake.wait(view.signal.id, Math.min(Math.max(Number(input.timeoutMs) || 300_000, 1_000), 600_000)))
+    return JSON.stringify(view)
+  }
+
+  async taskSignal(payload: string): Promise<string> {
+    await this.ready
+    const { id } = JSON.parse(payload) as { id?: string }
+    if (!id) throw new Error('缺少 Signal id')
+    const signal = this.intake.get(id)
+    if (!signal) throw new Error('没有这个 Task Signal')
+    return JSON.stringify({ ...signal, events: this.intake.events(id) })
+  }
+
+  async taskSignals(payload: string): Promise<string> {
+    await this.ready
+    const { limit } = JSON.parse(payload || '{}') as { limit?: number }
+    return JSON.stringify(this.intake.list(limit))
+  }
 
   private withNext(t: any) {
     return { ...t, nextFire: t.trigger.kind === 'cron' && t.enabled ? (nextFire(parseCron(t.trigger.expr)!)?.toISOString() ?? null) : null }

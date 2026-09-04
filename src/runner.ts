@@ -17,7 +17,7 @@ import { dirname, resolve } from 'node:path'
 import { applyAgentPermission } from './agent-session.ts'
 import { captureArtifacts } from './artifacts.ts'
 import { readSpec } from './presets.ts'
-import { EventStore, NUDGE, cardMessage, cronMatches, parseCron, type Batch, type BlockKind, type Card, type TaskSpec } from './tasks.ts'
+import { EventStore, NUDGE, cardMessage, cronMatches, parseCron, taskForBatch, taskForTurn, type Batch, type BlockKind, type Card, type TaskSpec, type TaskTurn } from './tasks.ts'
 import { registerWorkerTools } from './worker-tools.ts'
 
 interface Flight {
@@ -46,6 +46,13 @@ export interface RunnerOptions {
   now?: () => number
   onBatchSettled?: (batch: Batch) => void | Promise<void>
   onSessionCreated?: (sessionId: string) => void | Promise<void>
+}
+
+export interface FireOptions {
+  /** Stable IDs let an external signal resume safely after a host restart. */
+  batchId?: string
+  /** Signal-specific objective and dynamically selected Agent team. */
+  turn?: TaskTurn
 }
 
 export class TaskRunner {
@@ -150,8 +157,9 @@ export class TaskRunner {
     ready.sort((a, b) => a.batchId.localeCompare(b.batchId) || a.index - b.index)
     for (const c of ready) {
       if (inProgress >= this.maxInProgress) break
-      const task = this.store.tasks.get(c.taskId); if (!task) continue
+      const template = this.store.tasks.get(c.taskId); if (!template) continue
       const batch = this.store.s.batches.get(c.batchId); if (!batch || batch.settled) continue
+      const task = taskForBatch(template, batch)
       if (c.consecutiveFailures > 0 && (task.onFail !== 'retry' || c.consecutiveFailures >= task.maxTries)) {
         const failure = c.error ?? `连续失败 ${c.consecutiveFailures} 次`
         await this.store.transition(
@@ -191,14 +199,22 @@ export class TaskRunner {
   // ── firing ────────────────────────────────────────────────────────────
 
   /** Create a batch (one card per participant, chained) and dispatch. */
-  async fire(taskId: string, by: Batch['by']): Promise<Batch> {
-    const task = this.store.tasks.get(taskId)
-    if (!task) throw new Error('没有这个任务')
-    const batchId = `b-${this.clock().toString(36)}${Math.random().toString(36).slice(2, 5)}`
+  async fire(taskId: string, by: Batch['by'], options: FireOptions = {}): Promise<Batch> {
+    const template = this.store.tasks.get(taskId)
+    if (!template) throw new Error('没有这个任务')
+    const task = taskForTurn(template, options.turn)
+    const batchId = options.batchId ?? `b-${this.clock().toString(36)}${Math.random().toString(36).slice(2, 5)}`
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(batchId)) throw new Error('batchId 不合法')
+    const existing = this.store.s.batches.get(batchId)
+    if (existing) {
+      if (existing.taskId !== taskId) throw new Error('batchId 已被其他任务使用')
+      return existing
+    }
+    if (task.graphMode === 'dynamic-rounds' && task.participants.length !== 3) throw new Error('动态回合必须有规划者、执行者、评估者')
     const cards = task.graphMode === 'dynamic-rounds'
       ? [{ id: `${batchId}#p1`, agentId: task.participants[0].agentId, ...(task.participants[0].brief ? { brief: task.participants[0].brief } : {}), deps: [], kind: 'agent' as const, role: 'planner' as const, round: 1 }]
       : task.participants.map((p, i) => ({ id: `${batchId}#${i}`, agentId: p.agentId, ...(p.brief ? { brief: p.brief } : {}), deps: i ? [`${batchId}#${i - 1}`] : [] }))
-    await this.store.createBatch(task, { t: 'batch/fired', at: this.now(), taskId, batch: { id: batchId, by, cards } })
+    await this.store.createBatch(template, { t: 'batch/fired', at: this.now(), taskId, batch: { id: batchId, by, cards, ...(options.turn ? { turn: options.turn } : {}) } })
     const problem = await this.preflight(task)
     if (problem) {
       const first = cards[0]

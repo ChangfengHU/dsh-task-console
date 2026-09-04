@@ -2,7 +2,20 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.20.2):** adds an explicit per-Agent DSH session permission preset alongside tool-granular capabilities. `workspace-write` remains the safe default; trusted system operators such as `装机者` can pin `danger-full-access`, and the plugin writes that sandbox/approval bundle before the first user message is dispatched. A missing permission service now fails closed instead of silently starting the Agent under a different boundary. The inherited-tool fence hides every currently unselected host schema and adds an execution guard for later registrations, while preserving the preset's exact native/runtime/MCP/Skill capabilities. The DSH compatibility patch also preserves a plugin-created Agent's configured model and reasoning effort on its blank first turn instead of replacing them with the Web profile default. Every filtered MCP mount now uses a unique internal namespace while preserving stable model-facing tool names, so multiple live sessions of one Agent preset can coexist without weakening their tool policy.
+**This release (0.21.0):** adds a durable Task Signal intake boundary. An authenticated producer such as Fleet submits facts and intent, never an Agent choice. A capability-free internal Task Agent reads the current Task candidates and registered Agent roster, proposes `create`, `reuse`, or `triage`, and the host independently validates that it selected only existing capabilities. Task identity is the durable goal/root cause—not an IP or other target. Every accepted Signal becomes its own auditable Turn and Batch, while later signals in the same Incident can reuse the Task without overwriting its objective, team, targets, or provenance. Deterministic Signal and Batch IDs make producer retries idempotent.
+
+The Board shows the source Signal, Incident, Task Agent decision, routing Session, Turn objective, and target metadata directly above the database DAG. The SQLite projection adds dedicated Signal, Incident-link, and target tables; core task, link, run, gate, CAS, handoff, artifact, and replay semantics remain unchanged. The intake endpoint is fail-closed unless `DSH_TASK_INTAKE_TOKEN` is configured:
+
+```sh
+npm run build
+npm run preset:intake
+# POST /dsh-task-console/api/task-signals
+# Authorization: Bearer $DSH_TASK_INTAKE_TOKEN
+```
+
+The managed Task Agent has zero business tools, zero MCP access, and zero Skills. It can only read one frozen routing context and submit one validated decision; it cannot execute the requested work or enlarge a selected Agent's permissions.
+
+Per-Agent DSH session permission presets remain tool-granular. `workspace-write` is the safe default; trusted system operators such as `装机者` can pin `danger-full-access`, and the plugin writes that sandbox/approval bundle before the first user message is dispatched. A missing permission service fails closed. The inherited-tool fence hides every currently unselected host schema and guards later registrations, while preserving the preset's exact native/runtime/MCP/Skill capabilities.
 
 Native and MCP tools still live in one capability matrix; MCP servers are only grouping labels, while each advertised tool is independently selectable. Generated presets deny the complete live inherited host surface (including host tools added after the preset was saved), then merge only their own native/runtime/Skill registrations and chosen MCP definitions. Filtered MCP presets persist a host entry reference rather than copying its URL or authorization headers, and may enforce per-tool argument policies such as required arguments, key prefixes, and Fleet hostname patterns. A real try-run reports the exact request header and uses the same session permission path as a normal Agent chat.
 

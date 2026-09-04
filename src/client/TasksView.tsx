@@ -208,6 +208,7 @@ function TaskGroupCard({ task, latest, history, state, selected, onSelect, agent
     <div className={`dtc-taskgroup s-${state} ${selected ? 'selected' : ''}`} role="button" tabIndex={0} data-task-id={task.id} onClick={() => go(`tasks/${task.id}`)} onKeyDown={event => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) go(`tasks/${task.id}`) }}>
       <div className="dtc-taskgroup-head"><label className="dtc-taskselect" aria-label={`选择任务 ${task.title}`} onClick={event => event.stopPropagation()}><input type="checkbox" checked={selected} onChange={onSelect} /></label><div className="mark">{task.title.trim().charAt(0) || '任'}</div><div className="copy"><h2>{task.title}</h2><span className="dtc-mono">{task.id}</span></div><span className={`dtc-pill ${status[1]}`}>{status[0]}</span></div>
       <p className="brief">{task.brief}</p>
+      {task.origin ? <div className="dtc-task-origin"><span>Task Agent</span><b>{task.origin.source}</b>{task.origin.incidentId ? <code>{task.origin.incidentId}</code> : null}</div> : null}
       <div className="dtc-taskgroup-flow">{latest ? flowOf(latest, agents) : pipe(task, agents)}</div>
       {latest ? <div className="dtc-taskprogress"><div><span>最近一次进度</span><b>{done}/{total}</b></div><div className="track"><i style={{ width: `${progress}%` }} /></div></div> : null}
       {state === 'park' && current?.question ? <div className="dtc-tasknotice ask"><b>{agentName(agents, current.agentId)} 正在等你</b><span>{current.question}</span></div> : null}

@@ -5,6 +5,13 @@ import { actorOf, batchStatus, describe, fold, foldTurns, migrate, readyCards, t
 const task: TaskSpec = { id: 'T-1', title: '接机', brief: '装 clash + VNC', trigger: { kind: 'once' }, participants: [{ agentId: 'installer' }, { agentId: 'inspector', brief: '验一遍' }], cwd: '/tmp', timeoutSec: 600, onFail: 'retry', maxTries: 2, enabled: true, createdAt: 'x' }
 const fired: Event = { t: 'batch/fired', at: '2', taskId: 'T-1', batch: { id: 'b1', by: 'manual', cards: [{ id: 'b1#0', agentId: 'installer', deps: [] }, { id: 'b1#1', agentId: 'inspector', brief: '验一遍', deps: ['b1#0'] }] } }
 
+test('fold retains the signal-specific turn on a batch', () => {
+  const event: Event = { ...fired, batch: { ...fired.batch, turn: { objective: 'second request', participants: [{ agentId: 'inspector' }], targets: [{ kind: 'node', id: 'n-1' }], origin: { source: 'fleet', signalId: 's-1', decision: 'reuse' } } } }
+  const state = fold([{ t: 'task/created', at: '1', taskId: task.id, task }, event])
+  assert.equal(state.batches.get('b1')?.turn?.objective, 'second request')
+  assert.equal(state.batches.get('b1')?.turn?.origin?.signalId, 's-1')
+})
+
 test('fold: a chain of cards moves todo → ready → running → done as runs complete', () => {
   const ev: Event[] = [{ t: 'task/created', at: '1', taskId: 'T-1', task }, fired]
   let s = fold(ev)

@@ -63,6 +63,32 @@ test('runner: pins Agent permission and marks each task session internal before 
   runner.stop()
 })
 
+test('runner: one reused Task fires a signal-specific turn with a new objective and Agent team', async () => {
+  const { host, store, runner, root } = await setup({ participants: [{ agentId: 'a' }, { agentId: 'b' }, { agentId: 'c' }], graphMode: 'dynamic-rounds' })
+  const batch = await runner.fire('T', 'manual', {
+    batchId: 'b-signal-001',
+    turn: {
+      objective: 'Handle the second incident without inheriting the first incident prompt.',
+      participants: [{ agentId: 'c', brief: 'Plan this turn only.' }, { agentId: 'a' }, { agentId: 'b' }],
+      cwd: root,
+      targets: [{ kind: 'fleet-node', id: 'synthetic-node' }],
+      origin: { source: 'test', signalId: 'sig-001', incidentId: 'inc-001', decision: 'reuse' },
+    },
+  })
+  assert.equal(batch.id, 'b-signal-001')
+  assert.equal(batch.turn?.origin?.decision, 'reuse')
+  const session = [...host.sessions.keys()].at(-1)!
+  assert.match(host.sessions.get(session)!.followups[0].content[0].text, /second incident/)
+  assert.doesNotMatch(host.sessions.get(session)!.followups[0].content[0].text, /do it/)
+  assert.equal(store.s.cards.get('b-signal-001#p1')?.agentId, 'c')
+  assert.equal(store.kernel.getTask('b-signal-001#p1')?.workspace_path, root)
+  assert.equal((store.kernel.db.prepare('SELECT turn_json FROM dsh_batches WHERE id = ?').get(batch.id) as { turn_json: string }).turn_json.includes('sig-001'), true)
+  const duplicate = await runner.fire('T', 'manual', { batchId: 'b-signal-001' })
+  assert.equal(duplicate.id, batch.id)
+  assert.equal([...store.s.batches.values()].filter(row => row.id === batch.id).length, 1)
+  runner.stop()
+})
+
 test('runner: dynamic rounds materialize DB rows only after planner decisions and gates never own runs', async () => {
   const { host, store, runner, root } = await setup({ graphMode: 'dynamic-rounds' })
   await writeFile(join(root, 'result.html'), '<h1>version 1</h1>')

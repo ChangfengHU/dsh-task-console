@@ -24,6 +24,36 @@ export interface Participant {
   brief?: string
 }
 
+/** A resource mentioned by one turn. It is evidence/search metadata, never the Task identity. */
+export interface TaskTarget {
+  kind: string
+  id: string
+  label?: string
+}
+
+/** Auditable provenance for a Task or one of its later turns. */
+export interface TaskOrigin {
+  source: string
+  signalId: string
+  incidentId?: string
+  intakeSessionId?: string
+  decision: 'create' | 'reuse'
+  reason?: string
+}
+
+/**
+ * One request attached to a durable Task. A reused Task gets a fresh Batch and
+ * a fresh turn, so neither its current objective nor its selected Agent team is
+ * accidentally inherited from the first incident that created the Task.
+ */
+export interface TaskTurn {
+  objective: string
+  participants: Participant[]
+  cwd?: string
+  targets?: TaskTarget[]
+  origin?: TaskOrigin
+}
+
 export interface TaskSpec {
   id: string
   title: string
@@ -40,6 +70,8 @@ export interface TaskSpec {
   maxTries: number
   enabled: boolean
   createdAt: string
+  /** Present when this durable Task was first materialized by Task Intake. */
+  origin?: TaskOrigin
 }
 
 export type BlockKind = 'needs_input' | 'dependency' | 'capability' | 'transient'
@@ -109,6 +141,8 @@ export interface Batch {
   firedAt: string
   by: 'cron' | 'manual' | 'retry'
   cardIds: string[]
+  /** The signal-specific request that caused this firing. */
+  turn?: TaskTurn
   settled?: { at: string; outcome: 'done' | 'failed' | 'cancelled' }
 }
 
@@ -140,7 +174,7 @@ export type Event =
   | { t: 'task/created'; at: string; taskId: string; task: TaskSpec }
   | { t: 'task/enabled'; at: string; taskId: string; enabled: boolean }
   | { t: 'task/deleted'; at: string; taskId: string }
-  | { t: 'batch/fired'; at: string; taskId: string; batch: { id: string; by: Batch['by']; cards: CardSeed[] } }
+  | { t: 'batch/fired'; at: string; taskId: string; batch: { id: string; by: Batch['by']; cards: CardSeed[]; turn?: TaskTurn } }
   | { t: 'card/created'; at: string; taskId: string; batchId: string; card: CardSeed }
   | { t: 'gate/opened'; at: string; taskId: string; cardId: string }
   | { t: 'card/ready'; at: string; taskId: string; cardId: string }
@@ -203,7 +237,7 @@ export function fold(events: Event[]): State {
         break
       }
       case 'batch/fired': {
-        s.batches.set(e.batch.id, { id: e.batch.id, taskId: e.taskId, firedAt: e.at, by: e.batch.by, cardIds: e.batch.cards.map(c => c.id) })
+        s.batches.set(e.batch.id, { id: e.batch.id, taskId: e.taskId, firedAt: e.at, by: e.batch.by, cardIds: e.batch.cards.map(c => c.id), ...(e.batch.turn ? { turn: e.batch.turn } : {}) })
         e.batch.cards.forEach((c, i) => s.cards.set(c.id, { ...c, id: c.id, batchId: e.batch.id, taskId: e.taskId, index: i, agentId: c.agentId, brief: c.brief, deps: c.deps, status: c.deps.length ? 'todo' : 'ready', runIds: [], consecutiveFailures: 0, blockRecurrences: 0 }))
         break
       }

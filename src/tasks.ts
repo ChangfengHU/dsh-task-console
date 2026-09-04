@@ -8,12 +8,12 @@
 import { mkdir, readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { fold, migrate, type Batch, type Card, type Event, type Participant, type State, type TaskSpec, type Trigger } from './fold.ts'
+import { fold, migrate, type Batch, type Card, type Event, type Participant, type State, type TaskSpec, type TaskTurn, type Trigger } from './fold.ts'
 import { HermesKernel, type ClaimResult } from './hermes-kernel.ts'
 import type { GraphEventRow, GraphLinkRow, GraphRunRow, GraphSnapshot, GraphTaskRow } from './graph-data.ts'
 
 export { actorOf, batchStatus, cardRun, describe, fold, foldTurns, migrate, readyCards, BLOCK_RECURRENCE_LIMIT } from './fold.ts'
-export type { Artifact, Batch, BlockKind, Card, CardStatus, Event, Participant, Run, RunOutcome, RunStatus, State, StepRow, TaskSpec, ToolRow, Trigger, TurnLedger, TurnRow } from './fold.ts'
+export type { Artifact, Batch, BlockKind, Card, CardStatus, Event, Participant, Run, RunOutcome, RunStatus, State, StepRow, TaskOrigin, TaskSpec, TaskTarget, TaskTurn, ToolRow, Trigger, TurnLedger, TurnRow } from './fold.ts'
 export { cronHuman, cronMatches, nextFire, parseCron, type Cron } from './cron.ts'
 import { parseCron } from './cron.ts'
 
@@ -83,7 +83,7 @@ export class EventStore {
       const specStmt = db.prepare(`INSERT OR REPLACE INTO dsh_task_specs(id, spec_json, enabled, created_at) VALUES (?, ?, ?, ?)`)
       for (const spec of st.tasks.values()) specStmt.run(spec.id, JSON.stringify(spec), spec.enabled ? 1 : 0, toEpoch(spec.createdAt))
 
-      const batchStmt = db.prepare(`INSERT OR REPLACE INTO dsh_batches(id, spec_id, fired_by, fired_at, settled_at, outcome) VALUES (?, ?, ?, ?, ?, ?)`)
+      const batchStmt = db.prepare(`INSERT OR REPLACE INTO dsh_batches(id, spec_id, fired_by, fired_at, settled_at, outcome, turn_json) VALUES (?, ?, ?, ?, ?, ?, ?)`)
       const cardStmt = db.prepare(`INSERT OR REPLACE INTO dsh_card_bindings(card_id, spec_id, batch_id, position, brief) VALUES (?, ?, ?, ?, ?)`)
       const taskStmt = db.prepare(`INSERT OR IGNORE INTO tasks(
         id, title, body, assignee, status, priority, created_by, created_at, started_at,
@@ -93,7 +93,7 @@ export class EventStore {
       for (const batch of st.batches.values()) {
         const spec = st.tasks.get(batch.taskId)
         if (!spec) continue
-        batchStmt.run(batch.id, spec.id, batch.by, toEpoch(batch.firedAt), batch.settled ? toEpoch(batch.settled.at) : null, batch.settled?.outcome ?? null)
+        batchStmt.run(batch.id, spec.id, batch.by, toEpoch(batch.firedAt), batch.settled ? toEpoch(batch.settled.at) : null, batch.settled?.outcome ?? null, batch.turn ? JSON.stringify(batch.turn) : null)
         for (const cardId of batch.cardIds) {
           const card = st.cards.get(cardId); if (!card) continue
           cardStmt.run(card.id, spec.id, batch.id, card.index, card.brief ?? null)
@@ -239,9 +239,10 @@ export class EventStore {
 
   /** Create executable Hermes rows for one DSH batch, then emit its UI event. */
   async createBatch(task: TaskSpec, event: Extract<Event, { t: 'batch/fired' }>): Promise<void> {
+    const execution = taskForTurn(task, event.batch.turn)
     this.kernel.write(() => {
       const db = this.kernel.db
-      db.prepare(`INSERT INTO dsh_batches(id, spec_id, fired_by, fired_at) VALUES (?, ?, ?, ?)`).run(event.batch.id, task.id, event.batch.by, toEpoch(event.at))
+      db.prepare(`INSERT INTO dsh_batches(id, spec_id, fired_by, fired_at, turn_json) VALUES (?, ?, ?, ?, ?)`).run(event.batch.id, task.id, event.batch.by, toEpoch(event.at), event.batch.turn ? JSON.stringify(event.batch.turn) : null)
       const insertedCards: string[] = []
       for (const [index, card] of event.batch.cards.entries()) {
         db.prepare(`INSERT INTO dsh_card_bindings(card_id, spec_id, batch_id, position, brief) VALUES (?, ?, ?, ?, ?)`).run(card.id, task.id, event.batch.id, index, card.brief ?? null)
@@ -249,12 +250,12 @@ export class EventStore {
         db.prepare(`INSERT INTO tasks(id, title, body, assignee, status, priority, created_by, created_at,
           workspace_kind, workspace_path, tenant, max_runtime_seconds, max_retries, node_kind, round, role)
           VALUES (?, ?, ?, ?, ?, ?, 'dsh-task-console', ?, 'dir', ?, ?, ?, ?, ?, ?, ?)`).run(
-          card.id, `${task.title} · ${card.agentId}`, [task.brief, card.brief].filter(Boolean).join('\n\n'), card.agentId,
-          status, index * -1, toEpoch(event.at), task.cwd, event.batch.id, task.timeoutSec, task.maxTries,
+          card.id, `${execution.title} · ${card.agentId}`, [execution.brief, card.brief].filter(Boolean).join('\n\n'), card.agentId,
+          status, index * -1, toEpoch(event.at), execution.cwd, event.batch.id, execution.timeoutSec, execution.maxTries,
           card.kind ?? 'agent', card.round ?? null, card.role ?? null,
         )
         const at = toEpoch(event.at)
-        db.prepare(`INSERT INTO task_events(task_id, kind, payload, created_at, graph_id) VALUES (?, 'created', ?, ?, ?)`).run(card.id, JSON.stringify({ title: `${task.title} · ${card.role ?? card.agentId}`, body: [task.brief, card.brief].filter(Boolean).join('\n\n'), assignee: card.agentId, status, parents: card.deps, tenant: event.batch.id, node_kind: card.kind ?? 'agent', round: card.round ?? null, role: card.role ?? null, created_at: at }), at, event.batch.id)
+        db.prepare(`INSERT INTO task_events(task_id, kind, payload, created_at, graph_id) VALUES (?, 'created', ?, ?, ?)`).run(card.id, JSON.stringify({ title: `${execution.title} · ${card.role ?? card.agentId}`, body: [execution.brief, card.brief].filter(Boolean).join('\n\n'), assignee: card.agentId, status, parents: card.deps, tenant: event.batch.id, node_kind: card.kind ?? 'agent', round: card.round ?? null, role: card.role ?? null, created_at: at }), at, event.batch.id)
         for (const parent of card.deps) {
           db.prepare(`INSERT INTO task_links(parent_id, child_id, kind, created_at) VALUES (?, ?, 'dependency', ?)`).run(parent, card.id, at)
           db.prepare(`INSERT INTO task_events(task_id, kind, payload, created_at, graph_id) VALUES (?, 'linked', ?, ?, ?)`).run(card.id, JSON.stringify({ parent_id: parent, kind: 'dependency' }), at, event.batch.id)
@@ -270,6 +271,7 @@ export class EventStore {
   /** Materialize one real rework round. Nothing is inferred by the browser. */
   async expandRound(task: TaskSpec, batch: Batch, planner: Card, summary: string): Promise<void> {
     if (task.graphMode !== 'dynamic-rounds' || planner.role !== 'planner' || !planner.round) throw new Error('只有动态回合的规划者能创建下一轮')
+    const execution = taskForBatch(task, batch)
     const round = planner.round
     const seeds: Extract<Event, { t: 'card/created' }>[] = []
     const next = this.queue.then(async () => {
@@ -281,19 +283,19 @@ export class EventStore {
         const atIso = new Date().toISOString(); const at = toEpoch(atIso)
         const rows = [
           { id: `${batch.id}#g${round}`, agentId: '__gate__', kind: 'gate' as const, role: 'gate' as const, round, deps: [planner.id], brief: `Round ${round} 放行闸门` },
-          { id: `${batch.id}#e${round}`, agentId: task.participants[1].agentId, kind: 'agent' as const, role: 'executor' as const, round, deps: [`${batch.id}#g${round}`], brief: task.participants[1].brief ?? `执行规划者给出的第 ${round} 轮方案。` },
-          { id: `${batch.id}#r${round}`, agentId: task.participants[2].agentId, kind: 'agent' as const, role: 'reviewer' as const, round, deps: [`${batch.id}#e${round}`], brief: task.participants[2].brief ?? `评估第 ${round} 轮结果，明确给出通过或返工依据。` },
-          { id: `${batch.id}#p${round + 1}`, agentId: task.participants[0].agentId, kind: 'agent' as const, role: 'planner' as const, round: round + 1, deps: [`${batch.id}#r${round}`], brief: task.participants[0].brief ?? `读取第 ${round} 轮评估，决定结束或创建第 ${round + 1} 轮。` },
+          { id: `${batch.id}#e${round}`, agentId: execution.participants[1].agentId, kind: 'agent' as const, role: 'executor' as const, round, deps: [`${batch.id}#g${round}`], brief: execution.participants[1].brief ?? `执行规划者给出的第 ${round} 轮方案。` },
+          { id: `${batch.id}#r${round}`, agentId: execution.participants[2].agentId, kind: 'agent' as const, role: 'reviewer' as const, round, deps: [`${batch.id}#e${round}`], brief: execution.participants[2].brief ?? `评估第 ${round} 轮结果，明确给出通过或返工依据。` },
+          { id: `${batch.id}#p${round + 1}`, agentId: execution.participants[0].agentId, kind: 'agent' as const, role: 'planner' as const, round: round + 1, deps: [`${batch.id}#r${round}`], brief: execution.participants[0].brief ?? `读取第 ${round} 轮评估，决定结束或创建第 ${round + 1} 轮。` },
         ]
         const position = Number((db.prepare('SELECT COALESCE(MAX(position), -1) AS n FROM dsh_card_bindings WHERE batch_id = ?').get(batch.id) as { n: number }).n) + 1
         for (const [offset, row] of rows.entries()) {
           const status = 'todo'
           const assignee = row.kind === 'gate' ? null : row.agentId
-          const title = `${task.title} · ${row.role} ${row.round}`
+          const title = `${execution.title} · ${row.role} ${row.round}`
           db.prepare(`INSERT INTO dsh_card_bindings(card_id, spec_id, batch_id, position, brief) VALUES (?, ?, ?, ?, ?)`).run(row.id, task.id, batch.id, position + offset, row.brief)
           db.prepare(`INSERT INTO tasks(id, title, body, assignee, status, priority, created_by, created_at, workspace_kind, workspace_path, tenant, max_runtime_seconds, max_retries, node_kind, round, role)
-            VALUES (?, ?, ?, ?, ?, ?, 'dsh-task-console', ?, 'dir', ?, ?, ?, ?, ?, ?, ?)`).run(row.id, title, [task.brief, row.brief, summary].filter(Boolean).join('\n\n'), assignee, status, -(position + offset), at, task.cwd, batch.id, task.timeoutSec, task.maxTries, row.kind, row.round, row.role)
-          db.prepare(`INSERT INTO task_events(task_id, kind, payload, created_at, graph_id) VALUES (?, 'created', ?, ?, ?)`).run(row.id, JSON.stringify({ title, body: [task.brief, row.brief].join('\n\n'), assignee, status, parents: row.deps, tenant: batch.id, node_kind: row.kind, round: row.round, role: row.role, created_at: at }), at, batch.id)
+            VALUES (?, ?, ?, ?, ?, ?, 'dsh-task-console', ?, 'dir', ?, ?, ?, ?, ?, ?, ?)`).run(row.id, title, [execution.brief, row.brief, summary].filter(Boolean).join('\n\n'), assignee, status, -(position + offset), at, execution.cwd, batch.id, execution.timeoutSec, execution.maxTries, row.kind, row.round, row.role)
+          db.prepare(`INSERT INTO task_events(task_id, kind, payload, created_at, graph_id) VALUES (?, 'created', ?, ?, ?)`).run(row.id, JSON.stringify({ title, body: [execution.brief, row.brief].join('\n\n'), assignee, status, parents: row.deps, tenant: batch.id, node_kind: row.kind, round: row.round, role: row.role, created_at: at }), at, batch.id)
           seeds.push({ t: 'card/created', at: atIso, taskId: task.id, batchId: batch.id, card: row })
         }
         for (const row of rows) for (const parent of row.deps) {
@@ -372,6 +374,21 @@ const coreStatus = (status: Card['status']): string => status === 'failed' ? 'bl
 const coreRunStatus = (status: string): string => status === 'cancelled' ? 'released' : status
 
 // ── the message a card receives ─────────────────────────────────────────
+
+/** Resolve the immutable Task template plus one signal-specific execution turn. */
+export function taskForTurn(task: TaskSpec, turn?: TaskTurn): TaskSpec {
+  if (!turn) return task
+  return {
+    ...task,
+    brief: turn.objective,
+    participants: turn.participants,
+    ...(turn.cwd ? { cwd: turn.cwd } : {}),
+  }
+}
+
+export function taskForBatch(task: TaskSpec, batch: Batch): TaskSpec {
+  return taskForTurn(task, batch.turn)
+}
 
 /** The one user message a card's session gets: brief, its part, the upstream handoffs, and the contract. */
 export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstream: { agentName: string; summary: string }[]): string {

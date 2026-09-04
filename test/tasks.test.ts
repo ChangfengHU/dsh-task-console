@@ -28,6 +28,18 @@ test('cardMessage carries the brief, the part, upstream summaries, and the contr
   assert.doesNotMatch(cardMessage(task, { ...card, index: 0, deps: [], brief: undefined }, 'b', []), /UPSTREAM|YOUR PART/)
 })
 
+test('a signal turn gives every card the real Task, Signal, Incident and target provenance', () => {
+  const turnTask: TaskSpec = {
+    ...task,
+    origin: { source: 'fleet-probe/synthetic', signalId: 'sig-real', incidentId: 'inc-real', decision: 'reuse' },
+    targets: [{ kind: 'synthetic-node', id: 'runner-loop', label: 'No machine' }],
+  }
+  const card: Card = { id: 'b#0', batchId: 'b', taskId: 'T-1', index: 0, agentId: 'installer', deps: [], status: 'ready', runIds: [], consecutiveFailures: 0, blockRecurrences: 0 }
+  const message = cardMessage(turnTask, card, 'b', [])
+  assert.match(message, /\[ORIGIN\]\ntask=T-1\nsource=fleet-probe\/synthetic\nsignal=sig-real\nincident=inc-real\ndecision=reuse/)
+  assert.match(message, /\[TARGETS — RESOURCE METADATA ONLY\]\nsynthetic-node:runner-loop \(No machine\)/)
+})
+
 test('validateTask fills defaults and rejects unknown agents', () => {
   const ids = new Set(['installer'])
   assert.throws(() => validateTask({ brief: '短' }, ids), /任务书/)

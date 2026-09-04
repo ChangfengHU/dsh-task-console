@@ -72,6 +72,8 @@ export interface TaskSpec {
   createdAt: string
   /** Present when this durable Task was first materialized by Task Intake. */
   origin?: TaskOrigin
+  /** Present only on the execution view for one signal-specific turn. */
+  targets?: TaskTarget[]
 }
 
 export type BlockKind = 'needs_input' | 'dependency' | 'capability' | 'transient'

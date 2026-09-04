@@ -383,6 +383,8 @@ export function taskForTurn(task: TaskSpec, turn?: TaskTurn): TaskSpec {
     brief: turn.objective,
     participants: turn.participants,
     ...(turn.cwd ? { cwd: turn.cwd } : {}),
+    ...(turn.origin ? { origin: turn.origin } : {}),
+    ...(turn.targets ? { targets: turn.targets } : {}),
   }
 }
 
@@ -393,6 +395,14 @@ export function taskForBatch(task: TaskSpec, batch: Batch): TaskSpec {
 /** The one user message a card's session gets: brief, its part, the upstream handoffs, and the contract. */
 export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstream: { agentName: string; summary: string }[]): string {
   const lines = [`# 任务:${task.title} · ${batchId} · 第 ${card.index + 1}/${task.participants.length} 张卡`, '', '[TASK]', task.brief.trim()]
+  if (task.origin) lines.push('', '[ORIGIN]', [
+    `task=${task.id}`,
+    `source=${task.origin.source}`,
+    `signal=${task.origin.signalId}`,
+    ...(task.origin.incidentId ? [`incident=${task.origin.incidentId}`] : []),
+    `decision=${task.origin.decision}`,
+  ].join('\n'))
+  if (task.targets?.length) lines.push('', '[TARGETS — RESOURCE METADATA ONLY]', task.targets.map(target => `${target.kind}:${target.id}${target.label ? ` (${target.label})` : ''}`).join('\n'))
   if (card.brief?.trim()) lines.push('', '[YOUR PART]', card.brief.trim())
   for (const u of upstream) lines.push('', `[UPSTREAM HANDOFF from ${u.agentName}]`, u.summary.trim() || '(上游没有留下交接单)')
   if (card.reviewNote?.trim()) lines.push('', '[REVIEW CHANGES]', card.reviewNote.trim())

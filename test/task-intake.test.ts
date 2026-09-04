@@ -125,6 +125,10 @@ test('Signal and decision validators reject credential-shaped facts and permissi
     schemaVersion: 1, id: 's', source: 'x', kind: 'incident', observedAt: new Date().toISOString(),
     goal: { title: 'ok', objective: 'long enough objective' }, facts: [{ name: 'api_token', value: 'leak' }],
   }), /不允许/)
+  assert.throws(() => validateTaskSignal({
+    schemaVersion: 1, id: 's2', source: 'x', kind: 'incident', observedAt: new Date().toISOString(),
+    goal: { title: 'ok', objective: 'Investigate failure with password=do-not-store-this.' }, facts: [],
+  }), /凭据/)
   const context = { policy: [], agents: roster, candidateTasks: [], recommendedTaskId: undefined }
   assert.throws(() => validateTaskIntakeDecision({ action: 'create', reason: 'valid reason', confidence: 1, title: 'x', workflow: 'dynamic-rounds', participants: [{ agentId: 'ghost', role: 'planner' }] }, context), /名册/)
 })

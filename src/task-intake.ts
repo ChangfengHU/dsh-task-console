@@ -14,6 +14,7 @@ import type { Participant, TaskOrigin, TaskSpec, TaskTarget, TaskTurn } from './
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/
 const SAFE_KIND = /^[a-z][a-z0-9._-]{0,63}$/
 const STATUSES = ['received', 'deciding', 'materializing', 'materialized', 'needs_triage', 'failed'] as const
+const SECRET_TEXT = /(?:\bauthorization\s*[:=]|\bbearer\s+[A-Za-z0-9._~+/-]{12,}|\b(?:pass(?:word|wd)?|secret|api[_ -]?key|private[_ -]?key)\s*[:=]\s*\S+|-----BEGIN [A-Z ]*PRIVATE KEY-----)/i
 
 export type TaskSignalStatus = typeof STATUSES[number]
 
@@ -121,6 +122,10 @@ export interface TaskIntakeOptions {
 }
 
 const oneLine = (value: unknown, maximum: number) => String(value ?? '').trim().replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').slice(0, maximum)
+const noSecretText = (value: string, field: string): string => {
+  if (SECRET_TEXT.test(value)) throw new Error(`${field} 不允许包含凭据`)
+  return value
+}
 const iso = (value: unknown) => {
   const parsed = Date.parse(String(value ?? ''))
   if (!Number.isFinite(parsed)) throw new Error('observedAt 必须是 ISO 时间')
@@ -145,8 +150,8 @@ export function validateTaskSignal(raw: unknown): TaskSignal {
   const goalRaw = input.goal
   if (!goalRaw || typeof goalRaw !== 'object' || Array.isArray(goalRaw)) throw new Error('goal 必填')
   const goalInput = goalRaw as Record<string, unknown>
-  const title = oneLine(goalInput.title, 120)
-  const objective = String(goalInput.objective ?? '').trim().slice(0, 12_000)
+  const title = noSecretText(oneLine(goalInput.title, 120), 'goal.title')
+  const objective = noSecretText(String(goalInput.objective ?? '').trim().slice(0, 12_000), 'goal.objective')
   if (title.length < 2) throw new Error('goal.title 至少 2 个字符')
   if (objective.length < 8) throw new Error('goal.objective 至少 8 个字符')
   const goalKey = oneLine(goalInput.key, 160)
@@ -162,7 +167,7 @@ export function validateTaskSignal(raw: unknown): TaskSignal {
       faultKind,
       state: oneLine(value.state, 40) || 'confirmed',
       ...(oneLine(value.severity, 24) ? { severity: oneLine(value.severity, 24) } : {}),
-      ...(oneLine(value.summary, 1_000) ? { summary: oneLine(value.summary, 1_000) } : {}),
+      ...(oneLine(value.summary, 1_000) ? { summary: noSecretText(oneLine(value.summary, 1_000), 'incident.summary') } : {}),
     }
   }
   const targets = (Array.isArray(input.targets) ? input.targets : []).slice(0, 32).map((rawTarget, index) => {
@@ -172,7 +177,7 @@ export function validateTaskSignal(raw: unknown): TaskSignal {
     if (!SAFE_KIND.test(targetKind)) throw new Error(`targets[${index}].kind 不合法`)
     return { kind: targetKind, id: stringId(target.id, `targets[${index}].id`), ...(oneLine(target.label, 120) ? { label: oneLine(target.label, 120) } : {}) }
   })
-  const constraints = [...new Set((Array.isArray(input.constraints) ? input.constraints : []).map(value => oneLine(value, 300)).filter(Boolean))].slice(0, 32)
+  const constraints = [...new Set((Array.isArray(input.constraints) ? input.constraints : []).map((value, index) => noSecretText(oneLine(value, 300), `constraints[${index}]`)).filter(Boolean))].slice(0, 32)
   const facts = (Array.isArray(input.facts) ? input.facts : []).slice(0, 64).map((rawFact, index) => {
     if (!rawFact || typeof rawFact !== 'object' || Array.isArray(rawFact)) throw new Error(`facts[${index}] 不合法`)
     const fact = rawFact as Record<string, unknown>
@@ -180,7 +185,7 @@ export function validateTaskSignal(raw: unknown): TaskSignal {
     if (!name || /pass(word)?|secret|token|authorization|cookie|private.?key/i.test(name)) throw new Error(`facts[${index}].name 不允许`) 
     const candidate = fact.value
     if (candidate !== null && !['string', 'number', 'boolean'].includes(typeof candidate)) throw new Error(`facts[${index}].value 只允许标量`)
-    return { name, value: typeof candidate === 'string' ? oneLine(candidate, 1_000) : candidate as number | boolean | null }
+    return { name, value: typeof candidate === 'string' ? noSecretText(oneLine(candidate, 1_000), `facts[${index}].value`) : candidate as number | boolean | null }
   })
   return {
     schemaVersion: 1,

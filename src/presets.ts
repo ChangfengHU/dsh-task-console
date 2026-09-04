@@ -69,6 +69,9 @@ export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: s
 /** Tools that make an agent "可写" rather than merely "受限可写". */
 const DANGEROUS = new Set(['bash', 'fs', 'str-replace-editor'])
 
+/** Session-local tools registered only by the managed Task Intake coordinator. */
+const TASK_INTAKE_SESSION_TOOLS = ['task_intake_context', 'task_intake_decide'] as const
+
 /** Where a person's own presets live (dsh derives the same root). */
 export function userPresetRoot(home = homedir()): string {
   return join(process.env.DSH_HOME ?? join(home, '.dsh'), '.agent-presets')
@@ -197,6 +200,7 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
   // the runner registers them inside a task-owned session.
   void inheritedTools // retained as an API-compatible argument for older callers
   for (const name of WORKER_TOOL_NAMES) allowedToolNames.add(name)
+  if (spec.id === 'task-intake') for (const name of TASK_INTAKE_SESSION_TOOLS) allowedToolNames.add(name)
   const fence = toYaml({ selected: [...allowedToolNames].sort() }, { lineWidth: 0 }).trimEnd()
   parts.push(`- id: inherited-tool-fence\n  name: 'dsh-task-console/agent-tool-fence'\n  config:\n${indent(fence, 4)}`)
 

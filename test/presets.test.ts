@@ -56,6 +56,14 @@ test('the inherited fence admits exactly the selected preset tools', () => {
   assert.doesNotMatch(fence, /publish_public_html/)
 })
 
+test('only the managed Task Agent fence admits its session-local intake tools', () => {
+  const ordinary = renderComposition({ ...base, tools: [], mcpTools: {}, mcpPolicy: {}, skills: [] }, []).yml
+  const intake = renderComposition({ ...base, id: 'task-intake', tools: [], mcpTools: {}, mcpPolicy: {}, skills: [] }, []).yml
+  assert.doesNotMatch(ordinary, /task_intake_context|task_intake_decide/)
+  assert.match(intake, /task_intake_context/)
+  assert.match(intake, /task_intake_decide/)
+})
+
 test('permission is derived from tools, not declared', () => {
   const f = () => false
   assert.equal(permissionOf({ tools: ['ask-user'], mcpTools: {} }, f), 'read-only')

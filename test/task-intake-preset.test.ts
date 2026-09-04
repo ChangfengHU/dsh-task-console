@@ -10,7 +10,7 @@ test('managed Task Agent has no business execution capability', async () => {
   assert.deepEqual(spec.mcpTools, {})
   assert.deepEqual(spec.skills, [])
   assert.equal(spec.permissionPreset, 'workspace-write')
-  assert.equal(spec.model, 'llm-deepseek/qwen-plus-latest')
+  assert.equal(spec.model, 'codex-local/gpt-5.6-terra')
   assert.match(spec.persona, /不执行修复/)
   assert.match(spec.persona, /IP、机器、账号.*Task 身份/)
 })

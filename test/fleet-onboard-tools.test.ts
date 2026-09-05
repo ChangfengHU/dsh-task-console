@@ -549,8 +549,28 @@ test('Cloud disabled status becomes a needs-user blocker and never passes the st
   assert.equal(value.phase, 'blocked')
   assert.equal(value.reason, 'fleet-machine-disabled')
   assert.equal(value.needs_input, true)
+  const status = await adapter.status(IP, execution(`检查 ${IP}`))
+  assert.equal(status.needs_input, true)
+  assert.equal(status.can_resume, false)
   const stage = ledger.calls.filter(call => call.tool === 'onboard_record' && call.args.evidence.stage === 5)
   assert.deepEqual(stage.map(call => call.args.evidence.status), ['running', 'blocked'])
+})
+
+test('repairable blocked state exposes resume without overriding needs-user or fatal gates', async t => {
+  const files = await fixtureFiles()
+  const ledger = await ledgerFixture(files.log)
+  t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
+  const cloud: FleetOnboardCloudTransport = {
+    async execute() { return { status: 'blocked', action: null, resultCode: 'machine-browser-preservation-failed' } },
+  }
+  const adapter = await createAdapter(files, ledger, { vaultAvailable: true, healthyThrough: 6, executorAvailable: true, cloud })
+  const exec = execution(`修复 ${IP}`)
+  const started = await adapter.start(IP, 'base', exec)
+  assert.equal(started.phase, 'blocked')
+  const status = await adapter.status(IP, exec)
+  assert.equal(status.needs_input, false)
+  assert.equal(status.can_resume, true)
+  assert.equal(status.next_tool, 'fleet_onboard_resume')
 })
 
 test('resume polls a running Cloud stage with the same durable operation id and ledger attempt', async t => {

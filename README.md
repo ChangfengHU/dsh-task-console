@@ -130,3 +130,7 @@ must submit a new Signal for fresh intent/team validation, retaining the previou
 
 The lazy client asset URL includes the SHA256 of the exact built bundle, not only the package
 version. Rebuilding a candidate version cannot serve its previously cached UI to the new entry.
+
+Resume eligibility for a blocked transaction comes from the latest stage's failure class, not
+from the word `blocked` alone: repairable can resume, needs-user/fatal cannot. An unknown class
+is not an affirmative recovery permission. Status preserves needs-input from the stage evidence.

@@ -1047,11 +1047,11 @@ function isHostStage(stage: number): stage is 2 | 4 | 9 {
   return stage === 2 || stage === 4 || stage === 9
 }
 
-function continuation(phase: string, executionAvailable: boolean): Record<string, unknown> {
-  return phase === 'running' && executionAvailable
+function continuation(phase: string, executionAvailable: boolean, failureClass?: unknown): Record<string, unknown> {
+  return executionAvailable && (phase === 'running' || (phase === 'blocked' && failureClass === 'repairable'))
     ? { can_resume: true, next_tool: 'fleet_onboard_resume', task_complete_allowed: false,
       next_action: 'Continue the same transaction with fleet_onboard_resume. status/report only read the ledger; they do not poll or advance the durable operation. Do not complete the Task while running.' }
-    : { can_resume: false }
+    : phase === 'blocked' && executionAvailable && failureClass === undefined ? {} : { can_resume: false }
 }
 
 function projectLedger(operation: 'status' | 'report', ip: string, value: FleetLedgerStatus, executionAvailable: boolean): FleetToolResult {
@@ -1065,11 +1065,12 @@ function projectLedger(operation: 'status' | 'report', ip: string, value: FleetL
   const events = (value.events ?? []).map(row => ({
     id: Number(row.id), at: row.at ?? null, kind: row.kind, stage: row.stage ?? null, status: row.status ?? null,
   }))
+  const latest = [...stages].sort((a, b) => b.stage - a.stage || b.attempt - a.attempt)[0]
   const result: FleetToolResult = {
     schema: 1, ok: true, operation, ip, phase: run.status, execution_available: executionAvailable,
-    needs_input: false, run_created: false, probe_executed: false, run_id: run.id,
+    needs_input: run.status === 'blocked' && latest?.failure_class === 'needs-user', run_created: false, probe_executed: false, run_id: run.id,
     revision: run.revision, current_stage: run.currentStage, stages, events,
-    ...continuation(run.status, executionAvailable),
+    ...continuation(run.status, executionAvailable, latest?.failure_class),
   }
   if (operation === 'report') {
     result.report_available = Boolean(run.report)

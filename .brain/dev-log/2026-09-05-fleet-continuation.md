@@ -11,3 +11,6 @@
 - Browser acceptance exposed an older immutable heavy bundle cached under the same candidate
   version. Version 0.22.5 includes the actual heavy-asset SHA256 in the loader URL; this keeps lazy
   loading while preventing a rebuilt version from showing the previous UI.
+- Version 0.22.6 derives blocked resume eligibility from the latest failure class. The initial
+  running-only hint incorrectly presented every blocked state as unresumable; regression tests
+  now separate repairable from needs-user/fatal without bypassing the runtime's fresh probe/CAS.

@@ -132,3 +132,18 @@ test('Signal and decision validators reject credential-shaped facts and permissi
   const context = { policy: [], agents: roster, candidateTasks: [], recommendedTaskId: undefined }
   assert.throws(() => validateTaskIntakeDecision({ action: 'create', reason: 'valid reason', confidence: 1, title: 'x', workflow: 'dynamic-rounds', participants: [{ agentId: 'ghost', role: 'planner' }] }, context), /名册/)
 })
+
+test('executor capabilities are enforced by actual tool schemas, never a broad role description', () => {
+  const participants = [{agentId:'a',role:'planner'},{agentId:'b',role:'executor'},{agentId:'c',role:'reviewer'}]
+  const decision = {action:'create',title:'Restore Runner coverage',reason:'Use a released bounded deployment tool',confidence:1,workflow:'dynamic-rounds',participants}
+  const context = {policy:[],agents:roster,candidateTasks:[],requiredExecutorTools:['fleet_runner_ensure','fleet_runner_status']}
+  assert.throws(()=>validateTaskIntakeDecision(decision,context),/实际工具/)
+  const narrow=structuredClone(roster);narrow[1].description='Fleet runtime with all powers';narrow[1].toolSchemas=['fleet_onboard_start','fleet_onboard_status']
+  assert.throws(()=>validateTaskIntakeDecision(decision,{...context,agents:narrow}),/实际工具/)
+  narrow[1].toolSchemas=['fleet_runner_ensure','fleet_runner_status']
+  assert.equal(validateTaskIntakeDecision(decision,{...context,agents:narrow}).action,'create')
+  assert.equal(validateTaskIntakeDecision({action:'triage',reason:'No exact deployment tool exists',confidence:1},context).action,'triage')
+  const incoming=signal('sig-tools','inc-tools');incoming.requiredExecutorTools=context.requiredExecutorTools
+  assert.deepEqual(validateTaskSignal(incoming).requiredExecutorTools,context.requiredExecutorTools)
+  assert.throws(()=>validateTaskSignal({...incoming,requiredExecutorTools:['bash; ssh anything']}),/requiredExecutorTools/)
+})

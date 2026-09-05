@@ -61,9 +61,17 @@ export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: s
     schemaNames: ['todo_write'],
     rows: "- id: tool-todo\n  name: '@deepseek-ai/dsh-tool-todo'\n  config:\n    allowParallelInProgress: true" },
   { id: 'fleet-onboard-runtime', label: 'Fleet onboard runtime', group: 'Fleet', writes: true,
-    description: '确定性的节点评估、事务恢复与报告；不向模型暴露任意 shell。',
+    description: '仅基础节点接入、Clash/浏览器/VNC 修复与报告。不能部署 Fleet Probe Runner，不能用于 Runner 专项任务。',
     schemaNames: ['fleet_onboard_start', 'fleet_onboard_status', 'fleet_onboard_resume', 'fleet_onboard_report'],
     rows: "- id: fleet-onboard-runtime\n  name: 'dsh-task-console/fleet-onboard-tools'" },
+  { id: 'fleet-runner-runtime', label: 'Fleet Runner operations', group: 'Fleet', writes: true,
+    description: '仅检查、幂等部署/恢复 Fleet Probe Runner 并验收签名作业。不会修改 Clash、浏览器、账户或站点登录。',
+    schemaNames: ['fleet_runner_inspect', 'fleet_runner_ensure', 'fleet_runner_status', 'fleet_runner_cancel'],
+    rows: "- id: fleet-runner-runtime\n  name: 'dsh-task-console/fleet-runner-tools'" },
+  { id: 'fleet-runner-read', label: 'Fleet Runner inspection', group: 'Fleet', writes: false,
+    description: 'Runner 只读检查和脱敏部署报告；没有安装、重启、注册或取消工具。',
+    schemaNames: ['fleet_runner_inspect','fleet_runner_status'],
+    rows: "- id: fleet-runner-read\n  name: 'dsh-task-console/fleet-runner-tools'\n  config:\n    readOnly: true" },
 ]
 
 /** Tools that make an agent "可写" rather than merely "受限可写". */

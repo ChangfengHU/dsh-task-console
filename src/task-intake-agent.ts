@@ -140,6 +140,7 @@ export async function decideTaskSignalWithAgent(
       '[HARD BOUNDARY]',
       '- Task 身份是长期目标/根因，不是 IP、机器、账号或其他 target。',
       '- 只能选择 context 返回的 Agent；不得申请、推测或扩展它们的权限。',
+      '- requiredExecutorTools 是执行前硬条件：执行者必须具备其中所有实际工具。只凭名称/描述相关不代表具备能力；缺少则 triage，不准试调用另一类事务。',
       '- create/reuse 时，涉及实现或恢复的工作优先使用 dynamic-rounds，并按 planner → executor → reviewer 顺序提交三个不同 Agent。',
       '- 证据不足以安全合并时选择 triage。',
     ].join('\n')

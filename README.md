@@ -15,6 +15,18 @@ npm run preset:intake
 
 The managed Task Agent has zero business tools, zero MCP access, and zero Skills. It can only read one frozen routing context and submit one validated decision; it cannot execute the requested work or enlarge a selected Agent's permissions.
 
+Signals may also declare `requiredExecutorTools`: exact tool names, not an Agent selection. The
+host validates that the selected executor actually exposes every required schema before any Task
+is started. The roster includes expanded native tool names and descriptions. A generic Fleet label,
+base onboarding tool, or arbitrary shell is not a substitute for a Runner deployment capability.
+
+Runner deployment is provided by `fleet-probe-runner/operator`, not by the onboarding runtime.
+`node scripts/install-runner-presets.mjs` installs the bounded Runner operator and read-only reviewer
+after building. The DSH adapter takes only an IP and tracks real asynchronous stages; it exposes no
+credentials or arbitrary commands. The operator root is host configuration, and absence fails closed.
+Task cancellation stops only session-owned host operations; external state must be inspected before
+retry. Ordinary onboarding and coding Agents retain their existing permissions.
+
 Per-Agent DSH session permission presets remain tool-granular. `workspace-write` is the safe default; trusted system operators such as `装机者` can pin `danger-full-access`, and the plugin writes that sandbox/approval bundle before the first user message is dispatched. A missing permission service fails closed. The inherited-tool fence hides every currently unselected host schema and guards later registrations, while preserving the preset's exact native/runtime/MCP/Skill capabilities.
 
 Native and MCP tools still live in one capability matrix; MCP servers are only grouping labels, while each advertised tool is independently selectable. Generated presets deny the complete live inherited host surface (including host tools added after the preset was saved), then merge only their own native/runtime/Skill registrations and chosen MCP definitions. Filtered MCP presets persist a host entry reference rather than copying its URL or authorization headers, and may enforce per-tool argument policies such as required arguments, key prefixes, and Fleet hostname patterns. A real try-run reports the exact request header and uses the same session permission path as a normal Agent chat.

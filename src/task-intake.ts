@@ -34,6 +34,7 @@ export interface TaskSignal {
   targets: TaskTarget[]
   constraints: string[]
   facts: TaskSignalFact[]
+  requiredExecutorTools?: string[]
 }
 
 export interface IntakeAgent {
@@ -45,6 +46,8 @@ export interface IntakeAgent {
   tools: string[]
   mcpTools: Record<string, string[]>
   skills: string[]
+  toolSchemas?: string[]
+  toolDescriptions?: Record<string, string>
 }
 
 export interface IntakeTaskCandidate {
@@ -65,6 +68,7 @@ export interface TaskIntakeContext {
   agents: IntakeAgent[]
   candidateTasks: IntakeTaskCandidate[]
   recommendedTaskId?: string
+  requiredExecutorTools?: string[]
 }
 
 export interface DecisionParticipant extends Participant {
@@ -142,6 +146,8 @@ function stringId(value: unknown, field: string): string {
 export function validateTaskSignal(raw: unknown): TaskSignal {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('signal 必须是对象')
   const input = raw as Record<string, unknown>
+  const requiredExecutorTools = input.requiredExecutorTools === undefined ? undefined : input.requiredExecutorTools
+  if (requiredExecutorTools !== undefined && (!Array.isArray(requiredExecutorTools) || requiredExecutorTools.length > 32 || requiredExecutorTools.some(x => typeof x !== 'string' || !/^[A-Za-z][A-Za-z0-9_:-]{0,159}$/.test(x)))) throw new Error('requiredExecutorTools 必须是明确的工具名称列表')
   if (Number(input.schemaVersion) !== 1) throw new Error('只支持 Task Signal schemaVersion=1')
   const source = oneLine(input.source, 120)
   if (!source) throw new Error('source 必填')
@@ -198,6 +204,7 @@ export function validateTaskSignal(raw: unknown): TaskSignal {
     targets,
     constraints,
     facts,
+    ...(requiredExecutorTools ? { requiredExecutorTools: [...new Set(requiredExecutorTools as string[])] } : {}),
   }
 }
 
@@ -226,6 +233,13 @@ export function validateTaskIntakeDecision(raw: unknown, context: TaskIntakeCont
   if (workflow === 'dynamic-rounds') {
     const expected = ['planner', 'executor', 'reviewer']
     if (participants.length !== 3 || participants.some((row, index) => row.role !== expected[index])) throw new Error('动态回合必须依次选择 planner、executor、reviewer')
+  }
+  if (context.requiredExecutorTools?.length) {
+    const executors = participants.filter(row => row.role === 'executor' || row.role === 'worker')
+    if (!executors.some(row => {
+      const agent = context.agents.find(agent => agent.id === row.agentId)!
+      return context.requiredExecutorTools!.every(tool => agent.toolSchemas?.includes(tool))
+    })) throw new Error('执行者不具备所需的实际工具；请选择有能力的 Agent，或 triage。不得以基础装机或通用 shell 替代受限工具。')
   }
   const objective = String(input.objective ?? '').trim().slice(0, 12_000)
   if (objective && objective.length < 8) throw new Error('objective 至少 8 个字符')
@@ -422,6 +436,7 @@ export class TaskIntakeCoordinator {
         'When evidence is insufficient, choose triage instead of silently merging unrelated work.',
       ],
       agents: usable,
+      ...(signal.requiredExecutorTools?.length ? { requiredExecutorTools: signal.requiredExecutorTools } : {}),
       candidateTasks: candidates.slice(0, 20),
       ...(recommendedTaskId ? { recommendedTaskId } : {}),
     }

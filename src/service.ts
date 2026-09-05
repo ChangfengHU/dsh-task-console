@@ -139,6 +139,8 @@ export class TaskConsoleService extends TypertRemoteService {
       rows.push({
         id: spec.id, name: spec.name, description: spec.description, model: spec.model,
         permission: spec.permissionPreset, tools: spec.tools, mcpTools: spec.mcpTools, skills: spec.skills,
+        toolSchemas: spec.tools.flatMap(id => NATIVE_TOOLS.find(t => t.id === id)?.schemaNames ?? []).concat(Object.entries(spec.mcpTools).flatMap(([server, tools]) => tools.filter(t => t !== '*').map(t => `mcp__${server}__${t}`))),
+        toolDescriptions: Object.fromEntries(spec.tools.flatMap(id => { const tool = NATIVE_TOOLS.find(t => t.id === id); return tool ? tool.schemaNames.map(name => [name, tool.description]) : [] })),
       })
       this.runner.rememberName(spec.id, spec.name)
     }

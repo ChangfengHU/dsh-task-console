@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-console",
-  "version": "0.21.1",
+  "version": "0.22.0",
   "description": "Local-first Agent presets and task orchestration for DeepSeek Harness, backed by SQLite.",
   "license": "MIT",
   "type": "module",
@@ -23,6 +23,9 @@
     },
     "./fleet-onboard-tools": {
       "default": "./lib/fleet-onboard-tools.js"
+    },
+    "./fleet-runner-tools": {
+      "default": "./lib/fleet-runner-tools.js"
     },
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"

@@ -1047,6 +1047,13 @@ function isHostStage(stage: number): stage is 2 | 4 | 9 {
   return stage === 2 || stage === 4 || stage === 9
 }
 
+function continuation(phase: string, executionAvailable: boolean): Record<string, unknown> {
+  return phase === 'running' && executionAvailable
+    ? { can_resume: true, next_tool: 'fleet_onboard_resume', task_complete_allowed: false,
+      next_action: 'Continue the same transaction with fleet_onboard_resume. status/report only read the ledger; they do not poll or advance the durable operation. Do not complete the Task while running.' }
+    : { can_resume: false }
+}
+
 function projectLedger(operation: 'status' | 'report', ip: string, value: FleetLedgerStatus, executionAvailable: boolean): FleetToolResult {
   if (!value.ok || !value.run) return { ...blockedResult(operation, ip, 'onboarding-run-not-found'), execution_available: executionAvailable }
   const run = value.run
@@ -1062,6 +1069,7 @@ function projectLedger(operation: 'status' | 'report', ip: string, value: FleetL
     schema: 1, ok: true, operation, ip, phase: run.status, execution_available: executionAvailable,
     needs_input: false, run_created: false, probe_executed: false, run_id: run.id,
     revision: run.revision, current_stage: run.currentStage, stages, events,
+    ...continuation(run.status, executionAvailable),
   }
   if (operation === 'report') {
     result.report_available = Boolean(run.report)
@@ -1336,13 +1344,16 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
           }, exec.signal)
           if (!response.ok || !response.run) throw new Error('ledger-start-failed')
           created = response.created === true
-          run = checkedRun(response.run, this.config, ip, sessionId)
+          // An idempotent start may return the previous session's run. Verify its
+          // prior identity first; only the subsequent scoped CAS resume transfers it.
+          if (!created && (!prior.run || response.run.id !== prior.run.id)) throw new Error('ledger-prior-run-mismatch')
+          run = checkedRun(response.run, this.config, ip, created ? sessionId : prior.run!.sessionId)
           assertRunBinding(run, inventory, this.config)
           if (created) assertLeaseOwner(run, this.config)
           status = created ? { ok: true, run, stages: [], events: [] } : await this.config.ledger!.status({ runId: run.id }, exec.signal)
           if (!created) {
             if (!status.ok || !status.run) throw new Error('ledger-status-failed')
-            const observedRun = checkedRun(status.run, this.config, ip, sessionId)
+            const observedRun = checkedRun(status.run, this.config, ip, run.sessionId)
             if (observedRun.id !== run.id || observedRun.revision !== run.revision
               || observedRun.leaseEpoch !== run.leaseEpoch || observedRun.writeChallenge !== run.writeChallenge) {
               throw new Error('ledger-start-status-mismatch')
@@ -1402,6 +1413,7 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
           execution_available: this.executionAvailable, needs_input: driven.needsInput === true, run_created: operation === 'start' && created,
           probe_executed: true, run_id: run.id, revision: run.revision, current_stage: run.currentStage,
           report_available: Boolean(run.report), ...(driven.reason ? { reason: driven.reason } : {}),
+          ...continuation(run.status, this.executionAvailable),
         }
         assertNoSecrets(result, 'tool-result')
         return result
@@ -1507,14 +1519,14 @@ export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardH
     }, ['ip'])),
     register(strictTool(defineTool, {
       name: 'fleet_onboard_status',
-      description: '读取一个 Fleet 接入事务的当前状态，不连接目标机。',
+      description: '只读取 Fleet 接入事务账本，不连接目标机也不推进执行。running 且 can_resume=true 时，执行者必须调用 fleet_onboard_resume，不能交付为完成。',
       parameters: { ip: { type: 'string', required: true, description: '完整 IPv4 地址。' } },
       output: { schema: OUTPUT_SCHEMA, render },
       async execute(args: any, exec: ToolExecutionLike) { return adapter.status(requireIp(args.ip), exec) },
     }, ['ip'])),
     register(strictTool(defineTool, {
       name: 'fleet_onboard_resume',
-      description: '按宿主持久状态恢复一个可恢复的 Fleet 接入事务。',
+      description: '继续 running 或可恢复的 Fleet 事务：复用持久 operation ID 轮询并推进下一阶段；跨会话通过 CAS 接续，不能改用 status 代替执行。',
       parameters: {
         ip: { type: 'string', required: true, description: '完整 IPv4 地址。' },
       },

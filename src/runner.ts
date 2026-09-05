@@ -210,6 +210,9 @@ export class TaskRunner {
       if (existing.taskId !== taskId) throw new Error('batchId 已被其他任务使用')
       return existing
     }
+    if (!options.turn && (template.origin?.signalId || [...this.store.s.batches.values()].some(b => b.taskId === taskId && b.turn?.origin?.signalId))) {
+      throw new Error('外部 Signal 任务请从来源系统重新提交，由 Task Agent 重新核对目标与角色；不能重跑旧模板。')
+    }
     if (task.graphMode === 'dynamic-rounds' && task.participants.length !== 3) throw new Error('动态回合必须有规划者、执行者、评估者')
     const cards = task.graphMode === 'dynamic-rounds'
       ? [{ id: `${batchId}#p1`, agentId: task.participants[0].agentId, ...(task.participants[0].brief ? { brief: task.participants[0].brief } : {}), deps: [], kind: 'agent' as const, role: 'planner' as const, round: 1 }]

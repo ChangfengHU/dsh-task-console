@@ -86,6 +86,8 @@ test('runner: one reused Task fires a signal-specific turn with a new objective 
   const duplicate = await runner.fire('T', 'manual', { batchId: 'b-signal-001' })
   assert.equal(duplicate.id, batch.id)
   assert.equal([...store.s.batches.values()].filter(row => row.id === batch.id).length, 1)
+  await assert.rejects(() => runner.fire('T', 'retry'), /外部 Signal/)
+  assert.equal(store.s.batches.size, 1, 'manual retry cannot dispatch the original template team')
   runner.stop()
 })
 

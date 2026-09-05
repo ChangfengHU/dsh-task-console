@@ -67,6 +67,11 @@ test('Task Intake is idempotent and reuses one goal Task for later Turns of the 
   assert.equal(first.decision?.action, 'create')
   assert.equal(f.runner.store.s.tasks.size, 1)
   assert.equal(f.runner.store.s.batches.get(first.batchId!)?.turn?.origin?.signalId, 'sig-001')
+  const firstCard = f.runner.store.s.cards.get(f.runner.store.s.batches.get(first.batchId!)!.cardIds[0])!
+  const priorStatus = firstCard.status
+  firstCard.status = 'blocked'
+  assert.equal(f.intake.get(firstSignal.id)?.runState, 'blocked', 'a blocked card is not active execution')
+  firstCard.status = priorStatus
 
   const secondSignal = signal('sig-002', 'inc-001', 'Continue the same incident with fresh evidence and a new Turn objective.')
   await f.intake.submit(secondSignal)

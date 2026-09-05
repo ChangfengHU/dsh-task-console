@@ -102,7 +102,7 @@ export interface TaskSignalView {
   taskId?: string
   batchId?: string
   error?: string
-  runState?: 'active' | 'done' | 'failed' | 'missing'
+  runState?: 'active' | 'blocked' | 'done' | 'failed' | 'missing'
 }
 
 interface SignalRow {
@@ -451,7 +451,9 @@ export class TaskIntakeCoordinator {
 
   private view(row: SignalRow): TaskSignalView {
     const batch = row.batch_id ? this.runner.store.s.batches.get(row.batch_id) : undefined
-    const runState = !row.batch_id ? undefined : !batch ? 'missing' : !batch.settled ? 'active' : batch.settled.outcome === 'done' ? 'done' : 'failed'
+    const cards = batch?.cardIds.map(id => this.runner.store.s.cards.get(id)) ?? []
+    const blocked = cards.some(card => card?.status === 'blocked') && !cards.some(card => card?.status === 'running')
+    const runState = !row.batch_id ? undefined : !batch ? 'missing' : !batch.settled ? (blocked ? 'blocked' : 'active') : batch.settled.outcome === 'done' ? 'done' : 'failed'
     return {
       signal: parseJson(row.signal_json, {} as TaskSignal), status: row.status,
       receivedAt: new Date(row.received_at * 1000).toISOString(), updatedAt: new Date(row.updated_at * 1000).toISOString(),

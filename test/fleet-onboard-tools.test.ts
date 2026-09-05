@@ -390,6 +390,28 @@ test('Vault lease, signed probe, scoped central CAS receipts and retry remain se
   }
 })
 
+test('idempotent start from a new DSH session adopts only the verified prior run through scoped CAS', async t => {
+  const files = await fixtureFiles()
+  const ledger = await ledgerFixture(files.log)
+  t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
+  const adapter = await createAdapter(files, ledger, { vaultAvailable: true, healthyThrough: 1 })
+  const first = await adapter.start(IP, 'base', execution(`Check ${IP}`, true))
+  assert.equal(first.reason, 'executor-not-configured')
+  const priorRecords = ledger.calls.filter(call => call.tool === 'onboard_record')
+  assert.equal(priorRecords[0].args.evidence.sessionId, 'session-from-header')
+  const second = await adapter.start(IP, 'base', execution(`Continue ${IP}`))
+  assert.equal(second.reason, 'executor-not-configured')
+  assert.equal(second.run_created, false)
+  assert.equal(second.run_id, first.run_id)
+  const resume = ledger.calls.find(call => call.tool === 'onboard_resume')!
+  assert.equal(resume.scope, 'executor')
+  assert.equal(resume.args.sessionId, 'session-fleet-fixture')
+  const nextRecords = ledger.calls.filter(call => call.tool === 'onboard_record').slice(priorRecords.length)
+  assert.ok(nextRecords.length)
+  assert.ok(nextRecords.every(call => call.args.evidence.sessionId === 'session-fleet-fixture'))
+  assert.equal(JSON.stringify(second).includes(CANARY), false)
+})
+
 test('invalid physical-host fingerprint fails before central start and runtime assessment', async t => {
   const files = await fixtureFiles()
   const ledger = await ledgerFixture(files.log)
@@ -546,7 +568,15 @@ test('resume polls a running Cloud stage with the same durable operation id and 
     vaultAvailable: true, healthyThrough: 4, executorAvailable: true, cloud,
   })
   const exec = execution(`修复 ${IP}`)
-  assert.equal((await adapter.start(IP, 'base', exec)).reason, 'operation-still-running')
+  const started = await adapter.start(IP, 'base', exec)
+  assert.equal(started.reason, 'operation-still-running')
+  assert.equal(started.can_resume, true)
+  assert.equal(started.next_tool, 'fleet_onboard_resume')
+  assert.equal(started.task_complete_allowed, false)
+  const status = await adapter.status(IP, exec)
+  assert.equal(status.can_resume, true)
+  assert.equal(status.next_tool, 'fleet_onboard_resume')
+  assert.equal(operationIds.length, 1, 'read-only status never polls or starts a Cloud operation')
   assert.equal((await adapter.resume(IP, 'base', exec)).reason, 'operation-still-running')
   assert.equal(operationIds.length, 2)
   assert.equal(operationIds[0], operationIds[1])

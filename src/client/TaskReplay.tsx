@@ -268,7 +268,7 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
         <div className="dtc-cartoon-live"><i />Hermes 0.20.4 兼容内核在线</div>
         <div className="dtc-cartoon-actions">
           {batches.length > 1 ? <select value={selId} onChange={e => go(`tasks/${task.id}/runs/${e.target.value}`)}>{batches.map(b => <option key={b.id} value={b.id}>{b.id === batches[0].id ? '这次运行' : '之前'} · {fmt(b.firedAt)} · {BS[batchStatus(full, b)].label}</option>)}</select> : null}
-          <button className="dtc-btn pri" onClick={async () => { const { runId: rid } = await api.fireTask(task.id); toast('已触发'); go(`tasks/${task.id}/runs/${rid}`) }}>▶ 再跑一次</button>
+          <button className="dtc-btn pri" disabled={Boolean(task.origin?.signalId)} title="外部任务请从来源系统重新提交" onClick={async () => { const { runId: rid } = await api.fireTask(task.id); toast('已触发'); go(`tasks/${task.id}/runs/${rid}`) }}>{task.origin?.signalId ? '从来源重试' : '▶ 再跑一次'}</button>
           {batchFull && (bst === 'run' || bst === 'park') ? <button className="dtc-btn" onClick={async () => { await api.cancelRun(batchFull.id); toast('已取消') }}>取消</button> : null}
           <button className="dtc-btn danger" onClick={async () => { if (!window.confirm('删除任务和它的运行记录?会话本身不删。')) return; await api.deleteTask(task.id); go('tasks') }}>删除</button>
         </div>

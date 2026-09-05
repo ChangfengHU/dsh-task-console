@@ -115,3 +115,15 @@ inspection/report; neither grants deployment or repair tools.
 After building, `node scripts/install-runner-presets.mjs` installs the Runner and Fleet operations
 roles. It refuses to overwrite a differing user preset. Task completion is separate from Incident
 closure: Fleet must issue a new signed job after completion and independently verify recovery.
+
+An idempotent onboarding start may return a run owned by an earlier DSH session. Validate that
+record against the prior ledger identity before CAS resume; only after the revision/lease epoch
+advance must the record belong to the new session. Requiring the new session before takeover
+rejects legitimate recovery; skipping identity verification entirely would weaken the lock.
+
+For a running onboarding transaction, `can_resume` and `next_tool` explicitly direct the executor
+to continue with `fleet_onboard_resume`. Status/report are ledger-only reads, not async-operation
+polls. Running work cannot be handed off as completed; repeated unchanged attempts must block
+with evidence instead of creating empty rework rounds. Signal receipts distinguish `blocked`
+from active execution. External Signal tasks cannot rerun their original template: the source
+must submit a new Signal for fresh intent/team validation, retaining the previous batch history.

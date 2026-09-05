@@ -127,3 +127,6 @@ polls. Running work cannot be handed off as completed; repeated unchanged attemp
 with evidence instead of creating empty rework rounds. Signal receipts distinguish `blocked`
 from active execution. External Signal tasks cannot rerun their original template: the source
 must submit a new Signal for fresh intent/team validation, retaining the previous batch history.
+
+The lazy client asset URL includes the SHA256 of the exact built bundle, not only the package
+version. Rebuilding a candidate version cannot serve its previously cached UI to the new entry.

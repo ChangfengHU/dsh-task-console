@@ -7,6 +7,7 @@ import { installLightStyles } from './light-styles.ts'
 
 declare const require: (id: string) => unknown
 declare const __DTC_VERSION__: string
+declare const __DTC_ASSET_HASH__: string
 
 export const name = 'dsh-task-console'
 export const inject = ['slots', 'remote', 'sessions', 'workspaces', 'inputTriggers']
@@ -21,7 +22,7 @@ function loadHeavy(): Promise<Heavy> {
   heavyPromise = new Promise((resolve, reject) => {
     const script = document.createElement('script')
     script.async = true
-    script.src = `/dsh-task-console/client-heavy.js?v=${encodeURIComponent(__DTC_VERSION__)}`
+    script.src = `/dsh-task-console/client-heavy.js?v=${encodeURIComponent(__DTC_VERSION__)}&sha=${__DTC_ASSET_HASH__}`
     script.onload = () => {
       script.remove()
       const factory = (window as HeavyWindow).__DSHTaskConsoleHeavyFactory__

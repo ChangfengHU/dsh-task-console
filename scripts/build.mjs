@@ -15,6 +15,7 @@
  */
 
 import { build } from 'esbuild'
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -48,6 +49,7 @@ await build({
   logLevel: 'info',
 })
 
+async function writeClient(assetHash) {
 const client = await build({
   entryPoints: [join(root, 'src/client/index.tsx')],
   bundle: true,
@@ -58,7 +60,7 @@ const client = await build({
   jsx: 'automatic',
   minify: true,
   external: ['react', 'react-dom', 'react/jsx-runtime'],
-  define: { __DTC_VERSION__: JSON.stringify(pkg.version) },
+  define: { __DTC_VERSION__: JSON.stringify(pkg.version), __DTC_ASSET_HASH__: JSON.stringify(assetHash) },
   logLevel: 'info',
 })
 
@@ -74,6 +76,7 @@ ${body}
 \t}
 });
 `)
+}
 
 const heavy = await build({
   entryPoints: [join(root, 'src/client/heavy.tsx')],
@@ -88,13 +91,15 @@ const heavy = await build({
   logLevel: 'info',
 })
 const heavyBody = heavy.outputFiles[0].text.replace(/[ \t]+$/gm, '')
-await writeFile(join(out, 'client-heavy.js'), `window.__DSHTaskConsoleHeavyFactory__ = (require) => {
+const heavyAsset = `window.__DSHTaskConsoleHeavyFactory__ = (require) => {
 \tvar module = { exports: {} };
 \tvar exports = module.exports;
 \tObject.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 ${heavyBody}
 \treturn module.exports;
 };
-`)
+`
+await writeFile(join(out, 'client-heavy.js'), heavyAsset)
+await writeClient(createHash('sha256').update(heavyAsset).digest('hex'))
 
 console.log('built host, policy, filtered MCP and client bundles')

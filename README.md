@@ -2,7 +2,20 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**Task Signal intake (since 0.21.0):** an authenticated producer such as Fleet submits facts and intent, never an Agent choice. A capability-free internal Task Agent reads the current Task candidates and registered Agent roster, proposes `create`, `reuse`, or `triage`, and the host independently validates that it selected only existing capabilities. Task identity is the durable goal/root cause—not an IP or other target. Every accepted Signal becomes its own auditable Turn and Batch, while later signals in the same Incident can reuse the Task without overwriting its objective, team, targets, or provenance. Deterministic Signal and Batch IDs make producer retries idempotent.
+**Task Signal intake (since 0.21.0):** an authenticated producer such as Fleet submits facts and intent, never an Agent choice. A capability-free internal Task Agent reads the current Task candidates and registered Agent roster, proposes `create`, `reuse`, or `triage`, and the host independently validates that it selected only existing capabilities. Task identity is the durable goal/root cause—not an IP or other target. A materialized actionable Signal becomes an auditable Turn and Batch; triage does not create a Task. Later signals in the same Incident can reuse the Task without overwriting its objective, team, targets, or provenance. Deterministic Signal and Batch IDs make producer retries idempotent.
+
+**Report intake (0.23.0):** a Signal may contain a flat `items` array (including an empty array).
+One report creates one real `task-intake` Session, not one Session per machine. The parent carries
+the report findings; items retain independent intent, Incident and capability boundaries. One
+validated `batch` decision covers every item: existing accepted Signals are kept, new items may
+create/reuse/triage independently. Repeated inspections cannot retry an existing Signal. Both
+transport retries and materialization recovery reuse their original identities and decisions.
+
+The same authenticated HTTP endpoint returns `intakeProtocol: "bundle-v1"`, `intakeAgentId`,
+`intakeSessionId`, `inputMessageId` and `deliveredAt`. Session/input receipts are recorded before
+routing ends, so a failed Agent remains inspectable. Producer acceptance requires durable input
+delivery to the real Session; it does not require Task creation or repair completion. Session URLs
+use the native `?session=<id>` link. Historical records without a receipt are not fabricated.
 
 The Board shows the source Signal, Incident, Task Agent decision, routing Session, Turn objective, and target metadata directly above the database DAG. The SQLite projection adds dedicated Signal, Incident-link, and target tables; core task, link, run, gate, CAS, handoff, artifact, and replay semantics remain unchanged. The intake endpoint is fail-closed unless `DSH_TASK_INTAKE_TOKEN` is configured:
 

@@ -50,6 +50,9 @@ export async function handleTaskSignalHttp(req: any, res: any, service: any, tok
       reply(res, 202, { ok: true, ...value }); return
     }
     if (req.method === 'GET') {
+      if (url.searchParams.get('capabilities') === '1') {
+        reply(res,200,{ok:true,intakeProtocol:'bundle-v1',intakeAgentId:'task-intake'}); return
+      }
       const id = url.searchParams.get('id')
       const value = id
         ? JSON.parse(await service.taskSignal(JSON.stringify({ id })))

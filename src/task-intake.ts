@@ -35,6 +35,8 @@ export interface TaskSignal {
   constraints: string[]
   facts: TaskSignalFact[]
   requiredExecutorTools?: string[]
+  /** A producer report is routed in one Session, with independently validated items. */
+  items?: TaskSignal[]
 }
 
 export interface IntakeAgent {
@@ -70,6 +72,7 @@ export interface TaskIntakeContext {
   candidateTasks: IntakeTaskCandidate[]
   recommendedTaskId?: string
   requiredExecutorTools?: string[]
+  items?: { signal: TaskSignal; context: TaskIntakeContext; existing?: TaskSignalView }[]
 }
 
 export interface DecisionParticipant extends Participant {
@@ -77,7 +80,7 @@ export interface DecisionParticipant extends Participant {
 }
 
 export interface TaskIntakeDecision {
-  action: 'create' | 'reuse' | 'triage'
+  action: 'create' | 'reuse' | 'triage' | 'batch'
   reason: string
   confidence: number
   taskId?: string
@@ -85,6 +88,7 @@ export interface TaskIntakeDecision {
   objective?: string
   workflow?: 'static-chain' | 'dynamic-rounds'
   participants?: DecisionParticipant[]
+  decisions?: { signalId: string; keep?: true; decision?: TaskIntakeDecision }[]
 }
 
 export interface TaskIntakeDecisionResult {
@@ -98,6 +102,11 @@ export interface TaskSignalView {
   receivedAt: string
   updatedAt: string
   intakeSessionId?: string
+  intakeAgentId: 'task-intake'
+  inputMessageId?: string
+  deliveredAt?: string
+  intakeProtocol?: 'bundle-v1'
+  items?: TaskSignalView[]
   decision?: TaskIntakeDecision
   taskId?: string
   batchId?: string
@@ -110,6 +119,8 @@ interface SignalRow {
   signal_json: string
   status: TaskSignalStatus
   intake_session_id: string | null
+  input_message_id: string | null
+  delivered_at: number | null
   decision_json: string | null
   task_id: string | null
   batch_id: string | null
@@ -120,7 +131,10 @@ interface SignalRow {
 
 export interface TaskIntakeOptions {
   agents: () => Promise<IntakeAgent[]>
-  decide: (signal: TaskSignal, context: TaskIntakeContext) => Promise<TaskIntakeDecisionResult>
+  decide: (signal: TaskSignal, context: TaskIntakeContext, delivery: {
+    onSessionReady: (sessionId: string) => void
+    onInputDelivered: (messageId: string) => void
+  }) => Promise<TaskIntakeDecisionResult>
   workspace?: string
   timeoutSec?: number
   now?: () => number
@@ -147,6 +161,14 @@ function stringId(value: unknown, field: string): string {
 export function validateTaskSignal(raw: unknown): TaskSignal {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('signal 必须是对象')
   const input = raw as Record<string, unknown>
+  let items: TaskSignal[] | undefined
+  if (input.items !== undefined) {
+    if (!Array.isArray(input.items) || input.items.length > 32) throw new Error('items 最多 32 项')
+    if (input.items.some(item => !item || typeof item !== 'object' || Object.hasOwn(item, 'items'))) throw new Error('items 不允许嵌套汇总')
+    items = input.items.map(validateTaskSignal)
+    if (new Set(items.map(item => item.id)).size !== items.length || items.some(item => item.id === input.id)) throw new Error('items 的 Signal id 必须唯一')
+    if (input.incident || input.requiredExecutorTools) throw new Error('汇总不绑定单个 Incident 或执行工具；边界保留在各 item')
+  }
   const requiredExecutorTools = input.requiredExecutorTools === undefined ? undefined : input.requiredExecutorTools
   if (requiredExecutorTools !== undefined && (!Array.isArray(requiredExecutorTools) || requiredExecutorTools.length > 32 || requiredExecutorTools.some(x => typeof x !== 'string' || !/^[A-Za-z][A-Za-z0-9_:-]{0,159}$/.test(x)))) throw new Error('requiredExecutorTools 必须是明确的工具名称列表')
   if (Number(input.schemaVersion) !== 1) throw new Error('只支持 Task Signal schemaVersion=1')
@@ -206,6 +228,7 @@ export function validateTaskSignal(raw: unknown): TaskSignal {
     constraints,
     facts,
     ...(requiredExecutorTools ? { requiredExecutorTools: [...new Set(requiredExecutorTools as string[])] } : {}),
+    ...(items ? { items } : {}),
   }
 }
 
@@ -213,11 +236,29 @@ export function validateTaskIntakeDecision(raw: unknown, context: TaskIntakeCont
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('decision 必须是对象')
   const input = raw as Record<string, unknown>
   const action = oneLine(input.action, 20) as TaskIntakeDecision['action']
-  if (!['create', 'reuse', 'triage'].includes(action)) throw new Error('action 必须是 create / reuse / triage')
   const reason = oneLine(input.reason, 1_500)
   if (reason.length < 6) throw new Error('reason 必须说明判断依据')
   const confidence = Number(input.confidence)
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) throw new Error('confidence 必须在 0..1')
+  if (context.items) {
+    if (action !== 'batch' || !Array.isArray(input.decisions)) throw new Error('汇总必须提交 batch 决策')
+    const seen = new Set<string>()
+    const decisions = input.decisions.map((rawItem: any) => {
+      const signalId = stringId(rawItem?.signalId, 'decisions.signalId')
+      const item = context.items!.find(row => row.signal.id === signalId)
+      if (!item || seen.has(signalId)) throw new Error('只能决定汇总中的唯一 Signal')
+      seen.add(signalId)
+      if (item.existing) {
+        if (rawItem.keep !== true || rawItem.decision) throw new Error('已有接收请求必须 keep，不得因再次巡检重复执行；重试须有新的显式 Signal')
+        return { signalId, keep: true as const }
+      }
+      if (rawItem.keep) throw new Error('未接收请求不能冒充已有处置')
+      return { signalId, decision: validateTaskIntakeDecision(rawItem.decision, { ...item.context, agents: context.agents }) }
+    })
+    if (seen.size !== context.items.length) throw new Error('必须说明每项请求的处置，不能遗漏')
+    return { action: 'batch', reason, confidence, decisions }
+  }
+  if (!['create', 'reuse', 'triage'].includes(action)) throw new Error('action 必须是 create / reuse / triage')
   if (action === 'triage') return { action, reason, confidence }
   const workflow = input.workflow === 'static-chain' ? 'static-chain' : 'dynamic-rounds'
   const participants = (Array.isArray(input.participants) ? input.participants : []).map((rawParticipant, index) => {
@@ -308,6 +349,9 @@ export class TaskIntakeCoordinator {
           signal_json TEXT NOT NULL,
           status TEXT NOT NULL,
           intake_session_id TEXT,
+          input_message_id TEXT,
+          delivered_at INTEGER,
+          parent_signal_id TEXT,
           decision_json TEXT,
           task_id TEXT,
           batch_id TEXT,
@@ -351,12 +395,16 @@ export class TaskIntakeCoordinator {
         );
         CREATE INDEX IF NOT EXISTS idx_dsh_task_targets_resource ON dsh_task_targets(target_kind, target_id, updated_at);
       `)
+      const columns = new Set((db.prepare('PRAGMA table_info(dsh_task_signals)').all() as { name: string }[]).map(row => row.name))
+      if (!columns.has('input_message_id')) db.exec('ALTER TABLE dsh_task_signals ADD COLUMN input_message_id TEXT')
+      if (!columns.has('delivered_at')) db.exec('ALTER TABLE dsh_task_signals ADD COLUMN delivered_at INTEGER')
+      if (!columns.has('parent_signal_id')) db.exec('ALTER TABLE dsh_task_signals ADD COLUMN parent_signal_id TEXT')
       const interrupted = db.prepare(`SELECT signal_id FROM dsh_task_signals WHERE status IN ('deciding','materializing')`).all() as { signal_id: string }[]
       const reset = db.prepare(`UPDATE dsh_task_signals SET status='received', error=NULL, updated_at=? WHERE signal_id=?`)
       const event = db.prepare(`INSERT INTO dsh_task_signal_events(signal_id, kind, payload_json, created_at) VALUES (?, 'recovered', ?, ?)`)
       for (const row of interrupted) { reset.run(this.now(), row.signal_id); event.run(row.signal_id, JSON.stringify({ reason: 'host_restart' }), this.now()) }
     })
-    const pending = db.prepare(`SELECT signal_id FROM dsh_task_signals WHERE status='received' ORDER BY received_at`).all() as { signal_id: string }[]
+    const pending = db.prepare(`SELECT signal_id FROM dsh_task_signals WHERE status='received' AND parent_signal_id IS NULL ORDER BY received_at`).all() as { signal_id: string }[]
     for (const row of pending) this.kick(row.signal_id)
   }
 
@@ -365,6 +413,11 @@ export class TaskIntakeCoordinator {
     const db = this.runner.store.kernel.db
     const now = this.now()
     const encoded = JSON.stringify(signal)
+    if (Buffer.byteLength(encoded) > 64 * 1024) throw Object.assign(new Error('Signal 超过 64 KiB'), { status: 413 })
+    for (const item of signal.items ?? []) {
+      const existing = db.prepare('SELECT signal_json FROM dsh_task_signals WHERE signal_id=?').get(item.id) as { signal_json: string } | undefined
+      if (existing && existing.signal_json !== JSON.stringify(item)) throw Object.assign(new Error('汇总 item 已存在，但内容不同'), { status: 409 })
+    }
     const inserted = this.runner.store.kernel.write(() => {
       const result = db.prepare(`INSERT OR IGNORE INTO dsh_task_signals(
         signal_id,schema_version,source,signal_kind,incident_id,goal_key,signal_json,status,received_at,updated_at
@@ -411,6 +464,13 @@ export class TaskIntakeCoordinator {
   }
 
   context(signal: TaskSignal, agents: IntakeAgent[]): TaskIntakeContext {
+    if (signal.items) {
+      return {
+        policy: ['One report, one Task Intake Session. Existing accepted Signals are retained, never retried by repeated inspections. Independent items may create or reuse different goal Tasks.'],
+        agents: agents.filter(agent => agent.id !== 'task-intake'), candidateTasks: [],
+        items: signal.items.map(item => ({ signal: item, context: { ...this.context(item, agents), agents: [] }, existing: this.get(item.id) })),
+      }
+    }
     const db = this.runner.store.kernel.db
     const direct = signal.incident?.id ? (db.prepare(`SELECT task_id FROM dsh_task_incident_links WHERE incident_id=? ORDER BY updated_at DESC`).all(signal.incident.id) as { task_id: string }[]).map(row => row.task_id) : []
     const targetMatches = new Set<string>()
@@ -456,8 +516,15 @@ export class TaskIntakeCoordinator {
     const runState = !row.batch_id ? undefined : !batch ? 'missing' : !batch.settled ? (blocked ? 'blocked' : 'active') : batch.settled.outcome === 'done' ? 'done' : 'failed'
     return {
       signal: parseJson(row.signal_json, {} as TaskSignal), status: row.status,
+      intakeAgentId: 'task-intake',
       receivedAt: new Date(row.received_at * 1000).toISOString(), updatedAt: new Date(row.updated_at * 1000).toISOString(),
       ...(row.intake_session_id ? { intakeSessionId: row.intake_session_id } : {}),
+      ...(row.input_message_id ? { inputMessageId: row.input_message_id } : {}),
+      ...(row.delivered_at ? { deliveredAt: new Date(row.delivered_at * 1000).toISOString() } : {}),
+      ...(parseJson<TaskSignal>(row.signal_json, {} as TaskSignal).items ? {
+        intakeProtocol: 'bundle-v1' as const,
+        items: parseJson<TaskSignal>(row.signal_json, {} as TaskSignal).items!.map(item => this.get(item.id)).filter((item): item is TaskSignalView => Boolean(item)),
+      } : {}),
       ...(row.decision_json ? { decision: parseJson(row.decision_json, {} as TaskIntakeDecision) } : {}),
       ...(row.task_id ? { taskId: row.task_id } : {}), ...(row.batch_id ? { batchId: row.batch_id } : {}),
       ...(row.error ? { error: row.error } : {}), ...(runState ? { runState } : {}),
@@ -499,8 +566,11 @@ export class TaskIntakeCoordinator {
       if (!row) throw new Error('Task Signal disappeared')
       const agents = await this.options.agents()
       const context = this.context(row.signal, agents)
-      const routed = await this.options.decide(row.signal, context)
-      const decision = validateTaskIntakeDecision(routed.decision, context)
+      const routed = row.decision && row.intakeSessionId ? { decision: row.decision, sessionId: row.intakeSessionId } : await this.options.decide(row.signal, context, {
+        onSessionReady: sessionId => this.recordDelivery(signalId, sessionId),
+        onInputDelivered: messageId => this.recordDelivery(signalId, undefined, messageId),
+      })
+      const decision = row.decision && row.intakeSessionId ? row.decision : validateTaskIntakeDecision(routed.decision, context)
       const db = this.runner.store.kernel.db
       this.runner.store.kernel.write(() => {
         db.prepare(`UPDATE dsh_task_signals SET intake_session_id=?,decision_json=?,updated_at=? WHERE signal_id=? AND status='deciding'`).run(routed.sessionId, JSON.stringify(decision), this.now(), signalId)
@@ -511,11 +581,41 @@ export class TaskIntakeCoordinator {
         return
       }
       if (!this.transition(signalId, ['deciding'], 'materializing', 'materialization_started', { action: decision.action })) throw new Error('Task Signal 状态已改变')
-      await this.materialize(row.signal, decision, routed.sessionId)
+      if (row.signal.items) {
+        for (const item of decision.decisions!) {
+          if (item.keep) continue
+          const signal = row.signal.items.find(value => value.id === item.signalId)!
+          this.runner.store.kernel.write(() => {
+            db.prepare(`INSERT OR IGNORE INTO dsh_task_signals(signal_id,schema_version,source,signal_kind,incident_id,goal_key,signal_json,status,intake_session_id,decision_json,parent_signal_id,received_at,updated_at)
+              VALUES (?,?,?,?,?,?,?,'deciding',?,?,?,?,?)`).run(signal.id,1,signal.source,signal.kind,signal.incident?.id ?? null,signal.goal.key ?? null,JSON.stringify(signal),routed.sessionId,JSON.stringify(item.decision),signalId,this.now(),this.now())
+          })
+          const current = this.get(signal.id)!
+          if (JSON.stringify(current.signal) !== JSON.stringify(signal)) throw new Error('汇总 item 在决策期间发生 Signal id 内容冲突')
+          if (['materialized','needs_triage'].includes(current.status)) continue
+          if (item.decision!.action === 'triage') this.transition(signal.id,['received','deciding'],'needs_triage','triage_required',{reason:item.decision!.reason})
+          else {
+            this.transition(signal.id,['received','deciding'],'materializing','materialization_started',{parentSignalId:signalId})
+            await this.materialize(signal,item.decision!,routed.sessionId)
+          }
+        }
+        this.transition(signalId,['materializing'],'materialized','report_routed',{sessionId:routed.sessionId})
+      } else await this.materialize(row.signal, decision, routed.sessionId)
     } catch (error) { this.fail(signalId, error) }
   }
 
+  /** Persist the Session before routing finishes; a failed Agent must remain inspectable. */
+  private recordDelivery(signalId: string, sessionId?: string, messageId?: string): void {
+    const db = this.runner.store.kernel.db
+    this.runner.store.kernel.write(() => {
+      if (sessionId) db.prepare('UPDATE dsh_task_signals SET intake_session_id=?,updated_at=? WHERE signal_id=?').run(sessionId,this.now(),signalId)
+      if (messageId) db.prepare('UPDATE dsh_task_signals SET input_message_id=?,delivered_at=?,updated_at=? WHERE signal_id=?').run(messageId,this.now(),this.now(),signalId)
+      db.prepare('INSERT INTO dsh_task_signal_events(signal_id,kind,payload_json,created_at) VALUES (?,?,?,?)')
+        .run(signalId,sessionId?'session_ready':'input_delivered',JSON.stringify(sessionId?{sessionId}:{messageId}),this.now())
+    })
+  }
+
   private async materialize(signal: TaskSignal, decision: TaskIntakeDecision, sessionId: string): Promise<void> {
+    if (decision.action !== 'create' && decision.action !== 'reuse') throw new Error('只有 create/reuse 可以生成 Task 执行')
     const participants = decision.participants!.map(row => ({ agentId: row.agentId, ...(row.brief ? { brief: row.brief } : {}) }))
     const graphMode = decision.workflow ?? 'dynamic-rounds'
     const taskId = decision.action === 'reuse' ? decision.taskId! : `T-intake-${hash(signal.id)}`

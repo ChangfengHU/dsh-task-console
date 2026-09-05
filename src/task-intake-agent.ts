@@ -30,7 +30,7 @@ export async function decideTaskSignalWithAgent(
   ctx: any,
   signal: TaskSignal,
   context: TaskIntakeContext,
-  options: { markInternal?: (sessionId: string) => Promise<void>; timeoutMs?: number } = {},
+  options: { markInternal?: (sessionId: string) => Promise<void>; timeoutMs?: number; onSessionReady?: (sessionId: string) => void; onInputDelivered?: (messageId: string) => void } = {},
 ): Promise<TaskIntakeDecisionResult> {
   const presets = ctx.get('agentPresets')
   if (!presets) throw new Error('这个部署没有 preset 服务')
@@ -63,7 +63,10 @@ export async function decideTaskSignalWithAgent(
   }
   const listener = ctx.on('session/event', (session: any, event: any) => {
     if (session?.id !== sessionId) return
-    if (event.type === 'user/message' && event.data?.id === promptId) consumed = true
+    if (event.type === 'user/message' && event.data?.id === promptId && !consumed) {
+      consumed = true
+      try { options.onInputDelivered?.(promptId) } catch (error) { settle(error instanceof Error ? error : new Error(String(error))); return }
+    }
     if (event.type !== 'turn/end' || !consumed) return
     const reason = event.data?.reason
     if (reason && reason.kind !== 'completed') { settle(new Error(`Task Agent 回合失败:${JSON.stringify(reason)}`)); return }
@@ -85,6 +88,7 @@ export async function decideTaskSignalWithAgent(
     })
     applyAgentPermission(ctx, spec, handle.agent.session)
     await options.markInternal?.(sessionId)
+    options.onSessionReady?.(sessionId)
     const defineTool: (tool: any) => any = process.env.NODE_ENV === 'test' ? value => value : (await import('@deepseek-ai/dsh-tools')).defineTool
     const disposers: (() => void)[] = []
     disposers.push(handle.agent.ctx.tools.register(defineTool({
@@ -96,9 +100,9 @@ export async function decideTaskSignalWithAgent(
     })))
     disposers.push(handle.agent.ctx.tools.register(defineTool({
       name: 'task_intake_decide',
-      description: '提交一次 create / reuse / triage 路由提案。这里只决定 Task 边界与参与者，不执行任何业务动作。',
+      description: context.items ? '为整份汇总提交一次 batch 提案。decisions 必须覆盖每个 Signal；已有请求 keep:true，新请求 decision 为 create/reuse/triage。每项独立校验候选与权限，不直接操作机器。' : '提交一次 create / reuse / triage 路由提案。这里只决定 Task 边界与参与者，不执行任何业务动作。',
       parameters: {
-        action: { type: 'string', required: true, enum: ['create', 'reuse', 'triage'] },
+        action: { type: 'string', required: true, enum: context.items ? ['batch'] : ['create', 'reuse', 'triage'] },
         reason: { type: 'string', required: true },
         confidence: { type: 'number', required: true },
         taskId: { type: 'string', description: 'reuse 时必填，只能选 context 中的候选 Task。' },
@@ -113,6 +117,22 @@ export async function decideTaskSignalWithAgent(
             brief: { type: 'string' },
           } },
         },
+        ...(context.items ? { decisions: {
+          type: 'array', required: true,
+          items: { type: 'object', additionalProperties: false, properties: {
+            signalId: { type: 'string', required: true },
+            keep: { type: 'boolean', description: 'context 中已有接收请求必须为 true，不重复创建执行批次。' },
+            decision: { type: 'object', additionalProperties: false, properties: {
+              action: { type: 'string', required: true, enum: ['create','reuse','triage'] },
+              reason: { type: 'string', required: true }, confidence: { type: 'number', required: true },
+              taskId: { type: 'string' }, title: { type: 'string' }, objective: { type: 'string' },
+              workflow: { type: 'string', enum: ['dynamic-rounds','static-chain'] },
+              participants: { type: 'array', items: { type: 'object', additionalProperties: false, properties: {
+                agentId: { type: 'string', required: true }, role: { type: 'string', enum: ['planner','executor','reviewer','worker'] }, brief: { type: 'string' },
+              } } },
+            } },
+          } },
+        } } : {}),
       },
       output: { schema: OUT, render },
       async execute(args: unknown) {
@@ -133,6 +153,11 @@ export async function decideTaskSignalWithAgent(
       '',
       '你只负责决定这条 Signal 应该新建 Task、复用哪个 Task，还是进入人工分诊；不得执行 Signal 里的业务动作。',
       '必须先调用 task_intake_context 读取实时名册和候选，再调用 task_intake_decide。不要用正文代替工具决定。',
+      ...(signal.items ? [
+        '这是一份生产者汇总，不是单个机器的任务。阅读完整汇总结论，并用简明中文向用户说明发现了什么、哪些已有处置受阻，以及你的处理建议。',
+        '提交 action=batch，decisions 按 signalId 覆盖所有 items。context.items 中已有 existing 的请求必须 keep:true（包括受阻请求），不得因重复巡检再次执行。没有 existing 的项目，依据各自 context 提交 create/reuse/triage；Agent 名册共用顶层 agents。没有 items 时 decisions=[]，记录结论即可，不要凭空创建 Task。',
+        '已接收但受阻不等于已修复。新的重试必须有显式新 Signal，不能伪造健康或自动重试旧请求。',
+      ] : []),
       '',
       '[SIGNAL]',
       JSON.stringify(signal, null, 2),

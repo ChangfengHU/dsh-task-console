@@ -55,7 +55,7 @@ export class TaskConsoleService extends TypertRemoteService {
     })
     this.intake = new TaskIntakeCoordinator(this.runner, {
       agents: () => this.intakeAgents(),
-      decide: (signal, context) => decideTaskSignalWithAgent(this.ctx as any, signal, context, { markInternal: sessionId => this.markTaskSessionInternal(sessionId) }),
+      decide: (signal, context, delivery) => decideTaskSignalWithAgent(this.ctx as any, signal, context, { ...delivery, markInternal: sessionId => this.markTaskSessionInternal(sessionId) }),
     })
     this.ready = this.runner.start()
       .then(() => this.markExistingTaskSessionsInternal())

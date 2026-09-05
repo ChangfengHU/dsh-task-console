@@ -1,5 +1,7 @@
 # 后续优化
 
+- [x] [TASK-INTAKE-REPORT-001] 支持单会话汇总接收、提前持久化 Session/入参回执、独立 item 决策与已接收请求去重；保留真实角色与对话，Fleet 第一阶段不等待修复。（0.23.0，生产浏览器验收见对应 dev-log）
+
 - [x] [TASK-PERF-001] 将 `dsh-task-console` 改为轻量启动入口，任务页面、DAG 与 Trace 在用户进入对应界面后再懒加载。（0.17.5）
   - 现状基线：公网冷缓存测试中，HARNESS 完成加载约 71 秒；`dsh-task-console` 客户端传输约 167 KB，单项耗时约 31.6 秒。
   - 约束：保持技术包名、Typert namespace、SQLite 数据与现有任务 URL 兼容。

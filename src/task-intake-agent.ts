@@ -142,6 +142,8 @@ export async function decideTaskSignalWithAgent(
       '- 只能选择 context 返回的 Agent；不得申请、推测或扩展它们的权限。',
       '- requiredExecutorTools 是执行前硬条件：执行者必须具备其中所有实际工具。只凭名称/描述相关不代表具备能力；缺少则 triage，不准试调用另一类事务。',
       '- create/reuse 时，涉及实现或恢复的工作优先使用 dynamic-rounds，并按 planner → executor → reviewer 顺序提交三个不同 Agent。',
+      '- 规划者和评估者也必须与任务领域匹配：部署已发布服务或恢复运行环境不等于开发软件，不能选择会强制生成代码、CLI、--selftest 或网页的代码开发角色。优先选择名册中对应运维领域的规划者及只读验收者；仍由你动态决定，不按 Agent ID 固定路由。',
+      '- 运维验收者必须能独立读取该任务的真实状态/报告；没有所需只读工具时选择 triage，不要让正文承诺代替能力。',
       '- 证据不足以安全合并时选择 triage。',
     ].join('\n')
     handle.agent.followup({ id: promptId, role: 'user', content: [{ type: 'text', text: prompt }], source: { kind: 'user' } })

@@ -100,3 +100,14 @@ CLI-backed providers: `codex-local` calls the terminators fine; `claude-local` t
 
 - The DSH fence governs model-facing DSH tools. CLI-backed providers (`claude-local`, `codex-local`) bring their own Bash/Edit, which require provider-side process sandboxing when those capabilities must also be constrained.
 - Exact-tool and argument policies are enforced in the Agent scope. An upstream MCP should still issue scoped credentials when it needs a security boundary against a compromised host process.
+# Fleet operations roles
+
+Runner deployment and base-node repair use distinct executor capabilities. Task Intake selects
+the team from the live preset roster; it must also match planner/reviewer expertise, not just the
+executor tool names. Operational tasks deliver actual runtime reports, not invented code or CLI
+self-tests. `fleet-onboard-read` exposes only status/report, while `fleet-runner-read` exposes
+inspection/report; neither grants deployment or repair tools.
+
+After building, `node scripts/install-runner-presets.mjs` installs the Runner and Fleet operations
+roles. It refuses to overwrite a differing user preset. Task completion is separate from Incident
+closure: Fleet must issue a new signed job after completion and independently verify recovery.

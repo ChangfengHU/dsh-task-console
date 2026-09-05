@@ -65,11 +65,22 @@ function verifyHmac(value: any): boolean {
   return supplied === `hmac-sha256:${createHmac('sha256', HMAC_KEY).update(canonical(unsigned)).digest('hex')}`
 }
 
-function registry(adapter?: FleetOnboardHostAdapter) {
+function registry(adapter?: FleetOnboardHostAdapter, readOnly = false) {
   const definitions: any[] = []
   const ctx = { tools: { register(definition: any) { definitions.push(definition); return () => undefined } } }
-  return registerFleetOnboardTools(ctx, adapter).then(dispose => ({ definitions, dispose }))
+  return registerFleetOnboardTools(ctx, adapter, readOnly).then(dispose => ({ definitions, dispose }))
 }
+
+test('read-only onboarding capability registers no start or resume tools', async () => {
+  const { definitions, dispose } = await registry(undefined, true)
+  assert.deepEqual(definitions.map(tool => tool.name), ['fleet_onboard_status', 'fleet_onboard_report'])
+  for (const tool of definitions) {
+    const result = await tool.execute({ ip: IP }, execution('Read status only'))
+    assert.equal(result.execution_available, false)
+    assert.equal(result.run_created, false)
+  }
+  dispose()
+})
 
 function execution(text: string | string[], headerOnly = false): ToolExecutionLike {
   const messages = (Array.isArray(text) ? text : [text]).map(value => ({ role: 'user', content: [{ type: 'text', text: value }] }))

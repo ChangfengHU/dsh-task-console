@@ -1491,11 +1491,12 @@ function strictTool(defineTool: (spec: any) => any, spec: any, allowed: readonly
   return definition
 }
 
-/** Register exactly four intent-only tools. */
-export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardHostAdapter = new UnavailableFleetAdapter()): Promise<() => void> {
+/** Read-only reviewers never register start/resume, even temporarily. */
+export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardHostAdapter = new UnavailableFleetAdapter(), readOnly = false): Promise<() => void> {
   const defineTool: (spec: any) => any = process.env.NODE_ENV === 'test' ? (spec => spec) : (await import('@deepseek-ai/dsh-tools')).defineTool
+  const register = (tool: any) => readOnly && !['fleet_onboard_status', 'fleet_onboard_report'].includes(tool.name) ? () => undefined : ctx.tools.register(tool)
   const disposers = [
-    ctx.tools.register(strictTool(defineTool, {
+    register(strictTool(defineTool, {
       name: 'fleet_onboard_start',
       description: '开始或幂等评估一个基础 Fleet 节点。宿主自行取得凭据、探测并执行；模型只提供 IP。',
       parameters: {
@@ -1504,14 +1505,14 @@ export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardH
       output: { schema: OUTPUT_SCHEMA, render },
       async execute(args: any, exec: ToolExecutionLike) { return adapter.start(requireIp(args.ip), 'base', exec) },
     }, ['ip'])),
-    ctx.tools.register(strictTool(defineTool, {
+    register(strictTool(defineTool, {
       name: 'fleet_onboard_status',
       description: '读取一个 Fleet 接入事务的当前状态，不连接目标机。',
       parameters: { ip: { type: 'string', required: true, description: '完整 IPv4 地址。' } },
       output: { schema: OUTPUT_SCHEMA, render },
       async execute(args: any, exec: ToolExecutionLike) { return adapter.status(requireIp(args.ip), exec) },
     }, ['ip'])),
-    ctx.tools.register(strictTool(defineTool, {
+    register(strictTool(defineTool, {
       name: 'fleet_onboard_resume',
       description: '按宿主持久状态恢复一个可恢复的 Fleet 接入事务。',
       parameters: {
@@ -1520,7 +1521,7 @@ export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardH
       output: { schema: OUTPUT_SCHEMA, render },
       async execute(args: any, exec: ToolExecutionLike) { return adapter.resume(requireIp(args.ip), 'base', exec) },
     }, ['ip'])),
-    ctx.tools.register(strictTool(defineTool, {
+    register(strictTool(defineTool, {
       name: 'fleet_onboard_report',
       description: '读取 Fleet 接入事务的脱敏验收报告，不连接目标机。',
       parameters: { ip: { type: 'string', required: true, description: '完整 IPv4 地址。' } },
@@ -1531,7 +1532,7 @@ export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardH
   return () => { for (const dispose of disposers.reverse()) dispose() }
 }
 
-export interface FleetOnboardPluginConfig { skillRoot?: string }
+export interface FleetOnboardPluginConfig { skillRoot?: string; readOnly?: boolean }
 
 export async function apply(ctx: Context, pluginConfig: FleetOnboardPluginConfig = {}): Promise<void> {
   let credentials: CredentialProvider = sessionCredentialProvider
@@ -1582,7 +1583,7 @@ export async function apply(ctx: Context, pluginConfig: FleetOnboardPluginConfig
       environment: { FLEET_ONBOARD_HOST_CONFIG_FILE: hostConfig }, workerId, executorVersion,
     })
   } catch { /* Plugin stays loadable, but every unsafe or missing host dependency fails closed. */ }
-  await registerFleetOnboardTools(ctx, adapter ?? new UnavailableFleetAdapter(credentials))
+  await registerFleetOnboardTools(ctx, adapter ?? new UnavailableFleetAdapter(credentials), pluginConfig.readOnly === true)
 }
 
 export { TOOL_NAMES }

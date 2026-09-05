@@ -7,5 +7,6 @@
   "effort": "high",
   "permissionPreset": "workspace-write",
   "tools": ["ask-user", "fleet-onboard-read", "fleet-runner-read"],
+  "taskExpertise": ["fleet_onboard_start", "fleet_onboard_resume", "fleet_onboard_status", "fleet_onboard_report"],
   "mcpTools": {}, "mcpPolicy": {}, "skills": []
 }

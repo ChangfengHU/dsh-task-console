@@ -107,6 +107,8 @@ export interface AgentSpec {
   /** DSH sandbox + approval bundle pinned before this Agent receives its first message. */
   permissionPreset: 'workspace-write' | 'danger-full-access'
   tools: string[]
+  /** Executor tool contracts this preset is authored to plan/review; grants no tools. */
+  taskExpertise?: string[]
   /** Exact raw MCP tool names selected under each server. `*` reads legacy whole-server specs. */
   mcpTools: Record<string, string[]>
   /** Optional host-enforced argument constraints for selected MCP tools. */

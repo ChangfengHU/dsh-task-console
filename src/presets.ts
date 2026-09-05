@@ -428,6 +428,7 @@ export function validateSpec(raw: unknown): AgentSpec {
     effort,
     permissionPreset,
     tools: list(s.tools).filter(t => NATIVE_TOOLS.some(n => n.id === t)),
+    ...(Array.isArray(s.taskExpertise) ? { taskExpertise: list(s.taskExpertise).filter(t => /^[A-Za-z][A-Za-z0-9_:-]{0,159}$/.test(t)).slice(0, 32) } : {}),
     mcpTools,
     mcpPolicy,
     skills: list(s.skills),

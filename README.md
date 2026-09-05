@@ -2,7 +2,7 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**This release (0.21.0):** adds a durable Task Signal intake boundary. An authenticated producer such as Fleet submits facts and intent, never an Agent choice. A capability-free internal Task Agent reads the current Task candidates and registered Agent roster, proposes `create`, `reuse`, or `triage`, and the host independently validates that it selected only existing capabilities. Task identity is the durable goal/root cause—not an IP or other target. Every accepted Signal becomes its own auditable Turn and Batch, while later signals in the same Incident can reuse the Task without overwriting its objective, team, targets, or provenance. Deterministic Signal and Batch IDs make producer retries idempotent.
+**Task Signal intake (since 0.21.0):** an authenticated producer such as Fleet submits facts and intent, never an Agent choice. A capability-free internal Task Agent reads the current Task candidates and registered Agent roster, proposes `create`, `reuse`, or `triage`, and the host independently validates that it selected only existing capabilities. Task identity is the durable goal/root cause—not an IP or other target. Every accepted Signal becomes its own auditable Turn and Batch, while later signals in the same Incident can reuse the Task without overwriting its objective, team, targets, or provenance. Deterministic Signal and Batch IDs make producer retries idempotent.
 
 The Board shows the source Signal, Incident, Task Agent decision, routing Session, Turn objective, and target metadata directly above the database DAG. The SQLite projection adds dedicated Signal, Incident-link, and target tables; core task, link, run, gate, CAS, handoff, artifact, and replay semantics remain unchanged. The intake endpoint is fail-closed unless `DSH_TASK_INTAKE_TOKEN` is configured:
 
@@ -100,12 +100,16 @@ CLI-backed providers: `codex-local` calls the terminators fine; `claude-local` t
 
 - The DSH fence governs model-facing DSH tools. CLI-backed providers (`claude-local`, `codex-local`) bring their own Bash/Edit, which require provider-side process sandboxing when those capabilities must also be constrained.
 - Exact-tool and argument policies are enforced in the Agent scope. An upstream MCP should still issue scoped credentials when it needs a security boundary against a compromised host process.
-# Fleet operations roles
+
+## Fleet operations roles
 
 Runner deployment and base-node repair use distinct executor capabilities. Task Intake selects
 the team from the live preset roster; it must also match planner/reviewer expertise, not just the
 executor tool names. Operational tasks deliver actual runtime reports, not invented code or CLI
-self-tests. `fleet-onboard-read` exposes only status/report, while `fleet-runner-read` exposes
+self-tests. For tool-constrained Signals, each planner/reviewer must declare `taskExpertise`
+covering the required executor tool contracts. This metadata is routing eligibility, not tool
+authorization; overlapping read tools alone do not make the two operational domains interchangeable.
+`fleet-onboard-read` exposes only status/report, while `fleet-runner-read` exposes
 inspection/report; neither grants deployment or repair tools.
 
 After building, `node scripts/install-runner-presets.mjs` installs the Runner and Fleet operations

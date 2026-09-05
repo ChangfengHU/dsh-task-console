@@ -48,6 +48,7 @@ export interface IntakeAgent {
   skills: string[]
   toolSchemas?: string[]
   toolDescriptions?: Record<string, string>
+  taskExpertise?: string[]
 }
 
 export interface IntakeTaskCandidate {
@@ -240,6 +241,12 @@ export function validateTaskIntakeDecision(raw: unknown, context: TaskIntakeCont
       const agent = context.agents.find(agent => agent.id === row.agentId)!
       return context.requiredExecutorTools!.every(tool => agent.toolSchemas?.includes(tool))
     })) throw new Error('执行者不具备所需的实际工具；请选择有能力的 Agent，或 triage。不得以基础装机或通用 shell 替代受限工具。')
+    for (const row of participants.filter(row => row.role === 'planner' || row.role === 'reviewer')) {
+      const agent = context.agents.find(agent => agent.id === row.agentId)!
+      if (!context.requiredExecutorTools.every(tool => agent.taskExpertise?.includes(tool))) {
+        throw new Error(`${row.role} 的 taskExpertise 不覆盖本次执行工具契约；请选择对应领域的规划/验收角色或 triage，不得让基础节点角色规划 Runner 部署。`)
+      }
+    }
   }
   const objective = String(input.objective ?? '').trim().slice(0, 12_000)
   if (objective && objective.length < 8) throw new Error('objective 至少 8 个字符')

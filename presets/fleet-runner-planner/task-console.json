@@ -7,5 +7,6 @@
   "effort": "high",
   "permissionPreset": "workspace-write",
   "tools": ["ask-user"],
+  "taskExpertise": ["fleet_runner_inspect", "fleet_runner_ensure", "fleet_runner_status"],
   "mcpTools": {}, "mcpPolicy": {}, "skills": []
 }

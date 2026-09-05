@@ -141,7 +141,13 @@ test('executor capabilities are enforced by actual tool schemas, never a broad r
   const narrow=structuredClone(roster);narrow[1].description='Fleet runtime with all powers';narrow[1].toolSchemas=['fleet_onboard_start','fleet_onboard_status']
   assert.throws(()=>validateTaskIntakeDecision(decision,{...context,agents:narrow}),/实际工具/)
   narrow[1].toolSchemas=['fleet_runner_ensure','fleet_runner_status']
+  assert.throws(()=>validateTaskIntakeDecision(decision,{...context,agents:narrow}),/taskExpertise/)
+  narrow[0].taskExpertise=['fleet_onboard_start','fleet_onboard_status']
+  narrow[2].taskExpertise=[...context.requiredExecutorTools]
+  assert.throws(()=>validateTaskIntakeDecision(decision,{...context,agents:narrow}),/taskExpertise/)
+  narrow[0].taskExpertise=[...context.requiredExecutorTools]
   assert.equal(validateTaskIntakeDecision(decision,{...context,agents:narrow}).action,'create')
+  assert.equal(narrow[0].toolSchemas,undefined,'declared expertise grants no executor tools to a planner')
   assert.equal(validateTaskIntakeDecision({action:'triage',reason:'No exact deployment tool exists',confidence:1},context).action,'triage')
   const incoming=signal('sig-tools','inc-tools');incoming.requiredExecutorTools=context.requiredExecutorTools
   assert.deepEqual(validateTaskSignal(incoming).requiredExecutorTools,context.requiredExecutorTools)

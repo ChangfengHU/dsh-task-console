@@ -4,6 +4,9 @@ import { mkdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 
+export const name = 'task-console-fleet-runner-tools'
+export const inject = ['tools']
+
 type Job = { sessionId: string; operation: 'inspect' | 'ensure'; child: ChildProcess; events: unknown[]; result?: any; startedAt: string; done: Promise<any> }
 const key = Symbol.for('dsh.fleet-runner.jobs')
 const jobs: Map<string, Job> = (globalThis as any)[key] ??= new Map()

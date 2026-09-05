@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { apply, runnerIp } from '../src/fleet-runner-tools.ts'
+import { apply, runnerIp, inject } from '../src/fleet-runner-tools.ts'
+
+test('Runner plugin declares the Cordis tools dependency before mounting', () => {
+  assert.deepEqual(inject, ['tools'])
+})
 
 test('Runner reviewer gets no deployment or cancellation capability', async () => {
   const tools = new Map<string, any>()

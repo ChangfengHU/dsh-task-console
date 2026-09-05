@@ -302,9 +302,14 @@ export class TaskRunner {
         }
         flight.disposeTools = await registerWorkerTools(flight.handle.agent.ctx, {
           complete: async (summary, artifacts, metadata) => submit('completed', summary, artifacts, metadata),
-          requestReview: async (summary, artifacts, metadata, reviewer) => submit('review', summary, artifacts, metadata, reviewer),
+          requestReview: async (summary, artifacts, metadata, reviewer) => {
+            if (task.graphMode === 'dynamic-rounds') throw new Error('动态 DAG 使用独立评估卡，调用 task_complete 交给下游')
+            await submit('review', summary, artifacts, metadata, reviewer)
+          },
           requestChanges: async (reason) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            const claim = this.store.kernel.listEvents(flight.cardId).findLast(e => e.run_id === flight.coreRunId && e.kind === 'claimed')
+            if (task.graphMode === 'dynamic-rounds' || JSON.parse(claim?.payload || '{}').source_status !== 'review') throw new Error('不是同卡评审；通过 task_complete 将返工结论交给规划者')
             flight.terminal = { kind: 'changes', reason }
           },
           block: async (reason, kind) => { flight.terminal = { kind: 'blocked', reason, blockKind: kind } },
@@ -330,7 +335,7 @@ export class TaskRunner {
             }
             flight.terminal = { kind: 'completed', summary, metadata: { decision: 'approved', round: card.round, ...(finalArtifactId ? { finalArtifactId } : {}) } }
           },
-        }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner' })
+        }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner', dynamicRounds: task.graphMode === 'dynamic-rounds' })
       } catch (error) { console.warn('[task-console] worker tools not registered:', error) }
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }
       try {
@@ -527,8 +532,18 @@ export class TaskRunner {
     try {
       for (const f of [...this.flights.values()]) { const r = this.store.s.runs.get(f.runId); if (r?.batchId === batchId) await this.finish(f, 'run/cancelled', 'cancelled', '人工取消') }
       for (const id of b.cardIds) {
+        // A previous failed terminal transition can leave a claimed run without a Flight.
+        const core = this.store.kernel.getTask(id)
+        if (core?.current_run_id) {
+          const run = [...this.store.s.runs.values()].find(r => r.cardId === id && r.status === 'running')
+          if (run) await this.store.transition(
+            () => this.store.kernel.failRun(id, { expectedRunId: core.current_run_id!, outcome: 'cancelled', error: '人工取消批次：清理遗留运行' }),
+            result => result.ok ? { t: 'run/cancelled', at: this.now(), taskId: b.taskId, runId: run.id, outcome: 'cancelled', error: '人工取消批次：清理遗留运行' } : undefined,
+          )
+        }
         const c = this.store.s.cards.get(id)
-        if (c && (c.status === 'todo' || c.status === 'ready' || c.status === 'review')) await this.store.transition(
+        const remaining = this.store.kernel.getTask(id)
+        if (c && remaining && remaining.current_run_id === null && !['done', 'archived'].includes(remaining.status)) await this.store.transition(
           () => this.store.kernel.cancelTask(id, '人工取消批次'),
           ok => ok ? { t: 'card/cancelled', at: this.now(), taskId: b.taskId, cardId: id } : undefined,
         )

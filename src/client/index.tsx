@@ -50,7 +50,11 @@ function installSessionUrlSync(ctx: any): () => void {
   const sync = () => {
     const snapshot = ctx.sessions.list.getSnapshot()
     if (requested && snapshot.byId?.[requested]) {
-      try { ctx.sessions.open(requested); requested = null; return } catch { /* wait for the next list projection */ }
+      const target = requested
+      // open() publishes synchronously. Consume before notifying subscribers.
+      requested = null
+      try { if (snapshot.current !== target) ctx.sessions.open(target); return }
+      catch { requested = target /* retry when the session list is ready */ }
     }
     if (window.location.hash.startsWith(HASH_PREFIX)) return
     const url = new URL(window.location.href)

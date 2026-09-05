@@ -108,7 +108,10 @@ test('runner: dynamic rounds materialize DB rows only after planner decisions an
   assert.equal(graph.live.runs.filter(row => row.task_id.includes('#g')).length, 0)
 
   session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '执行一', artifacts: ['result.html'] }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '评估：返工', artifacts: ['result.html'] }); host.endTurn(session); await tick()
+  session = nextSession(); host.consumeFirst(session)
+  assert.equal(host.sessions.get(session)!.tools.some(tool => ['task_request_changes','task_request_review'].includes(tool.name)), false)
+  assert.doesNotMatch(host.sessions.get(session)!.followups[0].content[0].text, /调用 task_request_changes/)
+  await host.callTool(session, 'task_complete', { summary: '评估：返工', artifacts: ['result.html'] }); host.endTurn(session); await tick()
   session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_plan_round', { summary: '第二轮返工计划' })
   graph = store.graphSnapshot('T', batch.id)
   assert.equal(graph.live.tasks.length, 9); assert.equal(graph.live.links.length, 8)
@@ -259,6 +262,18 @@ test('runner: task_block(needs_input) closes the run; unblock creates a fresh ru
   host.consumeFirst(s2); await host.callTool(s2, 'task_complete', { summary: '抄送了' }); host.endTurn(s2); await tick()
   assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')
   runner.stop()
+})
+
+test('runner: explicit batch cancellation closes an orphaned claim without deleting history', async () => {
+  const { host, store, runner } = await setup({ participants: [{ agentId: 'a' }] })
+  const batch = await runner.fire('T', 'manual')
+  runner.stop()
+  ;(runner as any).flights.clear() // lost in-memory worker; durable claim still belongs to this batch
+  await runner.cancelBatch(batch.id)
+  assert.equal(store.kernel.listRuns(batch.cardIds[0])[0].outcome, 'cancelled')
+  assert.equal(store.kernel.getTask(batch.cardIds[0])!.status, 'archived')
+  assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'cancelled')
+  assert.equal(host.sessions.size, 1)
 })
 
 test('runner: capability block is a durable human-visible blocker and does not cancel dependencies', async () => {

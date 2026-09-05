@@ -24,7 +24,7 @@ const render = (_args: unknown, value: unknown) => [{ type: 'text' as const, tex
 export const WORKER_TOOL_NAMES = ['task_complete', 'task_block', 'task_request_review', 'task_request_changes', 'task_plan_round', 'task_finalize'] as const
 
 /** Register the four tools on one agent scope. Returns the disposer. */
-export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, options: { planner?: boolean } = {}): Promise<() => void> {
+export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, options: { planner?: boolean; dynamicRounds?: boolean } = {}): Promise<() => void> {
   // The real compiler is host-owned. Unit tests use identity descriptors so they do not need to install the whole dsh host.
   const defineTool: (spec: any) => any = process.env.NODE_ENV === 'test' ? (spec => spec) : (await import('@deepseek-ai/dsh-tools')).defineTool
   const disposers: (() => void)[] = []
@@ -60,7 +60,7 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, opt
       return { ok: true, note: '已记录并结束本次运行；解除阻塞后会创建新的 run。' }
     },
   })))
-  if (!options.planner) disposers.push(agentCtx.tools.register(defineTool({
+  if (!options.planner && !options.dynamicRounds) disposers.push(agentCtx.tools.register(defineTool({
     name: 'task_request_review',
     description: '提交同卡评审。指定 reviewer 时由该 Agent 创建独立 review run；不指定时进入人工验收。验收通过前不会放行下游。',
     parameters: {
@@ -78,7 +78,7 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, opt
       return { ok: true, note: `已提交验收${artifacts.length ? `,登记 ${artifacts.length} 个产物` : ''}。` }
     },
   })))
-  if (!options.planner) disposers.push(agentCtx.tools.register(defineTool({
+  if (!options.planner && !options.dynamicRounds) disposers.push(agentCtx.tools.register(defineTool({
     name: 'task_request_changes',
     description: '仅供同卡 reviewer 使用：退回当前实现并结束本次 review run。任务会恢复给原 implementer，评审意见进入下一次 handoff。',
     parameters: { reason: { type: 'string', required: true, description: '明确、可执行的返工原因。' } },

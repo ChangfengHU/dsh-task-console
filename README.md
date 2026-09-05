@@ -59,6 +59,8 @@ dsh plugin --profile web add github:ChangfengHU/dsh-task-console
 
 Opens from the sidebar footer buttons Agent and Board. Screens live in the URL hash (`#/tc/agents`, `#/tc/agents/<id>`, `#/tc/tasks`, `#/tc/tasks/<id>`). Session evidence is subordinate to a task and opens from its Related Sessions drawer or Trace instead of a third top-level screen. The SQLite data directory intentionally remains `~/.dsh/task-console/` across the package rename so existing tasks and audit history stay available.
 
+Dynamic DAG reviewers submit their verdict through `task_complete`; only the next planner creates rework rounds. Same-card review tools are not mounted in dynamic DAG sessions. Session URL selection consumes its pending request before publishing the synchronous session-list update.
+
 ## DSH host compatibility
 
 DSH `0.1.1-rc.2` needs a small host compatibility patch for internal task Sessions and the lightweight session-list projection. Run `npm run host:patch` after installing or updating DSH. The command is idempotent and fails loudly on any unverified DSH version instead of silently changing unknown bundles. This compatibility layer can be removed once those capabilities ship upstream.

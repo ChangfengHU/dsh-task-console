@@ -419,8 +419,10 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   lines.push('', '[CONTRACT]',
     '做完后必须调用 task_complete(summary, artifacts, metadata) 交卷;summary 写「产物 / 干了什么 / 下游注意」,它会原样交给下一张卡。',
     '生成了文件时,必须把文件路径放进 artifacts 数组;系统会保存不可变副本并让浏览器直接预览或下载。',
-    '做完但需要验收时调用 task_request_review(summary, artifacts, metadata, reviewer?);验收通过前不会启动下游。指定 reviewer 会由评估 Agent 领取，不指定则进入人工闸门。',
-    '作为评估者发现问题时调用 task_request_changes(reason);旧评审 Run 会关闭，原执行者得到新的返工 Run。',
+    ...(task.graphMode === 'dynamic-rounds' ? ['本模式不提供同卡评审工具。评估通过或返工都调用 task_complete 给出结论；规划者决定下一轮 Gate、执行者和评估者。'] : [
+      '做完但需要验收时调用 task_request_review(summary, artifacts, metadata, reviewer?);验收通过前不会启动下游。指定 reviewer 会由评估 Agent 领取，不指定则进入人工闸门。',
+      '作为同卡评估者发现问题时调用 task_request_changes(reason);旧评审 Run 会关闭，原执行者得到新的返工 Run。',
+    ]),
     '拿不准且不可逆的事:能用 ask_user_question 就问;否则 task_block(reason, kind="needs_input")。',
     '缺工具或权限做不了:task_block(reason, kind="capability")。',
     '不要在没有调用 task_complete 或 task_block 的情况下结束。')

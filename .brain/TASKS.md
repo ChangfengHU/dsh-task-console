@@ -1,5 +1,7 @@
 # 后续优化
 
+- [x] [TASK-HISTORY-ID-001] 修复兼容模型空 tool-call ID 导致的 Chat/Trajectory 重复匹配及冷启动历史校验失败；保留原始日志，按流事件与 sourceEventSeqs 在读取时恢复关联。真实公网会话冷启动、40 次工具详情及 Trace 验收通过，见 `dev-log/2026-09-06-history-mcp-repair.md`。
+
 - [x] [TASK-INTAKE-REPORT-001] 支持单会话汇总接收、提前持久化 Session/入参回执、独立 item 决策与已接收请求去重；保留真实角色与对话，Fleet 第一阶段不等待修复。（0.23.0，生产浏览器验收见对应 dev-log）
 
 - [x] [TASK-PERF-001] 将 `dsh-task-console` 改为轻量启动入口，任务页面、DAG 与 Trace 在用户进入对应界面后再懒加载。（0.17.5）

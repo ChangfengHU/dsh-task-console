@@ -2,6 +2,7 @@ import { constants } from 'node:fs'
 import { access, readFile, rename, writeFile } from 'node:fs/promises'
 import { delimiter, dirname, join } from 'node:path'
 import { realpathSync } from 'node:fs'
+import { patchHistoryIds } from './patch-history-ids.mjs'
 
 const SUPPORTED_DSH_VERSION = '0.1.1-rc.2'
 
@@ -208,4 +209,5 @@ if (await patchFile(ui, [
   ['\t\t\t\t\t\t\tarchivedSessionIds,', '\t\t\t\t\t\t\tarchivedSessionIds: undiscoverableSessionIds,', 'workspace UI consumers', 3],
 ], ['undiscoverableSessionIds', 'archivedSessionIds: undiscoverableSessionIds'])) changed.push('ui')
 
+changed.push(...await patchHistoryIds(dshRoot))
 console.log(changed.length ? `patched DSH ${SUPPORTED_DSH_VERSION}: ${changed.join(', ')}` : `DSH ${SUPPORTED_DSH_VERSION} compatibility patch already applied`)

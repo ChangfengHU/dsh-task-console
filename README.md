@@ -76,7 +76,9 @@ Dynamic DAG reviewers submit their verdict through `task_complete`; only the nex
 
 ## DSH host compatibility
 
-DSH `0.1.1-rc.2` needs a small host compatibility patch for internal task Sessions and the lightweight session-list projection. Run `npm run host:patch` after installing or updating DSH. The command is idempotent and fails loudly on any unverified DSH version instead of silently changing unknown bundles. This compatibility layer can be removed once those capabilities ship upstream.
+DSH `0.1.1-rc.2` needs a host compatibility patch for internal task Sessions, the lightweight session-list projection, and empty tool-call IDs in compatible model streams. Run `npm run host:patch` after installing or updating DSH. The command is idempotent and fails loudly on any unverified DSH version instead of silently changing unknown bundles. This compatibility layer can be removed once those capabilities ship upstream.
+
+The stream patch preserves a nonempty provider ID across empty continuation fragments and rejects a tool completion with no ID. Cold history reads reconstruct affected call IDs from the original stream and pair results through `sourceEventSeqs`, without rewriting session files or changing tool output. Missing evidence remains an error. Chat and Trajectory also support display-only event-sequence identities for already-live legacy records. These patches keep code backups alongside the affected bundles; restart an idle DSH service to reload server code, then verify the exact public Session URL after a cold reload. A warm page alone is not acceptance.
 
 **Talk to an agent from the composer:** type `@` in any composer, pick an agent, type the ask, Enter. That starts a new session on the agent's preset (a session's preset is fixed at creation in dsh, so "@agent" means "a fresh session with that agent") with your text as the first message, pins a readable title, files it under the current workspace, and switches to it. Agent cards also have 「开新会话」.
 

@@ -12,6 +12,7 @@ import {
   SubprocessFleetOnboardAdapter,
   VaultFirstCredentialProvider,
   registerFleetOnboardTools,
+  credentialFromSession,
   type FleetLedgerRun,
   type FleetOnboardCloudTransport,
   type FleetOnboardHostAdapter,
@@ -336,6 +337,40 @@ test('a later different IP invalidates credential replies and causes zero probe 
   const records = (await readFile(files.log, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
   assert.deepEqual(records.map(record => record.role), ['vault-provider'])
   assert.ok(!JSON.stringify(records).includes(CANARY))
+})
+
+test('same-target retries retain intake credentials without crossing target or username changes', () => {
+  const first = `IP: ${IP}\nuser: root\npassword: ${CANARY}`
+  for (const texts of [[first, `Continue ${IP}`], [first, '继续', `Retry ${IP}`]]) {
+    const lease = credentialFromSession(IP, execution(texts))
+    assert.equal(lease.available, true)
+    const material = JSON.parse(Buffer.from(lease.material!).toString())
+    assert.equal(material.username, 'root')
+    assert.equal(material.password, CANARY)
+    lease.material!.fill(0)
+  }
+  for (const texts of [[first, `Switch ${RANDOM_IP}`, `Back to ${IP}`],
+    [first, `Continue ${IP}\nuser: different-user`]]) {
+    const lease = credentialFromSession(IP, execution(texts))
+    assert.equal(lease.available, false)
+    assert.ok(lease.missing?.includes('ssh_credential'))
+  }
+  const replacement = credentialFromSession(IP, execution([first, `Continue ${IP}\npassword: replacement-fixture`]))
+  assert.equal(JSON.parse(Buffer.from(replacement.material!).toString()).password, 'replacement-fixture')
+  replacement.material!.fill(0)
+  const alphabetic = credentialFromSession(IP, execution(`IP: ${IP}\nuser: root\npassword: alphabeticonly`))
+  assert.equal(alphabetic.available, true)
+  alphabetic.material!.fill(0)
+  const injected = execution([first, `Continue ${IP}`])
+  const originalMessages = injected.agent!.session!.deriveMessages!()
+  injected.agent!.session!.deriveMessages = () => [originalMessages[0],
+    {role: 'user', source: {kind: 'skill-catalog'}, content: [{type: 'text', text: `user names\npassword: injected-fixture\nexample ${RANDOM_IP}`}]},
+    originalMessages[1]]
+  const retained = credentialFromSession(IP, injected)
+  const decoded = JSON.parse(Buffer.from(retained.material!).toString())
+  assert.equal(decoded.username, 'root')
+  assert.equal(decoded.password, CANARY)
+  retained.material!.fill(0)
 })
 
 test('Vault lease, signed probe, scoped central CAS receipts and retry remain secret-free', async t => {

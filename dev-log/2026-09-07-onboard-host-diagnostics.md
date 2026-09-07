@@ -22,3 +22,17 @@ The paired producer fix is linux-clash-skill `ccb0235`. Its new test runs real p
 serialization, HMAC assembly, strict validation and assessment with only external
 I/O mocked. Production retry stays in the owner's original DSH Session; this developer
 does not directly SSH to the target or execute its installation.
+
+The first visible retry exposed another pre-existing intake problem: mentioning the
+same IP again discarded earlier credentials, and model-role `user` Skill-catalog
+injections could be parsed as a username (the prose "user names"). Intake now respects
+message provenance and the contiguous same-target context; switching target or username
+still prevents credential reuse. The owner's actual persisted history was replayed
+locally against the parser: available=true and expected username, without printing a
+password or contacting the machine. Ambiguous prose is not shorthand credential input.
+
+The expanded full suite passes 116 tests with `--test-concurrency=1`. An earlier parallel
+run exposed the new negative-case test plus three existing timing-sensitive Runner
+tests; the negative case was corrected in production parsing and the final serial full
+run passed without modifying unrelated Runner code. The incorrect credential question
+is cancelled only in the owner-selected session before reloading; no history is removed.

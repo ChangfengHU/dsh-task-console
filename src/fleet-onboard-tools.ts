@@ -440,6 +440,8 @@ function requireIp(value: unknown): string {
 
 function textOfMessage(message: unknown): string {
   if (!message || typeof message !== 'object' || (message as any).role !== 'user') return ''
+  const source = (message as any).source
+  if (source && source.kind !== 'user') return ''
   const content = (message as any).content
   if (!Array.isArray(content)) return ''
   return content.filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n')
@@ -465,6 +467,10 @@ function labeledCredential(text: string): { username?: string; password?: string
 
 function conventionalCredential(text: string, ip: string): { username?: string; password?: string } {
   const tokens = text.trim().split(/\s+/)
+  if (tokens[0]?.startsWith('@')) tokens.shift()
+  // Ambiguous all-word prose such as "Back to IP" is not credential input.
+  // Alphabetic passwords remain supported through an explicit password label.
+  if (tokens.length !== 3 || !/[\d\W]/.test(tokens[1])) return {}
   const ipIndex = tokens.findLastIndex(token => token.replace(/[，,。；;]+$/g, '') === ip)
   if (ipIndex < 2) return {}
   const username = tokens[ipIndex - 2]
@@ -491,6 +497,13 @@ export function credentialFromSession(ip: string, exec: ToolExecutionLike): Cred
     if (messageIpv4s(rows[index]).includes(ip)) { anchor = index; break }
   }
   if (anchor < 0) return { available: false, missing: ['ssh_username', 'ssh_credential'] }
+  // A retry mentioning the same target continues its intake context. Never
+  // cross an intervening different target (including a later switch back).
+  for (let index = anchor - 1; index >= 0; index -= 1) {
+    const ips = messageIpv4s(rows[index])
+    if (ips.some(value => value !== ip)) break
+    if (ips.includes(ip)) anchor = index
+  }
   const anchorIps = messageIpv4s(rows[anchor])
   if (anchorIps.some(value => value !== ip)
     || rows.slice(anchor + 1).some(text => messageIpv4s(text).some(value => value !== ip))) {
@@ -502,7 +515,10 @@ export function credentialFromSession(ip: string, exec: ToolExecutionLike): Cred
     const text = rows[index]
     if (!text) continue
     const labeled = labeledCredential(text)
-    if (labeled.username) username = labeled.username
+    if (labeled.username) {
+      if (username && username !== labeled.username) password = undefined
+      username = labeled.username
+    }
     if (labeled.password) password = labeled.password
     if (index === anchor) {
       const conventional = conventionalCredential(text, ip)

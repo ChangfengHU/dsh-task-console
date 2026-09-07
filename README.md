@@ -150,6 +150,12 @@ contract failure does not mean execution is unconfigured or SSH authentication f
 strict wire schemas aligned: internal telemetry readiness belongs in the existing registration
 `readback` check, not undeclared top-level fields or component facts.
 
+Credential intake ignores plugin/Skill-catalog messages even when their model role is
+`user`. Repeating the same target in a follow-up preserves that target's intake;
+an intervening different IP or explicit username change invalidates the old password.
+Ambiguous all-word prose is not the `username password IP` shorthand; use explicit
+labels for alphabetic-only passwords. No credential value is returned by the tools.
+
 The lazy client asset URL includes the SHA256 of the exact built bundle, not only the package
 version. Rebuilding a candidate version cannot serve its previously cached UI to the new entry.
 

@@ -48,3 +48,12 @@ carrying the previous active run's `new` mode after a partial account installati
 Same-baseline continuation still preserves the original mode. The focused suite
 passes 25 tests, the full serial suite 117; the two existing central baseline-migration
 tests also pass. No ledger rows are deleted and no needs-user policy is relaxed.
+
+The new host receipt identified the actual second-stage failure boundary as
+`vault-bootstrap`. Production `apply()` supplied the scoped Vault environment to
+the intake provider but omitted it from the host subprocess, so bootstrap/commit
+could not use it despite a healthy service. Pass the same narrow Vault environment
+to trusted host subprocesses; never forward broad Vault, Fleet agent/executor, or
+Cloud tokens. A production-entry wiring test failed before this fix and passes
+afterward, including model-schema non-disclosure. Full serial suite: 118 passed.
+No bearer values were changed, rotated or displayed.

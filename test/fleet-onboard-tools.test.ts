@@ -13,6 +13,7 @@ import {
   VaultFirstCredentialProvider,
   registerFleetOnboardTools,
   credentialFromSession,
+  apply,
   type FleetLedgerRun,
   type FleetOnboardCloudTransport,
   type FleetOnboardHostAdapter,
@@ -278,6 +279,41 @@ test('module registers exactly four strict intent-only schemas', async () => {
     }
     assert.throws(() => tool.execute({ ip: IP, inventory: {} }, execution(`repair ${IP}`)), /unsupported tool argument/)
   }
+})
+
+test('production plugin wiring passes scoped Vault credentials to the host adapter only', async t => {
+  const files = await fixtureFiles()
+  const environment = {
+    FLEET_ONBOARD_AGENT_MCP_URL: 'https://fleet.invalid/agent', FLEET_ONBOARD_AGENT_TOKEN: AGENT_TOKEN,
+    FLEET_ONBOARD_EXECUTOR_MCP_URL: 'https://fleet.invalid/executor', FLEET_ONBOARD_EXECUTOR_TOKEN: EXECUTOR_TOKEN,
+    FLEET_ONBOARD_WORKER_ID: WORKER, FLEET_ONBOARD_EXECUTOR_VERSION: EXECUTOR_VERSION,
+    FLEET_ONBOARD_INVENTORY_HMAC_KEY_FILE: files.keyFile, FLEET_ONBOARD_HOST_CONFIG_FILE: join(files.root, 'host.json'),
+    FLEET_ONBOARD_VAULT_RESOLVE_TOKEN: 'scoped-vault-test-token',
+    FLEET_ONBOARD_VAULT_RESOLVE_URL: 'https://fleet.invalid/scoped-vault',
+    FLEET_ONBOARD_EXECUTION_ENABLED: '1',
+    FLEET_ONBOARD_CLOUD_URL: '', FLEET_ONBOARD_CLOUD_TOKEN: '',
+    FLEET_VAULT_TOKEN: 'broad-vault-test-token',
+  }
+  for (const [key, value] of Object.entries(environment)) {
+    const before = process.env[key]
+    process.env[key] = value
+    t.after(() => { if (before === undefined) delete process.env[key]; else process.env[key] = before })
+  }
+  t.mock.method(VaultFirstCredentialProvider, 'create', async () => ({ async resolve() { return { available: false } } }))
+  let configured: any
+  t.mock.method(SubprocessFleetOnboardAdapter, 'create', async (config: any) => {
+    configured = config
+    return { executionAvailable: true }
+  })
+  const definitions: any[] = []
+  await apply({ tools: { register(d: any) { definitions.push(d); return () => undefined } } } as any, { skillRoot: files.root })
+  assert.ok(configured)
+  assert.equal(configured.environment.FLEET_ONBOARD_VAULT_RESOLVE_TOKEN, environment.FLEET_ONBOARD_VAULT_RESOLVE_TOKEN)
+  assert.equal(configured.environment.FLEET_ONBOARD_VAULT_RESOLVE_URL, environment.FLEET_ONBOARD_VAULT_RESOLVE_URL)
+  for (const key of ['FLEET_VAULT_TOKEN', 'FLEET_ONBOARD_AGENT_TOKEN', 'FLEET_ONBOARD_EXECUTOR_TOKEN']) {
+    assert.equal(configured.environment[key], undefined)
+  }
+  assert.ok(!JSON.stringify(definitions).includes(environment.FLEET_ONBOARD_VAULT_RESOLVE_TOKEN))
 })
 
 test('missing session credentials checks fixed Vault first, then returns needs_input with zero probe and zero ledger run', async t => {

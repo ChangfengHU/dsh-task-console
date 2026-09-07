@@ -383,7 +383,7 @@ export interface SubprocessFleetAdapterConfig {
   stateDir?: string
   tempRoot?: string
   timeoutMs?: number
-  /** Explicit, host-owned non-secret environment for adapters and tests. */
+  /** Explicit host-owned environment for trusted subprocesses, never tool/model output. */
   environment?: Readonly<Record<string, string>>
   workerId: string
   executorVersion: string
@@ -1641,7 +1641,9 @@ export async function apply(ctx: Context, pluginConfig: FleetOnboardPluginConfig
       ...(cloud ? { cloud } : {}),
       contractFile: join(skillRoot, 'component-contract.json'), hmacKeyFile,
       hmacForbiddenValues: [agentToken, executorToken, vaultToken, ...(cloudToken ? [cloudToken] : [])],
-      environment: { FLEET_ONBOARD_HOST_CONFIG_FILE: hostConfig }, workerId, executorVersion,
+      // Both inventory managed-login resolution and Stage 2 bootstrap/readback
+      // run inside this trusted host subprocess, not the intake provider.
+      environment: { ...vaultEnvironment, FLEET_ONBOARD_HOST_CONFIG_FILE: hostConfig }, workerId, executorVersion,
     })
   } catch { /* Plugin stays loadable, but every unsafe or missing host dependency fails closed. */ }
   await registerFleetOnboardTools(ctx, adapter ?? new UnavailableFleetAdapter(credentials), pluginConfig.readOnly === true)

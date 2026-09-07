@@ -143,6 +143,13 @@ with evidence instead of creating empty rework rounds. Signal receipts distingui
 from active execution. External Signal tasks cannot rerun their original template: the source
 must submit a new Signal for fresh intent/team validation, retaining the previous batch history.
 
+Host-adapter failures carry a bounded `diagnostic.boundary` and allowlisted `diagnostic.code`.
+Raw stderr, credentials, paths and arbitrary exception messages are never returned. A probe
+contract failure does not mean execution is unconfigured or SSH authentication failed;
+`execution_available` retains the actual configured capability. Inventory producers must keep
+strict wire schemas aligned: internal telemetry readiness belongs in the existing registration
+`readback` check, not undeclared top-level fields or component facts.
+
 The lazy client asset URL includes the SHA256 of the exact built bundle, not only the package
 version. Rebuilding a candidate version cannot serve its previously cached UI to the new entry.
 

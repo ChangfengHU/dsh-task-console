@@ -36,3 +36,15 @@ run exposed the new negative-case test plus three existing timing-sensitive Runn
 tests; the negative case was corrected in production parsing and the final serial full
 run passed without modifying unrelated Runner code. The incorrect credential question
 is cancelled only in the owner-selected session before reloading; no history is removed.
+
+Further real execution passed SSH preflight and reached managed-account setup. The
+paired host repair `40855d1` fixes OpenSSH closing inherited identity descriptors;
+it was reproduced with actual OpenSSH in all three affected transports and passed
+273 Python tests. The old needs-user record cannot be blindly resumed; retain this
+protection and use the existing audited executor-baseline migration instead.
+
+Baseline migration now recalculates new/repair mode from fresh inventory rather than
+carrying the previous active run's `new` mode after a partial account installation.
+Same-baseline continuation still preserves the original mode. The focused suite
+passes 25 tests, the full serial suite 117; the two existing central baseline-migration
+tests also pass. No ledger rows are deleted and no needs-user policy is relaxed.

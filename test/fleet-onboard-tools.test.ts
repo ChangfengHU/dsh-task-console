@@ -153,7 +153,8 @@ async function ledgerFixture(probeLog: string): Promise<LedgerFixture> {
       probeFirst = log.includes('"role":"probe"')
       assert.equal(verifyHmac(args.inventoryEvidence), true)
       assert.equal(args.inventoryEvidence.provenance.target_fingerprint, args.targetFingerprint)
-      if (!run) {
+      if (!run || run.executorVersion !== args.executorVersion || run.contractVersion !== args.contractVersion) {
+        stages.length = 0
         run = {
           id: 'onb-fixture', nodeId: `host-${args.ip.replaceAll('.', '-')}`, ip: args.ip,
           sessionId: args.sessionId, mode: args.mode, status: 'running', currentStage: 0,
@@ -226,7 +227,7 @@ async function ledgerFixture(probeLog: string): Promise<LedgerFixture> {
   }
 }
 
-async function createAdapter(files: FixtureFiles, ledger: LedgerFixture, options: { vaultAvailable?: boolean; healthyThrough?: number; badFingerprint?: boolean; probeError?: string; executorAvailable?: boolean; cloud?: FleetOnboardCloudTransport } = {}) {
+async function createAdapter(files: FixtureFiles, ledger: LedgerFixture, options: { vaultAvailable?: boolean; healthyThrough?: number; badFingerprint?: boolean; probeError?: string; executorAvailable?: boolean; executorVersion?: string; cloud?: FleetOnboardCloudTransport } = {}) {
   const credentials = await VaultFirstCredentialProvider.create({
     command: { executable: files.provider },
     environment: {
@@ -254,7 +255,7 @@ async function createAdapter(files: FixtureFiles, ledger: LedgerFixture, options
       ...(options.badFingerprint ? { FLEET_FIXTURE_BAD_FINGERPRINT: '1' } : {}),
       ...(options.probeError ? { FLEET_FIXTURE_PROBE_ERROR: options.probeError } : {}),
     },
-    workerId: WORKER, executorVersion: EXECUTOR_VERSION,
+    workerId: WORKER, executorVersion: options.executorVersion ?? EXECUTOR_VERSION,
   })
 }
 
@@ -523,6 +524,21 @@ test('a bare host is classified as new, not adopt, before central start', async 
   assert.equal(value.needs_input, true)
   assert.equal(value.reason, 'probe-gate-not-satisfied')
   assert.equal(ledger.calls.find(call => call.tool === 'onboard_start')!.args.mode, 'new')
+})
+
+test('an upgraded executor reclassifies partially installed hosts during baseline migration', async t => {
+  const files = await fixtureFiles()
+  const ledger = await ledgerFixture(files.log)
+  t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
+  const old = await createAdapter(files, ledger, { vaultAvailable: true, healthyThrough: 1, executorVersion: 'old/1' })
+  const first = await old.start(IP, 'base', execution(`Install ${IP}`))
+  assert.equal(first.phase, 'blocked')
+  assert.equal(ledger.calls.find(call => call.tool === 'onboard_start')!.args.mode, 'new')
+  const upgraded = await createAdapter(files, ledger, { vaultAvailable: true, healthyThrough: 2 })
+  const next = await upgraded.start(IP, 'base', execution(`Continue ${IP}`))
+  assert.equal(ledger.calls.filter(call => call.tool === 'onboard_start').at(-1)!.args.mode, 'repair')
+  assert.equal(next.run_created, true)
+  assert.equal(next.current_stage, 2)
 })
 
 test('execution availability requires ledger, probe, host executors and Cloud transport', async t => {

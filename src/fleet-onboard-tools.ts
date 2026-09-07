@@ -1004,8 +1004,9 @@ function stageAssessment(assessment: Record<string, unknown>, stage: number): Re
   return item as Record<string, unknown>
 }
 
-function startMode(inventory: Record<string, unknown>, assessment: Record<string, unknown>, prior: FleetLedgerStatus): FleetLedgerRun['mode'] {
-  if (prior.ok && prior.run && ['running', 'blocked'].includes(prior.run.status)) return prior.run.mode
+function startMode(inventory: Record<string, unknown>, assessment: Record<string, unknown>, prior: FleetLedgerStatus, config: PreparedConfig): FleetLedgerRun['mode'] {
+  if (prior.ok && prior.run && ['running', 'blocked'].includes(prior.run.status)
+    && prior.run.executorVersion === config.executorVersion && prior.run.contractVersion === config.contractSha256) return prior.run.mode
   const fleet = inventory.fleet as Record<string, unknown> | undefined
   const stages = Array.isArray(assessment.components) ? assessment.components : []
   const complete = fleet?.registered === true && fleet.reachable === true
@@ -1380,7 +1381,7 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
           if (!prior.ok && prior.error !== 'onboarding run not found' && prior.error !== 'not found') {
             throw new Error('ledger-prior-status-failed')
           }
-          const mode = startMode(inventory, assessment, prior)
+          const mode = startMode(inventory, assessment, prior, this.config)
           const response = await this.config.ledger!.start({
             ip, mode, sessionId, workerId: this.config.workerId, contractVersion: this.config.contractSha256,
             executorVersion: this.config.executorVersion, desiredLine: 'line-100', profile: 'base',

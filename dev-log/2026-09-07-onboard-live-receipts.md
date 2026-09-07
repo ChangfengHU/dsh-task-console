@@ -60,6 +60,14 @@ does not show it as a node failure; this run does not add the separate browser
 account-control service or image-worker extension. Do not claim those extensions
 were accepted, or that initial history loading latency was solved here.
 
+After waiting for the whole Fleet card, two additional UI/data boundaries are
+visible: exit verification is about an hour old, and the candidate-line matrix
+says not yet probed. Source check confirms /api/fleet/exits reads the Controller
+last_result.verified_at (not this run's fresh inventory), while /api/fleet/lines
+reads separately persisted line_probes rows filled by Fleet sweeps. These were
+not refreshed by this base admission. Never describe the entire Fleet UI as
+fully reconciled or silently replace those timestamps with the admission time.
+
 Final plugin code: 90fa41d; 122 serial tests and build passed. Companion code:
 linux-clash-skill 4c29521; sop-ui 0c55ee0 (machined 0.15.8);
 a2a-studio 518a521, deployed Worker 61e51509-9b42-45bb-8802-d9c241d40af0.

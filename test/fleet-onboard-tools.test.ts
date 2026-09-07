@@ -225,7 +225,7 @@ async function ledgerFixture(probeLog: string): Promise<LedgerFixture> {
   }
 }
 
-async function createAdapter(files: FixtureFiles, ledger: LedgerFixture, options: { vaultAvailable?: boolean; healthyThrough?: number; badFingerprint?: boolean; executorAvailable?: boolean; cloud?: FleetOnboardCloudTransport } = {}) {
+async function createAdapter(files: FixtureFiles, ledger: LedgerFixture, options: { vaultAvailable?: boolean; healthyThrough?: number; badFingerprint?: boolean; probeError?: string; executorAvailable?: boolean; cloud?: FleetOnboardCloudTransport } = {}) {
   const credentials = await VaultFirstCredentialProvider.create({
     command: { executable: files.provider },
     environment: {
@@ -251,6 +251,7 @@ async function createAdapter(files: FixtureFiles, ledger: LedgerFixture, options
       FLEET_FIXTURE_LOG: files.log,
       FLEET_FIXTURE_HEALTHY_THROUGH: String(options.healthyThrough ?? 2),
       ...(options.badFingerprint ? { FLEET_FIXTURE_BAD_FINGERPRINT: '1' } : {}),
+      ...(options.probeError ? { FLEET_FIXTURE_PROBE_ERROR: options.probeError } : {}),
     },
     workerId: WORKER, executorVersion: EXECUTOR_VERSION,
   })
@@ -422,11 +423,36 @@ test('invalid physical-host fingerprint fails before central start and runtime a
   assert.equal(value.reason, 'host-adapter-failed')
   assert.equal(value.run_created, false)
   assert.equal(value.probe_executed, true)
+  assert.deepEqual(value.diagnostic, { boundary: 'probe', code: 'adapter-result-validation-failed' })
   assert.equal(ledger.calls.length, 0)
   const records = (await readFile(files.log, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
   assert.deepEqual(records.map(record => record.role), ['vault-provider', 'probe'])
   assert.ok(!JSON.stringify(value).includes(CANARY))
   await assert.rejects(() => readFile(records[1].credentialFile), /ENOENT/)
+})
+
+test('host probe errors expose only bounded allowlisted diagnostics and never raw transport secrets', async t => {
+  const cases: [string, string][] = [
+    [JSON.stringify({schema: 1, ok: false, error: 'probe-inventory-invalid:unknown-field:inventory.fleet.metrics_ready'}), 'probe-inventory-contract-invalid'],
+    [JSON.stringify({schema: 1, ok: false, error: 'probe-transport-failed'}), 'probe-transport-failed'],
+    [JSON.stringify({schema: 1, ok: false, error: CANARY}), 'adapter-process-failed'],
+    [`Traceback: ${CANARY}`, 'adapter-process-failed'],
+    [JSON.stringify({schema: 1, ok: false, error: 'probe-transport-failed'}) + '\n' + CANARY, 'adapter-process-failed'],
+    [' '.repeat(8193) + JSON.stringify({schema: 1, ok: false, error: 'probe-transport-failed'}), 'adapter-process-failed'],
+  ]
+  for (const [probeError, code] of cases) {
+    const files = await fixtureFiles()
+    const ledger = await ledgerFixture(files.log)
+    t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
+    const adapter = await createAdapter(files, ledger, {vaultAvailable: true, probeError})
+    const value = await adapter.start(IP, 'base', execution(`Check ${IP}`))
+    assert.equal(value.reason, 'host-adapter-failed')
+    assert.deepEqual(value.diagnostic, {boundary: 'probe', code})
+    assert.equal(value.execution_available, adapter.executionAvailable)
+    assert.equal(value.run_created, false)
+    assert.equal(ledger.calls.length, 0)
+    assert.ok(!JSON.stringify(value).includes(CANARY))
+  }
 })
 
 test('adapter rejects a non-canonical or bearer-equal evidence key before any subprocess', async () => {

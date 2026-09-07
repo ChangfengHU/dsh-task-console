@@ -25,6 +25,10 @@ if (!credential.username || !credential.password || credential.ip !== input.ip) 
 await appendFile(process.env.FLEET_FIXTURE_LOG, `${JSON.stringify({
   role: 'probe', argv: process.argv.slice(2), stdin: input, credentialFile, credentialMode: metadata.mode & 0o777,
 })}\n`)
+if (process.env.FLEET_FIXTURE_PROBE_ERROR) {
+  process.stderr.write(process.env.FLEET_FIXTURE_PROBE_ERROR + '\n')
+  process.exit(2)
+}
 const contract = JSON.parse(await readFile(process.env.FLEET_ONBOARD_CONTRACT_FILE, 'utf8'))
 const key = (await readFile(process.env.FLEET_ONBOARD_INVENTORY_HMAC_KEY_FILE, 'utf8')).trimEnd()
 const through = Number(process.env.FLEET_FIXTURE_HEALTHY_THROUGH || 0)

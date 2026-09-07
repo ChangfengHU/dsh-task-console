@@ -743,6 +743,25 @@ function safeEnvironment(extra: Readonly<Record<string, string>> = {}): NodeJS.P
   return env
 }
 
+class AdapterProcessError extends Error {
+  constructor(readonly diagnostic: string) { super('fleet-onboard-adapter-process-failed') }
+}
+
+// Decode only the host's bounded JSON diagnostic. Never forward stderr, paths,
+// credentials or arbitrary exception text into the model-visible tool result.
+function adapterFailureCode(stderr: Buffer): string {
+  try {
+    const value = JSON.parse(stderr.toString('utf8').trim())
+    if (value?.schema !== 1 || value.ok !== false || typeof value.error !== 'string') return 'adapter-process-failed'
+    if (value.error.startsWith('probe-inventory-invalid:')) return 'probe-inventory-contract-invalid'
+    if (new Set(['probe-transport-failed', 'probe-executor-unavailable', 'probe-result-identity-mismatch',
+      'probe-target-fingerprint-required', 'probe-result-shape-invalid', 'host-adapter-config-required',
+      'host-adapter-config-unavailable', 'host-adapter-config-not-private-to-service',
+      'host-adapter-config-invalid', 'runtime-unavailable']).has(value.error)) return value.error
+  } catch { /* Unstructured transport output is not safe diagnostic evidence. */ }
+  return 'adapter-process-failed'
+}
+
 async function runJsonProcess(command: Required<FixedCommand>, extraArgs: string[], input: unknown, env: NodeJS.ProcessEnv, signal?: AbortSignal, timeoutMs = DEFAULT_ADAPTER_TIMEOUT_MS): Promise<Record<string, unknown>> {
   const child = spawn(command.executable, [...command.args, ...extraArgs], {
     shell: false,
@@ -752,6 +771,7 @@ async function runJsonProcess(command: Required<FixedCommand>, extraArgs: string
   })
   let stdout = Buffer.alloc(0)
   let stderrBytes = 0
+  let diagnosticBytes = Buffer.alloc(0)
   let overflow = false
   child.stdout.on('data', chunk => {
     if (overflow) return
@@ -760,6 +780,8 @@ async function runJsonProcess(command: Required<FixedCommand>, extraArgs: string
   })
   child.stderr.on('data', chunk => {
     stderrBytes += Buffer.byteLength(chunk)
+    if (stderrBytes <= 8192) diagnosticBytes = Buffer.concat([diagnosticBytes, Buffer.from(chunk)])
+    else diagnosticBytes.fill(0)
     if (stderrBytes > MAX_PROCESS_BYTES) child.kill('SIGKILL')
   })
   const abort = () => child.kill('SIGTERM')
@@ -774,9 +796,11 @@ async function runJsonProcess(command: Required<FixedCommand>, extraArgs: string
     clearTimeout(timer)
     signal?.removeEventListener('abort', abort)
   })
+  const failureCode = stderrBytes <= 8192 ? adapterFailureCode(diagnosticBytes) : 'adapter-process-failed'
+  diagnosticBytes.fill(0)
   if (aborted) throw new Error('fleet-onboard-operation-aborted')
   if (overflow) throw new Error('fleet-onboard-adapter-output-too-large')
-  if (code !== 0) throw new Error(`fleet-onboard-adapter-exit-${code ?? 'signal'}`)
+  if (code !== 0) { stdout.fill(0); throw new AdapterProcessError(failureCode) }
   const lines = stdout.toString('utf8').split(/\r?\n/).filter(line => line.trim())
   stdout.fill(0)
   if (lines.length !== 1) throw new Error('fleet-onboard-adapter-must-return-one-json-line')
@@ -1323,11 +1347,15 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
     let probeAttempted = false
     let run: FleetLedgerRun | undefined
     let created = false
+    let boundary = 'credential-handoff'
     try {
       return await withCredentialFile(lease, this.config, async env => {
         probeAttempted = true
+        boundary = 'probe'
         const inventory = await this.inventory(ip, profile, env, exec.signal)
+        boundary = 'assessment'
         const assessment = await this.assess(inventory, env, exec.signal)
+        boundary = 'ledger'
         const provenance = inventory.provenance as Record<string, unknown>
         const desired = inventory.desired as Record<string, unknown>
         let status: FleetLedgerStatus
@@ -1407,6 +1435,7 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
             }
           }
         }
+        boundary = 'execution'
         const driven = await this.drive(run!, inventory, assessment, status!.stages ?? [], env, exec.signal)
         run = driven.run
         const result: FleetToolResult = {
@@ -1419,9 +1448,11 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
         assertNoSecrets(result, 'tool-result')
         return result
       })
-    } catch {
+    } catch (error) {
       return {
         ...blockedResult(operation, ip, 'host-adapter-failed'), probe_executed: probeAttempted,
+        execution_available: this.executionAvailable,
+        diagnostic: { boundary, code: error instanceof AdapterProcessError ? error.diagnostic : 'adapter-result-validation-failed' },
         run_created: operation === 'start' && created,
         ...(run ? { run_id: run.id, revision: run.revision } : {}),
       }

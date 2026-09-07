@@ -72,7 +72,7 @@ export interface CredentialLease {
 }
 
 export interface CredentialProvider {
-  resolve(ip: string, exec: ToolExecutionLike): Promise<CredentialLease>
+  resolve(ip: string, exec: ToolExecutionLike, preferManaged?: boolean): Promise<CredentialLease>
 }
 
 export interface ToolExecutionLike {
@@ -618,7 +618,7 @@ async function runCredentialProvider(config: VaultCredentialProviderConfig, ip: 
   return value as Record<string, unknown>
 }
 
-/** Latest user intake wins; otherwise a single fixed, host-owned Vault provider is consulted. */
+/** Initial intake may bootstrap; continuations prefer the verified managed Vault login. */
 export class VaultFirstCredentialProvider implements CredentialProvider {
   private constructor(private readonly config: VaultCredentialProviderConfig) {}
 
@@ -627,9 +627,9 @@ export class VaultFirstCredentialProvider implements CredentialProvider {
     return new VaultFirstCredentialProvider({ ...config, command: await prepareCommand(config.command, 'credential-provider') })
   }
 
-  async resolve(ip: string, exec: ToolExecutionLike): Promise<CredentialLease> {
+  async resolve(ip: string, exec: ToolExecutionLike, preferManaged = false): Promise<CredentialLease> {
     const intake = credentialFromSession(ip, exec)
-    if (intake.available) return intake
+    if (intake.available && !preferManaged) return intake
     const root = await mkdtemp(join(this.config.tempRoot ?? tmpdir(), 'dsh-fleet-vault-'))
     await chmod(root, 0o700)
     const file = join(root, 'credential.json')
@@ -637,9 +637,11 @@ export class VaultFirstCredentialProvider implements CredentialProvider {
       const metadata = await runCredentialProvider(this.config, ip, file, exec.signal)
       if (!metadata) {
         await rm(root, { recursive: true, force: true })
+        if (intake.available) return intake
         return { available: false, missing: intake.missing ?? ['ssh_username', 'ssh_credential'] }
       }
       await validateCredentialLeaseFile(file)
+      intake.material?.fill(0)
       let disposed = false
       return {
         available: true, source: 'vault', file,
@@ -650,6 +652,7 @@ export class VaultFirstCredentialProvider implements CredentialProvider {
         },
       }
     } catch (error) {
+      intake.material?.fill(0)
       await rm(root, { recursive: true, force: true })
       throw error
     }
@@ -1349,7 +1352,7 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
     const sessionId = executionSessionId(exec)
     if (!sessionId || !/^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,159}$/.test(sessionId)) return blockedResult(operation, ip, 'dsh-session-id-unavailable')
     let lease: CredentialLease
-    try { lease = await this.config.credentials.resolve(ip, exec) }
+    try { lease = await this.config.credentials.resolve(ip, exec, operation === 'resume') }
     catch { return blockedResult(operation, ip, 'credential-provider-unavailable') }
     if (!lease.available) {
       if (lease.material instanceof Uint8Array) lease.material.fill(0)

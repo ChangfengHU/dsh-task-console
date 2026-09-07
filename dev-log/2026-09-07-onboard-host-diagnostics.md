@@ -57,3 +57,11 @@ to trusted host subprocesses; never forward broad Vault, Fleet agent/executor, o
 Cloud tokens. A production-entry wiring test failed before this fix and passes
 afterward, including model-schema non-disclosure. Full serial suite: 118 passed.
 No bearer values were changed, rotated or displayed.
+
+Subsequent continuation exposed bootstrap reuse: historical intake always won over
+the now-verified Vault login, making each resume report Stage 2 unhealthy again.
+`resume` now prefers managed Vault material; only a genuinely absent record falls
+back to intake. Initial explicit bootstrap intake remains supported; provider
+transport/validation errors do not silently fall back. Discarded intake buffers are
+zeroed. The paired host change requires independent managed resolution for Stage 4+
+even within an initial `start` call. Full serial plugin suite: 119 passed.

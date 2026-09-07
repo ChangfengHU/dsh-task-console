@@ -577,6 +577,30 @@ test('an upgraded executor reclassifies partially installed hosts during baselin
   assert.equal(next.current_stage, 2)
 })
 
+test('continuation prefers managed Vault over historical bootstrap, with fallback only when absent', async () => {
+  const files = await fixtureFiles()
+  const make = (available: boolean) => VaultFirstCredentialProvider.create({
+    command: { executable: files.provider }, environment: {
+      FLEET_FIXTURE_LOG: files.log, FLEET_FIXTURE_VAULT_AVAILABLE: available ? '1' : '0',
+      FLEET_FIXTURE_VAULT_SECRET: CANARY, FLEET_ONBOARD_VAULT_RESOLVE_TOKEN: 'scoped-vault-test-token',
+      FLEET_ONBOARD_VAULT_RESOLVE_URL: 'https://fleet.invalid/vault',
+    },
+  })
+  const exec = execution([`IP: ${IP}\nuser: root\npassword: ${CANARY}`, `Continue ${IP}`])
+  const provider = await make(true)
+  const initial = await provider.resolve(IP, exec)
+  assert.equal(initial.source, 'intake')
+  initial.material!.fill(0)
+  const continued = await provider.resolve(IP, exec, true)
+  assert.equal(continued.source, 'vault')
+  assert.equal(continued.material, undefined)
+  assert.ok(continued.file)
+  await continued.dispose!()
+  const fallback = await (await make(false)).resolve(IP, exec, true)
+  assert.equal(fallback.source, 'intake')
+  fallback.material!.fill(0)
+})
+
 test('execution availability requires ledger, probe, host executors and Cloud transport', async t => {
   const files = await fixtureFiles()
   const ledger = await ledgerFixture(files.log)

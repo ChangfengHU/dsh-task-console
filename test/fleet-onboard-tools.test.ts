@@ -674,6 +674,68 @@ test('Cloud transport configuration rejects non-fixed URLs without exposing the 
   }
 })
 
+test('Cloud status is GET-only and still validates the exact operation receipt', async () => {
+  const operationId = 'onboard-0123456789abcdef0123456789abcdef'
+  const calls: string[] = []
+  let wrongIp = false
+  const cloud = new HttpFleetOnboardCloudTransport({
+    url: 'https://control.invalid/api/fleet-onboard-cloud/v1/operations', token: AGENT_TOKEN,
+    fetch: (async (_url, init = {}) => {
+      calls.push(init.method ?? 'GET')
+      return new Response(JSON.stringify({ ok: true, operations: [{ operation_id: operationId,
+        schema_version: 1, stage: 5, ip: wrongIp ? '8.8.8.8' : IP, node_id: `host-${IP.replaceAll('.', '-')}`,
+        status: 'failed', action: null, result_code: 'machine-request-failed' }] }))
+    }) as typeof fetch,
+  })
+  assert.deepEqual(await cloud.status({ schema: 1, operationId, stage: 5, ip: IP }), {
+    status: 'failed', action: null, resultCode: 'machine-request-failed',
+  })
+  wrongIp = true
+  await assert.rejects(cloud.status({ schema: 1, operationId, stage: 5, ip: IP }), /status-invalid/)
+  await assert.rejects(cloud.status({ schema: 1, operationId: '../other', stage: 5, ip: IP }), /request-invalid/)
+  assert.deepEqual(calls, ['GET', 'GET'])
+})
+
+test('status/report show live Cloud failure without dispatch, credentials, probes, or ledger writes', async t => {
+  const files = await fixtureFiles()
+  const ledger = await ledgerFixture(files.log)
+  t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
+  const submitted: string[] = []
+  const queried: string[] = []
+  let unreachable = false
+  const cloud: FleetOnboardCloudTransport = {
+    async execute(input) { submitted.push(input.operationId); return { status: 'running', action: null, resultCode: null } },
+    async status(input) {
+      queried.push(input.operationId)
+      if (unreachable) throw new Error(CANARY)
+      return { status: 'failed', action: null, resultCode: 'machine-request-failed' }
+    },
+  }
+  const adapter = await createAdapter(files, ledger, { vaultAvailable: true, healthyThrough: 4, executorAvailable: true, cloud })
+  const exec = execution(`修复 ${IP}`)
+  await adapter.start(IP, 'base', exec)
+  const callCount = ledger.calls.length
+  const fileBefore = await readFile(files.log, 'utf8')
+  for (const operation of ['status', 'report'] as const) {
+    const value = await adapter[operation](IP, exec)
+    assert.equal(value.phase, 'running', 'ledger phase is not rewritten by a read')
+    assert.equal((value.async_operation as any).status, 'failed')
+    assert.equal((value.async_operation as any).result_code, 'machine-request-failed')
+    assert.equal(value.next_tool, 'fleet_onboard_resume')
+    assert.equal(value.probe_executed, false)
+  }
+  assert.deepEqual(queried, [submitted[0], submitted[0]])
+  assert.equal(submitted.length, 1)
+  assert.ok(ledger.calls.slice(callCount).every(call => ['onboard_status', 'onboard_report'].includes(call.tool)))
+  const beforeProbes = fileBefore.split('\n').filter(line => line.includes('"role":"probe"')).length
+  const afterProbes = (await readFile(files.log, 'utf8')).split('\n').filter(line => line.includes('"role":"probe"')).length
+  assert.equal(afterProbes, beforeProbes)
+  unreachable = true
+  const value = await adapter.status(IP, exec)
+  assert.equal((value.async_operation as any).status, 'unknown')
+  assert.ok(!JSON.stringify(value).includes(CANARY))
+})
+
 test('Cloud disabled status becomes a needs-user blocker and never passes the stage', async t => {
   const files = await fixtureFiles()
   const ledger = await ledgerFixture(files.log)

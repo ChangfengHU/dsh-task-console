@@ -137,9 +137,11 @@ advance must the record belong to the new session. Requiring the new session bef
 rejects legitimate recovery; skipping identity verification entirely would weaken the lock.
 
 For a running onboarding transaction, `can_resume` and `next_tool` explicitly direct the executor
-to continue with `fleet_onboard_resume`. Status/report are ledger-only reads, not async-operation
-polls. Running work cannot be handed off as completed; repeated unchanged attempts must block
-with evidence instead of creating empty rework rounds. Signal receipts distinguish `blocked`
+to continue with `fleet_onboard_resume`. Status/report read the ledger and the exact Cloud
+operation receipt without submitting work; `async_operation` distinguishes live state from the
+persisted ledger. They do not advance the transaction. Running work cannot be handed off as
+completed, and unchanged running receipts alone are not failure. Follow the executor's terminal
+state/timeout; the preset bounds no-progress tracking at 30 minutes. Signal receipts distinguish `blocked`
 from active execution. External Signal tasks cannot rerun their original template: the source
 must submit a new Signal for fresh intent/team validation, retaining the previous batch history.
 

@@ -124,6 +124,7 @@ export interface FleetOnboardCloudResult {
 
 export interface FleetOnboardCloudTransport {
   execute(input: { schema: 1; operationId: string; stage: 5 | 6 | 7 | 8 | 10; ip: string }, signal?: AbortSignal): Promise<FleetOnboardCloudResult>
+  status?(input: { schema: 1; operationId: string; stage: 5 | 6 | 7 | 8 | 10; ip: string }, signal?: AbortSignal): Promise<FleetOnboardCloudResult>
 }
 
 function trustedCloudWorkflowUrl(value: string): URL {
@@ -195,6 +196,15 @@ export class HttpFleetOnboardCloudTransport implements FleetOnboardCloudTranspor
       || !['queued', 'running', 'blocked', 'failed', 'succeeded'].includes(String(accepted.status))
       || typeof accepted.idempotent !== 'boolean') throw new Error('fleet-onboard-cloud-submit-invalid')
 
+    return this.status(input, signal)
+  }
+
+  /** Read the durable receipt without submitting or advancing any machine work. */
+  async status(input: { schema: 1; operationId: string; stage: 5 | 6 | 7 | 8 | 10; ip: string }, signal?: AbortSignal): Promise<FleetOnboardCloudResult> {
+    if (input.schema !== 1 || !/^onboard-[0-9a-f]{32}$/.test(input.operationId)
+      || ![5, 6, 7, 8, 10].includes(input.stage) || !validIpv4(input.ip)) {
+      throw new Error('fleet-onboard-cloud-request-invalid')
+    }
     const statusUrl = new URL(`${this.#url.href}/${input.operationId}`)
     const response = await this.#request(statusUrl, {}, signal)
     if (response.status !== 200) throw new Error('fleet-onboard-cloud-status-failed')
@@ -1091,10 +1101,14 @@ function isHostStage(stage: number): stage is 2 | 4 | 9 {
   return stage === 2 || stage === 4 || stage === 9
 }
 
+function stageOperationId(run: FleetLedgerRun, stage: number, attempt: number): string {
+  return `onboard-${createHash('sha256').update(`${run.id}\0${run.targetFingerprint}\0${stage}\0${attempt}\0${run.executorVersion}`).digest('hex').slice(0, 32)}`
+}
+
 function continuation(phase: string, executionAvailable: boolean, failureClass?: unknown): Record<string, unknown> {
   return executionAvailable && (phase === 'running' || (phase === 'blocked' && failureClass === 'repairable'))
     ? { can_resume: true, next_tool: 'fleet_onboard_resume', task_complete_allowed: false,
-      next_action: 'Continue the same transaction with fleet_onboard_resume. status/report only read the ledger; they do not poll or advance the durable operation. Do not complete the Task while running.' }
+      next_action: 'Continue the same transaction with fleet_onboard_resume. status/report are read-only snapshots and cannot advance the transaction. Repeated running receipts alone are not failure; the durable executor owns its timeout. Do not complete the Task while running.' }
     : phase === 'blocked' && executionAvailable && failureClass === undefined ? {} : { can_resume: false }
 }
 
@@ -1109,7 +1123,8 @@ function projectLedger(operation: 'status' | 'report', ip: string, value: FleetL
   const events = (value.events ?? []).map(row => ({
     id: Number(row.id), at: row.at ?? null, kind: row.kind, stage: row.stage ?? null, status: row.status ?? null,
   }))
-  const latest = [...stages].sort((a, b) => b.stage - a.stage || b.attempt - a.attempt)[0]
+  const latest = [...stages].filter(row => row.stage === run.currentStage + 1)
+    .sort((a, b) => b.attempt - a.attempt)[0]
   const result: FleetToolResult = {
     schema: 1, ok: true, operation, ip, phase: run.status, execution_available: executionAvailable,
     needs_input: run.status === 'blocked' && latest?.failure_class === 'needs-user', run_created: false, probe_executed: false, run_id: run.id,
@@ -1212,7 +1227,7 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
       const running = signedReceipt(this.config, run, inventory, stage, { attempt, status: 'running', action, reasonCode: `${stage.id}-started` })
       run = await this.record(run, running, signal)
     }
-    const operationId = `onboard-${createHash('sha256').update(`${run.id}\0${run.targetFingerprint}\0${stage.stage}\0${attempt}\0${run.executorVersion}`).digest('hex').slice(0, 32)}`
+    const operationId = stageOperationId(run, stage.stage, attempt)
     let actionResult: Record<string, unknown>
     if (isHostStage(stage.stage)) {
       const request: Record<string, unknown> = {
@@ -1486,7 +1501,25 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
     if (!this.config.ledger) return blockedResult(operation, ip, 'production-ledger-unavailable')
     try {
       const raw = await this.config.ledger[operation]({ ip }, exec.signal)
-      return projectLedger(operation, ip, raw, this.executionAvailable)
+      const result = projectLedger(operation, ip, raw, this.executionAvailable)
+      const run = raw.run
+      const stage = Number(run?.currentStage) + 1
+      const prior = latestAttempt(raw.stages ?? [], stage)
+      if (run?.status === 'running' && prior?.status === 'running' && isCloudStage(stage) && this.config.cloud?.status) {
+        const operationId = stageOperationId(run, stage, Number(prior.attempt))
+        try {
+          const live = await this.config.cloud.status({ schema: 1, operationId, stage, ip }, exec.signal)
+          result.async_operation = { operation_id: operationId, stage, status: live.status,
+            result_code: live.resultCode, observed_at: new Date().toISOString() }
+          if (['succeeded', 'blocked', 'failed'].includes(live.status)) {
+            result.next_action = 'The durable operation has a terminal receipt. Call fleet_onboard_resume to reconcile it with fresh evidence; the ledger phase is not the live operation state.'
+          }
+        } catch {
+          result.async_operation = { operation_id: operationId, stage, status: 'unknown', reason: 'cloud-status-unavailable' }
+        }
+      }
+      assertNoSecrets(result, 'tool-result')
+      return result
     } catch { return blockedResult(operation, ip, 'central-ledger-unavailable') }
   }
 

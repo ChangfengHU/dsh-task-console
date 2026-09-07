@@ -21,3 +21,9 @@ Validation: 29 focused onboarding tests pass, including GET-only receipts,
 wrong-target rejection, no repeated dispatch/probe/ledger writes, and secret-safe
 read failures. The full serial plugin suite passes 121 tests and the build passes.
 This is not evidence of completed target installation.
+
+After Stage 5 passed, the live Stage-6 installer returned a generic failure. The
+host probe now supplies fixed Dashboard startup reason enums. Start/resume project
+those allowlisted codes with the original observation time and an explicit
+pre-execution boundary while Stage 6 is pending; they cannot be mistaken for new
+execution results. Raw logs or unknown strings never reach the tool response.

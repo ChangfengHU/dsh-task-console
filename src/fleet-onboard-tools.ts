@@ -1473,11 +1473,18 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
         boundary = 'execution'
         const driven = await this.drive(run!, inventory, assessment, status!.stages ?? [], env, exec.signal)
         run = driven.run
+        const observedReason = (inventory.components as any)?.['clash-control-plane']?.reason_code
+        const dashboardDiagnostic = run.currentStage === 5 && run.status !== 'complete' && new Set([
+          'dashboard-port-in-use', 'dashboard-permission-denied', 'dashboard-dependency-missing',
+          'dashboard-database-unavailable', 'dashboard-auth-config-invalid', 'dashboard-startup-unconfirmed',
+        ]).has(observedReason)
         const result: FleetToolResult = {
           schema: 1, ok: run.status === 'complete', operation, ip, phase: run.status,
           execution_available: this.executionAvailable, needs_input: driven.needsInput === true, run_created: operation === 'start' && created,
           probe_executed: true, run_id: run.id, revision: run.revision, current_stage: run.currentStage,
           report_available: Boolean(run.report), ...(driven.reason ? { reason: driven.reason } : {}),
+          ...(dashboardDiagnostic ? { diagnostic: { boundary: 'pre-execution-probe', code: observedReason,
+            stage: 6, observed_at: provenance.observed_at } } : {}),
           ...continuation(run.status, this.executionAvailable),
         }
         assertNoSecrets(result, 'tool-result')

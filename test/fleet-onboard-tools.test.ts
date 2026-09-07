@@ -228,7 +228,7 @@ async function ledgerFixture(probeLog: string): Promise<LedgerFixture> {
   }
 }
 
-async function createAdapter(files: FixtureFiles, ledger: LedgerFixture, options: { vaultAvailable?: boolean; healthyThrough?: number; badFingerprint?: boolean; probeError?: string; dashboardReason?: string; executorAvailable?: boolean; executorVersion?: string; cloud?: FleetOnboardCloudTransport } = {}) {
+async function createAdapter(files: FixtureFiles, ledger: LedgerFixture, options: { vaultAvailable?: boolean; healthyThrough?: number; badFingerprint?: boolean; probeError?: string; dashboardReason?: string; browserReason?: string; executorAvailable?: boolean; executorVersion?: string; cloud?: FleetOnboardCloudTransport } = {}) {
   const credentials = await VaultFirstCredentialProvider.create({
     command: { executable: files.provider },
     environment: {
@@ -256,6 +256,7 @@ async function createAdapter(files: FixtureFiles, ledger: LedgerFixture, options
       ...(options.badFingerprint ? { FLEET_FIXTURE_BAD_FINGERPRINT: '1' } : {}),
       ...(options.probeError ? { FLEET_FIXTURE_PROBE_ERROR: options.probeError } : {}),
       ...(options.dashboardReason ? { FLEET_FIXTURE_DASHBOARD_REASON: options.dashboardReason } : {}),
+      ...(options.browserReason ? { FLEET_FIXTURE_BROWSER_REASON: options.browserReason } : {}),
     },
     workerId: WORKER, executorVersion: options.executorVersion ?? EXECUTOR_VERSION,
   })
@@ -756,24 +757,25 @@ test('Cloud disabled status becomes a needs-user blocker and never passes the st
   assert.deepEqual(stage.map(call => call.args.evidence.status), ['running', 'blocked'])
 })
 
-test('stage-six probe diagnostics are timestamped enums, not arbitrary journal text', async t => {
+test('stage-six/seven probe diagnostics are timestamped enums, not arbitrary machine text', async t => {
   const files = await fixtureFiles()
   const ledger = await ledgerFixture(files.log)
   t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
   const cloud: FleetOnboardCloudTransport = {
     async execute() { return { status: 'blocked', action: null, resultCode: 'machine-component-installer-failed' } },
   }
-  for (const reason of ['dashboard-permission-denied', CANARY]) {
-    const adapter = await createAdapter(files, ledger, { vaultAvailable: true, healthyThrough: 5, cloud, dashboardReason: reason })
+  for (const [stage, reason] of [[6, 'dashboard-permission-denied'], [6, CANARY], [7, 'browser-binary-unavailable-arm64'], [7, CANARY]] as const) {
+    const adapter = await createAdapter(files, ledger, { vaultAvailable: true, healthyThrough: stage - 1, cloud,
+      ...(stage === 6 ? { dashboardReason: reason } : { browserReason: reason }) })
     const result = await adapter.start(IP, 'base', execution(`修复 ${IP}`))
     assert.equal(result.phase, 'blocked')
-    assert.equal(result.current_stage, 5)
+    assert.equal(result.current_stage, stage - 1)
     if (reason === CANARY) assert.equal(result.diagnostic, undefined)
     else {
       const diagnostic = result.diagnostic as any
       assert.equal(diagnostic.code, reason)
       assert.equal(diagnostic.boundary, 'pre-execution-probe')
-      assert.equal(diagnostic.stage, 6)
+      assert.equal(diagnostic.stage, stage)
       assert.ok(Number.isFinite(Date.parse(diagnostic.observed_at)))
     }
     assert.ok(!JSON.stringify(result).includes(CANARY))

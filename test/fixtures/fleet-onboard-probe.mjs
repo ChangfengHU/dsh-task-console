@@ -67,5 +67,6 @@ const inventory = {
   components,
 }
 if (process.env.FLEET_FIXTURE_DASHBOARD_REASON) components['clash-control-plane'].reason_code = process.env.FLEET_FIXTURE_DASHBOARD_REASON
+if (process.env.FLEET_FIXTURE_BROWSER_REASON) components['browser-vnc'].reason_code = process.env.FLEET_FIXTURE_BROWSER_REASON
 inventory.provenance.attestation = `hmac-sha256:${createHmac('sha256', key).update(canonical(inventory)).digest('hex')}`
 process.stdout.write(`${JSON.stringify({ schema: 1, ok: true, operation: 'probe', ip: input.ip, inventory })}\n`)

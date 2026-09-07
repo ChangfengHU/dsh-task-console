@@ -27,3 +27,9 @@ host probe now supplies fixed Dashboard startup reason enums. Start/resume proje
 those allowlisted codes with the original observation time and an explicit
 pre-execution boundary while Stage 6 is pending; they cannot be mistaken for new
 execution results. Raw logs or unknown strings never reach the tool response.
+# Browser prerequisite diagnostics
+
+After the original run passed stages 4/5/6, stage 7 failed generically. The
+timestamped pre-execution diagnostic projection now also accepts four fixed
+browser prerequisite enums. It does not expose command output or claim that
+the observation happened after installation. Unknown text/canary remains hidden.

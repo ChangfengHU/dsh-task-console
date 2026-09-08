@@ -54,6 +54,21 @@ protocol remains separate; do not invent Gate nodes for static business chains.
 The Board reuses database-truth replay for both. Session Trace stays in a drawer;
 operations may deliver a text report without an HTML artifact.
 
+Chat workflow executions store the redacted `userRequest` separately and a
+content-addressed `TaskTurn.workflow` definition (goal, role briefs, graph mode and
+failure limits) in the existing SQLite turn JSON. Execution and the plan viewer use
+that frozen definition. Legacy turns are labelled without a fabricated snapshot.
+Creation/routing sessions appear separately from execution Runs, including on direct
+workflow reuse; never invent another Creator invocation or a fourth execution node.
+The compact creation header opens the original conversation and expands role plans,
+input and saved JSON on demand. Full transcripts/Trace remain lazy.
+
+The Creator preset includes login as an explicit business requirement, distinct from
+base-node health. The browser role must verify existing as well as newly created
+instances when requested. It selects only authorized Gemini sources, preserves valid
+target logins and reports unknown/challenge/no-source honestly. No prompt expands the
+host browser policy; per-node/instance authorization stays Fleet-owned.
+
 Execution-history pickers show the actual firedAt date/time in Asia/Shanghai
 (explicit Beijing UTC+8), followed by an eight-character display code. Full Batch
 IDs remain the select values, route identifiers and hover text; display codes are

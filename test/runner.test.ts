@@ -71,6 +71,10 @@ test('chat workflow: real runner orders three roles, hands off, deduplicates and
     assert.equal(first.cards[0].status, 'running')
     assert.equal(first.cards[1].status, 'todo')
     assert.equal(first.cards[1].dependsOn[0], first.cards[0].id)
+    const savedTurn = store.s.batches.get(first.batchId)!.turn!
+    assert.equal(savedTurn.userRequest, 'Validate 192.0.2.10 idempotently')
+    assert.match(savedTurn.workflow!.id, /^[a-f0-9]{64}$/)
+    assert.deepEqual(savedTurn.workflow!.definition.participants, proposal.participants)
     const duplicate = await creator.submit({ ...proposal, title: 'LLM repeated with a different title' }, exec, root)
     assert.equal(duplicate.batchId, first.batchId)
     assert.equal(store.s.batches.size, 1)
@@ -91,6 +95,8 @@ test('chat workflow: real runner orders three roles, hands off, deduplicates and
     const second = await creator.launch(first.taskId, 'Validate 192.0.2.20', 'second-submission-1234', root)
     assert.equal(second.taskId, first.taskId)
     assert.notEqual(second.batchId, first.batchId)
+    assert.equal(store.s.batches.get(second.batchId)!.turn!.workflow!.id, savedTurn.workflow!.id)
+    assert.equal(store.s.batches.get(second.batchId)!.turn!.userRequest, 'Validate 192.0.2.20')
     assert.equal(creator.catalog().length, 1)
     const prompt = [...host.sessions.values()].at(-1)!.followups[0].content[0].text
     assert.match(prompt, /192\.0\.2\.20/); assert.doesNotMatch(prompt, /192\.0\.2\.10/)

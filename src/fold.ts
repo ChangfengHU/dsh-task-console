@@ -49,10 +49,16 @@ export interface TaskOrigin {
 export interface TaskTurn {
   objective: string
   participants: Participant[]
+  /** Redacted accepted input, separate from the reusable workflow instructions. */
+  userRequest?: string
+  /** Content-addressed definition actually selected for this execution. */
+  workflow?: { id: string; definition: WorkflowDefinition }
   cwd?: string
   targets?: TaskTarget[]
   origin?: TaskOrigin
 }
+
+export type WorkflowDefinition = Pick<TaskSpec, 'title' | 'brief' | 'participants' | 'graphMode' | 'timeoutSec' | 'onFail' | 'maxTries'>
 
 export interface TaskSpec {
   id: string

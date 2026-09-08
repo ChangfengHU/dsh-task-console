@@ -380,6 +380,7 @@ export function taskForTurn(task: TaskSpec, turn?: TaskTurn): TaskSpec {
   if (!turn) return task
   return {
     ...task,
+    ...(turn.workflow ? turn.workflow.definition : {}),
     brief: turn.objective,
     participants: turn.participants,
     ...(turn.cwd ? { cwd: turn.cwd } : {}),

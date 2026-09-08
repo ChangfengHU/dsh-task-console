@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+import { test } from 'node:test'
+import { validateSpec } from '../src/presets.ts'
+
+test('creator ships reusable onboarding/login rules but no business execution grants', async () => {
+  const spec = validateSpec(JSON.parse(await readFile(new URL('../presets/task-create-agent/task-console.json', import.meta.url), 'utf8')))
+  assert.deepEqual(spec.tools, ['ask-user', 'task-create-runtime'])
+  assert.deepEqual(spec.mcpTools, {})
+  assert.match(spec.persona, /没有新建浏览器也执行登录验收/)
+  assert.match(spec.persona, /browser_login_provision/)
+  assert.match(spec.persona, /仅要求只读验收或保持登录时不得自动复制/)
+  assert.match(spec.persona, /不承诺其他平台/)
+  assert.doesNotMatch(spec.persona, /152\.70\.155\.63/)
+})

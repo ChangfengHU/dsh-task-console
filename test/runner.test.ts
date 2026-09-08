@@ -108,6 +108,9 @@ test('chat workflow: real runner orders three roles, hands off, deduplicates and
   try {
     const first = await creator.submit(proposal, exec, root)
     assert.deepEqual(JSON.parse(JSON.stringify(first)), first, 'tool results must be lossless JSON, not contain undefined')
+    const context = await creator.context()
+    assert.deepEqual(JSON.parse(JSON.stringify(context)), context, 'a custom workflow must not poison the next Creator tool result')
+    assert.equal(Object.hasOwn(context.tasks[0], 'workflowRecipe'), false)
     assert.equal(first.cards.length, 3)
     assert.equal(first.cards[0].status, 'running')
     assert.equal(first.cards[1].status, 'todo')
@@ -162,6 +165,9 @@ test('chat recipe materializes exactly the registered roles and rejects mixed de
     const task = store.tasks.get(result.taskId)!
     assert.deepEqual(task.participants.map(p => p.agentId), ids)
     assert.deepEqual(task.workflowRecipe, recipe)
+    const context = await creator.context()
+    assert.deepEqual(context.tasks[0].workflowRecipe, recipe)
+    assert.deepEqual(JSON.parse(JSON.stringify(context)), context, 'managed recipes retain lossless Creator context too')
     assert.deepEqual(store.s.batches.get(result.batchId)!.turn!.workflow!.definition.workflowRecipe, recipe)
     assert.match(task.participants[1].brief!, /browser_login_provision/)
     assert.equal(result.cards.length, 3)

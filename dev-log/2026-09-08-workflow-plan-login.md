@@ -1,5 +1,28 @@
 # Workflow composition and explicit login acceptance
 
+## 0.27.3: custom workflow catalog must be lossless JSON
+
+The owner waived browser/config backups and authorized only 63 browser-2's scoped
+Task-driven deletion/recreation. Prior Task T-chat-1fbeb6ef25796ace7e13 required a
+backup and correctly remained blocked; keep its immutable plan and all previous runs.
+Companion browser MCP 9a163e9 supports purged native-slot creation without the optional
+image service and read-only exact instance grants. No browser data has been deleted at
+this checkpoint.
+
+Creator agent-task-create-agent-mtso55u3 failed twice before task creation because its
+context returned undefined workflowRecipe for the first custom non-recipe workflow.
+The native tool protocol requires lossless JSON; ordinary RPC JSON.stringify hid this
+defect. Reproduced against the real catalog at context.tasks.1.workflowRecipe. Omit
+absent optional fields and test the next Creator context after both custom and managed
+workflow submissions. No database rewrite, invented plan or direct node operation.
+All 162 regression tests and the existing build pass; the live catalog also survives
+an exact JSON round-trip with the source fix. Production retry remains pending here.
+
+Production retry must reuse the original Creator session and carry the complete updated
+user scope as a new message; do not let a short maintenance message replace task input.
+Only the new immutable no-backup plan may execute. Browser-1, shared services, account
+source grants, existing Tasks and all failed sessions remain preserved.
+
 ## Live fifth attempt reaches provider verification; not an accepted Task
 
 Run -3-t5 prepared only the verifier; browser PIDs/profiles stayed unchanged.

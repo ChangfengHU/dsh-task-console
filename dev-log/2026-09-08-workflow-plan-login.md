@@ -1,5 +1,24 @@
 # Workflow composition and explicit login acceptance
 
+## Live handoff regression (0.26.2)
+
+The corrected recipe created Task `T-chat-31436d3176dc1fb2eb0c` with exactly three
+roles and the `provision-gemini` policy. Public-browser acceptance passed plan/input/JSON,
+Creator Trace/native-session navigation, return navigation and mobile light/dark layouts.
+The installer exposed a second genuine defect: an interrupted transaction still had a
+15-minute lease. Fleet correctly refuses a new session's start and premature resume,
+but the host adapter collapsed both into `adapter-result-validation-failed`.
+
+Start now returns the verified existing transaction and explicit resume instructions;
+an unexpired lease also exposes its retry time without allowing takeover. Resume retains
+the existing run id on error and fixed allowlisted ledger conflicts are visible even in
+MCP error envelopes. Unknown upstream error text remains hidden. CAS, identity checks,
+lease duration and Fleet ledger logic are unchanged. Tests cover expired/live handoff
+and sensitive upstream error suppression. The real Task remains pending acceptance;
+browser login and Runner completion have not yet occurred at this commit.
+Verification: all 149 tests pass under the production Node 22 ABI; esbuild and
+`git diff --check` pass. No global Node or native SQLite installation was changed.
+
 Owner scope: delete the generated onboarding test workflows and restart the complete
 Creator-to-three-role process on existing node 63, including account selection/login.
 The developer may enhance DSH/MCP and trigger visible DSH sessions, never directly

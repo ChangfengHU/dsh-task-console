@@ -124,7 +124,7 @@ interface LedgerFixture {
   probeSeenBeforeStart: () => boolean
 }
 
-async function ledgerFixture(probeLog: string): Promise<LedgerFixture> {
+async function ledgerFixture(probeLog: string, options: { activeLease?: boolean } = {}): Promise<LedgerFixture> {
   const calls: Array<{ scope: string; tool: string; args: any }> = []
   const stages: any[] = []
   let probeFirst = false
@@ -160,6 +160,7 @@ async function ledgerFixture(probeLog: string): Promise<LedgerFixture> {
           id: 'onb-fixture', nodeId: `host-${args.ip.replaceAll('.', '-')}`, ip: args.ip,
           sessionId: args.sessionId, mode: args.mode, status: 'running', currentStage: 0,
           revision: 1, leaseEpoch: 1, leaseOwner: args.workerId, writeChallenge: rotate(),
+          leaseExpiresAt: new Date(Date.now() + (options.activeLease ? 900_000 : -1000)).toISOString(),
           contractVersion: args.contractVersion, executorVersion: args.executorVersion,
           targetFingerprint: args.targetFingerprint, browserCount: args.browserCount,
         }
@@ -176,6 +177,9 @@ async function ledgerFixture(probeLog: string): Promise<LedgerFixture> {
     assert.equal(args.workerId, WORKER)
     assert.equal(args.writeChallenge, run.writeChallenge)
     if (tool === 'onboard_resume') {
+      if (options.activeLease && run.status === 'running' && run.sessionId !== args.sessionId) {
+        response(res, message.id, { ok: false, error: 'an active run cannot be handed to another session' }); return
+      }
       assert.equal(verifyHmac(args.inventoryEvidence), true)
       assert.equal(args.targetFingerprint, run.targetFingerprint)
       run = { ...run, sessionId: args.sessionId, status: 'running', revision: run.revision + 1, leaseEpoch: run.leaseEpoch + 1, leaseOwner: WORKER, writeChallenge: rotate() }
@@ -465,7 +469,7 @@ test('Vault lease, signed probe, scoped central CAS receipts and retry remain se
   }
 })
 
-test('idempotent start from a new DSH session adopts only the verified prior run through scoped CAS', async t => {
+test('idempotent start from a new DSH session requires an explicit scoped CAS resume', async t => {
   const files = await fixtureFiles()
   const ledger = await ledgerFixture(files.log)
   t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
@@ -475,9 +479,11 @@ test('idempotent start from a new DSH session adopts only the verified prior run
   const priorRecords = ledger.calls.filter(call => call.tool === 'onboard_record')
   assert.equal(priorRecords[0].args.evidence.sessionId, 'session-from-header')
   const second = await adapter.start(IP, 'base', execution(`Continue ${IP}`))
-  assert.equal(second.reason, 'executor-not-configured')
+  assert.equal(second.reason, 'ledger-explicit-handoff-required')
   assert.equal(second.run_created, false)
   assert.equal(second.run_id, first.run_id)
+  assert.equal(ledger.calls.some(call => call.tool === 'onboard_resume'), false)
+  assert.equal((await adapter.resume(IP, 'base', execution(`Continue ${IP}`))).reason, 'executor-not-configured')
   const resume = ledger.calls.find(call => call.tool === 'onboard_resume')!
   assert.equal(resume.scope, 'executor')
   assert.equal(resume.args.sessionId, 'session-fleet-fixture')
@@ -883,6 +889,67 @@ test('configured Stage 9 remediation runs before the acceptance probe gate is re
   assert.equal(value.needs_input, false)
   const stage = ledger.calls.filter(call => call.tool === 'onboard_record' && call.args.evidence.stage === 9)
   assert.deepEqual(stage.map(call => call.args.evidence.status), ['running'])
+})
+
+test('a new session starts with an explicit handoff instruction and resumes the same expired transaction', async t => {
+  const files = await fixtureFiles()
+  const ledger = await ledgerFixture(files.log)
+  t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
+  const cloud: FleetOnboardCloudTransport = { async execute() { return { status: 'running', action: null, resultCode: null } } }
+  const adapter = await createAdapter(files, ledger, { vaultAvailable: true, healthyThrough: 8, executorAvailable: true, cloud })
+  const first = await adapter.start(IP, 'base', execution(`Install ${IP}`))
+  const nextSession = execution(`Continue ${IP}`, true)
+  const callCount = ledger.calls.length
+  const start = await adapter.start(IP, 'base', nextSession)
+  assert.equal(start.reason, 'ledger-explicit-handoff-required')
+  assert.equal(start.run_id, first.run_id)
+  assert.equal(start.run_created, false)
+  assert.equal(start.can_resume, true)
+  assert.equal(start.next_tool, 'fleet_onboard_resume')
+  assert.deepEqual(ledger.calls.slice(callCount).map(c => c.tool), ['onboard_status'])
+  const resumed = await adapter.resume(IP, 'base', nextSession)
+  assert.equal(resumed.run_id, first.run_id)
+  assert.equal(resumed.reason, 'operation-still-running')
+  assert.equal(ledger.calls.filter(c => c.tool === 'onboard_start').length, 1)
+  assert.equal(ledger.calls.find(c => c.tool === 'onboard_resume')!.args.sessionId, 'session-from-header')
+})
+
+test('handoff never steals a live session lease and reports its fixed conflict code', async t => {
+  const files = await fixtureFiles()
+  const ledger = await ledgerFixture(files.log, { activeLease: true })
+  t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
+  const adapter = await createAdapter(files, ledger, { vaultAvailable: true, healthyThrough: 8, executorAvailable: true })
+  const first = await adapter.start(IP, 'base', execution(`Install ${IP}`))
+  const nextSession = execution(`Continue ${IP}`, true)
+  const start = await adapter.start(IP, 'base', nextSession)
+  assert.equal(start.reason, 'ledger-session-lease-active')
+  assert.equal(start.can_resume, false)
+  assert.ok(Date.parse(String(start.retry_after)) > Date.now())
+  const resumed = await adapter.resume(IP, 'base', nextSession)
+  assert.equal(resumed.phase, 'blocked')
+  assert.equal(resumed.run_id, first.run_id)
+  assert.deepEqual(resumed.diagnostic, { boundary: 'ledger', code: 'ledger-session-lease-active' })
+})
+
+test('MCP error envelopes expose only allowlisted ledger codes, never upstream error text', async t => {
+  let error = 'an active run cannot be handed to another session'
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { isError: true,
+      content: [{ type: 'text', text: JSON.stringify({ ok: false, error }) }] } }))
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise<void>(resolve => server.close(() => resolve())))
+  const address = server.address() as { port: number }
+  const client = new ScopedFleetMcpClient(`http://127.0.0.1:${address.port}/executor`, EXECUTOR_TOKEN, WORKER, ['onboard_resume'])
+  await assert.rejects(client.call('onboard_resume', {}), /ledger-session-lease-active/)
+  error = CANARY
+  await assert.rejects(client.call('onboard_resume', {}), err => {
+    assert.ok(err instanceof Error)
+    assert.equal(err.message, 'fleet-onboard-ledger-call-failed')
+    assert.ok(!err.message.includes(CANARY))
+    return true
+  })
 })
 
 test('already-healthy node records ten verified stages and binds final inventory to finish', async t => {

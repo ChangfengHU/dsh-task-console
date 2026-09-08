@@ -32,7 +32,7 @@ export class TaskCreator {
 
   catalog() {
     return [...this.runner.store.tasks.values()].filter(t => t.enabled && t.origin?.source === 'task-chat')
-      .map(({ id, title, brief, participants, graphMode }) => ({ id, title, brief, participants, graphMode }))
+      .map(({ id, title, brief, participants, graphMode, workflowRecipe }) => ({ id, title, brief, participants, graphMode, workflowRecipe }))
   }
 
   async context() {

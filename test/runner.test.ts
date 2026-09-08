@@ -54,6 +54,22 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
 
+test('a rejected completion gate keeps the run active and permits a corrected submission', async () => {
+  const {host,runner,store} = await setup({onFail:'stop',maxTries:1}, {beforeComplete: input => {
+    if (input.metadata?.receipt !== 'verified') throw Error('missing acceptance evidence')
+  }})
+  try {
+    const batch = await runner.fire('T','manual'); await tick()
+    const session = [...host.sessions.keys()][0]; host.consumeFirst(session)
+    await assert.rejects(host.callTool(session,'task_complete',{summary:'a claim without evidence'}),/missing acceptance/)
+    assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+    assert.equal(store.s.cards.get(batch.cardIds[1])?.status,'todo')
+    await host.callTool(session,'task_complete',{summary:'verified',metadata:{receipt:'verified'}})
+    host.endTurn(session); await tick()
+    assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'done')
+  } finally {runner.stop()}
+})
+
 test('chat workflow: real runner orders three roles, hands off, deduplicates and reuses Task with fresh inputs', async () => {
   const { host, store, runner, root } = await setup()
   const creator = new TaskCreator(runner, async () => ['a','b','c'].map(id => ({ id, name: id } as any)))

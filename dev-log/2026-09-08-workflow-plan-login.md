@@ -1,5 +1,31 @@
 # Workflow composition and explicit login acceptance
 
+## Acceptance reopened; fresh v2 workflow requested
+
+The owner later observed browser-1 unknown/page-not-ready and browser-2 signed_out.
+Read-only public Chrome/API checks reproduced browser-2 changing between unknown
+and signed_out. Earlier success receipts remain historical facts, not proof of
+stable login. Runner's eight checks do not verify Gemini authentication. The old
+"completed" subsection below records that execution, not final business acceptance.
+
+The owner explicitly requested deletion and a redesigned fresh Task. Verified only
+T-chat-31436d3176dc1fb2eb0c (two settled Batches, no active runs), made an owner-only
+online SQLite backup with integrity_check=ok and copied the legacy event file into
+`~/.dsh/task-console/workflow-restart-backup-0qcrtg`. Normal deleteTask removed exactly
+that Task; all other 21 Task IDs and all 7 execution-session directories remained.
+No machine data was cleared. Restore selected records if needed, never roll back
+the entire live database over later work.
+
+V2 separates installer, Runner and final browser acceptance; the Creator still
+creates exactly three real role nodes and keeps a frozen plan. A generic host
+beforeComplete callback delegates only this recipe's account requirement to
+workflow-acceptance.ts. It validates same-session private MCP receipts, both default
+instances, the 20-minute observation span and current Fleet identity before accepting
+the browser's task_complete. Missing/fabricated/stale receipts, a repeated old sample
+and current disagreement are rejected without finalizing the Run. V1, preserve and
+unrelated tasks retain their original contracts. All 158 Node 22 tests/build pass;
+companion MCP 46 Node and 15 Python tests pass. Production v2 acceptance is pending.
+
 ## Completed live acceptance
 
 Source fixes `cf1a1cd` (DSH 0.26.3) and companion `fc9c697` were pushed and applied.

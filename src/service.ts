@@ -29,6 +29,7 @@ import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, valid
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
 import { TaskCreator } from './task-create.ts'
+import { validateWorkflowCompletion } from './workflow-acceptance.ts'
 import type { Artifact, Card } from './tasks.ts'
 import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
@@ -58,6 +59,7 @@ export class TaskConsoleService extends TypertRemoteService {
     super(ctx, NAMESPACE)
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
+      beforeComplete: input => validateWorkflowCompletion(input),
     })
     this.intake = new TaskIntakeCoordinator(this.runner, {
       agents: () => this.intakeAgents(),

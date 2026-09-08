@@ -46,7 +46,10 @@ export interface RunnerOptions {
   now?: () => number
   onBatchSettled?: (batch: Batch) => void | Promise<void>
   onSessionCreated?: (sessionId: string) => void | Promise<void>
+  beforeComplete?: (input: CompletionCheck) => void | Promise<void>
 }
+
+export interface CompletionCheck { task: TaskSpec; batch: Batch; card: Card; sessionId: string; profileId: string; metadata?: Record<string, unknown> }
 
 export interface FireOptions {
   /** Stable IDs let an external signal resume safely after a host restart. */
@@ -68,6 +71,7 @@ export class TaskRunner {
   private readonly clock: () => number
   private readonly onBatchSettled?: (batch: Batch) => void | Promise<void>
   private readonly onSessionCreated?: (sessionId: string) => void | Promise<void>
+  private readonly beforeComplete?: RunnerOptions['beforeComplete']
 
   constructor(ctx: Context, store: EventStore, opts: RunnerOptions = {}) {
     this.ctx = ctx; this.store = store
@@ -75,6 +79,7 @@ export class TaskRunner {
     this.clock = opts.now ?? (() => Date.now())
     this.onBatchSettled = opts.onBatchSettled
     this.onSessionCreated = opts.onSessionCreated
+    this.beforeComplete = opts.beforeComplete
   }
 
   async start(): Promise<void> {
@@ -307,6 +312,7 @@ export class TaskRunner {
       try {
         const submit = async (kind: 'completed' | 'review', summary: string, paths: string[], metadata?: Record<string, unknown>, reviewer?: string) => {
           if (flight.terminal) throw new Error('这次运行已经提交了终态')
+          if (kind === 'completed') await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata })
           const at = this.now()
           const captured = await captureArtifacts({ root: this.store.root, task, batchId: batch.id, cardId: card.id, runId, sessionId, at }, paths)
           for (const artifact of captured) await this.append({ t: 'artifact/registered', at, taskId: task.id, artifact })

@@ -76,13 +76,26 @@ instances when requested. It selects only authorized Gemini sources, preserves v
 target logins and reports unknown/challenge/no-source honestly. No prompt expands the
 host browser policy; per-node/instance authorization stays Fleet-owned.
 
-`workflow-recipes.ts` contains the managed `fleet-base-v1` business recipe. The
+`workflow-recipes.ts` advertises the managed `fleet-base-v2` business recipe. The
 Creator sees its required Agent IDs and selects `preserve` or `provision-gemini`;
 recipe submissions cannot also supply rewritten role briefs or graph mode. The
 recipe is target-independent, checked against the live roster and materialized by
 the existing scheduler. Save its ID/policy in the frozen definition. Unmatched
 business goals still use normal dynamic composition; do not force Fleet roles onto
 other tasks. Updating a recipe never changes already-saved execution definitions.
+
+The old v1 definition remains readable/compatible, but is not the current login
+acceptance recipe. V2 orders installer → Runner → browser-manager so the role with
+account tools performs final business acceptance. For provision-gemini, it requires
+browser-1/2's independent background checks across 20 minutes (at least 8 distinct
+timestamps each). The browser role submits browserAcceptanceOperationId(s), not a
+self-authored stable flag. A host completion callback validates private Browser MCP
+receipts (current Session/target, regular owner-only file, criterion, window, account
+fingerprint, freshness), then reads current Fleet. It rejects mismatches before
+recording completion. This business callback is separate from the generic kernel;
+legacy/preserve/unrelated Tasks have no Gemini gate. Host receipt storage follows
+FLEET_BROWSER_STATE_DIR or ~/.local/state/fleet-browser-manager. Retain receipts;
+MCP status returns only recent acceptance events to avoid growing model context.
 
 Execution-history pickers show the actual firedAt date/time in Asia/Shanghai
 (explicit Beijing UTC+8), followed by an eight-character display code. Full Batch

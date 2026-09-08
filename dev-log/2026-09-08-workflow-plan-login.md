@@ -20,6 +20,17 @@ Remaining external step: the owner must complete Google verification in browser-
 then resume this same Task and run the unchanged 20-minute two-browser acceptance.
 Installer and Runner are complete, but the workflow and login outcome are NOT.
 
+Final diagnosis-only Run -3-t6 read inspect/status without a new mutation job and
+recorded needs_input. All five login attempts remain. Its model's claim that login
+will automatically unblock the Task was corrected visibly in that same conversation:
+no such trigger exists; an explicit unblock/new attempt is required. Public Chrome
+confirmed Fleet browser-1 verified / browser-2 signed_out and the Task blocked DAG,
+6.36 s / 17.79 s including assertions, zero page errors and no mobile overflow.
+The other 21 Tasks and selected-Task recovery backup remain present. Removed only
+/tmp/workflow-login-resume-tests.kZPIZL (19,624,417 bytes), after a privileged /proc
+check found no open references. Fixtures regenerate from tests; production lib,
+databases, backups, sessions and unique screenshots are retained.
+
 ## 0.27.2 pending-operation terminal guard
 
 Third browser attempt submitted task_block while its real login-resume operation

@@ -24,6 +24,29 @@ The version-guarded host patch suppresses only native @ history suggestions whil
 the plugin is active; it does not remove the sidebar history or file references.
 After a host upgrade revalidate the exact patch; never guess a replacement anchor.
 
+The @ Agent picker orders by immutable authoring time, shows five by default and
+uses native input-trigger text/continue outcomes for expand/collapse. Search
+considers the complete roster. `agent-meta.json` is an authoring sidecar, preserved
+on edits and created fresh for a new ID; it is not part of user-editable AgentSpec.
+Legacy presets have no proven creation timestamp: use explicitly labelled earliest
+session-header creation time as a first-use fallback, unknown dates last. Never use
+directory mtime/birthtime (preset saves atomically replace the entire directory).
+
+Agent detail exposes configuration, paginated sessions and paginated tasks through
+`taskConsole/agentHistory`. Tabs/page are in the hash query. The host joins actual
+SessionHeader.agentPreset, Task/TaskTurn.origin.intakeSessionId, dynamic cards and
+Run.profileId (reviewers need not own the card). Creator and participant relations
+are unioned once per Task; each link prefers that Agent's latest relevant Batch.
+Creator sessions never inherit executor sessions. Removed session files remain
+visible through retained Run metadata, but their Open button is disabled.
+
+Listing reads the host's lightweight header index, briefly coalesced, and enriches
+only the requested page from live/cached title projections. Never call inspect,
+load or coldSnapshot to fill a listing. Pagination is host-side, not a full-list
+browser slice. Optional Cordis services must be resolved through ctx.get; direct
+access without a declared inject fails at runtime. Browser popstate re-notifies
+console hash readers so returning from a session preserves the Agent tab/page.
+
 Business-role chains use existing static scheduling and canonical DB rows. Their
 final role receives original ancestor summaries from the same Batch, not only a
 rewritten immediate handoff. The existing planner/Gate/executor/reviewer dynamic

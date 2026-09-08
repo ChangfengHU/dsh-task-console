@@ -1,5 +1,15 @@
 # Workflow composition and explicit login acceptance
 
+## 0.27.2 pending-operation terminal guard
+
+Third browser attempt submitted task_block while its real login-resume operation
+was still running; it mistook a minute of waiting for a terminal failure. The job
+later independently failed, but that does not justify the premature Task terminal.
+The fleet-base-v2 browser role now checks same-session fresh durable operations
+before accepting task_block. The worker must keep polling until terminal; expired
+operations remain blockable. Other roles/workflows are unchanged. 160 tests pass.
+The first three failed Runs remain intact. Actual login recovery is not complete.
+
 ## Same-Task second attempt remains blocked — live evidence, not success
 
 Canonical unblock created browser Run -3-t2 without rerunning installer/Runner or

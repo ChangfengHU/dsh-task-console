@@ -70,6 +70,21 @@ test('a rejected completion gate keeps the run active and permits a corrected su
   } finally {runner.stop()}
 })
 
+test('a pending-operation block gate keeps the run active until the operation is terminal', async () => {
+  let running = true
+  const {host,runner,store} = await setup({onFail:'stop',maxTries:1}, {beforeBlock: () => { if(running)throw Error('poll running operation') }})
+  try {
+    const batch = await runner.fire('T','manual'); await tick()
+    const session = [...host.sessions.keys()][0]; host.consumeFirst(session)
+    await assert.rejects(host.callTool(session,'task_block',{reason:'one minute elapsed',kind:'capability'}),/poll running/)
+    assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+    running = false
+    await host.callTool(session,'task_block',{reason:'actual terminal failure',kind:'capability'})
+    host.endTurn(session);await tick()
+    assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'blocked')
+  } finally {runner.stop()}
+})
+
 test('chat workflow: real runner orders three roles, hands off, deduplicates and reuses Task with fresh inputs', async () => {
   const { host, store, runner, root } = await setup()
   const creator = new TaskCreator(runner, async () => ['a','b','c'].map(id => ({ id, name: id } as any)))

@@ -47,6 +47,7 @@ export interface RunnerOptions {
   onBatchSettled?: (batch: Batch) => void | Promise<void>
   onSessionCreated?: (sessionId: string) => void | Promise<void>
   beforeComplete?: (input: CompletionCheck) => void | Promise<void>
+  beforeBlock?: (input: CompletionCheck) => void | Promise<void>
 }
 
 export interface CompletionCheck { task: TaskSpec; batch: Batch; card: Card; sessionId: string; profileId: string; metadata?: Record<string, unknown> }
@@ -72,6 +73,7 @@ export class TaskRunner {
   private readonly onBatchSettled?: (batch: Batch) => void | Promise<void>
   private readonly onSessionCreated?: (sessionId: string) => void | Promise<void>
   private readonly beforeComplete?: RunnerOptions['beforeComplete']
+  private readonly beforeBlock?: RunnerOptions['beforeBlock']
 
   constructor(ctx: Context, store: EventStore, opts: RunnerOptions = {}) {
     this.ctx = ctx; this.store = store
@@ -80,6 +82,7 @@ export class TaskRunner {
     this.onBatchSettled = opts.onBatchSettled
     this.onSessionCreated = opts.onSessionCreated
     this.beforeComplete = opts.beforeComplete
+    this.beforeBlock = opts.beforeBlock
   }
 
   async start(): Promise<void> {
@@ -330,7 +333,11 @@ export class TaskRunner {
             if (task.graphMode === 'dynamic-rounds' || JSON.parse(claim?.payload || '{}').source_status !== 'review') throw new Error('不是同卡评审；通过 task_complete 将返工结论交给规划者')
             flight.terminal = { kind: 'changes', reason }
           },
-          block: async (reason, kind) => { flight.terminal = { kind: 'blocked', reason, blockKind: kind } },
+          block: async (reason, kind) => {
+            if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            await this.beforeBlock?.({ task, batch, card, sessionId, profileId })
+            flight.terminal = { kind: 'blocked', reason, blockKind: kind }
+          },
           planRound: async (summary) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
             await this.store.expandRound(task, batch, card, summary)

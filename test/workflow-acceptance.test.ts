@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createHash } from 'node:crypto'
-import { validateWorkflowCompletion } from '../src/workflow-acceptance.ts'
+import { validateWorkflowCompletion, validateWorkflowBlock } from '../src/workflow-acceptance.ts'
 
 function fixture() {
   const now = 2_000_000, sessionId = 'task-example-current-3', requestId = 'accept-current', ip = '192.0.2.10'
@@ -13,6 +13,13 @@ function fixture() {
   const deps = { now: () => now, receipt: async () => job, fleet: async () => fleet }
   return { job, fleet, input, deps }
 }
+test('only a fresh running operation of this browser session prevents premature task_block', async () => {
+  const f=fixture(),job={id:'1'.repeat(32),args:{sessionId:f.input.sessionId},phase:'running',updatedAt:new Date(f.deps.now()-60000).toISOString()}
+  await assert.rejects(validateWorkflowBlock(f.input,{now:f.deps.now,jobs:async()=>[job]}),/browser_status/)
+  for(const change of [{phase:'blocked'},{phase:'complete'},{args:{sessionId:'other'}},{updatedAt:new Date(f.deps.now()-360001).toISOString()}])
+    await validateWorkflowBlock(f.input,{now:f.deps.now,jobs:async()=>[{...job,...change}]})
+  await validateWorkflowBlock({...f.input,profileId:'fleet-installer'},{jobs:async()=>{throw Error('must not read')}})
+})
 test('managed workflow accepts actual same-session stability and current Fleet readback', async () => {
   const f = fixture(); await validateWorkflowCompletion(f.input, f.deps)
 })

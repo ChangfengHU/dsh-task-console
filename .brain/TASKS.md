@@ -1,5 +1,7 @@
 # 后续优化
 
+- [x] [TASK-CREATE-001] 新增通用 task-create-agent、Agent/Workflow @ 入口和幂等提交账本；复用既有 Task/Batch/Run 调度及角色权限。63 已通过三角色自动协作及原 Task 第二次执行；第二轮装机十阶段 reused、changed=0，原始上游交接完整传达。数据库回放、全屏检查器、Trace/原会话跳转和文字报告均经过真实浏览器测试。见 `../dev-log/2026-09-07-task-create-workflow.md`。
+
 - [x] [TASK-HISTORY-ID-001] 修复兼容模型空 tool-call ID 导致的 Chat/Trajectory 重复匹配及冷启动历史校验失败；保留原始日志，按流事件与 sourceEventSeqs 在读取时恢复关联。真实公网会话冷启动、40 次工具详情及 Trace 验收通过，见 `dev-log/2026-09-06-history-mcp-repair.md`。
 
 - [x] [TASK-INTAKE-REPORT-001] 支持单会话汇总接收、提前持久化 Session/入参回执、独立 item 决策与已接收请求去重；保留真实角色与对话，Fleet 第一阶段不等待修复。（0.23.0，生产浏览器验收见对应 dev-log）

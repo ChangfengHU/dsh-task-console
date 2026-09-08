@@ -1,5 +1,50 @@
 # Workflow composition and explicit login acceptance
 
+## Live no-backup Task: lifecycle passes, stability gate correctly blocks
+
+After deploying 0.27.3, the original Creator session agent-task-create-agent-mtso55u3
+retried with the complete updated input and successfully created Task
+T-chat-9fd1c8bfa45d890b9ce4 / Batch b-chat-9fd1c8bfa45d890b9ce4. The first failed
+Creator turn, prior backup-required workflow, all Tasks and all sessions remain.
+Plan hash 62e0d646472dd9d8796e29a6a12d55dbf06b2f76973e480a370447c7e88e65c7 freezes
+five stages: inspect permissions, retire/purge without backup, same-slot recreate,
+one authorized login copy, independent 20-minute two-browser acceptance. Only
+browser-manager executes; no developer SSH or database rewrite was used.
+
+Browser MCP 9a163e9 receipts prove actual deletion of only 63 profile-2 (610,246,656
+allocated bytes), absent original profile before recreation, native slot 2/9223,
+backupCreated=false and one 84 browser-1 to 63 browser-2 copy with loginVerified=true,
+matchesSource=true. Browser-1 PID 264658 stayed unchanged. The developer visibly
+corrected a read-only candidates call that confused target and source coordinates;
+this did not widen authorization or perform another copy.
+
+Acceptance e5c66815ee54d2d7495fab96164aaae5 failed at 2026-09-08T13:04:02Z with
+login-stability-signed-out. Its terminal login_stability_failed event identifies
+browser-1. Browser-2 was still verified at 13:05:03Z, but has no successful 20-minute
+receipt. Browser-1 was not a delete/restart/copy target; whether same-account copying
+contributed to its login change is unknown. No further target mutations were sent.
+Canonical Run and card are blocked. A text-only same-session correction rejected the
+Agent's unsupported "stable" wording and causal implication. This custom workflow
+followed its prompt gate; do not claim the existing fleet-base-v2-specific completion
+validator automatically became a universal custom-workflow host gate.
+
+Real public Chrome verified the frozen plan, original input and no-backup steps on
+desktop/mobile (22.7 seconds including assertions). Final Fleet browser-1 out /
+browser-2 in and blocked Task checks passed without page errors or mobile overflow
+(25.75 seconds including assertions). Screenshots /tmp/browser-rebuild-nobackup-*.png
+are unique failure evidence and retained. These durations are not isolated load time.
+No new build dependencies were installed; production lib and dependencies remain.
+Full login readiness remains FAILED, not completed merely because rebuild/copy passed.
+
+Cleanup removed only 30 exact /tmp/fleet-onboard-tools-test-* fixture roots from the
+12:54:44–12:55:08 UTC suite, after matching checked-in fixture contents (including the
+intentional malformed-key test), hashing each tree and a privileged /proc open-reference
+check. Reclaimed 458,752 allocated bytes; regenerate with the checked-in tests. No
+source, production dependencies, real database, Task history or screenshot was removed.
+The other 43 test-window candidate directories remain because their content audit did
+not complete; do not delete them by prefix/age. Review their synthetic presets and
+test-database ownership before cleanup, not during another machine repair attempt.
+
 ## 0.27.3: custom workflow catalog must be lossless JSON
 
 The owner waived browser/config backups and authorized only 63 browser-2's scoped

@@ -1,6 +1,8 @@
 # 后续优化
 
-- [x] [TASK-CREATE-JSON-001] 0.27.3：修复首个自定义工作流导致 task_create_context 返回 undefined、触发 lossless JSON 拒绝的问题；保留原始失败会话和旧计划，加入自定义/受管工作流提交后的目录回归。63 browser-2 的无备份重建尚待新版 Task 真实验收，不以控制面修复代替业务成功。
+- [x] [TASK-CREATE-JSON-001] 0.27.3：修复自定义工作流目录中 undefined 导致的 lossless JSON 拒绝；162 项回归/构建通过。原 Creator 会话重试成功创建下述真实 Task，原始失败和旧计划均保留。
+
+- [ ] [TASK-BROWSER-REBUILD-001] Task T-chat-9fd1c8bfa45d890b9ce4 由浏览器管理员实际完成 63 browser-2 无备份删除、原槽位重建和一次授权登录复制；旧资料约 582 MiB 永久删除。双浏览器20分钟验收因 browser-1 signed_out 失败，Task/Run 均 blocked。browser-1 未被删除、重启或作为复制目标，但掉线原因未定；browser-2 仅短期已验证，不能宣称稳定。停止重试，不擅自修复 browser-1；本行取代下方旧计划的下一步指引，历史不改写。见现有 dev-log 最新段落。
 
 - [ ] [TASK-WORKFLOW-002] 0.27.2：旧 Task 精确备份删除，21 个其他 Task 和全部会话保留。新 Task T-chat-b4c6fcb369f0c20a9739 的装机/Runner 通过；浏览器五次真实尝试未通过最终验收。最新正常续接成功选中授权账号（嵌套元素已修复），随后 Google 要求交互验证；等待用户在 browser-2 完成，再在同 Task 做双浏览器20分钟验收。不能宣称装机工作流已完成。运行中阻塞保护及终态回执纠正已实现；162 项 DSH 回归/构建、55 Node/19 Python 及公网计划/Creator/历史导航/移动端验收通过。见 `dev-log/2026-09-08-workflow-plan-login.md`。
 

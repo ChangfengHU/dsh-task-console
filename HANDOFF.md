@@ -31,6 +31,11 @@ protocol remains separate; do not invent Gate nodes for static business chains.
 The Board reuses database-truth replay for both. Session Trace stays in a drawer;
 operations may deliver a text report without an HTML artifact.
 
+Execution-history pickers show the actual firedAt date/time in Asia/Shanghai
+(explicit Beijing UTC+8), followed by an eight-character display code. Full Batch
+IDs remain the select values, route identifiers and hover text; display codes are
+not database keys. Both legacy and DB-replay pickers share this presentation.
+
 Bootstrap credentials are resolved by the host, scrubbed from Task/event/handoff
 data and held in owner-only per-Batch `private-inputs` files with a 24-hour read
 expiry. Only the active Task-bound fleet-installer Run can resolve its exact IP.

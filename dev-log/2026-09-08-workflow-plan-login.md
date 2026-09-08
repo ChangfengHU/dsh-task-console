@@ -1,5 +1,27 @@
 # Workflow composition and explicit login acceptance
 
+## Fresh Task created; real stability failure and 0.27.1 rework
+
+Creator agent-task-create-agent-mtsh4qw9 created T-chat-b4c6fcb369f0c20a9739 and Batch
+b-chat-b4c6fcb369f0c20a9739 using fleet-base-v2/provision-gemini. Exactly three roles:
+installer → Runner → browser-manager. Public Chrome passed plan/input/JSON, original
+Creator Trace/conversation, return navigation and mobile overflow checks (38.31 s,
+zero page errors). This is whole interaction-test duration, not plugin load time.
+Installer onb-bfaddaca-a1a6-4669-90e8-c4509458ad96 passed ten stages (eight reused,
+resource snapshot and acceptance reverified). Runner job-mtshgbi1-9dfd73af1322 passed
+signed independent checks with existing service/route reused. Browser-1 login reused;
+browser-2 got one authorized copy and a same-fingerprint positive proof.
+
+The real 20-minute observation f0d3f28c0c25d8a29ef3d169272c59fc failed at 09:54:49 UTC
+on browser-2 signed_out, so the workflow did NOT complete. A subsequent Agent copy
+contradicted the prompt-only retry rule; visible maintenance stopped further retries
+after its already-started import completed. The same browser session performed only
+read-only source/target expiry diagnostics and the canonical Task stays blocked.
+Companion runtime now fences replacement IDs after failed stability; probe v3 waits
+the complete negative readiness window. 0.27.1 requires v3 receipt/current Fleet
+proof, preserving the original failed Run. All 158 Node 22 tests/build pass; companion
+49 Node/17 Python pass. New-attempt live acceptance is still pending.
+
 ## Acceptance reopened; fresh v2 workflow requested
 
 The owner later observed browser-1 unknown/page-not-ready and browser-2 signed_out.

@@ -7,8 +7,8 @@ function fixture() {
   const now = 2_000_000, sessionId = 'task-example-current-3', requestId = 'accept-current', ip = '192.0.2.10'
   const id = createHash('sha256').update(JSON.stringify([sessionId, requestId])).digest('hex').slice(0, 32)
   const rows = [1, 2].map(instance => ({ instance, fingerprint: '1234abcd', firstCheckedAt: new Date(now - 1_200_000).toISOString(), checkedAt: new Date(now).toISOString(), expiresAt: new Date(now + 180_000).toISOString(), observedMs: 1_200_000, samples: 21 }))
-  const job: any = { id, action: 'login-acceptance', phase: 'complete', args: { ip, platform: 'gemini', instances: [1, 2], sessionId, requestId }, result: { stable: true, criterion: 'gemini-background-stability-v1', probeVersion: 2, requiredMs: 1_200_000, startedAt: rows[0].firstCheckedAt, completedAt: rows[0].checkedAt, instances: rows } }
-  const fleet: any = { nodes: [{ id: 'host-192-0-2-10', browsers: rows.map(r => ({ browserNo: r.instance, identities: { gemini: 'in' }, accounts: { gemini: { fingerprint: r.fingerprint, source: 'gemini-account-control' } }, loginVerification: { probeVersion: 2, status: 'verified', checkedAt: r.checkedAt, expiresAt: r.expiresAt } })) }] }
+  const job: any = { id, action: 'login-acceptance', phase: 'complete', args: { ip, platform: 'gemini', instances: [1, 2], sessionId, requestId }, result: { stable: true, criterion: 'gemini-background-stability-v1', probeVersion: 3, requiredMs: 1_200_000, startedAt: rows[0].firstCheckedAt, completedAt: rows[0].checkedAt, instances: rows } }
+  const fleet: any = { nodes: [{ id: 'host-192-0-2-10', browsers: rows.map(r => ({ browserNo: r.instance, identities: { gemini: 'in' }, accounts: { gemini: { fingerprint: r.fingerprint, source: 'gemini-account-control' } }, loginVerification: { probeVersion: 3, status: 'verified', checkedAt: r.checkedAt, expiresAt: r.expiresAt } })) }] }
   const input: any = { task: { workflowRecipe: { id: 'fleet-base-v2', login: 'provision-gemini' } }, batch: { firedAt: new Date(now - 1_300_000).toISOString(), turn: { targets: [{ kind: 'fleet-node', id: ip }] } }, profileId: 'browser-manager', sessionId, metadata: { browserAcceptanceOperationId: id } }
   const deps = { now: () => now, receipt: async () => job, fleet: async () => fleet }
   return { job, fleet, input, deps }
@@ -27,6 +27,7 @@ test('wrong session/target, one browser, incomplete window and stale receipts ar
     (f: any) => { f.job.phase = 'blocked' },
     (f: any) => { f.job.args.instances = [1] },
     (f: any) => { f.job.result.requiredMs = 60_000 },
+    (f: any) => { f.job.result.probeVersion = 2 },
     (f: any) => { f.job.result.startedAt = 'invalid' },
     (f: any) => { f.job.result.instances[1].samples = 1 },
     (f: any) => { f.job.result.instances[1].expiresAt = new Date(0).toISOString() },

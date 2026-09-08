@@ -37,7 +37,7 @@ export async function validateWorkflowCompletion(input: CompletionCheck, deps: {
     const expected = createHash('sha256').update(JSON.stringify([sessionId, job?.args?.requestId])).digest('hex').slice(0, 32)
     const result = job?.result, rows = result?.instances
     if (job?.id !== id || id !== expected || job.action !== 'login-acceptance' || job.phase !== 'complete' || job.args?.sessionId !== sessionId || !remaining.delete(job.args?.ip) || job.args.platform !== 'gemini') return rejection('回执不属于本次会话、目标或操作')
-    if (!Array.isArray(job.args.instances) || JSON.stringify([...job.args.instances].sort()) !== '[1,2]' || result?.stable !== true || result.criterion !== 'gemini-background-stability-v1' || result.probeVersion !== 2 || result.requiredMs !== windowMs || !Array.isArray(rows) || rows.length !== 2 || new Set(rows.map(r => r.instance)).size !== 2) return rejection('未覆盖双浏览器稳定性标准')
+    if (!Array.isArray(job.args.instances) || JSON.stringify([...job.args.instances].sort()) !== '[1,2]' || result?.stable !== true || result.criterion !== 'gemini-background-stability-v1' || result.probeVersion !== 3 || result.requiredMs !== windowMs || !Array.isArray(rows) || rows.length !== 2 || new Set(rows.map(r => r.instance)).size !== 2) return rejection('未覆盖双浏览器稳定性标准')
     const started = Date.parse(result.startedAt), completed = Date.parse(result.completedAt)
     if (!Number.isFinite(started) || !Number.isFinite(completed) || started < Date.parse(batch.firedAt) || completed > now + 5000 || now - completed > 180_000) return rejection('验收时间不属于当前执行或已过期')
     for (const row of rows) {
@@ -55,7 +55,7 @@ export async function validateWorkflowCompletion(input: CompletionCheck, deps: {
     const node = fleet.nodes?.find((n: any) => n.id === 'host-' + ip.replaceAll('.', '-'))
     for (const row of rows) {
       const b = node?.browsers?.find((b: any) => b.browserNo === row.instance), check = b?.loginVerification
-      if (b?.identities?.gemini !== 'in' || b.accounts?.gemini?.fingerprint !== row.fingerprint || b.accounts?.gemini?.source !== 'gemini-account-control' || check?.probeVersion !== 2 || check.status !== 'verified' || !(Date.parse(check.expiresAt) > now) || !(Date.parse(check.checkedAt) >= Date.parse(row.checkedAt))) return rejection('Fleet 当前登录与验收回执不一致')
+      if (b?.identities?.gemini !== 'in' || b.accounts?.gemini?.fingerprint !== row.fingerprint || b.accounts?.gemini?.source !== 'gemini-account-control' || check?.probeVersion !== 3 || check.status !== 'verified' || !(Date.parse(check.expiresAt) > now) || !(Date.parse(check.checkedAt) >= Date.parse(row.checkedAt))) return rejection('Fleet 当前登录与验收回执不一致')
     }
   }
 }

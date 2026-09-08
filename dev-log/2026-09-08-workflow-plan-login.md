@@ -1,5 +1,46 @@
 # Workflow composition and explicit login acceptance
 
+## Completed live acceptance
+
+Source fixes `cf1a1cd` (DSH 0.26.3) and companion `fc9c697` were pushed and applied.
+Only the supported dsh-llm-deepseek host module changed. Restart occurred with no
+running sessions. The previously failed browser session then returned a real model
+response to a read-only diagnostic prompt, without HTTP 400 or target/tool actions.
+This did not retroactively accept its rejected completion.
+
+Normal launchWorkflow reused Task `T-chat-31436d3176dc1fb2eb0c` and created execution
+`b-chat-7e0edd5787c21b8ef851`; no extra Task or fictional Creator session. Original
+Creator `agent-task-create-agent-mtsbx06u` and frozen plan fingerprint
+`2f0b14f2b4f9bbe501d129a7bbecad05a82504e54f3573ea0a2f7cd9ac511e2f` remain visible.
+The three real role runs completed and the Batch settled `done` at 08:41:31 UTC.
+The previous failed Batch `b-chat-31436d3176dc1fb2eb0c` and all its sessions remain.
+
+- Installer receipt `onb-1e49db14-1fa0-4f1e-9479-f66b47070227`: ten stages passed;
+  nine reused, acceptance evidence reverified/repaired, blocked zero.
+- Browser 1 operation `38dc9e5c9c2bde88b7159f2b0cdcd48e`: existing valid account
+  reused with fresh verification at 08:36:57 UTC; no transfer or restart.
+- Browser 2 operation `e320345d2334128605e4dc98a1131ac4`: a fresh signed_out result
+  at 08:37:43 UTC authorized one transfer from the existing 84/browser-1 grant.
+  loginVerified and matchesSource true at 08:38:17 UTC, fingerprint `98caccf3`.
+  This is separate from its earlier successful observation; an older receipt was
+  not substituted for the current check. Unknown was never treated as signed-out.
+- Runner receipt `job-mtsf61g3-2e2735a47cf8`: action reused, publicRouteChanged false,
+  signatureVerified/runnerCoverageHealthy/nodeHealthy true. All eight fixed checks
+  passed, including fresh TCP/UDP exit verification. No source grant, credential,
+  browser deletion or developer SSH mutation was introduced.
+
+Unmocked public Chrome acceptance: Fleet showed both verified Gemini account rows
+and working responsive layout (8.47 s, zero page errors). Reused workflow plan/input/
+JSON, original Creator Trace/native-session links and back navigation passed in
+36.03 s. Completed Task's "查看执行报告" button scrolled to the actual three-role
+summary and signed receipt; desktop/mobile passed in 21.14 s, zero page errors.
+These are full test durations, not plugin-load-only benchmarks.
+Screenshots and command logs under `/tmp/workflow-*` are retained as local acceptance
+evidence; durable operation receipts and session logs remain the primary evidence.
+The private pre-deletion backup is retained for selected-record recovery. Existing
+Node/Chrome/Playwright dependencies were reused; no disposable dependency tree was
+installed. Test-created SQLite directories now close/remove themselves after tests.
+
 ## Browser recovery and malformed completion history (0.26.3)
 
 Browser MCP fc9c697 recovered browser-1's original receipt: `page-not-ready` at

@@ -10,7 +10,7 @@ import type { IntakeAgent } from './task-intake.ts'
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export function userInput(exec: ToolExecutionLike) {
   const messages = exec.agent?.session?.deriveMessages?.() as any[] | undefined
-  const users = (messages ?? []).filter(m => m.role === 'user')
+  const users = (messages ?? []).filter(m => m.role === 'user' && (!m.source || m.source.kind === 'user'))
   const last = users.at(-1)
   const text = typeof last?.content === 'string' ? last.content : (last?.content ?? []).filter((p: any) => p.type === 'text').map((p: any) => p.text).join('\n')
   const sessionId = String(exec.agent?.session?.id ?? exec.agent?.session?.header?.id ?? '')
@@ -109,7 +109,7 @@ export class TaskCreator {
     if (!batch || batch.taskId !== taskId) throw new Error('没有这个执行记录')
     return { taskId, batchId, outcome: batch.settled?.outcome ?? 'running', path: `/#/tc/tasks/${taskId}/runs/${batchId}`,
       cards: batch.cardIds.map(id => { const card = store.s.cards.get(id)!; const run = store.s.runs.get(card.currentRunId ?? ''); return {
-        id, agentId: card.agentId, dependsOn: card.deps, status: card.status, sessionId: run?.sessionId, summary: run?.summary, error: run?.error,
+        id, agentId: card.agentId, dependsOn: card.deps, status: card.status, sessionId: run?.sessionId ?? null, summary: run?.summary ?? null, error: run?.error ?? null,
       } }), note: '已提交不等于已完成。看板记录真实角色状态、会话、工具调用和交接；复用 Task 会增加执行记录，不增加任务卡片。' }
   }
 }

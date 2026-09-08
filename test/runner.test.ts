@@ -59,9 +59,14 @@ test('chat workflow: real runner orders three roles, hands off, deduplicates and
   const creator = new TaskCreator(runner, async () => ['a','b','c'].map(id => ({ id, name: id } as any)))
   const proposal = { decision: 'create' as const, reason: 'new reusable goal', title: 'Node readiness', brief: 'Inspect and converge the submitted node; preserve healthy components',
     participants: [{ agentId: 'a', brief: 'base' }, { agentId: 'b', brief: 'browser' }, { agentId: 'c', brief: 'runner' }] }
-  const exec = { agent: { session: { id: 'agent-task-create-agent-test', deriveMessages: () => [{ id: 'input-1', role: 'user', content: [{ type: 'text', text: 'Validate 192.0.2.10 idempotently' }] }] } } }
+  let timeStep = 1
+  const exec = { agent: { session: { id: 'agent-task-create-agent-test', deriveMessages: () => [
+    { id: 'input-1', role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Validate 192.0.2.10 idempotently' }] },
+    { id: `clock-${timeStep++}`, role: 'user', source: { kind: 'plugin', plugin: 'time-context' }, content: [{ type: 'text', text: 'Time sampled while preparing turn 1, step 2' }] },
+  ] } } }
   try {
     const first = await creator.submit(proposal, exec, root)
+    assert.deepEqual(JSON.parse(JSON.stringify(first)), first, 'tool results must be lossless JSON, not contain undefined')
     assert.equal(first.cards.length, 3)
     assert.equal(first.cards[0].status, 'running')
     assert.equal(first.cards[1].status, 'todo')

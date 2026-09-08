@@ -54,6 +54,16 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
 
+test('the block gate can replace stale model prose with observed evidence without erasing tool history', async()=>{
+  const {host,runner,store}=await setup({onFail:'stop',maxTries:1},{beforeBlock:()=>({reason:'Actual provider challenge',kind:'needs_input'})})
+  try {
+    const batch=await runner.fire('T','manual');await tick()
+    const session=[...host.sessions.keys()][0];host.consumeFirst(session)
+    await host.callTool(session,'task_block',{reason:'Still running',kind:'capability'});host.endTurn(session);await tick()
+    assert.equal(store.s.cards.get(batch.cardIds[0])?.lastBlockReason,'Actual provider challenge')
+  }finally{runner.stop()}
+})
+
 test('a rejected completion gate keeps the run active and permits a corrected submission', async () => {
   const {host,runner,store} = await setup({onFail:'stop',maxTries:1}, {beforeComplete: input => {
     if (input.metadata?.receipt !== 'verified') throw Error('missing acceptance evidence')

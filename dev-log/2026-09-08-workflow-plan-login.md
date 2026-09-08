@@ -1,5 +1,25 @@
 # Workflow composition and explicit login acceptance
 
+## Live fifth attempt reaches provider verification; not an accepted Task
+
+Run -3-t5 prepared only the verifier; browser PIDs/profiles stayed unchanged.
+318fe4e36d174c71da3fc6825de92897 found two matching nested elements representing
+one authorized account, selected it successfully, then reached Google's challenge
+route. No visible email/password input was present; the exact required challenge
+type is not established. This is real interactive-verification-required evidence,
+not a timeout, missing tool, or permission request. No additional copy was made.
+
+There is also a finalization race: a job can finish after the last poll but before
+task_block. The host now uses a fresh terminal receipt's reason/kind instead of
+persisting stale model prose. Raw tool calls remain in session history. 162 tests
+and the build pass. Public Chrome plan/input/JSON, Creator Trace/native session,
+back-navigation and mobile width pass in 35.18 s, zero page errors; screenshots
+use /tmp/workflow-v272-*.png. This is interaction-test duration, not load time.
+
+Remaining external step: the owner must complete Google verification in browser-2;
+then resume this same Task and run the unchanged 20-minute two-browser acceptance.
+Installer and Runner are complete, but the workflow and login outcome are NOT.
+
 ## 0.27.2 pending-operation terminal guard
 
 Third browser attempt submitted task_block while its real login-resume operation

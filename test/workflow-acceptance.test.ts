@@ -23,6 +23,13 @@ test('only a fresh running operation of this browser session prevents premature 
 test('managed workflow accepts actual same-session stability and current Fleet readback', async () => {
   const f = fixture(); await validateWorkflowCompletion(f.input, f.deps)
 })
+test('a job finishing between poll and task_block supplies its actual reason and input boundary',async()=>{
+  const f=fixture(),job={id:'a'.repeat(32),args:{sessionId:f.input.sessionId},phase:'blocked',error:'interactive-verification-required',updatedAt:new Date(f.deps.now()).toISOString()}
+  const result=await validateWorkflowBlock(f.input,{now:f.deps.now,jobs:async()=>[job]})
+  assert.equal(result?.kind,'needs_input');assert.match(result?.reason||'',/Google/)
+  job.error='login-resumption-not-verified'
+  assert.equal((await validateWorkflowBlock(f.input,{now:f.deps.now,jobs:async()=>[job]}))?.kind,'capability')
+})
 test('a summary or model-authored stable flag cannot replace a host receipt', async () => {
   const f = fixture(); f.input.metadata = { stable: true, loginVerified: true }
   await assert.rejects(validateWorkflowCompletion(f.input, f.deps), /缺少/)

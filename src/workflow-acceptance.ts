@@ -3,12 +3,12 @@ import { constants } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import type { CompletionCheck } from './runner.ts'
+import type { CompletionCheck, BlockDecision } from './runner.ts'
 
 const windowMs = 20 * 60_000
 const rejection = (reason: string): never => { throw new Error(`工作流登录验收未通过：${reason}。由浏览器管理员完成 browser_login_acceptance 后提交真实 operationId；不要用再次复制代替验收。`) }
 
-export async function validateWorkflowBlock(input: CompletionCheck, deps: { jobs?: () => Promise<any[]>; now?: () => number } = {}) {
+export async function validateWorkflowBlock(input: CompletionCheck, deps: { jobs?: () => Promise<any[]>; now?: () => number } = {}): Promise<BlockDecision | void> {
   if (input.task.workflowRecipe?.id !== 'fleet-base-v2' || input.profileId !== 'browser-manager') return
   const jobs = await (deps.jobs || (async () => {
     const root = process.env.FLEET_BROWSER_STATE_DIR || join(homedir(), '.local/state/fleet-browser-manager')
@@ -21,6 +21,15 @@ export async function validateWorkflowBlock(input: CompletionCheck, deps: { jobs
   const now = (deps.now || Date.now)()
   const active = jobs.find(j => j.args?.sessionId === input.sessionId && j.phase === 'running' && now - Date.parse(j.updatedAt) < 360000)
   if (active) throw new Error(`操作 ${active.id} 仍为 running，尚未失败。继续调用 browser_status 到 complete/blocked/interrupted；不能因等待一分钟或公开状态 pending 而 task_block。`)
+  // The job can finish between the model's last poll and its block call. Use
+  // that receipt's actual reason instead of persisting a stale "still running".
+  const latest = jobs.filter(j => j.args?.sessionId === input.sessionId && now - Date.parse(j.updatedAt) < 360000)
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))[0]
+  if (latest?.phase === 'blocked' && /^[a-f0-9]{32}$/.test(latest.id) && /^[a-z0-9-]{1,100}$/.test(latest.error || '')) {
+    if (latest.error === 'interactive-verification-required') return { kind: 'needs_input',
+      reason: `Google 要求交互式登录验证，需用户在目标浏览器完成。操作 ${latest.id} 已真实结束为 blocked；不能再次复制或绕过验证。完成验证后在同 Task 新尝试执行稳定性验收。` }
+    return { kind: 'capability', reason: `浏览器操作 ${latest.id} 已真实结束为 blocked，回执原因：${latest.error}。原始证据保存在该操作与会话中；不能把它描述成仍在运行或已通过验收。` }
+  }
 }
 
 export async function readBrowserAcceptance(id: string) {

@@ -47,9 +47,10 @@ export interface RunnerOptions {
   onBatchSettled?: (batch: Batch) => void | Promise<void>
   onSessionCreated?: (sessionId: string) => void | Promise<void>
   beforeComplete?: (input: CompletionCheck) => void | Promise<void>
-  beforeBlock?: (input: CompletionCheck) => void | Promise<void>
+  beforeBlock?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
 }
 
+export interface BlockDecision { reason: string; kind: BlockKind }
 export interface CompletionCheck { task: TaskSpec; batch: Batch; card: Card; sessionId: string; profileId: string; metadata?: Record<string, unknown> }
 
 export interface FireOptions {
@@ -335,8 +336,8 @@ export class TaskRunner {
           },
           block: async (reason, kind) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
-            await this.beforeBlock?.({ task, batch, card, sessionId, profileId })
-            flight.terminal = { kind: 'blocked', reason, blockKind: kind }
+            const observed = await this.beforeBlock?.({ task, batch, card, sessionId, profileId })
+            flight.terminal = { kind: 'blocked', reason: observed?.reason ?? reason, blockKind: observed?.kind ?? kind }
           },
           planRound: async (summary) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')

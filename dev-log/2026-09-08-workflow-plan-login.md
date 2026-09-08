@@ -1,5 +1,25 @@
 # Workflow composition and explicit login acceptance
 
+## Browser recovery and malformed completion history (0.26.3)
+
+Browser MCP fc9c697 recovered browser-1's original receipt: `page-not-ready` at
+07:32:07 UTC, before any import. The recovered Task run completed browser-1 operation
+35ef856a96d3fa3812c87c40555d28c1: one authorized transfer, loginVerified/matchesSource
+true at 08:23:30 UTC. Browser-2's still-valid login and PID 255049 were preserved.
+Public workflow plan/input/JSON/Creator Trace/native-session/mobile checks passed
+again in 39.38 seconds with zero page errors.
+
+The browser Agent then generated malformed task_complete arguments (one missing outer
+closing brace). Tool validation correctly rejected it; no completion was accepted.
+The host forwarded the malformed raw arguments in the next model request, causing
+Qwen HTTP 400 before it could self-correct. The Batch truthfully failed and cancelled
+its unstarted Runner. Existing history/stream patch now wraps only invalid historical
+arguments as non-executed evidence on the model request wire; it neither modifies
+raw session logs nor repairs/executes rejected tool inputs. This is a version-fenced
+DSH host compatibility fix, not an override of Task completion or account validation.
+All 151 Node 22 tests, build and diff checks pass. A dry run against the installed
+supported host selects only dsh-llm-deepseek; no other host package needs rewriting.
+
 ## Live handoff regression (0.26.2)
 
 The corrected recipe created Task `T-chat-31436d3176dc1fb2eb0c` with exactly three

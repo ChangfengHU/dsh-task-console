@@ -38,6 +38,22 @@ export function patchDeepseekStream(source) {
   return replaceOne(next, 'function closeBlock(block) {\n', `function closeBlock(block) {\n\t${reject}\n`)
 }
 
+/** Request-only representation of a rejected call. Never repair or execute it. */
+export function toolArgumentsForHistory(raw) {
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return raw
+  } catch { /* preserve malformed source as data, not function arguments */ }
+  return JSON.stringify({ _dsh_rejected_tool_arguments: raw,
+    _dsh_error: 'Previous tool arguments were invalid and were not executed. Submit a new valid JSON object if the tool error requires correction.' })
+}
+
+export function patchDeepseekArgumentHistory(source) {
+  if (source.includes('function toolArgumentsForHistory(') && source.includes('arguments: toolArgumentsForHistory(block.arguments)')) return source
+  const next = replaceOne(source, 'function serializeAssistant(message) {', `${toolArgumentsForHistory.toString()}\nfunction serializeAssistant(message) {`)
+  return replaceOne(next, 'arguments: block.arguments\n', 'arguments: toolArgumentsForHistory(block.arguments)\n')
+}
+
 export function patchHistoryPersistence(source) {
   if (source.includes('function restoreHistoryToolIds(') && source.includes('if (hasLegacyEmptyToolId(event)) return true;')) return source
   let next = replaceOne(source, 'function needsLegacyPrefix(event) {', `${hasLegacyEmptyToolId.toString()}\n${restoreHistoryToolIds.toString()}\nfunction needsLegacyPrefix(event) {\n\tif (hasLegacyEmptyToolId(event)) return true;`)
@@ -55,7 +71,7 @@ export async function patchHistoryIds(dshRoot, { dryRun = false } = {}) {
   const specs = [
     ['dsh-client-ui-conversation', 'client.js', source => patchToolHistoryBundle(source)],
     ['dsh-client-ui-trajectory', 'client.js', source => patchToolHistoryBundle(source, true)],
-    ['dsh-llm-deepseek', 'index.js', patchDeepseekStream],
+    ['dsh-llm-deepseek', 'index.js', source => patchDeepseekArgumentHistory(patchDeepseekStream(source))],
     ['dsh-session-persistence', 'index.js', patchHistoryPersistence],
   ]
   const changes = []

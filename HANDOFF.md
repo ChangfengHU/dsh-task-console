@@ -1,5 +1,12 @@
 # Task Console runtime contracts
 
+The version-fenced history patch also shields DeepSeek-compatible model requests from
+previously rejected malformed tool-argument JSON. Raw session/Trace records and tool
+execution stay unchanged; only request serialization carries the invalid input as
+explicit non-executed evidence, allowing the model to correct it after the tool error.
+Do not silently repair and execute malformed arguments. Reapply through the existing
+`scripts/patch-history-ids.mjs` host patch after a supported host reinstall.
+
 Package remains `dsh-task-console`; Agent and Board are modules of the same plugin.
 Use the installed DSH service's actual executable/configuration to identify the host,
 not an adjacent source checkout. Its generated `lib/` plugin assets are tracked.

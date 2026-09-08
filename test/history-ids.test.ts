@@ -1,8 +1,31 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { runInNewContext } from 'node:vm'
-import { legacyToolContextId, patchToolHistoryBundle, patchDeepseekStream, patchHistoryPersistence } from '../scripts/patch-history-ids.mjs'
+import { legacyToolContextId, patchToolHistoryBundle, patchDeepseekStream, patchHistoryPersistence, toolArgumentsForHistory, patchDeepseekArgumentHistory } from '../scripts/patch-history-ids.mjs'
 import { restoreHistoryToolIds } from '../scripts/restore-history-tool-ids.mjs'
+
+test('rejected malformed arguments remain raw evidence but cannot poison the next model request', () => {
+  const valid = '{"summary":"done", "metadata":{"verified":true}}'
+  assert.equal(toolArgumentsForHistory(valid), valid)
+  for (const raw of [valid.slice(0,-1), '', 'not json', 'null', '[]', '"value"']) {
+    const value = JSON.parse(toolArgumentsForHistory(raw))
+    assert.equal(value._dsh_rejected_tool_arguments, raw)
+    assert.match(value._dsh_error, /not executed/)
+    assert.equal(value.summary, undefined, 'never invent executable repaired arguments')
+  }
+})
+
+test('history serializer patch is idempotent and leaves the original call unchanged', () => {
+  const source = 'function serializeAssistant(message) { return message.content.map(block => ({arguments: block.arguments\n})); }'
+  const next = patchDeepseekArgumentHistory(source)
+  assert.equal(patchDeepseekArgumentHistory(next), next)
+  assert.throws(() => patchDeepseekArgumentHistory('unknown version'), /Unrecognized/)
+  const serialize = runInNewContext(`${next}; serializeAssistant`)
+  const block = { type: 'tool-call', arguments: '{"summary":"done"' }
+  const sent = serialize({ content: [block] })
+  assert.equal(block.arguments, '{"summary":"done"')
+  assert.equal(JSON.parse(sent[0].arguments)._dsh_rejected_tool_arguments, block.arguments)
+})
 
 test('empty-ID calls pair by recorded source sequence, including parallel and paginated results', () => {
   const first = { type: 'tool/call', seq: 29 }

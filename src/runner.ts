@@ -271,7 +271,7 @@ export class TaskRunner {
     this.nameCache.set(profileId, agentName)
     const upstream: { agentName: string; summary: string }[] = []
     for (const d of card.deps.map(x => this.store.s.cards.get(x)).filter(Boolean) as Card[]) upstream.push({ agentName: await this.displayName(d.agentId), summary: d.summary ?? '' })
-    const text = `${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}`
+    const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}`
     const messageId = randomUUID()
     const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview)
     if (!claim) return

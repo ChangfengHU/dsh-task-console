@@ -37,6 +37,7 @@ await build({
     join(root, 'src/filtered-mcp-client.ts'),
     join(root, 'src/fleet-onboard-tools.ts'),
     join(root, 'src/fleet-runner-tools.ts'),
+    join(root, 'src/task-create-tools.ts'),
     join(root, 'src/task-intake.ts'),
     join(root, 'src/task-intake-http.ts'),
   ],

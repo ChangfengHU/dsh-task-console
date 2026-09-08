@@ -26,6 +26,7 @@ import { TaskRunner } from './runner.ts'
 import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask } from './tasks.ts'
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
+import { TaskCreator } from './task-create.ts'
 import type { Artifact, Card } from './tasks.ts'
 import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
@@ -46,6 +47,7 @@ export class TaskConsoleService extends TypertRemoteService {
 
   readonly runner: TaskRunner
   readonly intake: TaskIntakeCoordinator
+  readonly creator: TaskCreator
   private readonly ready: Promise<void>
 
   constructor(ctx: Context) {
@@ -57,6 +59,7 @@ export class TaskConsoleService extends TypertRemoteService {
       agents: () => this.intakeAgents(),
       decide: (signal, context, delivery) => decideTaskSignalWithAgent(this.ctx as any, signal, context, { ...delivery, markInternal: sessionId => this.markTaskSessionInternal(sessionId) }),
     })
+    this.creator = new TaskCreator(this.runner, () => this.intakeAgents())
     this.ready = this.runner.start()
       .then(() => this.markExistingTaskSessionsInternal())
       .then(() => this.intake.start())
@@ -320,7 +323,8 @@ export class TaskConsoleService extends TypertRemoteService {
       throw error
     }
     this.chats.set(sessionId, handle)
-    const head = (text ?? '').trim().replace(/\s+/g, ' ').slice(0, 28)
+    // Operational input can contain SSH credentials. Do not copy it into sidebar titles.
+    const head = ''
     try { (this.ctx as any).get('sessionTitle')?.rename?.(handle.agent.session, head ? `${name} · ${head}` : `${name} · 新会话`) } catch { /* cosmetic */ }
     try {
       const registry = (this.ctx as any).get('workspaceRegistry')
@@ -349,6 +353,17 @@ export class TaskConsoleService extends TypertRemoteService {
   }
 
   // ── tasks ──────────────────────────────────────────────────────────────
+
+  async workflowCatalog(): Promise<string> {
+    await this.ready
+    return JSON.stringify(this.creator.catalog())
+  }
+
+  async launchWorkflow(payload: string): Promise<string> {
+    await this.ready
+    const { taskId, text, requestId, cwd } = JSON.parse(payload)
+    return JSON.stringify(await this.creator.launch(taskId, text, requestId, cwd))
+  }
 
   /** Submit one generic, credential-free Signal; the Task Agent routes it asynchronously. */
   async submitTaskSignal(payload: string): Promise<string> {

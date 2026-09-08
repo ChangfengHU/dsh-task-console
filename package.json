@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-console",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "description": "Local-first Agent presets and task orchestration for DeepSeek Harness, backed by SQLite.",
   "license": "MIT",
   "type": "module",
@@ -27,6 +27,9 @@
     "./fleet-runner-tools": {
       "default": "./lib/fleet-runner-tools.js"
     },
+    "./task-create-tools": {
+      "default": "./lib/task-create-tools.js"
+    },
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
@@ -36,7 +39,9 @@
     "presets",
     "scripts/preset-skills.mjs",
     "scripts/install-task-intake.mjs",
+    "scripts/install-task-create.mjs",
     "scripts/patch-dsh-host.mjs",
+    "scripts/patch-task-mentions.mjs",
     "scripts/patch-history-ids.mjs",
     "scripts/restore-history-tool-ids.mjs",
     "prototype",
@@ -50,6 +55,7 @@
     "host:patch": "node scripts/patch-dsh-host.mjs",
     "preset:skills": "node scripts/preset-skills.mjs",
     "preset:intake": "node scripts/install-task-intake.mjs",
+    "preset:creator": "node scripts/install-task-create.mjs",
     "test": "NODE_ENV=test tsx --test test/*.test.ts",
     "kernel:check": "npm --prefix cloudflare run check"
   },

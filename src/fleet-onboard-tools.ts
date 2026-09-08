@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
+import { taskCredential } from './task-credentials.ts'
 
 export const name = 'task-console-fleet-onboard-tools'
 export const inject = ['tools']
@@ -638,7 +639,8 @@ export class VaultFirstCredentialProvider implements CredentialProvider {
   }
 
   async resolve(ip: string, exec: ToolExecutionLike, preferManaged = false): Promise<CredentialLease> {
-    const intake = credentialFromSession(ip, exec)
+    const direct = credentialFromSession(ip, exec)
+    const intake = direct.available ? direct : await taskCredential(ip, String(exec.agent?.session?.id ?? exec.agent?.session?.header?.id ?? ''))
     if (intake.available && !preferManaged) return intake
     const root = await mkdtemp(join(this.config.tempRoot ?? tmpdir(), 'dsh-fleet-vault-'))
     await chmod(root, 0o700)

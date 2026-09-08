@@ -20,6 +20,8 @@ export function activate(ctx: any): Promise<Api> {
       return JSON.parse(unwrap<string>(result, method)) as T
     }
     return {
+      workflowCatalog: () => call('workflowCatalog'),
+      launchWorkflow: (taskId: string, text: string, requestId: string, cwd?: string) => call('launchWorkflow', { taskId, text, requestId, cwd }),
       catalog: () => call<Catalog>('catalog'), agents: () => call<AgentRow[]>('agents'),
       previewAgent: (spec: AgentSpec) => call<Preview>('previewAgent', spec), saveAgent: (spec: AgentSpec) => call<{ path: string; preview: Preview }>('saveAgent', spec),
       deleteAgent: async (id: string) => { await call('deleteAgent', { id }) }, tryRun: (id: string) => call<TryRunResult>('tryRun', { id }),

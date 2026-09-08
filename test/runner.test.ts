@@ -6,6 +6,8 @@ import { test } from 'node:test'
 import { TaskRunner } from '../src/runner.ts'
 import { EventStore, type TaskSpec } from '../src/tasks.ts'
 import { groupArtifacts } from '../src/artifact-delivery.ts'
+import { TaskCreator } from '../src/task-create.ts'
+import { taskCredential } from '../src/task-credentials.ts'
 
 /** A fake dsh host: presets resolve, agents.create hands back a controllable session. */
 function fakeHost(presetDir: string) {
@@ -51,6 +53,68 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
   return { host, store, runner, task, root }
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
+
+test('chat workflow: real runner orders three roles, hands off, deduplicates and reuses Task with fresh inputs', async () => {
+  const { host, store, runner, root } = await setup()
+  const creator = new TaskCreator(runner, async () => ['a','b','c'].map(id => ({ id, name: id } as any)))
+  const proposal = { decision: 'create' as const, reason: 'new reusable goal', title: 'Node readiness', brief: 'Inspect and converge the submitted node; preserve healthy components',
+    participants: [{ agentId: 'a', brief: 'base' }, { agentId: 'b', brief: 'browser' }, { agentId: 'c', brief: 'runner' }] }
+  const exec = { agent: { session: { id: 'agent-task-create-agent-test', deriveMessages: () => [{ id: 'input-1', role: 'user', content: [{ type: 'text', text: 'Validate 192.0.2.10 idempotently' }] }] } } }
+  try {
+    const first = await creator.submit(proposal, exec, root)
+    assert.equal(first.cards.length, 3)
+    assert.equal(first.cards[0].status, 'running')
+    assert.equal(first.cards[1].status, 'todo')
+    assert.equal(first.cards[1].dependsOn[0], first.cards[0].id)
+    const duplicate = await creator.submit({ ...proposal, title: 'LLM repeated with a different title' }, exec, root)
+    assert.equal(duplicate.batchId, first.batchId)
+    assert.equal(store.s.batches.size, 1)
+    for (let i = 0; i < 3; i++) {
+      const session = [...host.sessions.keys()].at(-1)!
+      const prompt = host.sessions.get(session)!.followups[0].content[0].text
+      assert.match(prompt, /192\.0\.2\.10/)
+      if (i) assert.match(prompt, new RegExp(`receipt-${i-1}`))
+      host.consumeFirst(session)
+      await host.callTool(session, 'task_complete', { summary: `receipt-${i}` })
+      host.endTurn(session); await tick()
+    }
+    assert.equal(creator.status(first.taskId, first.batchId).outcome, 'done')
+    const second = await creator.launch(first.taskId, 'Validate 192.0.2.20', 'second-submission-1234', root)
+    assert.equal(second.taskId, first.taskId)
+    assert.notEqual(second.batchId, first.batchId)
+    assert.equal(creator.catalog().length, 1)
+    const prompt = [...host.sessions.values()].at(-1)!.followups[0].content[0].text
+    assert.match(prompt, /192\.0\.2\.20/); assert.doesNotMatch(prompt, /192\.0\.2\.10/)
+    const third = await creator.launch(first.taskId, 'Validate 192.0.2.20', 'second-submission-1234', root)
+    assert.equal(third.batchId, second.batchId)
+    await assert.rejects(() => creator.launch('T', 'do old incident', 'invalid-workflow-1234', root), /聊天工作流/)
+    await assert.rejects(() => creator.submit({ ...proposal, participants: [{ agentId: 'unregistered' }] }, { agent: { session: { ...exec.agent.session, id: 'another' } } }, root), /没有这个 Agent/)
+  } finally { runner.stop() }
+})
+
+test('chat credentials: no secret in persisted task/events; only active bound installer can resolve exact target', async () => {
+  const { host, store, runner, root } = await setup()
+  const preset = join(root, 'presets', 'fleet-installer'); await mkdir(preset)
+  await writeFile(join(preset, 'task-console.json'), JSON.stringify({ id: 'fleet-installer', name: 'installer', model: 'p/m', tools: [], mcpTools: {}, skills: [] }))
+  const creator = new TaskCreator(runner, async () => [{ id: 'fleet-installer' } as any])
+  const secret = 'Fixture-Only!123'
+  const exec = { agent: { session: { id: 'creator-test', deriveMessages: () => [{ role: 'user', content: [{ type: 'text', text: `root ${secret} 192.0.2.10` }] }] } } }
+  try {
+    const result = await creator.submit({ decision: 'create', reason: 'credential test', title: 'onboard', brief: 'Configure the target node safely', participants: [{ agentId: 'fleet-installer' }] }, exec, root)
+    assert.ok(!JSON.stringify(store.all()).includes(secret))
+    const sessionId = [...host.sessions.keys()].at(-1)!
+    assert.ok(!host.sessions.get(sessionId)!.followups[0].content[0].text.includes(secret))
+    const lease = await taskCredential('192.0.2.10', sessionId, store.root)
+    assert.equal(lease.available, true)
+    assert.equal(JSON.parse(Buffer.from(lease.material!).toString()).password, secret)
+    lease.material?.fill(0)
+    assert.equal((await taskCredential('192.0.2.20', sessionId, store.root)).available, false)
+    assert.equal((await taskCredential('192.0.2.10', 'task-forged', store.root)).available, false)
+    host.consumeFirst(sessionId); await host.callTool(sessionId, 'task_complete', { summary: 'done' }); host.endTurn(sessionId); await tick()
+    assert.equal((await taskCredential('192.0.2.10', sessionId, store.root)).available, false)
+    assert.equal(creator.status(result.taskId, result.batchId).outcome, 'done')
+  } finally { runner.stop() }
+})
 
 test('runner: pins Agent permission and marks each task session internal before dispatch', async () => {
   const internal: string[] = []

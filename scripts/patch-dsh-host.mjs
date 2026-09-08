@@ -3,6 +3,7 @@ import { access, readFile, rename, writeFile } from 'node:fs/promises'
 import { delimiter, dirname, join } from 'node:path'
 import { realpathSync } from 'node:fs'
 import { patchHistoryIds } from './patch-history-ids.mjs'
+import { patchTaskMentions } from './patch-task-mentions.mjs'
 
 const SUPPORTED_DSH_VERSION = '0.1.1-rc.2'
 
@@ -57,6 +58,15 @@ const runtime = join(packages, 'dsh-client-runtime', 'lib', 'client.js')
 const ui = join(packages, 'dsh-client-ui-workspace', 'lib', 'client.js')
 
 const changed = []
+const reference = join(packages, 'dsh-client-ui-reference', 'lib', 'client.js')
+const referenceBefore = await readFile(reference, 'utf8')
+const referenceAfter = patchTaskMentions(referenceBefore)
+if (referenceAfter !== referenceBefore) {
+  try { await writeFile(`${reference}.dtc-mentions-backup`, referenceBefore, { flag: 'wx' }) } catch (error) { if (error.code !== 'EEXIST') throw error }
+  await writeFile(`${reference}.dtc-next`, referenceAfter)
+  await rename(`${reference}.dtc-next`, reference)
+  changed.push('task-mentions')
+}
 if (await patchFile(workspace, [
   [
     '\tarchivedSessionIds: z.array(z.string().transform(SessionId)).default([]),\n\tpendingMutation:',

@@ -38,6 +38,7 @@ function loadHeavy(): Promise<Heavy> {
 function go(path: string): void { window.location.hash = `${HASH_PREFIX}/${path}`.replace(/\/+$/, '') }
 
 export async function apply(ctx: any): Promise<void> {
+  ctx.effect(() => { document.documentElement.setAttribute('data-dsh-task-entry', ''); return () => document.documentElement.removeAttribute('data-dsh-task-entry') }, 'task-console: task mentions replace history references')
   ctx.effect(() => installLightStyles(), 'task-console: lightweight stylesheet')
   ctx.effect(() => installSessionUrlSync(ctx), 'task-console: session URL sync')
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'task-console', order: 30, inject: () => ({ ctx }) }, FooterEntry))
@@ -111,13 +112,25 @@ function currentCwd(ctx: any, action: any): string | undefined {
 
 function lazyAgentSource(ctx: any) {
   let roster: AgentRow[] = []
+  let workflows: { id: string; title: string; brief: string }[] = []
+  let refreshedAt = 0
   const api = async () => (await loadHeavy()).activate(ctx)
-  const refresh = async () => { roster = (await (await api()).agents()).filter(agent => !agent.broken) }
+  const refresh = async () => { if (Date.now() - refreshedAt < 1500) return; const service = await api(); const [agents, tasks] = await Promise.all([service.agents(), service.workflowCatalog()]); roster = agents.filter(agent => !agent.broken); workflows = tasks; refreshedAt = Date.now() }
   const claimFor = (agent: AgentRow, prefix: string) => ({ claim: { token: prefix, hint: `要 ${agent.name} 做什么`, images: false, submit: async (args: string, action: any) => { try { const service = await api(); const { sessionId } = await service.startAgentSession(agent.id, args, currentCwd(ctx, action)); await service.openSession(sessionId); return { kind: 'success' as const } } catch (error) { return { kind: 'error' as const, text: error instanceof Error ? error.message : String(error) } } } } })
+  const claimTask = (task: { id: string; title: string }, prefix: string) => {
+    const requestId = crypto.randomUUID()
+    return { claim: { token: prefix, hint: `提交 ${task.title} 的本次参数 · 新执行记录`, images: false, submit: async (text: string, action: any) => {
+      try { const result = await (await api()).launchWorkflow(task.id, text, requestId, currentCwd(ctx, action)); go(`tasks/${result.taskId}/runs/${result.batchId}`); return { kind: 'success' as const } }
+      catch (error) { return { kind: 'error' as const, text: error instanceof Error ? error.message : String(error) } }
+    } } }
+  }
   return {
     trigger: '@' as const, name: 'Agent', order: -10, warm: () => undefined,
-    candidates: async (_session: unknown, request: { query: string }) => { if (!roster.length) await refresh(); const query = (request.query ?? '').toLowerCase(); return roster.filter(agent => !query || agent.name.toLowerCase().includes(query) || agent.id.includes(query)).map(agent => ({ name: agent.name, description: agent.description || agent.id, hint: '开一个它的会话', value: agent.id, section: 'Agent' })) },
-    onPick: (pick: { candidate: { value?: string } }) => { const agent = roster.find(row => row.id === pick.candidate.value); return agent ? claimFor(agent, `@${agent.name} `) : undefined },
-    matchEnter: async (_session: unknown, line: string) => { const match = /^@(\S+)\s*([\s\S]*)$/.exec(line.trim()); if (!match) return undefined; if (!roster.length) await refresh(); const agent = roster.find(row => row.name === match[1] || row.id === match[1]); return agent ? claimFor(agent, `@${match[1]} `) : undefined },
+    candidates: async (_session: unknown, request: { query: string }) => { await refresh(); const query = (request.query ?? '').toLowerCase(); return [
+      ...roster.filter(agent => !query || agent.name.toLowerCase().includes(query) || agent.id.includes(query)).map(agent => ({ name: agent.name, description: agent.description || agent.id, hint: '交给 Agent', value: agent.id, section: 'Agent' })),
+      ...workflows.filter(task => !query || task.title.toLowerCase().includes(query) || task.id.toLowerCase().includes(query)).map(task => ({ name: task.title, description: task.brief, hint: '复用工作流 · 新执行', value: `task:${task.id}`, section: 'Task / Workflow' })),
+    ] },
+    onPick: (pick: { candidate: { value?: string } }) => { const task = workflows.find(row => `task:${row.id}` === pick.candidate.value); if (task) return claimTask(task, `@${task.title} `); const agent = roster.find(row => row.id === pick.candidate.value); return agent ? claimFor(agent, `@${agent.name} `) : undefined },
+    matchEnter: async (_session: unknown, line: string) => { const match = /^@(\S+)\s*([\s\S]*)$/.exec(line.trim()); if (!match) return undefined; await refresh(); const task = workflows.find(row => row.title === match[1] || row.id === match[1]); if (task) return claimTask(task, `@${match[1]} `); const agent = roster.find(row => row.name === match[1] || row.id === match[1]); return agent ? claimFor(agent, `@${match[1]} `) : undefined },
   }
 }

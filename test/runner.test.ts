@@ -79,11 +79,15 @@ test('chat workflow: real runner orders three roles, hands off, deduplicates and
       const prompt = host.sessions.get(session)!.followups[0].content[0].text
       assert.match(prompt, /192\.0\.2\.10/)
       if (i) assert.match(prompt, new RegExp(`receipt-${i-1}`))
+      if (i === 2) assert.match(prompt, /receipt-0/, 'final role receives the original first-role handoff too')
       host.consumeFirst(session)
       await host.callTool(session, 'task_complete', { summary: `receipt-${i}` })
       host.endTurn(session); await tick()
     }
-    assert.equal(creator.status(first.taskId, first.batchId).outcome, 'done')
+    const completed = creator.status(first.taskId, first.batchId)
+    assert.equal(completed.outcome, 'done')
+    assert.equal(completed.cards[0].summary, 'receipt-0')
+    assert.ok(completed.cards.every(c => c.sessionId), 'completed sessions remain navigable')
     const second = await creator.launch(first.taskId, 'Validate 192.0.2.20', 'second-submission-1234', root)
     assert.equal(second.taskId, first.taskId)
     assert.notEqual(second.batchId, first.batchId)
@@ -92,6 +96,8 @@ test('chat workflow: real runner orders three roles, hands off, deduplicates and
     assert.match(prompt, /192\.0\.2\.20/); assert.doesNotMatch(prompt, /192\.0\.2\.10/)
     const third = await creator.launch(first.taskId, 'Validate 192.0.2.20', 'second-submission-1234', root)
     assert.equal(third.batchId, second.batchId)
+    assert.equal(store.s.batches.get(second.batchId)?.turn?.origin?.intakeSessionId, undefined, 'direct workflow has no invented Agent session link')
+    await assert.rejects(() => creator.launch(first.taskId, 'Validate 192.0.2.99', 'second-submission-1234', root), /同一提交/)
     await assert.rejects(() => creator.launch('T', 'do old incident', 'invalid-workflow-1234', root), /聊天工作流/)
     await assert.rejects(() => creator.submit({ ...proposal, participants: [{ agentId: 'unregistered' }] }, { agent: { session: { ...exec.agent.session, id: 'another' } } }, root), /没有这个 Agent/)
   } finally { runner.stop() }

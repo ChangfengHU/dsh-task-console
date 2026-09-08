@@ -172,7 +172,7 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
           const state = fold(next.events as Event[])
           const spec = state.tasks.get(id)
           const selected = next.batchId ? state.batches.get(next.batchId) : undefined
-          if (spec?.graphMode !== 'dynamic-rounds' && !selected?.settled) poll = window.setTimeout(loadEvents, 4000)
+          if (spec?.graphMode !== 'dynamic-rounds' && spec?.origin?.source !== 'task-chat' && !selected?.settled) poll = window.setTimeout(loadEvents, 4000)
         }
       } catch (e) { if (!stop) setError(String((e as Error).message ?? e)) }
     }
@@ -194,7 +194,7 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
   useEffect(() => {
     let stop = false
     if (!selId) { setArtifacts([]); setArtifactBatch(null); return }
-    if (task?.graphMode === 'dynamic-rounds' || batchFull?.settled) return
+    if (task?.graphMode === 'dynamic-rounds' || task?.origin?.source === 'task-chat' || batchFull?.settled) return
     const load = () => api.taskArtifacts(id, selId).then(a => { if (!stop) { setArtifacts(a); setArtifactBatch(selId) } }).catch(e => { if (!stop) setError(String((e as Error).message ?? e)) })
     if (artifactBatch !== selId) void load()
     const t = window.setInterval(load, 3000)
@@ -221,7 +221,7 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
 
   const agentName = (aid: string) => agents.find(a => a.id === aid)?.name ?? aid
   if (!task) return <div className="dtc-empty">{error || (events.length ? '没有这个任务' : <><span className="dtc-spin" /> 读取事件流…</>)}</div>
-  if (task.graphMode === 'dynamic-rounds' && selId) return <DynamicTaskReplay api={api} agents={agents} task={task} batches={batches} batchId={selId} sessionId={sessionId} toast={toast} />
+  if ((task.graphMode === 'dynamic-rounds' || task.origin?.source === 'task-chat') && selId) return <DynamicTaskReplay api={api} agents={agents} task={task} batches={batches} batchId={selId} sessionId={sessionId} toast={toast} />
 
   const cardsNow = batchNow ? batchNow.cardIds.map(cid => now.cards.get(cid)).filter(Boolean) as Card[] : []
   const cardsFull = batchFull ? batchFull.cardIds.map(cid => full.cards.get(cid)).filter(Boolean) as Card[] : []

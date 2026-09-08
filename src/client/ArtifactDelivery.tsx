@@ -77,7 +77,7 @@ export function ArtifactDelivery({ api, taskId, batchId, artifacts, actors = [],
   const groups = useMemo(() => groupArtifacts(artifacts, actors), [artifacts, actors])
   const final = finalArtifact(groups)
   const actions = useArtifactActions(api, taskId, batchId, toast, refresh)
-  if (!groups.length) return <section id="dtc-final-delivery" className="dtc-delivery"><div className="dtc-delivery-head"><div><span>交付物</span><h2>最终交付</h2></div><em>等待产物</em></div><div className="dtc-empty">{empty}</div></section>
+  if (!groups.length) return <section id="dtc-final-delivery" className="dtc-delivery"><div className="dtc-delivery-head"><div><span>执行结果</span><h2>{summary ? '执行报告' : '最终交付'}</h2></div><em>{summary ? '文字结果 · 无需 HTML 文件' : '等待结果'}</em></div>{summary ? <div className="dtc-hand">{summary}</div> : <div className="dtc-empty">{empty}</div>}</section>
   return <section id="dtc-final-delivery" className="dtc-delivery">
     <div className="dtc-delivery-head"><div><span>交付物</span><h2>{final ? '最终产物已确认' : '交付版本记录'}</h2><p>{final?.finalSource === 'compatibility' ? '此任务完成于显式最终产物功能上线前；系统按“最新执行者版本”兼容识别，请人工核对。' : final ? '规划者已经明确指定最终版本；相同字节的提交与评估快照已合并。' : '当前只有过程产物，任务完成前不会冒充最终结果。'}</p></div>{final ? <div className="dtc-delivery-final"><b>{final.primary.name}</b><small>SHA256 {final.sha256.slice(0, 12)}…</small><FinalArtifactActions api={api} taskId={taskId} batchId={batchId} group={final} toast={toast} refresh={refresh} /></div> : <em>待规划者确认</em>}</div>
     {summary ? <details className="dtc-delivery-handoff"><summary>查看最终交接说明</summary><p>{summary}</p></details> : null}

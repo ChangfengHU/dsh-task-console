@@ -270,7 +270,16 @@ export class TaskRunner {
     const sessionId = `task-${task.id}-${batch.id}-${card.index + 1}${attempt > 1 ? `-t${attempt}` : ''}`.toLowerCase().replace(/[^a-z0-9-]/g, '-')
     this.nameCache.set(profileId, agentName)
     const upstream: { agentName: string; summary: string }[] = []
-    for (const d of card.deps.map(x => this.store.s.cards.get(x)).filter(Boolean) as Card[]) upstream.push({ agentName: await this.displayName(d.agentId), summary: d.summary ?? '' })
+    const prior = new Map<string, Card>()
+    const collect = (id: string) => {
+      const d = this.store.s.cards.get(id)
+      if (!d || prior.has(id) || !batch.cardIds.includes(id)) return
+      prior.set(id, d)
+      // A reusable workflow's final role needs original ancestor receipts, not only a rewritten immediate handoff.
+      if (task.origin?.source === 'task-chat' && task.graphMode !== 'dynamic-rounds') d.deps.forEach(collect)
+    }
+    card.deps.forEach(collect)
+    for (const d of [...prior.values()].sort((a, b) => a.index - b.index)) upstream.push({ agentName: await this.displayName(d.agentId), summary: d.summary ?? '' })
     const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}`
     const messageId = randomUUID()
     const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview)

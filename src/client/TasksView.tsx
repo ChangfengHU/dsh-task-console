@@ -9,8 +9,10 @@ import { cronHuman, nextFire, parseCron } from '../cron.ts'
 import type { AgentRow, ArtifactView, GraphSnapshot, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
 import { ArtifactResultAction, canPreviewArtifact } from './ArtifactDelivery.tsx'
+import { TaskRunAction } from './TaskRunAction.tsx'
 
 export interface TasksApi {
+  launchWorkflow: (taskId: string, text: string, requestId: string, cwd?: string) => Promise<{ taskId: string; batchId: string; path: string }>
   tasks: () => Promise<{ tasks: (TaskSpec & { nextFire: string | null })[]; runs: Run[] }>
   createTask: (spec: Partial<TaskSpec>) => Promise<{ id: string }>
   setTaskEnabled: (id: string, enabled: boolean) => Promise<void>
@@ -219,7 +221,7 @@ function TaskGroupCard({ task, latest, history, state, selected, onSelect, agent
         {task.trigger.kind === 'cron' ? <><span className="dtc-mono">{cronHuman(task.trigger.expr)}</span><span>{task.enabled && task.nextFire ? `下次 ${fmt(task.nextFire)}` : '时间表已停用'}</span></> : latest ? <><span>{ago(latest.firedAt)} · {BY[latest.by]}</span><span>{history} 次运行</span></> : <span>单次任务</span>}
         </div><div className="acts">
           {task.trigger.kind === 'cron' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void toggleSchedule() }}>{task.enabled ? '停用' : '启用'}</button> : null}
-          {task.origin?.signalId ? <span title="从来源系统重新提交 Signal，由 Task Agent 核对目标与角色">从来源重试</span> : <>
+          {task.origin?.source === 'task-chat' ? <TaskRunAction task={task} api={api} toast={toast} /> : task.origin?.signalId ? <span title="从来源系统重新提交 Signal，由 Task Agent 核对目标与角色">从来源重试</span> : <>
           {state === 'bad' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void retry() }}>重试</button> : null}
           {state === 'done' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void rerun() }}>再次执行</button> : null}</>}
           {state === 'park' && current?.sessionId ? <button className="dtc-btn sm pri" onClick={event => { event.stopPropagation(); closeConsole(); void api.openSession(current.sessionId!) }}>去回答</button> : null}

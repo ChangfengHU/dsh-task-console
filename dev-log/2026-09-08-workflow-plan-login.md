@@ -1,5 +1,27 @@
 # Workflow composition and explicit login acceptance
 
+## Same-Task second attempt remains blocked — live evidence, not success
+
+Canonical unblock created browser Run -3-t2 without rerunning installer/Runner or
+discarding the first failure. It upgraded the node verifier to v3, reused browser-1,
+copied the previously authorized account to browser-2 once, and then failed
+acceptance f6464437bae8cd6028be2ab22a412aee after five positive samples per browser.
+The redundant explicit-copy call returned reused and did not transfer again.
+
+Browser-2 later appeared verified without another copy, then signed_out again.
+The original DSH role performed fixed read-only normal/cache-bypass/default-account
+comparisons. All showed signed_out with actual network responses and no reported
+cookie-delivery blocking. This is not proof of Google's rejection reason. The Task
+is still capability-blocked; no completed final acceptance report is claimed.
+
+Public Chrome verified browser-1's positive and browser-2's negative labels, mobile
+width, and the Task's two completed roles / blocked browser node with both failed
+Runs visible. Initial assertions took 4.69 s on Fleet and 22.23 s on DSH, no page
+errors. Screenshots are retained as failure evidence, not successful acceptance.
+Companion changes pass 50 Node / 18 Python tests. DSH runtime remains 0.27.1 with
+the previously verified 158 tests/build. Recovery backups, the other 21 Tasks and
+all seven old execution session directories are retained.
+
 ## Fresh Task created; real stability failure and 0.27.1 rework
 
 Creator agent-task-create-agent-mtsh4qw9 created T-chat-b4c6fcb369f0c20a9739 and Batch

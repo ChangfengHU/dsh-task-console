@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [TASK-WORKFLOW-002] 0.27.1：旧 Task 精确备份删除，21 个其他 Task 和全部会话保留。新 Creator/Task T-chat-b4c6fcb369f0c20a9739 已真实创建；装机/Runner 通过，浏览器跨周期验收发现 signed_out，原失败 Run 保留且 Task blocked。补全负判定等待窗口、同会话失败后禁止换 ID 重复制、宿主强制 v3 真实回执与 Fleet 读回；158 项回归/构建及 MCP 49 Node/17 Python 通过。待同 Task 新尝试持续公网验收。证据见 `dev-log/2026-09-08-workflow-plan-login.md`。
+- [ ] [TASK-WORKFLOW-002] 0.27.1：旧 Task 精确备份删除，21 个其他 Task 和全部会话保留。新 Task T-chat-b4c6fcb369f0c20a9739 的装机/Runner 通过；浏览器两次真实尝试均未通过稳定验收，失败 Run 保留且 Task blocked。DSH 只读普通/绕缓存/默认账号页面均报 signed_out，没有发现浏览器拦截 Cookie；Google 侧原因未确认，不能宣称已完成。公网桌面/移动端及阻塞 DAG 已验证；158 项 DSH 回归/构建，MCP 50 Node/18 Python 通过。后续需要有效登录或经证实的登录链路修复，再在同 Task 验收。见 `dev-log/2026-09-08-workflow-plan-login.md`。
 
 - [x] [AGENT-HISTORY-001] 0.25.0：新会话 @ Agent 默认最新五条、展开/收起与全名册搜索；Agent 详情支持配置/会话/任务页签、服务端分页、创建者与实际参与者关联、北京时间和原会话跳转。保留草稿及返回页码；不读取完整会话日志、不操作目标机器。140 项测试及真实公网桌面/窄屏交互验收，见 `dev-log/2026-09-08-agent-history.md`。
 

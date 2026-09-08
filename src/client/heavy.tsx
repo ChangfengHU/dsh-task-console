@@ -20,6 +20,7 @@ export function activate(ctx: any): Promise<Api> {
       return JSON.parse(unwrap<string>(result, method)) as T
     }
     return {
+      agentHistory: query => call('agentHistory', query),
       workflowCatalog: () => call('workflowCatalog'),
       launchWorkflow: (taskId: string, text: string, requestId: string, cwd?: string) => call('launchWorkflow', { taskId, text, requestId, cwd }),
       catalog: () => call<Catalog>('catalog'), agents: () => call<AgentRow[]>('agents'),

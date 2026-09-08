@@ -449,6 +449,8 @@ export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: 
   await chmod(root, 0o700).catch(() => undefined)
 
   const preview = renderComposition(spec, hostMcp, inheritedTools)
+  const existed = await stat(dir).then(() => true).catch(error => { if (error.code === 'ENOENT') return false; throw error })
+  const createdAt = existed ? await readAgentCreatedAt(dir) : new Date().toISOString()
   const staged = resolve(root, `.${spec.id}-next-${randomUUID()}`)
   const backup = resolve(root, `.${spec.id}-backup-${randomUUID()}`)
   let backedUp = false
@@ -457,8 +459,8 @@ export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: 
     await writeFile(join(staged, 'agent.cordis.yml'), preview.yml, { mode: 0o600 })
     await writeFile(join(staged, 'preset.yml'), `name: ${JSON.stringify(spec.name)}\ndescription: ${JSON.stringify(spec.description)}\n`, { mode: 0o600 })
     await writeFile(join(staged, SPEC_FILE), JSON.stringify(spec, null, 2) + '\n', { mode: 0o600 })
+    await writeFile(join(staged, 'agent-meta.json'), JSON.stringify({ createdAt }) + '\n', { mode: 0o600 })
     await syncPresetSkills(spec, library, staged)
-    const existed = await stat(dir).then(() => true).catch(() => false)
     if (existed) { await rename(dir, backup); backedUp = true }
     try {
       await rename(staged, dir)
@@ -479,6 +481,13 @@ export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: 
 /** Our spec for a preset directory, when we authored it. */
 export async function readSpec(dir: string): Promise<AgentSpec | null> {
   try { return validateSpec(JSON.parse(await readFile(join(dir, SPEC_FILE), 'utf8'))) } catch { return null }
+}
+
+export async function readAgentCreatedAt(dir: string): Promise<string | null> {
+  try {
+    const { createdAt } = JSON.parse(await readFile(join(dir, 'agent-meta.json'), 'utf8'))
+    return typeof createdAt === 'string' && Number.isFinite(Date.parse(createdAt)) ? new Date(createdAt).toISOString() : null
+  } catch (error: any) { if (error.code === 'ENOENT') return null; throw error }
 }
 
 /** Delete one authored preset directory. */

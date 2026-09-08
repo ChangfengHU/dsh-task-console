@@ -16,10 +16,12 @@ import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { applyAgentPermission } from './agent-session.ts'
+import { agentHistory, firstAgentUse, historyQuery, type AgentSessionHeader } from './agent-history.ts'
+import { sortAgents } from './agent-order.ts'
 import { discoverLegacyArtifacts, publishHtml, readArtifact } from './artifacts.ts'
 import { withFinalArtifact } from './artifact-delivery.ts'
 import {
-  NATIVE_TOOLS, mask, readSpec, removePreset, renderComposition, scanSkills, userPresetRoot, validateSpec, writePreset,
+  NATIVE_TOOLS, mask, readAgentCreatedAt, readSpec, removePreset, renderComposition, scanSkills, userPresetRoot, validateSpec, writePreset,
   type HostMcp,
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
@@ -49,6 +51,8 @@ export class TaskConsoleService extends TypertRemoteService {
   readonly intake: TaskIntakeCoordinator
   readonly creator: TaskCreator
   private readonly ready: Promise<void>
+  private headerCache?: { at: number; value: AgentSessionHeader[] }
+  private headerRead?: Promise<AgentSessionHeader[]>
 
   constructor(ctx: Context) {
     super(ctx, NAMESPACE)
@@ -172,6 +176,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const presets = (this.ctx as any).get('agentPresets')
     if (!presets) return JSON.stringify([])
     const rows: AgentRow[] = []
+    const firstUsed = firstAgentUse(await this.sessionHeaders())
     for (const p of await presets.list() as any[]) {
       const dir = dirname(String(p.path))
       const spec = p.trust === 'user' ? await readSpec(dir) : null
@@ -184,9 +189,41 @@ export class TaskConsoleService extends TypertRemoteService {
           name = unq(n) ?? name; description = unq(d) ?? description
         } catch { /* no metadata */ }
       }
-      rows.push({ id: p.id, name, description, trust: p.trust, broken: p.broken, path: dir, spec })
+      rows.push({ id: p.id, name, description, trust: p.trust, broken: p.broken, path: dir, spec, createdAt: await readAgentCreatedAt(dir), firstUsedAt: firstUsed.get(p.id) ?? null })
     }
-    return JSON.stringify(rows)
+    return JSON.stringify(sortAgents(rows))
+  }
+
+  /** Header-only persistence index, coalesced briefly; live headers always win. */
+  private async sessionHeaders(): Promise<AgentSessionHeader[]> {
+    const ctx = this.ctx as any
+    if (!this.headerCache || Date.now() - this.headerCache.at > 3000) {
+      this.headerRead ??= Promise.resolve(ctx.get('sessionPersistence')?.list() ?? []).then((value: AgentSessionHeader[]) => {
+        this.headerCache = { at: Date.now(), value }; return value
+      }).finally(() => { this.headerRead = undefined })
+      await this.headerRead
+    }
+    const headers = new Map((this.headerCache?.value ?? []).map(h => [h.id, h]))
+    for (const session of ctx.get('sessions')?.list() ?? []) headers.set(session.id, session.header)
+    return [...headers.values()]
+  }
+
+  async agentHistory(payload: string): Promise<string> {
+    const query = historyQuery(JSON.parse(payload))
+    await this.ready
+    const headers = await this.sessionHeaders()
+    const result = agentHistory(this.runner.store.s, headers, query)
+    const byId = new Map(headers.map(h => [h.id, h]))
+    const ctx = this.ctx as any
+    // Enrich only the requested page, exclusively from live/cached projections.
+    for (const row of result.sessions) {
+      const live = ctx.get('sessions')?.get(row.id), meta = byId.get(row.id)
+      let values: any
+      try { values = (live ? ctx.get('sessionProjections')?.snapshot(live) : meta ? ctx.get('sessionProjectionCache')?.cachedSnapshot(meta) : undefined)?.values } catch { /* optional cache; no transcript fallback */ }
+      row.title = typeof values?.title === 'string' ? mask(values.title) : row.kind === 'task' ? `${row.tasks[0]?.title ?? '任务执行'} · ${query.agentId}` : `${query.agentId} · 会话`
+      if (ctx.agents?.get(row.id)?.status === 'running') row.status = 'running'
+    }
+    return JSON.stringify(result)
   }
 
   // ── authoring ──────────────────────────────────────────────────────────

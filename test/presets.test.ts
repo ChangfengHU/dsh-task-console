@@ -3,7 +3,7 @@ import { access, mkdtemp, readFile, readdir, mkdir, writeFile } from 'node:fs/pr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { mask, permissionOf, readSpec, removePreset, renderComposition, syncPresetSkills, validateSpec, verifyPresetSkills, writePreset } from '../src/presets.ts'
+import { mask, permissionOf, readAgentCreatedAt, readSpec, removePreset, renderComposition, syncPresetSkills, validateSpec, verifyPresetSkills, writePreset } from '../src/presets.ts'
 
 const base = { id: 'inspector', name: '巡检员', description: '只看不动', persona: '你是巡检员。\n只读。', model: 'codex-local/gpt-5.6-mini', effort: 'medium' as const, permissionPreset: 'workspace-write' as const }
 
@@ -86,7 +86,9 @@ test('writePreset lays out the directory, copies chosen skills, and readSpec rou
   const presetRoot = join(root, 'presets')
   const { path } = await writePreset(spec, [], [{ name: 'linux-clash-skill', dir: join(lib, 'linux-clash-skill'), description: '', root: 'x' }], presetRoot)
   assert.equal(path, join(presetRoot, 'inspector'))
-  assert.deepEqual((await readdir(path)).sort(), ['agent.cordis.yml', 'preset.yml', 'skills', 'skills.lock.json', 'task-console.json'])
+  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'preset.yml', 'skills', 'skills.lock.json', 'task-console.json'])
+  const createdAt = await readAgentCreatedAt(path)
+  assert.ok(createdAt)
   assert.match(await readFile(join(path, 'preset.yml'), 'utf8'), /name: "巡检员"/)
   assert.equal((await readFile(join(path, 'skills', 'linux-clash-skill', 'SKILL.md'), 'utf8')).includes('body'), true)
   assert.deepEqual((await verifyPresetSkills(spec, [{ name: 'linux-clash-skill', dir: join(lib, 'linux-clash-skill'), description: '', root: 'x' }], path)).map(row => row.status), ['in-sync'])
@@ -97,10 +99,22 @@ test('writePreset lays out the directory, copies chosen skills, and readSpec rou
   assert.deepEqual((await verifyPresetSkills(spec, [{ name: 'linux-clash-skill', dir: join(lib, 'linux-clash-skill'), description: '', root: 'x' }], path)).map(row => row.status), ['source-and-copy-drift'])
   // a second save without skills clears the stale copy
   await writePreset({ ...spec, skills: [] }, [], [], presetRoot)
-  assert.deepEqual((await readdir(path)).sort(), ['agent.cordis.yml', 'preset.yml', 'skills.lock.json', 'task-console.json'])
+  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'preset.yml', 'skills.lock.json', 'task-console.json'])
+  assert.equal(await readAgentCreatedAt(path), createdAt)
   await removePreset('inspector', presetRoot)
   assert.deepEqual(await readdir(presetRoot), [])
   await assert.rejects(removePreset('../x', presetRoot))
+})
+
+test('legacy preset save does not invent creation time and a new copy gets its own timestamp', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tc-legacy-'))
+  const old = join(root, base.id)
+  await mkdir(old)
+  await writeFile(join(old, 'task-console.json'), JSON.stringify(base))
+  await writePreset(validateSpec({ ...base, skills: [] }), [], [], root)
+  assert.equal(await readAgentCreatedAt(old), null)
+  const copy = await writePreset(validateSpec({ ...base, id: 'copy', skills: [] }), [], [], root)
+  assert.ok(await readAgentCreatedAt(copy.path))
 })
 
 test('writePreset fails before replacing a working preset when a selected Skill source vanished', async () => {

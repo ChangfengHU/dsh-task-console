@@ -44,7 +44,7 @@ function descriptor(method: string, argc: 0 | 1) {
 /** Every method the console calls, in the order the service defines them. */
 export const METHODS = [
   ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
-  ['startAgentSession', 1], ['sessionTurns', 1],
+  ['startAgentSession', 1], ['sessionTurns', 1], ['agentHistory', 1],
   ['workflowCatalog', 0], ['launchWorkflow', 1],
   ['submitTaskSignal', 1], ['taskSignal', 1], ['taskSignals', 1],
   ['board', 0], ['tasks', 0], ['createTask', 1], ['setTaskEnabled', 1], ['deleteTask', 1], ['deleteTasks', 1], ['fireTask', 1], ['cancelRun', 1], ['taskEvents', 1],
@@ -135,6 +135,48 @@ export interface AgentRow {
   broken?: string
   path: string
   spec: AgentSpec | null
+  /** Fixed authoring timestamp; absent for legacy presets, never inferred from mtime. */
+  createdAt?: string | null
+  firstUsedAt?: string | null
+}
+
+export interface AgentHistoryQuery {
+  agentId: string
+  kind: 'sessions' | 'tasks'
+  page?: number
+  pageSize?: number
+}
+
+export interface AgentSessionRow {
+  id: string
+  title: string
+  createdAt: string
+  status: string
+  kind: 'direct' | 'task'
+  available: boolean
+  tasks: { id: string; title: string; batchId?: string }[]
+}
+
+export interface AgentTaskRow {
+  id: string
+  title: string
+  createdAt: string
+  latestAt: string
+  batchId?: string
+  status: string
+  relations: ('creator' | 'participant')[]
+  executions: number
+}
+
+export interface AgentHistoryPage {
+  kind: AgentHistoryQuery['kind']
+  sessions: AgentSessionRow[]
+  tasks: AgentTaskRow[]
+  counts: { sessions: number; tasks: number }
+  total: number
+  page: number
+  pageSize: number
+  pages: number
 }
 
 export interface Preview {

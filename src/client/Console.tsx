@@ -7,6 +7,7 @@ import { TaskReplay } from './TaskReplay.tsx'
 import { NewTask, TaskBoard, type TasksApi } from './TasksView.tsx'
 
 export interface Api extends TasksApi {
+  agentHistory: (query: import('../wire.ts').AgentHistoryQuery) => Promise<import('../wire.ts').AgentHistoryPage>
   workflowCatalog: () => Promise<Pick<import('../wire.ts').TaskSpec, 'id' | 'title' | 'brief' | 'participants'>[]>
   launchWorkflow: (taskId: string, text: string, requestId: string, cwd?: string) => Promise<{ taskId: string; batchId: string; path: string }>
   catalog: () => Promise<Catalog>

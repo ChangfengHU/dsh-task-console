@@ -21,3 +21,32 @@ test('opening a session URL consumes the request before synchronous list notific
   assert.equal(opened, 1)
   assert.equal(snapshot.current, 'selected')
 })
+
+test('history traversal re-notifies Agent route readers and restores the addressed native session', async () => {
+  const source = await readFile(new URL('../src/client/index.tsx', import.meta.url), 'utf8')
+  const fn = source.slice(source.indexOf('function installSessionUrlSync'), source.indexOf('\nfunction useHeavy'))
+  const { code } = await transform(fn, { loader: 'ts' })
+  const listeners = new Map<string, Set<() => void>>()
+  const snapshot = { current: 'first', byId: { first: {}, second: {} }, ids: ['first', 'second'] }
+  let routeEvents = 0
+  const location = { href: 'https://dsh.example/?session=first', hash: '' }
+  const win = { location,
+    addEventListener: (k: string, f: () => void) => { const set = listeners.get(k) ?? new Set(); set.add(f); listeners.set(k, set) },
+    removeEventListener: (k: string, f: () => void) => listeners.get(k)?.delete(f),
+    dispatchEvent: (e: { type: string }) => { if (e.type === 'hashchange') routeEvents++; for (const fn of listeners.get(e.type) ?? []) fn() },
+  }
+  const ctx = {
+    sessions: { list: { getSnapshot: () => snapshot, subscribe: () => () => undefined }, open: (id: string) => { snapshot.current = id } },
+    workspaces: { list: { getSnapshot: () => ({}), subscribe: () => () => undefined } },
+  }
+  const scope = vm.createContext({ ctx, URL, HASH_PREFIX: '#/tc', window: win, HashChangeEvent: class { constructor(public type: string) {} }, history: { replaceState() {} }, document: { title: '' } })
+  vm.runInContext(code + '\nconst dispose=installSessionUrlSync(ctx)', scope)
+  location.href = 'https://dsh.example/#/tc/agents/worker?tab=sessions&page=2'; location.hash = '#/tc/agents/worker?tab=sessions&page=2'
+  win.dispatchEvent({ type: 'popstate' })
+  assert.equal(routeEvents, 1)
+  location.href = 'https://dsh.example/?session=second'; location.hash = ''
+  win.dispatchEvent({ type: 'popstate' })
+  assert.equal(snapshot.current, 'second')
+  vm.runInContext('dispose()', scope)
+  assert.equal(listeners.get('popstate')?.size, 0)
+})

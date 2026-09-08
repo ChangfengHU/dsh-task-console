@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { AgentRow } from '../wire.ts'
+import { agentCandidates, AGENT_EXPAND, AGENT_COLLAPSE } from '../agent-order.ts'
 import { installLightStyles } from './light-styles.ts'
 
 declare const require: (id: string) => unknown
@@ -75,8 +76,15 @@ function installSessionUrlSync(ctx: any): () => void {
   const stopSessions = ctx.sessions.list.subscribe(sync)
   const stopWorkspaces = ctx.workspaces.list.subscribe(sync)
   window.addEventListener('hashchange', sync)
+  // pushState session links are traversed with popstate; not every browser
+  // emits hashchange for that traversal. Re-notify the console route readers.
+  const onPop = () => {
+    requested = new URL(window.location.href).searchParams.get('session')
+    window.dispatchEvent(new HashChangeEvent('hashchange'))
+  }
+  window.addEventListener('popstate', onPop)
   sync()
-  return () => { stopSessions(); stopWorkspaces(); window.removeEventListener('hashchange', sync) }
+  return () => { stopSessions(); stopWorkspaces(); window.removeEventListener('hashchange', sync); window.removeEventListener('popstate', onPop) }
 }
 
 function useHeavy(ctx: any): { heavy?: Heavy; api?: Awaited<ReturnType<Heavy['activate']>>; error?: string } {
@@ -111,6 +119,7 @@ function currentCwd(ctx: any, action: any): string | undefined {
 }
 
 function lazyAgentSource(ctx: any) {
+  const expanded = new Set<string>()
   let roster: AgentRow[] = []
   let workflows: { id: string; title: string; brief: string }[] = []
   let refreshedAt = 0
@@ -126,11 +135,18 @@ function lazyAgentSource(ctx: any) {
   }
   return {
     trigger: '@' as const, name: 'Agent', order: -10, warm: () => undefined,
-    candidates: async (_session: unknown, request: { query: string }) => { await refresh(); const query = (request.query ?? '').toLowerCase(); return [
-      ...roster.filter(agent => !query || agent.name.toLowerCase().includes(query) || agent.id.includes(query)).map(agent => ({ name: agent.name, description: agent.description || agent.id, hint: '交给 Agent', value: agent.id, section: 'Agent' })),
+    candidates: async (session: { sessionId: string }, request: { query: string }) => { await refresh(); const query = (request.query ?? '').toLowerCase(); return [
+      ...agentCandidates(roster, query, expanded.has(session.sessionId)),
       ...workflows.filter(task => !query || task.title.toLowerCase().includes(query) || task.id.toLowerCase().includes(query)).map(task => ({ name: task.title, description: task.brief, hint: '复用工作流 · 新执行', value: `task:${task.id}`, section: 'Task / Workflow' })),
     ] },
-    onPick: (pick: { candidate: { value?: string } }) => { const task = workflows.find(row => `task:${row.id}` === pick.candidate.value); if (task) return claimTask(task, `@${task.title} `); const agent = roster.find(row => row.id === pick.candidate.value); return agent ? claimFor(agent, `@${agent.name} `) : undefined },
+    onPick: (pick: { candidate: { value?: string }; session: { sessionId: string } }) => {
+      if (pick.candidate.value === AGENT_EXPAND || pick.candidate.value === AGENT_COLLAPSE) {
+        if (pick.candidate.value === AGENT_EXPAND) expanded.add(pick.session.sessionId)
+        else expanded.delete(pick.session.sessionId)
+        return { text: '@', continue: true }
+      }
+      const task = workflows.find(row => `task:${row.id}` === pick.candidate.value); if (task) return claimTask(task, `@${task.title} `); const agent = roster.find(row => row.id === pick.candidate.value); return agent ? claimFor(agent, `@${agent.name} `) : undefined
+    },
     matchEnter: async (_session: unknown, line: string) => { const match = /^@(\S+)\s*([\s\S]*)$/.exec(line.trim()); if (!match) return undefined; await refresh(); const task = workflows.find(row => row.title === match[1] || row.id === match[1]); if (task) return claimTask(task, `@${match[1]} `); const agent = roster.find(row => row.name === match[1] || row.id === match[1]); return agent ? claimFor(agent, `@${match[1]} `) : undefined },
   }
 }

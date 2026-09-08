@@ -7,6 +7,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wire.ts'
 import { closeConsole, go, type Api } from './Console.tsx'
+import { AgentHistory, agentTab, agentPage } from './AgentHistory.tsx'
+import { executionTime } from '../execution-label.ts'
 
 const EMPTY: AgentSpec = { id: '', name: '', description: '', persona: '', model: '', effort: 'medium', permissionPreset: 'workspace-write', tools: ['ask-user'], mcpTools: {}, mcpPolicy: {}, skills: [] }
 const PERM: Record<Preview['permission'], { label: string; cls: string; dot: string }> = {
@@ -50,23 +52,11 @@ export function AgentsPage({ api, catalog, agents, id, onSaved, toast }: { api: 
   )
 }
 
-function ActivityCard({ api, id }: { api: Api; id: string }) {
-  const [a, setA] = useState<{ cards: number; done: number; failed: number; runs: number; lastRunAt: string | null; lastOutcome: string | null; tasks: { id: string; title: string }[] } | null>(null)
-  useEffect(() => { let stop = false; api.agentActivity(id).then(x => { if (!stop) setA(x) }).catch(() => undefined); return () => { stop = true } }, [api, id])
-  if (!a) return <div className="dtc-panel"><h3>近况</h3><div className="dtc-faint">读取…</div></div>
-  const when = a.lastRunAt ? new Date(a.lastRunAt).toLocaleString('zh-CN', { hour12: false }) : '—'
-  return (
-    <div className="dtc-panel"><h3>近况</h3>
-      <div className="dtc-kv">
-        <span className="k">接过的卡</span><span>{a.cards} 张 · 完成 {a.done}{a.failed ? ` · 失败 ${a.failed}` : ''}</span>
-        <span className="k">运行</span><span>{a.runs} 次{a.lastOutcome ? ` · 最近 ${when} · ${a.lastOutcome}` : ''}</span>
-        <span className="k">参与任务</span><span>{a.tasks.length ? a.tasks.map(t => <a key={t.id} style={{ color: 'var(--dtc-accent)', cursor: 'pointer', display: 'block' }} onClick={() => go(`tasks/${t.id}`)}>{t.title}</a>) : '—'}</span>
-      </div>
-    </div>
-  )
-}
-
 function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; catalog: Catalog; agents: AgentRow[]; id: string | null; onSaved: () => Promise<void>; toast: (m: string) => void }) {
+  const [tab, setTab] = useState(agentTab)
+  const [page, setPage] = useState(agentPage)
+  const [counts, setCounts] = useState<{ sessions: number; tasks: number } | null>(null)
+  useEffect(() => { const on = () => { setTab(agentTab()); setPage(agentPage()) }; window.addEventListener('hashchange', on); return () => window.removeEventListener('hashchange', on) }, [])
   const row = id ? agents.find(a => a.id === id) : undefined
   const readOnly = !!row && row.trust === 'system'
   const initial = useMemo<AgentSpec>(() => {
@@ -155,6 +145,11 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
         </div>
       </div>
       {err ? <div className="dtc-err">{err}</div> : null}
+      {row ? <>
+        <div className="dtc-agent-tabs" role="tablist" aria-label="Agent 详情">{(['config', 'sessions', 'tasks'] as const).map(t => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => go(`agents/${encodeURIComponent(row.id)}?tab=${t}&page=1`)}>{t === 'config' ? '配置' : `${t === 'sessions' ? '会话' : '任务'}${counts ? `（${counts[t]}）` : ''}`}</button>)}</div>
+        <AgentHistory api={api} id={row.id} tab={tab} page={page} onCounts={setCounts} />
+      </> : null}
+      <div hidden={!!row && tab !== 'config'}>
       {readOnly ? <div className="dtc-warn">出厂 preset 由部署提供,任务台不改它。点「复制」得到一份可编辑的副本。</div> : null}
       {claude ? <div className="dtc-warn">claude-local 上 dsh 的工具都是延迟工具:这个 agent 用不了 MCP、问不了人、也交不了卷,<b>不能参与任务</b>。要参与任务请选 codex-local 或 API 型模型。</div> : cli ? <div className="dtc-note">codex-local 自带 shell:dsh 的工具围栏管不到它自己的 bash,只管 MCP / skill / 交卷。</div> : null}
 
@@ -227,13 +222,15 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
           </div>
         </div>
         <div className="dtc-rail">
-          {row ? <ActivityCard api={api} id={row.id} /> : null}
+          {row ? <div className="dtc-panel"><h3>创建信息</h3><div className="dtc-note">{row.createdAt ? `创建于 ${executionTime(row.createdAt)}（北京时间）` : row.firstUsedAt ? `历史 Agent 未记录创建时间；首次使用于 ${executionTime(row.firstUsedAt)}（北京时间），列表以此补充排序。` : '历史 Agent 未记录创建时间，暂无使用记录。'}</div></div> : null}
           <div className="dtc-disc">
             <button className="sum" onClick={() => setShowYml(v => !v)}>{showYml ? '▾' : '▸'} 生成的 preset 文件 <span className="dtc-mono dtc-faint" style={{ fontWeight: 400, fontSize: 11 }}>agent.cordis.yml</span></button>
             {showYml ? (readOnly ? <div className="dtc-note" style={{ padding: '0 14px 12px' }}>出厂 preset 的组合文件在 dsh 安装目录里,任务台不展示、不改。</div> : <div className="dtc-yml">{preview?.yml ?? (spec.id && spec.name ? '生成中…' : '填好 id 和名字后生成')}</div>) : null}
           </div>
           <p className="dtc-note">保存即写目录;dsh 热读取 preset 根,新会话立刻能选到,不重启。MCP 认证始终由宿主条目保管，preset 只保存条目引用和工具白名单。</p>
         </div>
+      </div>
+
       </div>
 
       {run && run !== 'running' ? <TryRunModal result={run} onClose={() => setRun(null)} /> : null}

@@ -109,6 +109,24 @@ test('chat workflow: real runner orders three roles, hands off, deduplicates and
   } finally { runner.stop() }
 })
 
+test('chat recipe materializes exactly the registered roles and rejects mixed definitions', async () => {
+  const { store, runner, root } = await setup()
+  const ids = ['fleet-installer', 'browser-manager', 'fleet-runner-operator']
+  const creator = new TaskCreator(runner, async () => ids.map(id => ({ id, name: id } as any)))
+  const exec = { agent: { session: { id: 'recipe-creator', deriveMessages: () => [{ role: 'user', content: 'Configure 192.0.2.10 including Gemini login' }] } } }
+  const recipe = { id: 'fleet-base-v1' as const, login: 'provision-gemini' as const }
+  try {
+    await assert.rejects(() => creator.submit({ decision: 'create', reason: 'recipe', recipe, participants: [{ agentId: 'a' }] }, exec, root), /不能混入/)
+    const result = await creator.submit({ decision: 'create', reason: 'explicit login request', recipe }, exec, root)
+    const task = store.tasks.get(result.taskId)!
+    assert.deepEqual(task.participants.map(p => p.agentId), ids)
+    assert.deepEqual(task.workflowRecipe, recipe)
+    assert.deepEqual(store.s.batches.get(result.batchId)!.turn!.workflow!.definition.workflowRecipe, recipe)
+    assert.match(task.participants[1].brief!, /browser_login_provision/)
+    assert.equal(result.cards.length, 3)
+  } finally { runner.stop() }
+})
+
 test('chat credentials: no secret in persisted task/events; only active bound installer can resolve exact target', async () => {
   const { host, store, runner, root } = await setup()
   const preset = join(root, 'presets', 'fleet-installer'); await mkdir(preset)

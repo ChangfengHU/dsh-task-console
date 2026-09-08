@@ -7,6 +7,7 @@ import { cardRun, validateTask, type TaskSpec, type TaskTurn } from './tasks.ts'
 import type { TaskRunner } from './runner.ts'
 import type { IntakeAgent } from './task-intake.ts'
 import { workflowDefinition } from './workflow-plan.ts'
+import { composeRecipe, workflowRecipes, type WorkflowRecipe } from './workflow-recipes.ts'
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export function userInput(exec: ToolExecutionLike) {
@@ -21,6 +22,7 @@ export function userInput(exec: ToolExecutionLike) {
 
 export type TaskProposal = {
   decision: 'create' | 'reuse'; taskId?: string; reason: string
+  recipe?: WorkflowRecipe
   title?: string; brief?: string; participants?: TaskSpec['participants']; graphMode?: TaskSpec['graphMode']
 }
 
@@ -34,7 +36,7 @@ export class TaskCreator {
   }
 
   async context() {
-    return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(),
+    return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
       contract: 'Task 是可复用目标/流程，不绑定 IP。每次提交一个独立执行 Batch。static-chain 按所选业务角色顺序交接；dynamic-rounds 仅用于规划者、执行者、评估者三人返工协议。不得改变 Agent 权限。' }
   }
 
@@ -76,7 +78,12 @@ export class TaskCreator {
     }
     const scrub = (value: string) => leases.reduce((s, l) => s.split(l.password).join('[credential supplied privately]'), value)
     try {
-      const proposal: TaskProposal = JSON.parse(scrub(JSON.stringify(raw)))
+      let proposal: TaskProposal = JSON.parse(scrub(JSON.stringify(raw)))
+      if (proposal.recipe) {
+        if (proposal.decision !== 'create' || proposal.title || proposal.brief || proposal.participants || proposal.graphMode)
+          throw new Error('预制配方只接受 create、reason、recipe；不能混入另一份角色计划')
+        proposal = { ...proposal, ...composeRecipe(proposal.recipe) }
+      }
       let task: TaskSpec
       if (proposal.decision === 'reuse') {
         const found = store.tasks.get(proposal.taskId ?? '')
@@ -88,6 +95,7 @@ export class TaskCreator {
           participants: proposal.participants?.map(p => ({ agentId: p.agentId, brief: reusable(p.brief ?? '') })), graphMode: proposal.graphMode,
           cwd, timeoutSec: 7200, onFail: 'stop', maxTries: 1 }, ids)
         task.origin = { source: 'task-chat', signalId: input.requestId, intakeSessionId: input.sessionId, decision: 'create', reason: scrub(proposal.reason) }
+        if (proposal.recipe) task.workflowRecipe = { ...proposal.recipe }
       }
       if (task.participants.length > 8 || task.participants.some(p => !ids.has(p.agentId))) throw new Error('工作流角色已失效或超出 8 位参与者上限')
       const hash = digest({ proposal, text: scrub(input.text), cwd })

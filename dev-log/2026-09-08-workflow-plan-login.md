@@ -37,3 +37,24 @@ Current source privacy checked: dsh-task-console is public; linux-clash-skill pr
 No passwords, cookies, tokens or private runtime policy files are committed.
 
 Production re-execution and real-browser acceptance are pending at this commit.
+
+## First live plan failure and correction
+
+Public Chrome submitted one short user request through a fresh Creator session
+`agent-task-create-agent-mtsbjp7s`. It created T-chat-c7d9f568d7f413d9930f with four
+roles, adding fleet-ops-reviewer, and the generated browser brief contradicted itself
+(provision requested, but also a blanket prohibition on automatic copy). The plan
+snapshot makes that error inspectable. This is failed composition, not acceptance.
+
+Cancelled batch b-chat-c7d9f568d7f413d9930f through the normal API while only the
+installer was running; browser and Runner had not started. Disabled the Task and
+retained its sessions/records. Installer had called fleet_onboard_start; do not
+claim the test did nothing or reset its shared runtime ledger.
+
+0.26.1 introduces a target-independent managed Fleet recipe instead of asking the
+model to rewrite fixed safety/role boundaries every run. Creator chooses an explicit
+login policy; the recipe fixes three responsibilities and final reporting. Mixed
+recipe/free-form proposals are rejected before materialization, actual Agent IDs
+are still validated, and no business permissions are granted by selecting a recipe.
+Both recipe and free-form workflows retain the same Task/Batch scheduling/kernel.
+146 tests and build pass. Fresh live recipe execution remains pending here.

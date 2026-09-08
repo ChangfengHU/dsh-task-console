@@ -58,7 +58,7 @@ export interface TaskTurn {
   origin?: TaskOrigin
 }
 
-export type WorkflowDefinition = Pick<TaskSpec, 'title' | 'brief' | 'participants' | 'graphMode' | 'timeoutSec' | 'onFail' | 'maxTries'>
+export type WorkflowDefinition = Pick<TaskSpec, 'title' | 'brief' | 'participants' | 'graphMode' | 'timeoutSec' | 'onFail' | 'maxTries' | 'workflowRecipe'>
 
 export interface TaskSpec {
   id: string
@@ -69,6 +69,7 @@ export interface TaskSpec {
   participants: Participant[]
   /** Static chains are kept for historical tasks; dynamic rounds materialize one DB-backed round at a time. */
   graphMode?: 'static-chain' | 'dynamic-rounds'
+  workflowRecipe?: { id: string; login: string }
   cwd: string
   timeoutSec: number
   onFail: 'stop' | 'retry'

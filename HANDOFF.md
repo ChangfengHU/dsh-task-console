@@ -69,6 +69,14 @@ instances when requested. It selects only authorized Gemini sources, preserves v
 target logins and reports unknown/challenge/no-source honestly. No prompt expands the
 host browser policy; per-node/instance authorization stays Fleet-owned.
 
+`workflow-recipes.ts` contains the managed `fleet-base-v1` business recipe. The
+Creator sees its required Agent IDs and selects `preserve` or `provision-gemini`;
+recipe submissions cannot also supply rewritten role briefs or graph mode. The
+recipe is target-independent, checked against the live roster and materialized by
+the existing scheduler. Save its ID/policy in the frozen definition. Unmatched
+business goals still use normal dynamic composition; do not force Fleet roles onto
+other tasks. Updating a recipe never changes already-saved execution definitions.
+
 Execution-history pickers show the actual firedAt date/time in Asia/Shanghai
 (explicit Beijing UTC+8), followed by an eight-character display code. Full Batch
 IDs remain the select values, route identifiers and hover text; display codes are

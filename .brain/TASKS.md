@@ -1,6 +1,7 @@
 # 后续优化
 
-- [ ] [TASK-BROWSER-LOGIN-002] 用户本轮授权恢复两个既有浏览器。新 Task T-chat-61d84a0199aabbe795dc 已通过浏览器管理员升级有界清理模块，browser-1 单次复制成功、browser-2 复用登录，公网双 Gemini in。首次20分钟验收因模型提前结束、宿主 protocol_violation 撤销 Session 绑定中断，不是登录失败。0.27.4 补后台操作等待保护，164项回归通过；新执行只读验收待完成。旧 Task/失败记录保留；本条覆盖旧条“不得修复 browser-1”的当时范围，不改历史证据。
+- [x] [TASK-BROWSER-LOGIN-002] Task T-chat-61d84a0199aabbe795dc 首次准备与 browser-1 单次复制完成，browser-2 复用。0.27.4 修复宿主提前结束后，第二 Batch b-chat-619ec90823195dd9e78b 于 2026-09-09 03:22:42 UTC 完成20分钟只读验收、各21样本、stable=true，浏览器管理员自行调用 task_complete。原失败 Run 和回执保留；不代表未来永不失效或完整装机已稳定。
+- [ ] [TASK-BROWSER-POOL-003] 用户明确开发目标是完善 DSH Agent，不是开发者代管机器；由 Agent 自己选择、执行、验收、处理阻塞及报告。账号池修复归 linux-clash/browser-manager，排除机主指定账号、保留既有登录，本插件不另造账号库。新角色 generation 与真实决策会话验收待完成。
 
 - [x] [TASK-CREATE-JSON-001] 0.27.3：修复自定义工作流目录中 undefined 导致的 lossless JSON 拒绝；162 项回归/构建通过。原 Creator 会话重试成功创建下述真实 Task，原始失败和旧计划均保留。
 

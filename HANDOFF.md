@@ -46,6 +46,12 @@ block reason. Completed patrol summaries are derived from those observations, no
 prose. A copy needs a subsequent inspect with real verification. List-only, legacy,
 other-role and other-business tasks do not acquire this opt-in requirement. This is
 point-in-time patrol evidence, not another 20-minute stability requirement.
+The gate also accepts completed browser_status receipts from this exact Session,
+operation and target for login-verify/provision/copy. It uses actual verifier
+checkedAt/expiresAt, not status polling time, and chooses newer proof over legacy
+inspect metadata. All-login acceptance cannot pass empty inventory or skipped grants.
+Correct blocking is not all-browser login completion; fix capabilities and continue
+actual DSH execution, retaining failed attempts and the original authorization boundary.
 
 `task-create-agent` is an installed, scoped Agent preset. It reads the trusted Agent
 roster and enabled chat workflows, chooses create/reuse and delegates to the existing

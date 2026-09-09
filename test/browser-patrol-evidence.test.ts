@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { browserPatrolEvidence } from '../src/browser-patrol-evidence.ts'
-const input = { profileId: 'browser-manager', task: { design: { evidenceContract: 'browser-patrol-v1' } }, metadata: { verified: 999 } } as any
+const input = { sessionId: 'task-browser-test', profileId: 'browser-manager', task: { design: { evidenceContract: 'browser-patrol-v1' } }, metadata: { verified: 999 } } as any
 const at = '2026-09-09T06:00:00.000Z'
 const b = { instance: 1, gemini: 'verified', account: { fingerprint: '01234567' }, checkedAt: at, expiresAt: '2026-09-09T06:03:00.000Z', loginAuthorized: true }
 function fixture(assessment: any = b) {
@@ -32,7 +32,34 @@ test('missing or failed inventory cannot become an empty successful patrol', () 
   const e = fixture(); e[1].data.message.content[0].isError = true
   assert.match(browserPatrolEvidence(input, e)!.failure!, /缺少/)
 })
+test('skipped authorization or an empty browser inventory cannot satisfy all-login acceptance', () => {
+  const events = fixture()
+  const part = events[1].data.message.content[0].content[0]
+  const value = JSON.parse(part.text); value.nodes[0].readAuthorized = false; part.text = JSON.stringify(value)
+  assert.equal(browserPatrolEvidence(input, events)!.counts?.skipped, 1)
+  assert.match(browserPatrolEvidence(input, events)!.failure!, /不能绿色交卷/)
+  value.nodes[0].browsers = []; part.text = JSON.stringify(value)
+  assert.match(browserPatrolEvidence(input, events)!.failure!, /不能绿色交卷/)
+})
 test('the explicit business contract never affects legacy, list-only or other roles', () => {
   assert.equal(browserPatrolEvidence({ ...input, task: {} }, fixture()), undefined)
   assert.equal(browserPatrolEvidence({ ...input, profileId: 'other' }, fixture()), undefined)
+})
+test('own completed live verification receipt supplies missing legacy evidence, not polling timestamps or another session', () => {
+  const e = fixture({ ...b, gemini: 'unknown', checkedAt: null })
+  const id = 'a'.repeat(32)
+  const receipt = { id, phase: 'complete', action: 'login-verify', updatedAt: at,
+    args: { ip: '192.0.2.10', instance: 1, sessionId: input.sessionId }, result: { verification: {
+      instance: 1, loginVerified: true, identity: { gemini: 'in', account: { source: 'gemini-account-control', fingerprint: '01234567' } },
+      loginVerification: { status: 'verified', checkedAt: at, expiresAt: b.expiresAt },
+    } } }
+  const events = () => [...e,
+    { type: 'tool/call', seq: 5, data: { callId: 'c5', name: 'mcp__fleet-browser-browser-manager__browser_status', arguments: JSON.stringify({ ip: receipt.args.ip, operationId: id }) } },
+    { type: 'tool/result', seq: 6, data: { message: { content: [{ type: 'tool-result', toolCallId: 'c5', content: [{ type: 'text', text: JSON.stringify(receipt) }] }] } } },
+  ]
+  assert.equal(browserPatrolEvidence(input, events())!.counts?.verified, 1)
+  receipt.args.sessionId = 'other-session'
+  assert.equal(browserPatrolEvidence(input, events())!.counts?.verified, 0)
+  receipt.args.sessionId = input.sessionId; receipt.result.verification.loginVerification.expiresAt = at
+  assert.equal(browserPatrolEvidence(input, events())!.counts?.verified, 0)
 })

@@ -1,5 +1,25 @@
 # Structured Creator plans and independent review
 
+## 0.28.2 — actual all-browser login remains the outcome
+
+Owner rejected stopping at truthful blocked reporting. Fleet removes its automatic
+dispatch isolation in linux-clash-skill, with manual state/history preserved. New
+read-scoped browser_login_verify supplies actual legacy/base page proof. The Task
+gate now joins matching current-Session browser_status receipts, checks target,
+operation, terminal state and timestamps, and ignores stale inspect metadata when
+newer real proof exists. Skipped grants and zero browser inventory cannot satisfy
+all-login acceptance.175 tests pass; production linked plugin built and restarted
+only after both native Sessions and Task Runs were idle.
+
+Creator agent-task-create-agent-mttsp6ta independently generated
+P-chat-fffecc0cd4029c6d9687; reviewed and released as
+T-chat-e5d640c5595bedcf83eb / b-chat-e5d640c5595bedcf83eb. The first real legacy checks
+exposed an export/module compatibility gap; Fleet adapter corrected it while keeping
+failed receipts.188/browser-2 subsequently produced actual signed-out page evidence
+and its Agent autonomously started provision. Execution is ongoing, not all-login
+acceptance. Public Task page screenshot /tmp/browser-patrol-v2-running.png has no
+overflow or page exceptions. No target action was performed by developer SSH.
+
 The owner requested a development loop: improve task-create-agent, give it the real
 Fleet login-patrol objective, review its generated design before execution, observe
 the actual browser-manager, and fix the responsible plan/Agent/tool. Developer does

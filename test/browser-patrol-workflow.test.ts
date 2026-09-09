@@ -85,4 +85,10 @@ test('WeCom outbox requires reviewed recipients, deduplicates and never repeats 
   const unknown=async()=>{calls.push('timeout');throw Error('simulated ambiguous transport')}
   assert.equal((await outbox.send(input,'findings',report,unknown)).notifications[0].state,'unknown')
   await outbox.send(input,'findings',report,unknown);assert.equal(calls.length,2)
+  const disconnected=async()=>({error:'发送失败',detail:{ok:false,error:'this node is not the connected alerter'}})
+  const refused=await outbox.send(input,'rework',report,disconnected)
+  assert.equal(refused.notifications[0].state,'failed')
+  assert.match(refused.notifications[0].reason,/发送节点未连接/)
+  await outbox.send(input,'rework',report,send)
+  assert.equal(outbox.rows(input.batch.id).find((r:any)=>r.stage==='rework').state,'sent')
 })

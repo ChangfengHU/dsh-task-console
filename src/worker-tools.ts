@@ -49,7 +49,7 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, opt
   })))
   if (!options.planner) disposers.push(agentCtx.tools.register(defineTool({
     name: 'task_complete',
-    description: '交卷:这张卡做完了。summary 写「产物 / 干了什么 / 下游注意」;生成的文件路径必须放进 artifacts,系统会保存副本供浏览器预览和下载。调用后不要再做别的。',
+    description: '交卷:这张卡做完了。最小入参是 {"summary":"简洁交接"}；可选字段不需要时省略。browser-patrol-v2 的逐项证据由宿主读取原始MCP回执，不手抄清单到metadata。summary 写「产物 / 干了什么 / 下游注意」;生成的文件路径必须放进 artifacts,系统会保存副本供浏览器预览和下载。调用后不要再做别的。',
     parameters: {
       summary: { type: 'string', required: true, description: '交接单正文,给下游看的。' },
       artifacts: { type: 'array', items: { type: 'string' }, description: '交付文件路径,相对路径按任务工作区解析。没有文件可省略。' },

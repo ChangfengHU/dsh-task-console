@@ -44,7 +44,12 @@ export class TaskNotifications {
           const failure = result?.detail ?? result
           if (result?.ok !== false && !result?.error && result?.sent === 1) { state = 'sent'; reason = 'MCP 确认送达1个群，不代表用户已阅读' }
           // Only definite pre-send refusals are safely retryable. Network failures are ambiguous.
-          else if (/^(no subscribers|指定的 chatid 不在已订阅列表里|no alerter designated|alerter node [\w-]+ unavailable)$/.test(String(failure?.error))) { state = 'failed'; reason = '发送前被服务拒绝；配置恢复后最多重试3次，仅重试通知' }
+          else if (/^(no subscribers|指定的 chatid 不在已订阅列表里|no alerter designated|alerter node [\w-]+ unavailable|this node is not the connected alerter|wecom bridge not loaded)$/.test(String(failure?.error))) {
+            state = 'failed'
+            reason = /connected alerter|bridge not loaded/.test(failure.error)
+              ? '企业微信发送节点未连接，服务在发送前拒绝；恢复后仅重试通知，不重复浏览器操作'
+              : '发送前被服务拒绝；配置恢复后最多重试3次，仅重试通知'
+          }
         } catch { /* Never expose transport credentials or replay an ambiguous send. */ }
         db.prepare('UPDATE dsh_task_notifications SET state=?,reason=?,updated_at=? WHERE id=?').run(state,reason,Date.now(),id)
         this.store.kernel.recordEvent(input.card.id, 'notification_delivery', { notification_id: id, stage, state, reason })

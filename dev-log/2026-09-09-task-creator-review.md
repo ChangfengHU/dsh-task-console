@@ -265,3 +265,37 @@ manual-first approval action with no page errors (plan-review.png in this turn's
 directory). Approval created disabled Task T-chat-ddae64d380f24e8e23a2, awaiting_trial and
 zero Batches. A single explicit manual fire then created b-mtu2iur4sah. Planner is running;
 no cron activation, business pass or notification delivery is claimed at this checkpoint.
+
+## 0.29.2 — Manual trial exposed notification and handoff diagnostics
+
+The real first planner established seven nodes / eleven observed browser instances,
+preserving unreachable/unreadable206 as uncovered. Its started notification is unknown;
+that historical result remains unchanged and must not be blindly replayed. A separate
+read-only WeCom status returned botConfigured=true, one subscriber and host-84 with
+designated=false/connected=false. This proves the current transport is inactive, not that
+credentials or a recipient are missing. Restoring that service requires separate authority;
+no developer or Task changed its activation or token.
+
+Notification dispatch now passes the native ToolRuntime opaque parent token and root call
+ID, with an execution-local send grant, and reads canonical MCP receipts rather than a
+possibly truncated display projection. The known node-side pre-send disconnected/bridge
+refusals are classified as failed with a useful reason; ambiguous delivery remains unknown.
+Three added tests include the actual native ToolRuntime with a fake, non-network sender.
+
+Executor independently checked11 instances:10 verified and187/browser-2 signed_out;
+no login write occurred at this checkpoint. Repeated malformed task_complete JSON required
+one visible maintainer steer in the same session (omit optional handwritten metadata).
+Agent then called task_complete itself. The worker tool description now documents that
+minimal call and explains that v2 evidence is extracted from native receipts, not self-counts.
+Do not describe this trial as fully autonomous. Reviewer independently reproduced the
+finding, then used durable task_wait to resume at2026-09-09T12:55:35Z in the same Batch.
+Public Chrome rendered the real Gate/DAG/inspector without page errors (manual-trial.png).
+The schedule stays disabled pending real business and notification acceptance.
+
+All191 regressions passed and the0.29.2 build passed. After confirming zero active native
+sessions, zero running Task Runs and zero fresh browser jobs, the idle host was restarted.
+Online backup: backups/pre-notification-0292-2026-09-09T12-37-35.218Z.sqlite (0600).
+Post-restart verification preserved the one manual Batch, disabled Task, awaiting_trial
+review state and the same pending12:55:35UTC reviewer wakeup. Core tasks.status=scheduled;
+the compatibility card projects blocked plus wakeAt, while the database DAG labels it
+定时等待. No target service was restarted and no delivery receipt was rewritten.

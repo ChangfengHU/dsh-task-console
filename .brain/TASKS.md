@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [TASK-PATROL-SCHEDULE-007] 0.29.1：Creator 原会话 `agent-task-create-agent-mttz2uwq` 实际查询唯一订阅群并生成计划 `P-chat-265430054d2890df3743`，独立审查后创建暂停的 Task `T-chat-ddae64d380f24e8e23a2`，首个手动 Batch `b-mtu2iur4sah` 正在执行。业务和通知验收均通过才可启用每小时定时；后续复用同 Task。保留0.29持久调度、动态返工、独立证据和权限预算；保留健康登录、不重建、不重复63旧专项验收。尚不宣称业务达标。见现有 `dev-log/2026-09-09-task-creator-review.md`。
+- [ ] [TASK-PATROL-SCHEDULE-007] 0.29.2：Creator 原会话 `agent-task-create-agent-mttz2uwq` 实际查询唯一订阅群并生成 `P-chat-265430054d2890df3743`，独立审查后创建暂停的 Task `T-chat-ddae64d380f24e8e23a2`，首个手动 Batch `b-mtu2iur4sah` 正在执行。两角色独立检查均发现10登录/187-b2未登录；206未覆盖。评估者 task_wait 至12:55:35UTC，同Batch续接；一次JSON纠正维护消息留在执行者会话，不宣称无人干预通过。企微首次回执unknown保持不重发；当前host-84发送连接未激活，恢复需另行授权。0.29.2补齐原生通知父令牌/完整回执和已知发送前拒绝诊断，191项回归通过；空闲部署后原Task/Batch/wakeup保留。业务和通知均通过才启用小时定时，后续复用同Task。保留健康登录、不重建、不重复63旧专项验收。见现有 `dev-log/2026-09-09-task-creator-review.md`。
 
 - [x] [TASK-CREATOR-REVIEW-004] 0.28.1：结构化设计/独立审查/幂等放行/分页审查上线。两次错误完成报告保留；增强 MCP 登录证据分类及显式 browser-patrol-v1 宿主闸门。最终真实 Task T-chat-40a78cfa15b039ba4589 于 2026-09-09 07:10:56 UTC 自主 task_block、nudges=0；宿主从真实工具事件计算 11 实例=3 verified/6 unknown/2 skipped，未伪造绿色完成。173 项回归、公网桌面/390px审查与导航通过。见 `dev-log/2026-09-09-task-creator-review.md`。
 - [ ] [TASK-BROWSER-PATROL-COVERAGE-005] 0.28.2：Fleet 自动业务隔离已移除；真实巡查 Task T-chat-e5d640c5595bedcf83eb 第三 Run 已完成，登录复制均由 browser-manager 经 MCP 执行。188/browser-3 展示遗漏另经独立审查修复（见下一项）。全部已观测实例的回执保留，但不可达206无浏览器观测不等于不存在或验收通过；不宣称未观测范围全量达标，不重复63的20分钟验收。

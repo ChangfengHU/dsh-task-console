@@ -21,6 +21,7 @@ import { EventStore, NUDGE, cardMessage, cronMatches, parseCron, taskForBatch, t
 import { registerWorkerTools } from './worker-tools.ts'
 import { ScheduleLedger, type ScheduleClaim } from './scheduler.ts'
 import { publicToolName } from './filtered-mcp-client.ts'
+import { dispatchNotification } from './notification-dispatch.ts'
 
 interface Flight {
   runId: string
@@ -373,9 +374,7 @@ export class TaskRunner {
             const names = Object.entries(spec?.mcpTools ?? {}).flatMap(([server, selected]) => selected.filter(raw => raw.replace(/-/g, '_') === 'vyibc_wecom_send_message').flatMap(raw => [publicToolName(server, raw), publicToolName(`${server}-${profileId}`, raw)]))
             const tool = runtime.schemas(flight.handle.agent).find((s: any) => names.includes(s.name))
             if (!tool) throw new Error('当前规划者未配置企业微信发送 MCP')
-            const result = await runtime.execute({ name: tool.name, arguments: args, agent: flight.handle.agent, callId: `notify-${randomUUID()}`, signal: exec.signal, parent: exec })
-            if (result.isError) throw new Error('企业微信 MCP 未确认发送结果')
-            return JSON.parse((result.content ?? []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join(''))
+            return dispatchNotification(runtime, flight.handle.agent, tool.name, args, exec)
           }) } : {}),
           ...(task.design?.evidenceContract === 'browser-patrol-v2' && this.patrolStatus ? { patrolStatus: () => this.patrolStatus!({ task, batch, card, sessionId, profileId }) } : {}),
           wait: async (until, reason) => {

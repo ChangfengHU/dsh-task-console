@@ -564,8 +564,10 @@ export class TaskConsoleService extends TypertRemoteService {
   async setTaskEnabled(payload: string): Promise<string> {
     const { id, enabled } = JSON.parse(payload) as { id: string; enabled: boolean }
     if (!this.runner.store.tasks.has(id)) throw new Error('没有这个任务')
+    if (enabled) await this.creator.assertScheduleActivation(this.runner.store.tasks.get(id)!)
     await this.runner.store.append({ t: 'task/enabled', at: new Date().toISOString(), taskId: id, enabled: !!enabled })
     this.runner.schedule.sync(this.runner.store.tasks.get(id)!, Date.now(), true)
+    if (enabled) this.creator.scheduleActivated(this.runner.store.tasks.get(id)!)
     return JSON.stringify({ ok: true })
   }
 

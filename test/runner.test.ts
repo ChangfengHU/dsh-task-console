@@ -111,12 +111,21 @@ test('Creator recurring approval only schedules; frozen turn is checked again at
     const plan = await creator.prepare({ decision: 'create', reason: 'hourly fixture', title: 'Hourly', brief: 'Check current fixture only', participants: [{ agentId: 'a' }], trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' }, design }, { agent: { session: { id: 'schedule-creator', deriveMessages: () => [{ role: 'user', content: 'Check the fixture hourly' }] } } }, root) as any
     assert.equal(plan.definition.trigger.kind, 'cron'); assert.equal(host.sessions.size, 0)
     const approved = await creator.review(plan.id, plan.hash, 'approve', 'fixture-only recurring scope approved')
-    assert.equal(approved.state, 'scheduled'); assert.equal(approved.batchId, null)
+    assert.equal(approved.state, 'awaiting_trial'); assert.equal(approved.batchId, null)
     assert.equal(host.sessions.size, 0); assert.equal(store.s.batches.size, 0)
     const task = store.tasks.get(approved.taskId)!
+    assert.equal(task.enabled, false)
+    assert.equal(runner.schedule.claim(task, Date.now() + 3600000), undefined)
+    await assert.rejects(creator.assertScheduleActivation(task), /先对当前已审查计划手动执行/)
     const turn = await creator.scheduledTurn(task, 'scheduled-occurrence')
     assert.equal(turn?.origin?.reviewPlanId, plan.id)
     assert.equal(turn?.origin?.signalId, 'scheduled-occurrence')
+    const batch = await runner.fire(task.id, 'manual', { turn })
+    await assert.rejects(creator.assertScheduleActivation(task), /尚未结束/)
+    const session = [...host.sessions.keys()].at(-1)!
+    host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'fixture passed' }); host.endTurn(session); await tick()
+    await creator.assertScheduleActivation(task)
+    creator.scheduleActivated(task); assert.equal(creator.plan(plan.id).state, 'scheduled')
     hash = 'v2'; await assert.rejects(creator.scheduledTurn(task, 'next'), /配置已变化/)
   } finally { runner.stop(); store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
 })

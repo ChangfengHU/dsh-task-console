@@ -180,8 +180,11 @@ and destructive uninstall/reinstall require their own evidence.
 Keep one reviewed Task and one Batch per cron/manual occurrence. `dsh_schedule_state`
 stores the next due instant and IANA time zone; `dsh_schedule_fires` records durable
 claims, skipped overlaps, coalesced downtime and bounded dispatch failures. Batch
-insertion consumes its claim in the same SQLite transaction. Creator cron approval
-only enables scheduling; it does not immediately fire. The reviewed input and roster
+insertion consumes its claim in the same SQLite transaction. New Creator cron approval
+creates a paused Task in `awaiting_trial`; it neither enables cron nor immediately fires.
+Run it manually first. Enabling checks the latest manual Batch passed against the reviewed
+definition, has no active Batch, and all requested notification receipts are sent. A failed,
+unresolved or unknown-delivery trial cannot activate cron. The reviewed input and roster
 hash live in `dsh_schedule_bindings`; changed roles require another review. Query
 `taskSchedule(id,page)` for ten-row SQL pagination, not session transcripts.
 
@@ -208,7 +211,10 @@ next scheduled check; it is not business success.
 
 Notifications belong to the planner's `task_notify`, which invokes the existing
 WeCom MCP under the real Agent tool scope. Configure explicit reviewed `chatIds`;
-never default to every subscriber. `dsh_task_notifications` persists per-stage/group
+never default to every subscriber. Creator has only `vyibc-wecom_list_groups`: query
+active subscribers, prefill the actual sole group for independent review, or ask the user
+to select when multiple groups exist. Do not request existing bot credentials/chatId by
+hand or use Vault secrets as model context. `dsh_task_notifications` persists per-stage/group
 deduplication and receipts. Definite pre-send failures can be retried up to three
 times; ambiguous sends stay `unknown` for human reconciliation by notification ID.
 There is no exactly-once delivery claim or automatic replay of browser work. For the

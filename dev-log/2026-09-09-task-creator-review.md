@@ -237,3 +237,31 @@ After the final full regression runs (188 DSH / 81 Browser MCP, both exit zero),
 only this turn's verified `/tmp/dsh-workflow-tests.lZ9NXP` fixture tree, freeing 20,844,544
 allocated bytes. No running process held that tree. Fixtures are recreated by the test
 commands; production dependencies, built runtime, source, backup and screenshots remain.
+
+## 0.29.1 — Discover existing WeCom recipients, manual trial before cron
+
+Owner rejected asking for already-configured chat IDs. Creator now receives only the
+existing WeCom MCP's new list_groups tool: the sole current subscriber is prefilled for
+review, multiple groups require selection, and no bot secret or message read grant is added.
+Creation context and persona no longer mandate asking the user before discovery.
+The same Creator session's old pending question was cancelled (history retained), its
+managed preset updated while keeping the model, and the original session resumed after
+idle-checked DSH restart. Its native receipts prove task_create_context and list_groups
+were actually called; the latter returned one real subscriber. No Task was approved yet.
+
+New recurring approvals create disabled Tasks with awaiting_trial state. The enable action
+requires the latest manual Batch to pass against the frozen definition with no active
+Batch; requested WeCom receipts must all be sent. Unresolved business or ambiguous delivery
+cannot activate cron. This is enforced server-side, not only a label or prompt change.
+Tests cover disabled cron, pre-trial/active-trial rejection and post-manual acceptance.
+All188 DSH tests and the build pass; the related Fleet+Browser Node suite also passed.
+Backup: private backups/pre-wecom-0291-2026-09-09T12-13-23.493Z.sqlite. Existing30 Tasks and
+192 Runs were preserved. Browser patrol has not run; deployment is not business acceptance.
+
+Creator produced pending plan P-chat-265430054d2890df3743 in that same conversation.
+Independent review checked the actual recipient receipt, three live roles, host grants,
+v2 action/budget enforcement and non-destructive scope. Public Chrome showed the new
+manual-first approval action with no page errors (plan-review.png in this turn's evidence
+directory). Approval created disabled Task T-chat-ddae64d380f24e8e23a2, awaiting_trial and
+zero Batches. A single explicit manual fire then created b-mtu2iur4sah. Planner is running;
+no cron activation, business pass or notification delivery is claimed at this checkpoint.

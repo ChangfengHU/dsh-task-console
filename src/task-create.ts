@@ -41,8 +41,8 @@ export class TaskCreator {
 
   async context() {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
-      scheduling: { trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' }, approval: '只启用时间表，不立即执行；独立审查通过后可手动立即执行。', overlap: '上一轮未结束时跳过并留记录', missed: '重启后漏跑合并为最近一次', waiting: 'task_wait(until,reason) 持久化等待，同一Batch/卡新Run继续；等待不消耗返工轮次，但受总时长限制。', permissions: '定时不增加权限；当前角色配置变化会停止派发并要求重新审查。' },
-      evidenceContracts: [{ id: 'browser-patrol-v2', purpose: '周期性浏览器登录巡查：dynamic-rounds 的规划者→Gate→浏览器管理员→只读评估者→规划者。规划者每轮用 task_plan_round(summary,items:[{ip,instance,action:verify|provision|resume,reason}]) 冻结真实目标和动作；未知先验证，有未登录证据才允许 provision。MCP 强制逐目标累计修复预算；无删除重建权限。执行者/评估者 task_complete 交接事实，不等于业务通过；规划者 task_finalize 由真实工具证据把关。修改过的实例用 task_wait 分时独立复验，同一卡新Run，已健康实例只做当前检查。', browserPatrol: { scope: 'fleet-existing-authorized', actions: ['provision','resume'], observationMinutes: 20, minSamples: 4 }, notifications: '需要企微时显式设置 design.notifications={channel:"wecom",chatIds:[已确认群ID]}。规划者必须具备实际企微发送MCP，通过 task_notify 生成基于证据的通知并持久化结果；没有群ID就先询问，禁止默认广播。' },
+      scheduling: { trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' }, approval: '批准后创建暂停的时间表；先手动执行，通过业务和通知验收后才能启用定时。每次复用同一Task、新增Batch。', overlap: '上一轮未结束时跳过并留记录', missed: '重启后漏跑合并为最近一次', waiting: 'task_wait(until,reason) 持久化等待，同一Batch/卡新Run继续；等待不消耗返工轮次，但受总时长限制。', permissions: '定时不增加权限；当前角色配置变化会停止派发并要求重新审查。' },
+      evidenceContracts: [{ id: 'browser-patrol-v2', purpose: '周期性浏览器登录巡查：dynamic-rounds 的规划者→Gate→浏览器管理员→只读评估者→规划者。规划者每轮用 task_plan_round(summary,items:[{ip,instance,action:verify|provision|resume,reason}]) 冻结真实目标和动作；未知先验证，有未登录证据才允许 provision。MCP 强制逐目标累计修复预算；无删除重建权限。执行者/评估者 task_complete 交接事实，不等于业务通过；规划者 task_finalize 由真实工具证据把关。修改过的实例用 task_wait 分时独立复验，同一卡新Run，已健康实例只做当前检查。', browserPatrol: { scope: 'fleet-existing-authorized', actions: ['provision','resume'], observationMinutes: 20, minSamples: 4 }, notifications: '需要企微时显式设置 design.notifications={channel:"wecom",chatIds:[已确认群ID]}。规划者必须具备实际企微发送MCP，通过 task_notify 生成基于证据的通知并持久化结果；先用 vyibc-wecom_list_groups 发现现有订阅群；只有一个群时预填其真实chatId交审查，多个群再询问。禁止索要已有密钥或默认广播。' },
         { id: 'browser-patrol-v1', purpose: '旧版单角色巡查兼容；新定时和动态返工目标使用v2，不为兼容改写历史计划。' }],
       contract: 'Task 是可复用目标/流程，不绑定 IP。task_create_submit 只保存待审查计划，不启动执行；审查入口独立于创建 Agent。每次先提供 design:{scope,branches:[{id,when,action,evidence}],coordination,failurePolicy:{isolateItems,maxAttempts,stopConditions:[]},acceptance:[]}。条件由业务 Agent 根据真实工具证据执行，不能把自然语言条件伪装成内核自动 DAG。static-chain 按所选业务角色交接，也可只选一个业务 Agent 处理多目标分支；dynamic-rounds 仅用于规划者、执行者、评估者三人返工协议。不得改变 Agent 权限。' }
   }
@@ -84,6 +84,28 @@ export class TaskCreator {
     return { page: current, pages, total, rows: db.prepare('SELECT id,title,state,created_at,source_session,task_id,batch_id FROM dsh_task_plans ORDER BY created_at DESC,id DESC LIMIT 10 OFFSET ?').all((current - 1) * 10) }
   }
 
+  async assertScheduleActivation(task: TaskSpec) {
+    if (task.trigger.kind !== 'cron' || !task.origin?.reviewPlanId) return;
+    const row = this.plansDb().prepare('SELECT state FROM dsh_task_plans WHERE id=?').get(task.origin.reviewPlanId) as any
+    if (row?.state !== 'awaiting_trial') return
+    await this.scheduledTurn(task, 'activation-check')
+    const batches = [...this.runner.store.s.batches.values()].filter(b => b.taskId === task.id)
+    if (batches.some(b => !b.settled)) throw new Error('首次手动执行尚未结束，不能启用定时')
+    const manual = batches.filter(b => b.by === 'manual').sort((a,b) => b.firedAt.localeCompare(a.firedAt))[0]
+    if (!manual || manual.settled?.outcome !== 'done' || !manual.turn?.workflow || digest(manual.turn.workflow.definition) !== digest(workflowDefinition(task)))
+      throw new Error('先对当前已审查计划手动执行并通过业务验收，再启用定时')
+    if (task.design?.notifications) {
+      const notices = this.plansDb().prepare('SELECT state FROM dsh_task_notifications WHERE batch_id=?').all(manual.id) as any[]
+      if (notices.length < task.design.notifications.chatIds.length || notices.some(n => n.state !== 'sent'))
+        throw new Error('首次执行的企微通知尚未全部确认送达，不能启用定时；仅处理通知，不重复浏览器修复')
+    }
+  }
+
+  scheduleActivated(task: TaskSpec) {
+    if (task.trigger.kind === 'cron' && task.origin?.reviewPlanId)
+      this.plansDb().prepare("UPDATE dsh_task_plans SET state='scheduled' WHERE id=? AND state='awaiting_trial'").run(task.origin.reviewPlanId)
+  }
+
   plan(id: string) {
     const row = this.plansDb().prepare('SELECT * FROM dsh_task_plans WHERE id=?').get(id) as any
     if (!row) throw new Error('没有这个待审查计划')
@@ -100,7 +122,7 @@ export class TaskCreator {
       const db = this.plansDb(), row = db.prepare('SELECT * FROM dsh_task_plans WHERE id=?').get(id) as any
       if (!row || row.hash !== hash) throw new Error('计划不存在或指纹变化，请重新审查')
       if (!['approve', 'reject'].includes(decision) || !reason?.trim() || reason.length > 4000) throw new Error('需要审查决定与理由')
-      if (['dispatched', 'scheduled'].includes(row.state) && decision === 'approve') return this.plan(id)
+      if (['dispatched', 'scheduled', 'awaiting_trial'].includes(row.state) && decision === 'approve') return this.plan(id)
       if (row.state !== 'pending' && !(row.state === 'approved' && decision === 'approve')) throw new Error('计划不再待审查，不能改写历史决定')
       const p = JSON.parse(row.payload), roster = (await this.context()).agents
       if (decision === 'reject') {
@@ -118,7 +140,7 @@ export class TaskCreator {
         if (claimed.changes !== 1) throw new Error('审查状态已被其他操作改变，请重新读取')
       }
       const store = this.runner.store
-      if (!store.tasks.has(p.task.id)) await store.append({ t: 'task/created', at: new Date().toISOString(), taskId: p.task.id, task: { ...p.task, origin: { ...p.task.origin, reviewPlanId: id } } })
+      if (!store.tasks.has(p.task.id)) await store.append({ t: 'task/created', at: new Date().toISOString(), taskId: p.task.id, task: { ...p.task, ...(p.task.trigger.kind === 'cron' ? { enabled: false } : {}), origin: { ...p.task.origin, reviewPlanId: id } } })
       const definition = workflowDefinition(p.task)
       const turn: TaskTurn = { objective: `${p.task.brief}\n\n[THIS EXECUTION — USER REQUEST]\n${p.input.text}`, participants: p.task.participants,
         userRequest: p.input.text, workflow: { id: digest(definition), definition }, ...(p.cwd ? { cwd: p.cwd } : {}), targets: p.targets,
@@ -126,7 +148,7 @@ export class TaskCreator {
       if (p.task.trigger.kind === 'cron') {
         db.prepare(`INSERT INTO dsh_schedule_bindings VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET plan_id=excluded.plan_id,turn_json=excluded.turn_json,roster_hash=excluded.roster_hash`).run(p.task.id, id, JSON.stringify(turn), p.rosterHash)
         this.runner.schedule.sync(store.tasks.get(p.task.id)!, Date.now())
-        db.prepare("UPDATE dsh_task_plans SET state='scheduled',task_id=? WHERE id=? AND state='approved'").run(p.task.id, id)
+        db.prepare("UPDATE dsh_task_plans SET state='awaiting_trial',task_id=? WHERE id=? AND state='approved'").run(p.task.id, id)
         return this.plan(id)
       }
       await this.runner.fire(p.task.id, 'manual', { batchId: p.batchId, turn })
@@ -231,7 +253,7 @@ export class TaskCreator {
           rosterHash: digest(task.participants.map(a => roster.find(r => r.id === a.agentId))) })
         const oldPlan = db.prepare('SELECT id FROM dsh_task_plans WHERE id=?').get(planId)
         if (!oldPlan) {
-          const accepted = db.prepare("SELECT id FROM dsh_task_plans WHERE request_id=? AND state IN ('approved','dispatched','scheduled')").get(input.requestId)
+          const accepted = db.prepare("SELECT id FROM dsh_task_plans WHERE request_id=? AND state IN ('approved','dispatched','scheduled','awaiting_trial')").get(input.requestId)
           if (accepted) throw new Error('这条请求已有放行计划，不能通过改写计划再次执行')
           db.transaction(() => {
             db.prepare("UPDATE dsh_task_plans SET state='superseded' WHERE request_id=? AND state='pending'").run(input.requestId)

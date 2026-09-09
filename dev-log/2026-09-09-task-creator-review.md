@@ -1,5 +1,33 @@
 # Structured Creator plans and independent review
 
+## Reviewed legacy login-observation repair — real Agent completion
+
+Creator agent-task-create-agent-mttv8vzp generated plan
+P-chat-17143dab0c6d2d5c4b5e, independently approved09:00:41.947UTC. Repair
+Task/Batch T-chat-8c09e935a94ae56de699 / b-chat-8c09e935a94ae56de699 kept the
+earlier full-fleet workflow and all sessions. Only browser-manager participates.
+Run1 rejected an unrecognized old observer before writes; Run2 applied the narrow
+HTTP maintenance patch via operation0fd61b272132732f34d514a49a0cc659. Its empty
+image engine map no longer suppresses browser3 login observation. All three
+browser PIDs/CDP/maps retained, no login copies, browser lifecycle or other service
+configuration changes. Developer changed tools, reviewed and observed; DSH owned
+every target action.
+
+Run2 then confused strict missing-timestamp proof with the ordinary Fleet display;
+its blocked record stays intact. The owning MCP now returns fleetDisplay separately
+without promoting a UI hint to verified proof. Run3 performed only already-current
+read-only acceptance and called task_complete, Batch done09:14:12.641UTC. Current
+verify6d5e50e48af95b85e3575f02627590fb proved42c8855c at09:12:57.607UTC; Agent
+independently read the same fingerprint with fleetDisplay.gemini=in. The other
+retained PIDs were unchanged. Real public Chrome1600 loaded Fleet three times30s
+apart over60.05s; all three188 Gemini accounts displayed, no page errors. Viewed
+screenshot `/tmp/fleet-188-login-observation-fixed.png` retained as acceptance
+evidence. Temporary one-off browser-check script removed (4KiB allocated); reproduce
+by loading `https://fleet.vyibc.com/#/fleet` in Chrome at1600px, capture188 card and
+compare three page loads30s apart. No new dependencies installed.78 MCP Node/27
+Python checks pass in linux-clash; this repository only records acceptance and
+does not rebuild/restart the production plugin. Unobserved206 is not verified.
+
 ## 0.28.2 — actual all-browser login remains the outcome
 
 Owner rejected stopping at truthful blocked reporting. Fleet removes its automatic

@@ -1,7 +1,8 @@
 # 后续优化
 
 - [x] [TASK-CREATOR-REVIEW-004] 0.28.1：结构化设计/独立审查/幂等放行/分页审查上线。两次错误完成报告保留；增强 MCP 登录证据分类及显式 browser-patrol-v1 宿主闸门。最终真实 Task T-chat-40a78cfa15b039ba4589 于 2026-09-09 07:10:56 UTC 自主 task_block、nudges=0；宿主从真实工具事件计算 11 实例=3 verified/6 unknown/2 skipped，未伪造绿色完成。173 项回归、公网桌面/390px审查与导航通过。见 `dev-log/2026-09-09-task-creator-review.md`。
-- [ ] [TASK-BROWSER-PATROL-COVERAGE-005] 0.28.2 持续业务验收：机主要求全部现存浏览器可用 Gemini 登录，明确不以正确阻塞为交付。Fleet 已撤除自动业务隔离，按新授权补精确读取/登录权限。跨旧/基础节点 verify MCP 与当前会话 status 原生证据已接通；审查计划 P-chat-fffecc0cd4029c6d9687 放行 Task T-chat-e5d640c5595bedcf83eb。修复真实旧模块导出差异后，188 browser-2 确认 signed_out 并由 Agent 自主 provision。仍在执行，不宣称全量达标；原失败和有效登录保留，不重复63的20分钟验收。
+- [ ] [TASK-BROWSER-PATROL-COVERAGE-005] 0.28.2：Fleet 自动业务隔离已移除；真实巡查 Task T-chat-e5d640c5595bedcf83eb 第三 Run 已完成，登录复制均由 browser-manager 经 MCP 执行。188/browser-3 展示遗漏另经独立审查修复（见下一项）。全部已观测实例的回执保留，但不可达206无浏览器观测不等于不存在或验收通过；不宣称未观测范围全量达标，不重复63的20分钟验收。
+- [x] [TASK-BROWSER-OBSERVATION-006] 188/browser-3：Creator 生成并经独立审查的 P-chat-17143dab0c6d2d5c4b5e → Task T-chat-8c09e935a94ae56de699。Run2 仅修旧 HTTP 登录观察循环，保留三个PID/CDP/生图配置和登录；Run3 于09:14:12UTC 自行 task_complete，引用真实verify和独立fleetDisplay。公网Chrome60秒三次加载均显示三个Gemini账号；原两次blocked保留。MCP修复及78 Node/27 Python验收属于linux-clash仓库，本插件未改业务代码或重启。见现有dev-log。
 
 - [x] [TASK-BROWSER-LOGIN-002] Task T-chat-61d84a0199aabbe795dc 首次准备与 browser-1 单次复制完成，browser-2 复用。0.27.4 修复宿主提前结束后，第二 Batch b-chat-619ec90823195dd9e78b 于 2026-09-09 03:22:42 UTC 完成20分钟只读验收、各21样本、stable=true，浏览器管理员自行调用 task_complete。原失败 Run 和回执保留；不代表未来永不失效或完整装机已稳定。
 - [x] [TASK-BROWSER-POOL-003] 账号池规则在 linux-clash/browser-manager 实现，宿主策略明确排除指定账号、其余四个批准账号仍须实时验证；本插件不另造账号库。新 generation 会话 agent-browser-manager-mttkrxrj 仅调用两次 candidates，展示五账号、排除/未验证原因并保留两实例有效登录。75 项相关 Node 测试通过；没有为分散账号再次改动健康目标，未以只读查询冒充多账号实际复制验收。开发者只完善工具/角色，目标操作与任务收口由真实 DSH Agent 负责；20分钟自主收口证据见上一项。

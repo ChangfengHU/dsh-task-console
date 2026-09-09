@@ -11,7 +11,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
@@ -154,6 +154,7 @@ export class TaskConsoleService extends TypertRemoteService {
         id: spec.id, name: spec.name, description: spec.description, model: spec.model,
         permission: spec.permissionPreset, tools: spec.tools, mcpTools: spec.mcpTools, skills: spec.skills,
         taskExpertise: spec.taskExpertise ?? [],
+        profileHash: createHash('sha256').update(JSON.stringify(spec)).digest('hex'),
         toolSchemas: spec.tools.flatMap(id => NATIVE_TOOLS.find(t => t.id === id)?.schemaNames ?? []).concat(Object.entries(spec.mcpTools).flatMap(([server, tools]) => tools.filter(t => t !== '*').map(t => `mcp__${server}__${t}`))),
         toolDescriptions: Object.fromEntries(spec.tools.flatMap(id => { const tool = NATIVE_TOOLS.find(t => t.id === id); return tool ? tool.schemaNames.map(name => [name, tool.description]) : [] })),
       })
@@ -401,6 +402,23 @@ export class TaskConsoleService extends TypertRemoteService {
   async workflowCatalog(): Promise<string> {
     await this.ready
     return JSON.stringify(this.creator.catalog())
+  }
+
+  async taskPlans(payload: string): Promise<string> {
+    await this.ready
+    return JSON.stringify(this.creator.plans(JSON.parse(payload).page))
+  }
+
+  async taskPlan(payload: string): Promise<string> {
+    await this.ready
+    return JSON.stringify(this.creator.plan(JSON.parse(payload).id))
+  }
+
+  /** Console-only action: never registered as a Creator/worker tool. */
+  async reviewTaskPlan(payload: string): Promise<string> {
+    await this.ready
+    const { id, hash, decision, reason } = JSON.parse(payload)
+    return JSON.stringify(await this.creator.review(id, hash, decision, reason))
   }
 
   async launchWorkflow(payload: string): Promise<string> {

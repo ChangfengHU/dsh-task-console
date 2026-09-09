@@ -5,8 +5,12 @@ import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wir
 import { AgentsPage } from './AgentsPage.tsx'
 import { TaskReplay } from './TaskReplay.tsx'
 import { NewTask, TaskBoard, type TasksApi } from './TasksView.tsx'
+import { TaskPlanReview } from './TaskPlanReview.tsx'
 
 export interface Api extends TasksApi {
+  taskPlans: (page: number) => Promise<any>
+  taskPlan: (id: string) => Promise<any>
+  reviewTaskPlan: (id: string, hash: string, decision: 'approve' | 'reject', reason: string) => Promise<any>
   agentHistory: (query: import('../wire.ts').AgentHistoryQuery) => Promise<import('../wire.ts').AgentHistoryPage>
   workflowCatalog: () => Promise<Pick<import('../wire.ts').TaskSpec, 'id' | 'title' | 'brief' | 'participants'>[]>
   launchWorkflow: (taskId: string, text: string, requestId: string, cwd?: string) => Promise<{ taskId: string; batchId: string; path: string }>
@@ -90,6 +94,7 @@ export function Console({ api }: { api: Api }) {
   let page: JSX.Element
   if (section === 'agents') page = !agents || !catalog ? loading : <AgentsPage api={api} catalog={catalog} agents={agents} id={route[1] === 'new' ? 'new' : (route[1] ?? null)} onSaved={reload} toast={showToast} />
   else if (route[1] === 'new') page = !agents || !catalog ? loading : <div className="dtc-body"><NewTask api={api} agents={agents} toast={showToast} workspaces={catalog.workspaces} /></div>
+  else if (route[1] === 'plans') page = <div className="dtc-body"><TaskPlanReview api={api} id={route[2]} /></div>
   else if (route[1]) page = <div className="dtc-body"><TaskReplay api={api} agents={agents ?? []} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} sessionId={query.get('session') ?? undefined} toast={showToast} /></div>
   else page = <div className="dtc-body"><TaskBoard api={api} agents={agents ?? []} toast={showToast} /></div>
 
@@ -98,7 +103,7 @@ export function Console({ api }: { api: Api }) {
       <div className="dtc-head">
         <div className="dtc-brand"><span className="ic">{section === 'agents' ? '◎' : '▦'}</span><span><b>{section === 'agents' ? 'Agent' : '任务中心'}</b><small>{section === 'agents' ? '预置配置与能力边界' : '任务编排与交付验收'}</small></span></div>
         <div className="dtc-head-actions">
-          {section === 'tasks' && !route[1] ? <button className="dtc-btn sm pri" onClick={() => go('tasks/new')}>＋ 新建任务</button> : null}
+          {section === 'tasks' && !route[1] ? <><button className="dtc-btn sm" onClick={() => go('tasks/plans')}>计划审查</button><button className="dtc-btn sm pri" onClick={() => go('tasks/new')}>＋ 新建任务</button></> : null}
           <span className="dtc-head-context">{section === 'agents' ? (route[1] === 'new' ? '新建 Agent' : 'Agent 配置') : route[1] === 'new' ? '新建任务' : route[1] ? '任务详情' : '任务看板'}</span>
           <button className="dtc-close" title="关闭工作台" aria-label="关闭工作台" onClick={closeConsole}>×</button>
         </div>

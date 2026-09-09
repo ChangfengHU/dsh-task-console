@@ -116,6 +116,66 @@ test('a pending-operation block gate keeps the run active until the operation is
   } finally {runner.stop()}
 })
 
+test('Creator review persists a frozen plan without a Task, fences changed approvals, then dispatches once', async () => {
+  const { host, store, runner, root } = await setup()
+  let profileHash = 'v1'
+  const creator = new TaskCreator(runner, async () => [{ id: 'a', name: 'a', profileHash } as any])
+  const design = { scope: 'Inspect authorized targets', branches: [{ id: 'healthy', when: 'valid proof', action: 'reuse', evidence: 'current receipt' }],
+    coordination: 'serial changes', failurePolicy: { isolateItems: true, maxAttempts: 1, stopConditions: ['no permission'] }, acceptance: ['all targets accounted for'] }
+  const proposal = { decision: 'create' as const, reason: 'new goal', title: 'Reviewed workflow', brief: 'Inspect authorized targets without deleting anything', participants: [{ agentId: 'a' }], design }
+  const exec = { agent: { session: { id: 'review-test', deriveMessages: () => [{ role: 'user', content: 'Check 192.0.2.10' }] } } }
+  try {
+    const before = store.tasks.size, plan = await creator.prepare(proposal, exec, root) as any
+    assert.equal(plan.state, 'pending'); assert.equal(store.tasks.size, before); assert.equal(store.s.batches.size, 0); assert.equal(host.sessions.size, 0)
+    assert.equal((await creator.prepare(proposal, exec, root) as any).id, plan.id)
+    assert.equal(creator.plans().total, 1)
+    await assert.rejects(creator.review(plan.id, 'wrong', 'approve', 'checked'), /指纹/)
+    profileHash = 'v2'; await assert.rejects(creator.review(plan.id, plan.hash, 'approve', 'checked'), /配置已变化/)
+    assert.equal(host.sessions.size, 0); profileHash = 'v1'
+    const restarted = new TaskCreator(runner, async () => [{ id: 'a', name: 'a', profileHash } as any])
+    const approved = await restarted.review(plan.id, plan.hash, 'approve', 'Scope and outcomes checked')
+    assert.equal(approved.state, 'dispatched'); assert.equal(host.sessions.size, 1)
+    assert.equal((await restarted.review(plan.id, plan.hash, 'approve', 'duplicate')).batchId, approved.batchId)
+    assert.equal(host.sessions.size, 1); assert.equal(store.s.batches.size, 1)
+    const turn = store.s.batches.get(approved.batchId)!.turn!
+    assert.deepEqual(turn.workflow!.definition.design, design)
+    assert.equal(turn.origin?.reviewPlanId, plan.id)
+    assert.match([...host.sessions.values()][0].followups[0].content[0].text, /all targets accounted for/)
+    assert.match([...host.sessions.values()][0].followups[0].content[0].text, /HOST REVIEW RELEASE/)
+    assert.deepEqual(creator.catalog().find(t => t.id === approved.taskId)?.design, design)
+    const nextExec = { agent: { session: { id: 'review-reuse', deriveMessages: () => [{ role: 'user', content: 'Check 192.0.2.11' }] } } }
+    const reuse = await creator.prepare({ decision: 'reuse', taskId: approved.taskId, reason: 'same goal', design }, nextExec, root) as any
+    assert.equal(reuse.state, 'pending'); assert.equal(store.s.batches.size, 1)
+    const reused = await creator.review(reuse.id, reuse.hash, 'approve', 'Same reviewed workflow with new target')
+    assert.equal(reused.taskId, approved.taskId); assert.notEqual(reused.batchId, approved.batchId)
+    assert.equal(store.tasks.size, before + 1); assert.equal(store.s.batches.size, 2)
+    await assert.rejects(creator.prepare({ ...proposal, title: 'change accepted request' }, exec, root), /已有放行计划/)
+  } finally { runner.stop(); store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
+})
+
+test('rejected/superseded drafts never execute and review keeps original input secrets private', async () => {
+  const { host, store, runner, root } = await setup()
+  const creator = new TaskCreator(runner, async () => [{ id: 'a', name: 'a' } as any])
+  const secret = 'Review-Fixture-Only!123'
+  const exec = { agent: { session: { id: 'draft-secret', deriveMessages: () => [{ role: 'user', content: `root ${secret} 192.0.2.10` }] } } }
+  const proposal = { decision: 'create' as const, reason: 'draft', title: 'Draft', brief: 'Read authorized target only', participants: [{ agentId: 'a' }],
+    design: { scope: `Inspect 192.0.2.10; never expose ${secret}`, branches: [{ id: 'read', when: 'authorized', action: 'inspect', evidence: 'receipt' }], coordination: 'serial',
+      failurePolicy: { isolateItems: true, maxAttempts: 1, stopConditions: ['permission missing'] }, acceptance: ['report state'] } }
+  try {
+    const first = await creator.prepare(proposal, exec, root) as any
+    assert.ok(!JSON.stringify(first).includes(secret))
+    assert.match(first.definition.design.scope, /\{\{target\}\}/)
+    assert.ok(!JSON.stringify(first.definition).includes('192.0.2.10'))
+    assert.ok(!String((store.kernel.db.prepare('SELECT payload FROM dsh_task_plans WHERE id=?').get(first.id) as any).payload).includes(secret))
+    const second = await creator.prepare({ ...proposal, title: 'Revised draft' }, exec, root) as any
+    assert.equal(creator.plan(first.id).state, 'superseded')
+    await assert.rejects(creator.review(first.id, first.hash, 'approve', 'old'), /不再待审查/)
+    assert.equal((await creator.review(second.id, second.hash, 'reject', 'Missing branch')).state, 'rejected')
+    await assert.rejects(creator.review(second.id, second.hash, 'approve', 'too late'), /不再待审查/)
+    assert.equal(host.sessions.size, 0); assert.equal(store.s.batches.size, 0)
+  } finally { runner.stop(); store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
+})
+
 test('chat workflow: real runner orders three roles, hands off, deduplicates and reuses Task with fresh inputs', async () => {
   const { host, store, runner, root } = await setup()
   const creator = new TaskCreator(runner, async () => ['a','b','c'].map(id => ({ id, name: id } as any)))

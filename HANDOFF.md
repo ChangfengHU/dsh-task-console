@@ -13,6 +13,29 @@ not an adjacent source checkout. Its generated `lib/` plugin assets are tracked.
 
 ## Chat-created workflows
 
+Creator submissions now prepare a structured decision contract in SQLite
+`dsh_task_plans`; they do not create a Task/Batch or start a worker. Each plan records
+scope, evidence-based branches, coordination, bounded failure policy and acceptance.
+`#/tc/tasks/plans` pages the retained drafts/reviews; `task_create_plan_status` reads
+them. Only the separate Console `reviewTaskPlan` action approves/rejects with a reason
+and matching hash. Creator has no approval, shell or business-operation tool.
+Approval checks the selected preset/profile hashes and reused definition, claims the
+pending row with CAS and dispatches the existing TaskRunner using a fixed Batch ID.
+Duplicate approval is idempotent; rejection/supersession never executes or erases history.
+Changed Agent configuration needs a newly generated/reviewed draft. The roster check
+is at approval, not a new version-pinned per-card deployment system.
+
+The accepted TaskTurn freezes the design and references its reviewPlanId. Existing
+direct @ workflow runs and Fleet TaskIntake remain unchanged; no second scheduler is
+introduced. Conditions are evaluated by the business Agent from tool evidence, not
+an arbitrary executable conditional-DAG language. Static role handoff and Hermes-style
+dynamic-rounds retain their existing semantics. Creator context includes the stored
+design for exact reuse; resource IPs belong in turn input, not the reusable design.
+Host review release distinguishes the original creation-stage wait from the approved
+execution phase without lifting any other permissions. A completed Run is still an
+Agent claim unless the relevant business evidence gate verifies it; independent review
+must not confuse a green status with correct per-target results.
+
 `task-create-agent` is an installed, scoped Agent preset. It reads the trusted Agent
 roster and enabled chat workflows, chooses create/reuse and delegates to the existing
 TaskRunner. It has no SSH, shell or business MCP grants. Install/update the managed

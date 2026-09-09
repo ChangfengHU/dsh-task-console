@@ -404,7 +404,11 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
     `decision=${task.origin.decision}`,
   ].join('\n'))
   if (task.targets?.length) lines.push('', '[TARGETS — RESOURCE METADATA ONLY]', task.targets.map(target => `${target.kind}:${target.id}${target.label ? ` (${target.label})` : ''}`).join('\n'))
+  if (task.origin?.reviewPlanId) lines.push('', '[HOST REVIEW RELEASE]',
+    `本 Run 已由独立审查放行，审批计划 ${task.origin.reviewPlanId}。原始消息中“先生成计划、等待审查、不执行”描述的创建阶段已完成；现在执行下方已审查的业务范围。其他禁止事项、宿主权限及验收要求仍有效，不因批准而扩大。`)
   if (card.brief?.trim()) lines.push('', '[YOUR PART]', card.brief.trim())
+  if (task.design) lines.push('', '[REVIEWED DECISION CONTRACT]', JSON.stringify(task.design, null, 2),
+    '以上为已审查的业务决策契约：依据真实工具证据选分支，不能将 unknown 当失败或未登录；它不是自动执行的脚本。逐目标记录匹配分支、证据、动作和结果；隔离的失败不得遗漏或伪装成整体成功。重试上限不授予重复副作用或扩大权限。最终报告覆盖全部目标和验收条件；有未达标项必须明确列出。')
   for (const u of upstream) lines.push('', `[UPSTREAM HANDOFF from ${u.agentName}]`, u.summary.trim() || '(上游没有留下交接单)')
   if (card.reviewNote?.trim()) lines.push('', '[REVIEW CHANGES]', card.reviewNote.trim())
   if (task.graphMode === 'dynamic-rounds' && card.role === 'planner') {

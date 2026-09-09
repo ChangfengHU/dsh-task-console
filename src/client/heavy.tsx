@@ -22,6 +22,9 @@ export function activate(ctx: any): Promise<Api> {
     return {
       agentHistory: query => call('agentHistory', query),
       workflowCatalog: () => call('workflowCatalog'),
+      taskPlans: (page: number) => call('taskPlans', { page }),
+      taskPlan: (id: string) => call('taskPlan', { id }),
+      reviewTaskPlan: (id: string, hash: string, decision: 'approve' | 'reject', reason: string) => call('reviewTaskPlan', { id, hash, decision, reason }),
       launchWorkflow: (taskId: string, text: string, requestId: string, cwd?: string) => call('launchWorkflow', { taskId, text, requestId, cwd }),
       catalog: () => call<Catalog>('catalog'), agents: () => call<AgentRow[]>('agents'),
       previewAgent: (spec: AgentSpec) => call<Preview>('previewAgent', spec), saveAgent: (spec: AgentSpec) => call<{ path: string; preview: Preview }>('saveAgent', spec),

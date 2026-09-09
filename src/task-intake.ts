@@ -51,6 +51,7 @@ export interface IntakeAgent {
   toolSchemas?: string[]
   toolDescriptions?: Record<string, string>
   taskExpertise?: string[]
+  profileHash?: string
 }
 
 export interface IntakeTaskCandidate {

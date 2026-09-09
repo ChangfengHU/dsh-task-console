@@ -4,7 +4,7 @@ import type { Batch, TaskSpec, WorkflowDefinition } from './fold.ts'
 export function workflowDefinition(task: TaskSpec): WorkflowDefinition {
   return JSON.parse(JSON.stringify({ title: task.title, brief: task.brief,
     participants: task.participants, graphMode: task.graphMode ?? 'static-chain',
-    timeoutSec: task.timeoutSec, onFail: task.onFail, maxTries: task.maxTries, workflowRecipe: task.workflowRecipe }))
+    timeoutSec: task.timeoutSec, onFail: task.onFail, maxTries: task.maxTries, workflowRecipe: task.workflowRecipe, design: task.design }))
 }
 
 export function workflowView(task: TaskSpec, batch?: Batch) {

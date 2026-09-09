@@ -1,5 +1,7 @@
 # 后续优化
 
+- [ ] [TASK-CREATOR-REVIEW-004] 0.28.0 已部署结构化决策设计、SQLite 待审查计划、独立批准/退回、指纹与角色配置漂移检查、幂等放行和分页审查 UI。真实 Creator 首稿退回、二稿批准执行；首 Run 被独立检查判不合格（把 Cookie 当登录证明、统计失真），历史保留。已增强 browser-manager 的登录证据分类并启动强化计划复测；尚不把原绿色完成状态作为验收通过。168 项 DSH 回归通过，公网桌面/390px审查交互通过。见 `dev-log/2026-09-09-task-creator-review.md`。
+
 - [x] [TASK-BROWSER-LOGIN-002] Task T-chat-61d84a0199aabbe795dc 首次准备与 browser-1 单次复制完成，browser-2 复用。0.27.4 修复宿主提前结束后，第二 Batch b-chat-619ec90823195dd9e78b 于 2026-09-09 03:22:42 UTC 完成20分钟只读验收、各21样本、stable=true，浏览器管理员自行调用 task_complete。原失败 Run 和回执保留；不代表未来永不失效或完整装机已稳定。
 - [x] [TASK-BROWSER-POOL-003] 账号池规则在 linux-clash/browser-manager 实现，宿主策略明确排除指定账号、其余四个批准账号仍须实时验证；本插件不另造账号库。新 generation 会话 agent-browser-manager-mttkrxrj 仅调用两次 candidates，展示五账号、排除/未验证原因并保留两实例有效登录。75 项相关 Node 测试通过；没有为分散账号再次改动健康目标，未以只读查询冒充多账号实际复制验收。开发者只完善工具/角色，目标操作与任务收口由真实 DSH Agent 负责；20分钟自主收口证据见上一项。
 

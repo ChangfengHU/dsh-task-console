@@ -472,6 +472,7 @@ function textOfMessage(message: unknown): string {
   const source = (message as any).source
   if (source && source.kind !== 'user') return ''
   const content = (message as any).content
+  if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
   return content.filter(block => block?.type === 'text' && typeof block.text === 'string').map(block => block.text).join('\n')
 }

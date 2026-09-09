@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createHash } from 'node:crypto'
-import { validateWorkflowCompletion, validateWorkflowBlock } from '../src/workflow-acceptance.ts'
+import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation } from '../src/workflow-acceptance.ts'
 
 function fixture() {
   const now = 2_000_000, sessionId = 'task-example-current-3', requestId = 'accept-current', ip = '192.0.2.10'
@@ -22,6 +22,16 @@ test('only a fresh running operation of this browser session prevents premature 
 })
 test('managed workflow accepts actual same-session stability and current Fleet readback', async () => {
   const f = fixture(); await validateWorkflowCompletion(f.input, f.deps)
+})
+test('custom browser workflows retain only their own fresh live operation, independent of recipe', async () => {
+  const f=fixture(); delete f.input.task.workflowRecipe
+  const job={id:'b'.repeat(32),args:{sessionId:f.input.sessionId},phase:'running',updatedAt:new Date(f.deps.now()).toISOString()}
+  const deps={now:f.deps.now,jobs:async()=>[job]}
+  assert.match((await pendingBrowserOperation(f.input,deps))!,/running/)
+  await assert.rejects(validateWorkflowBlock(f.input,deps),/browser_status/)
+  for(const change of [{phase:'complete'},{args:{sessionId:'other'}},{updatedAt:new Date(f.deps.now()-360001).toISOString()}])
+    assert.equal(await pendingBrowserOperation(f.input,{...deps,jobs:async()=>[{...job,...change}]}),undefined)
+  assert.equal(await pendingBrowserOperation({...f.input,profileId:'fleet-installer'},{jobs:async()=>{throw Error('must not read')}}),undefined)
 })
 test('a job finishing between poll and task_block supplies its actual reason and input boundary',async()=>{
   const f=fixture(),job={id:'a'.repeat(32),args:{sessionId:f.input.sessionId},phase:'blocked',error:'interactive-verification-required',updatedAt:new Date(f.deps.now()).toISOString()}

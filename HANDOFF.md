@@ -97,6 +97,14 @@ legacy/preserve/unrelated Tasks have no Gemini gate. Host receipt storage follow
 FLEET_BROWSER_STATE_DIR or ~/.local/state/fleet-browser-manager. Retain receipts;
 MCP status returns only recent acceptance events to avoid growing model context.
 
+Fresh running Browser MCP receipts keep their owning browser-manager Run alive
+when the model ends a turn, including custom workflows without a Fleet recipe.
+The host polls receipts every 30 seconds without LLM calls, retains the CAS
+heartbeat and original watchdog deadline, then uses the existing terminator nudge
+after the operation ends. Completion/block calls cannot abandon a running browser
+operation. This is operation lifecycle protection, not a new generic Gemini gate;
+other Agents and stale/unrelated receipts retain their existing behavior.
+
 Execution-history pickers show the actual firedAt date/time in Asia/Shanghai
 (explicit Beijing UTC+8), followed by an eight-character display code. Full Batch
 IDs remain the select values, route identifiers and hover text; display codes are

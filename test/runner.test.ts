@@ -54,6 +54,27 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
 
+test('idle model turns retain live async operations without burning nudges or extending watchdog', async () => {
+  let pending = true
+  const {host,runner,store,root}=await setup({onFail:'stop',maxTries:1},{pendingOperation:async()=>pending?'operation running':undefined})
+  try {
+    const batch=await runner.fire('T','manual');await tick()
+    const session=[...host.sessions.keys()][0];host.consumeFirst(session)
+    const flight=(runner as any).flights.get(session), watchdog=flight.timer
+    for(let i=0;i<3;i++){host.endTurn(session);await tick()}
+    assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+    assert.equal(host.sessions.get(session)?.disposed,false)
+    assert.equal(host.sessions.get(session)?.followups.length,1)
+    assert.equal(flight.timer,watchdog)
+    assert.ok(flight.idleTimer)
+    pending=false;host.endTurn(session);await tick()
+    assert.equal(flight.idleTimer,undefined)
+    assert.equal(host.sessions.get(session)?.followups.length,2)
+    await host.callTool(session,'task_complete',{summary:'actual terminal receipt'});host.endTurn(session);await tick()
+    assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'done')
+  } finally {runner.stop();store.kernel.db.close();await (await import('node:fs/promises')).rm(root,{recursive:true,force:true})}
+})
+
 test('the block gate can replace stale model prose with observed evidence without erasing tool history', async()=>{
   const {host,runner,store}=await setup({onFail:'stop',maxTries:1},{beforeBlock:()=>({reason:'Actual provider challenge',kind:'needs_input'})})
   try {

@@ -38,6 +38,7 @@ interface Flight {
   pendingAsk?: string
   timer?: ReturnType<typeof setTimeout>
   heartbeatTimer?: ReturnType<typeof setInterval>
+  idleTimer?: ReturnType<typeof setTimeout>
   timeoutSec: number
 }
 
@@ -48,6 +49,7 @@ export interface RunnerOptions {
   onSessionCreated?: (sessionId: string) => void | Promise<void>
   beforeComplete?: (input: CompletionCheck) => void | Promise<void>
   beforeBlock?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
+  pendingOperation?: (input: CompletionCheck) => Promise<string | undefined>
 }
 
 export interface BlockDecision { reason: string; kind: BlockKind }
@@ -75,6 +77,7 @@ export class TaskRunner {
   private readonly onSessionCreated?: (sessionId: string) => void | Promise<void>
   private readonly beforeComplete?: RunnerOptions['beforeComplete']
   private readonly beforeBlock?: RunnerOptions['beforeBlock']
+  private readonly pendingOperation?: RunnerOptions['pendingOperation']
 
   constructor(ctx: Context, store: EventStore, opts: RunnerOptions = {}) {
     this.ctx = ctx; this.store = store
@@ -84,6 +87,7 @@ export class TaskRunner {
     this.onSessionCreated = opts.onSessionCreated
     this.beforeComplete = opts.beforeComplete
     this.beforeBlock = opts.beforeBlock
+    this.pendingOperation = opts.pendingOperation
   }
 
   async start(): Promise<void> {
@@ -401,6 +405,7 @@ export class TaskRunner {
   }
 
   private stopHeartbeat(f: Flight): void {
+    if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
     if (f.heartbeatTimer) { clearInterval(f.heartbeatTimer); f.heartbeatTimer = undefined }
   }
 
@@ -417,6 +422,7 @@ export class TaskRunner {
     const run = this.store.s.runs.get(f.runId)
     switch (event.type) {
       case 'user/message':
+        if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
         if (event.data?.id === f.messageId) f.consumed = true
         else if (run?.status === 'blocked' && event.data?.source?.kind === 'user' && f.terminal?.kind === 'blocked') {
           // A person answered in the session: the block is over, the run continues.
@@ -455,6 +461,7 @@ export class TaskRunner {
 
   private async onTurnEnd(f: Flight, reason: any): Promise<void> {
     if (!this.flights.has(f.sessionId)) return
+    if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
     if (reason && reason.kind !== 'completed') { await this.finish(f, 'run/failed', 'failed', JSON.stringify(reason)); return }
     const t = f.terminal
     if (t?.kind === 'completed') { await this.finish(f, 'run/completed', 'completed', undefined, t.summary, false, t.metadata); return }
@@ -463,6 +470,21 @@ export class TaskRunner {
     if (t?.kind === 'blocked') { await this.finishBlocked(f, t.reason ?? 'blocked', t.blockKind ?? 'needs_input'); return }
     const run = this.store.s.runs.get(f.runId)
     if (run?.status === 'blocked') return   // ask_user_question in flight
+    const card = this.store.s.cards.get(f.cardId), batch = card && this.store.s.batches.get(card.batchId)
+    const base = this.store.tasks.get(f.taskId)
+    if (card && batch && base && this.pendingOperation) {
+      try {
+        const pending = await this.pendingOperation({ task: taskForBatch(base, batch), batch, card, sessionId: f.sessionId, profileId: f.profileId })
+        if (!this.flights.has(f.sessionId)) return
+        if (pending) {
+          // An async operation outlives a model turn. Retain its live Run/CAS
+          // binding; poll receipts without LLM calls, without extending timeout.
+          f.idleTimer = setTimeout(() => { void this.onTurnEnd(f, reason) }, 30_000)
+          ;(f.idleTimer as any).unref?.()
+          return
+        }
+      } catch { await this.finish(f, 'run/failed', 'failed', '无法核验后台操作状态，未宣称完成'); return }
+    }
     if ((run?.nudges ?? 0) < 1) {
       await this.append({ t: 'run/nudged', taskId: f.taskId, runId: f.runId })
       f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: NUDGE }], source: { kind: 'user' } })

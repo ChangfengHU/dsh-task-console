@@ -29,7 +29,7 @@ import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, valid
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
 import { TaskCreator } from './task-create.ts'
-import { validateWorkflowCompletion, validateWorkflowBlock } from './workflow-acceptance.ts'
+import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation } from './workflow-acceptance.ts'
 import type { Artifact, Card } from './tasks.ts'
 import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
@@ -59,8 +59,12 @@ export class TaskConsoleService extends TypertRemoteService {
     super(ctx, NAMESPACE)
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
-      beforeComplete: input => validateWorkflowCompletion(input),
+      beforeComplete: async input => {
+        if (await pendingBrowserOperation(input)) throw new Error('浏览器后台操作仍在运行；继续 browser_status，不能提前 task_complete。')
+        await validateWorkflowCompletion(input)
+      },
       beforeBlock: input => validateWorkflowBlock(input),
+      pendingOperation: input => pendingBrowserOperation(input),
     })
     this.intake = new TaskIntakeCoordinator(this.runner, {
       agents: () => this.intakeAgents(),

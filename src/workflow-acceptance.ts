@@ -8,9 +8,9 @@ import type { CompletionCheck, BlockDecision } from './runner.ts'
 const windowMs = 20 * 60_000
 const rejection = (reason: string): never => { throw new Error(`工作流登录验收未通过：${reason}。由浏览器管理员完成 browser_login_acceptance 后提交真实 operationId；不要用再次复制代替验收。`) }
 
-export async function validateWorkflowBlock(input: CompletionCheck, deps: { jobs?: () => Promise<any[]>; now?: () => number } = {}): Promise<BlockDecision | void> {
-  if (input.task.workflowRecipe?.id !== 'fleet-base-v2' || input.profileId !== 'browser-manager') return
-  const jobs = await (deps.jobs || (async () => {
+type JobDeps = { jobs?: () => Promise<any[]>; now?: () => number }
+async function browserJobs(deps: JobDeps) {
+  return (deps.jobs || (async () => {
     const root = process.env.FLEET_BROWSER_STATE_DIR || join(homedir(), '.local/state/fleet-browser-manager')
     let names: string[]
     try { names = await readdir(root) } catch (e: any) { if (e.code === 'ENOENT') return []; throw e }
@@ -18,6 +18,18 @@ export async function validateWorkflowBlock(input: CompletionCheck, deps: { jobs
     for (const name of names) if (/^[a-f0-9]{32}\.json$/.test(name)) rows.push(await readBrowserAcceptance(name.slice(0, 32)))
     return rows
   }))()
+}
+
+export async function pendingBrowserOperation(input: CompletionCheck, deps: JobDeps = {}): Promise<string | undefined> {
+  if (input.profileId !== 'browser-manager') return
+  const now = (deps.now || Date.now)()
+  const active = (await browserJobs(deps)).find(j => j.args?.sessionId === input.sessionId && j.phase === 'running' && now - Date.parse(j.updatedAt) < 360000)
+  return active ? `操作 ${active.id} 仍为 running，等待真实终态；不要重复复制或提前交卷。` : undefined
+}
+
+export async function validateWorkflowBlock(input: CompletionCheck, deps: JobDeps = {}): Promise<BlockDecision | void> {
+  if (input.profileId !== 'browser-manager') return
+  const jobs = await browserJobs(deps)
   const now = (deps.now || Date.now)()
   const active = jobs.find(j => j.args?.sessionId === input.sessionId && j.phase === 'running' && now - Date.parse(j.updatedAt) < 360000)
   if (active) throw new Error(`操作 ${active.id} 仍为 running，尚未失败。继续调用 browser_status 到 complete/blocked/interrupted；不能因等待一分钟或公开状态 pending 而 task_block。`)

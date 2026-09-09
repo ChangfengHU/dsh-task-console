@@ -1,5 +1,7 @@
 # 后续优化
 
+- [ ] [TASK-BROWSER-LOGIN-002] 用户本轮授权恢复两个既有浏览器。新 Task T-chat-61d84a0199aabbe795dc 已通过浏览器管理员升级有界清理模块，browser-1 单次复制成功、browser-2 复用登录，公网双 Gemini in。首次20分钟验收因模型提前结束、宿主 protocol_violation 撤销 Session 绑定中断，不是登录失败。0.27.4 补后台操作等待保护，164项回归通过；新执行只读验收待完成。旧 Task/失败记录保留；本条覆盖旧条“不得修复 browser-1”的当时范围，不改历史证据。
+
 - [x] [TASK-CREATE-JSON-001] 0.27.3：修复自定义工作流目录中 undefined 导致的 lossless JSON 拒绝；162 项回归/构建通过。原 Creator 会话重试成功创建下述真实 Task，原始失败和旧计划均保留。
 
 - [ ] [TASK-BROWSER-REBUILD-001] Task T-chat-9fd1c8bfa45d890b9ce4 由浏览器管理员实际完成 63 browser-2 无备份删除、原槽位重建和一次授权登录复制；旧资料约 582 MiB 永久删除。双浏览器20分钟验收因 browser-1 signed_out 失败，Task/Run 均 blocked。browser-1 未被删除、重启或作为复制目标，但掉线原因未定；browser-2 仅短期已验证，不能宣称稳定。停止重试，不擅自修复 browser-1；本行取代下方旧计划的下一步指引，历史不改写。见现有 dev-log 最新段落。

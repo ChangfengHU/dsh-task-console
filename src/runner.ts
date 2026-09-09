@@ -321,7 +321,9 @@ export class TaskRunner {
       try {
         const submit = async (kind: 'completed' | 'review', summary: string, paths: string[], metadata?: Record<string, unknown>, reviewer?: string) => {
           if (flight.terminal) throw new Error('这次运行已经提交了终态')
-          if (kind === 'completed') {
+          const pending = await this.pendingOperation?.({ task, batch, card, sessionId, profileId })
+          if (pending) throw new Error(`后台操作仍在运行，继续读取终态回执，不能提前提交验收：${pending}`)
+          if (kind === 'completed' || task.design?.evidenceContract === 'browser-patrol-v1') {
             const observed = await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata })
             if (observed) { summary = observed.summary; metadata = observed.metadata }
           }

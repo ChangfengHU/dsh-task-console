@@ -395,7 +395,8 @@ export function taskForBatch(task: TaskSpec, batch: Batch): TaskSpec {
 
 /** The one user message a card's session gets: brief, its part, the upstream handoffs, and the contract. */
 export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstream: { agentName: string; summary: string }[]): string {
-  const lines = [`# 任务:${task.title} · ${batchId} · 第 ${card.index + 1}/${task.participants.length} 张卡`, '', '[TASK]', task.brief.trim()]
+  const lines = [`# 任务:${task.title} · ${batchId} · 第 ${card.index + 1}/${task.participants.length} 张卡`, '',
+    task.origin?.reviewPlanId ? '[ORIGINAL REQUEST — CREATION STAGE ALREADY REVIEWED]' : '[TASK]', task.brief.trim()]
   if (task.origin) lines.push('', '[ORIGIN]', [
     `task=${task.id}`,
     `source=${task.origin.source}`,
@@ -431,6 +432,10 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
     '拿不准且不可逆的事:能用 ask_user_question 就问;否则 task_block(reason, kind="needs_input")。',
     '缺工具或权限做不了:task_block(reason, kind="capability")。',
     '不要在没有调用 task_complete 或 task_block 的情况下结束。')
+  if (task.origin?.reviewPlanId) lines.push('', '[CURRENT EXECUTION PHASE — APPLIES TO THIS RUN AND RETRIES]',
+    `计划 ${task.origin.reviewPlanId} 已批准。本次是业务执行，不是创建或审查计划。按 YOUR PART 和 REVIEWED DECISION CONTRACT 完成真实工具操作与逐项验收。`,
+    '原始输入保留用于审计，其中要求 Creator 等待批准的阶段指令已经履行，不要求执行者再次提交计划。task_request_review 只能提交实际已执行的业务结果，不得以新计划替代执行。',
+    '异步工具返回 running/waiting 时继续按 nextAction 等待真实终态；有独立目标未检查时继续检查。有未达标项不能宣布完成。')
   return lines.join('\n')
 }
 

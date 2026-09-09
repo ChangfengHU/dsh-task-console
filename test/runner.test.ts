@@ -115,6 +115,26 @@ test('a completion evidence callback replaces model summary and metadata with ve
   } finally { runner.stop(); store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
 })
 
+test('review cannot bypass pending operations or an opted-in patrol evidence contract', async () => {
+  let pending = true, verified = false
+  const { host, runner, store, root } = await setup({ design: { evidenceContract: 'browser-patrol-v1' } as any }, {
+    pendingOperation: () => pending ? 'poll operation-1' : undefined,
+    beforeComplete: () => { if (!verified) throw Error('missing patrol evidence'); return { summary: 'verified receipt', metadata: {} } },
+  })
+  try {
+    const batch = await runner.fire('T', 'manual'); await tick()
+    const session = [...host.sessions.keys()][0]; host.consumeFirst(session)
+    await assert.rejects(host.callTool(session, 'task_request_review', { summary: 'a plan' }), /poll operation-1/)
+    pending = false
+    await assert.rejects(host.callTool(session, 'task_request_review', { summary: 'still only a plan' }), /missing patrol evidence/)
+    assert.equal(store.s.cards.get(batch.cardIds[0])?.status, 'running')
+    verified = true
+    await host.callTool(session, 'task_request_review', { summary: 'model claim' }); host.endTurn(session); await tick()
+    assert.equal(store.s.cards.get(batch.cardIds[0])?.status, 'review')
+    assert.equal([...store.s.runs.values()][0].summary, 'verified receipt')
+  } finally { runner.stop(); store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
+})
+
 test('a pending-operation block gate keeps the run active until the operation is terminal', async () => {
   let running = true
   const {host,runner,store} = await setup({onFail:'stop',maxTries:1}, {beforeBlock: () => { if(running)throw Error('poll running operation') }})
@@ -156,6 +176,14 @@ test('Creator review persists a frozen plan without a Task, fences changed appro
     assert.equal(turn.origin?.reviewPlanId, plan.id)
     assert.match([...host.sessions.values()][0].followups[0].content[0].text, /all targets accounted for/)
     assert.match([...host.sessions.values()][0].followups[0].content[0].text, /HOST REVIEW RELEASE/)
+    let session = [...host.sessions.keys()][0]; host.consumeFirst(session)
+    await host.callTool(session, 'task_request_review', { summary: 'premature plan' }); host.endTurn(session); await tick()
+    await runner.reviewCard(`${approved.batchId}#0`, 'changes', 'Execute the approved business contract'); await tick()
+    session = [...host.sessions.keys()].at(-1)!
+    const retryMessage = host.sessions.get(session)!.followups[0].content[0].text
+    assert.match(retryMessage, /ORIGINAL REQUEST — CREATION STAGE ALREADY REVIEWED/)
+    assert.match(retryMessage, /CURRENT EXECUTION PHASE/)
+    assert.ok(retryMessage.indexOf('[CURRENT EXECUTION PHASE') > retryMessage.indexOf('[CONTRACT]'))
     assert.deepEqual(creator.catalog().find(t => t.id === approved.taskId)?.design, design)
     const nextExec = { agent: { session: { id: 'review-reuse', deriveMessages: () => [{ role: 'user', content: 'Check 192.0.2.11' }] } } }
     const reuse = await creator.prepare({ decision: 'reuse', taskId: approved.taskId, reason: 'same goal', design }, nextExec, root) as any

@@ -131,3 +131,24 @@ evidence-based terminal path, including rejection and correction. It does not es
 all-fleet login coverage or real new multi-account transfer acceptance. Earlier completed
 claims remain failed acceptance evidence. Dedicated guarded-plan and final Run screenshots
 are /tmp/task-creator-host-evidence-gate.png and /tmp/task-creator-final-blocked.png.
+
+## Follow-up: execution phase and review escape hatch
+
+The user requires actual full login coverage, not the earlier truthful blocked report.
+Task T-chat-e5d640c5595bedcf83eb's second Run submitted a plan through
+task_request_review while its browser verifier was running. The generic review path
+did not invoke the completion callback; the original Creator request also retained
+creation-stage language. No history was deleted or success manufactured.
+
+All submit paths now check pending operations. The explicitly opted-in browser-patrol
+contract also checks native evidence before review; generic Hermes review remains
+available without demanding final business acceptance. Reviewed requests are labeled
+historical creation input, with a final execution-phase instruction that survives
+same-card rework. Regression tests cover both the bypass and actual Creator → approve
+→ review changes → retry prompt. 176 DSH tests and build passed. Deployed only after
+Task, native session and durable-operation idle checks; the same card was returned for
+execution with reviewCard(changes), retaining both prior Runs and tool receipts.
+
+Actual receipts so far prove 188/browser-2 provisioned fingerprint 0c1e90d8 and
+95/browser-3 retained its existing verified account. Other instances still require
+execution and evidence. This deployment is not full business acceptance.

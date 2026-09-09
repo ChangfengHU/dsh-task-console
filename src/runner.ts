@@ -19,6 +19,8 @@ import { captureArtifacts } from './artifacts.ts'
 import { readSpec } from './presets.ts'
 import { EventStore, NUDGE, cardMessage, cronMatches, parseCron, taskForBatch, taskForTurn, type Batch, type BlockKind, type Card, type TaskSpec, type TaskTurn } from './tasks.ts'
 import { registerWorkerTools } from './worker-tools.ts'
+import { ScheduleLedger, type ScheduleClaim } from './scheduler.ts'
+import { publicToolName } from './filtered-mcp-client.ts'
 
 interface Flight {
   runId: string
@@ -34,12 +36,13 @@ interface Flight {
   claimLock: string
   profileId: string
   /** Set by a terminator tool; the turn's end then finalizes the run. */
-  terminal?: { kind: 'completed' | 'review' | 'changes' | 'blocked'; summary?: string; reason?: string; blockKind?: BlockKind; metadata?: Record<string, unknown>; reviewer?: string }
+  terminal?: { kind: 'completed' | 'review' | 'changes' | 'blocked' | 'deferred'; summary?: string; reason?: string; blockKind?: BlockKind; metadata?: Record<string, unknown>; reviewer?: string }
   pendingAsk?: string
   timer?: ReturnType<typeof setTimeout>
   heartbeatTimer?: ReturnType<typeof setInterval>
   idleTimer?: ReturnType<typeof setTimeout>
   timeoutSec: number
+  deadline?: number
 }
 
 export interface RunnerOptions {
@@ -50,6 +53,10 @@ export interface RunnerOptions {
   beforeComplete?: (input: CompletionCheck) => CompletionDecision | void | Promise<CompletionDecision | void>
   beforeBlock?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
   pendingOperation?: (input: CompletionCheck) => Promise<string | undefined>
+  scheduledTurn?: (task: TaskSpec, occurrenceId: string) => Promise<TaskTurn | undefined>
+  beforePlanRound?: (input: CompletionCheck, items: unknown) => Promise<{ items: unknown; commit: () => void } | undefined>
+  patrolStatus?: (input: CompletionCheck) => Promise<unknown>
+  notify?: (input: CompletionCheck, stage: string, deliver: (args: any) => Promise<any>) => Promise<unknown>
 }
 
 export interface BlockDecision { reason: string; kind: BlockKind }
@@ -61,6 +68,7 @@ export interface FireOptions {
   batchId?: string
   /** Signal-specific objective and dynamically selected Agent team. */
   turn?: TaskTurn
+  scheduleClaim?: ScheduleClaim
 }
 
 export class TaskRunner {
@@ -68,7 +76,7 @@ export class TaskRunner {
   readonly store: EventStore
   private flights = new Map<string, Flight>()
   private ticker?: ReturnType<typeof setInterval>
-  private firedMinute = new Map<string, string>()
+  schedule!: ScheduleLedger
   private disposeListener?: () => void
   private ticking = false
   private dispatchSuspended = 0
@@ -79,6 +87,10 @@ export class TaskRunner {
   private readonly beforeComplete?: RunnerOptions['beforeComplete']
   private readonly beforeBlock?: RunnerOptions['beforeBlock']
   private readonly pendingOperation?: RunnerOptions['pendingOperation']
+  private readonly scheduledTurn?: RunnerOptions['scheduledTurn']
+  private readonly beforePlanRound?: RunnerOptions['beforePlanRound']
+  private readonly patrolStatus?: RunnerOptions['patrolStatus']
+  private readonly notify?: RunnerOptions['notify']
 
   constructor(ctx: Context, store: EventStore, opts: RunnerOptions = {}) {
     this.ctx = ctx; this.store = store
@@ -89,10 +101,15 @@ export class TaskRunner {
     this.beforeComplete = opts.beforeComplete
     this.beforeBlock = opts.beforeBlock
     this.pendingOperation = opts.pendingOperation
+    this.scheduledTurn = opts.scheduledTurn
+    this.beforePlanRound = opts.beforePlanRound
+    this.patrolStatus = opts.patrolStatus
+    this.notify = opts.notify
   }
 
   async start(): Promise<void> {
     await this.store.load()
+    this.schedule = new ScheduleLedger(this.store)
     // Runs still live in the projection belonged to a previous host process.
     // Close the normalized core run first; the UI event is only its projection.
     for (const r of this.store.s.runs.values()) {
@@ -134,19 +151,31 @@ export class TaskRunner {
     if (this.ticking || this.dispatchSuspended > 0) return
     this.ticking = true
     try {
+      await this.wakeDueCards()
       await this.fireDueCron()
       await this.dispatch()
     } finally { this.ticking = false }
   }
 
+  private async wakeDueCards(): Promise<void> {
+    const rows = this.store.kernel.db.prepare("SELECT w.card_id FROM dsh_task_wakeups w JOIN tasks t ON t.id=w.card_id WHERE w.state='pending' AND w.wake_at<=? AND t.status='scheduled'").all(this.clock()) as { card_id: string }[]
+    for (const row of rows) {
+      const card = this.store.s.cards.get(row.card_id)
+      if (!card) continue
+      await this.store.transition(() => {
+        const ok = this.store.kernel.unblockTask(card.id)
+        if (ok) this.store.kernel.db.prepare("UPDATE dsh_task_wakeups SET state='resumed' WHERE card_id=?").run(card.id)
+        return ok
+      }, ok => ok ? { t: 'card/ready', at: this.now(), taskId: card.taskId, cardId: card.id } : undefined)
+    }
+  }
+
   private async fireDueCron(): Promise<void> {
-    const d = new Date(this.clock()); const key = d.toISOString().slice(0, 16)
     for (const task of this.store.tasks.values()) {
-      if (task.trigger.kind !== 'cron' || !task.enabled) continue
-      const c = parseCron(task.trigger.expr); if (!c || !cronMatches(c, d)) continue
-      if (this.firedMinute.get(task.id) === key) continue
-      this.firedMinute.set(task.id, key)
-      await this.fire(task.id, 'cron').catch(err => console.warn('[task-console] cron fire failed:', err))
+      const claim = this.schedule.claim(task, this.clock())
+      if (!claim) continue
+      try { await this.fire(task.id, 'cron', { batchId: claim.batchId, scheduleClaim: claim }) }
+      catch (error) { this.schedule.failed(claim, this.clock(), error instanceof Error ? error.message : '定时派发失败') }
     }
   }
 
@@ -206,7 +235,10 @@ export class TaskRunner {
         if (!stillLive) await this.settleBatch(b, dead.some(c => c.status === 'failed') ? 'failed' : 'cancelled')
         continue
       }
-      if (cards.every(c => c.status === 'done')) await this.settleBatch(b, 'done')
+      if (cards.every(c => c.status === 'done')) {
+        const unresolved = cards.some(c => c.runIds.some(id => this.store.s.runs.get(id)?.metadata?.workflowOutcome === 'unresolved'))
+        await this.settleBatch(b, unresolved ? 'failed' : 'done')
+      }
     }
   }
 
@@ -216,7 +248,6 @@ export class TaskRunner {
   async fire(taskId: string, by: Batch['by'], options: FireOptions = {}): Promise<Batch> {
     const template = this.store.tasks.get(taskId)
     if (!template) throw new Error('没有这个任务')
-    const task = taskForTurn(template, options.turn)
     const batchId = options.batchId ?? `b-${this.clock().toString(36)}${Math.random().toString(36).slice(2, 5)}`
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(batchId)) throw new Error('batchId 不合法')
     const existing = this.store.s.batches.get(batchId)
@@ -224,6 +255,8 @@ export class TaskRunner {
       if (existing.taskId !== taskId) throw new Error('batchId 已被其他任务使用')
       return existing
     }
+    if (template.trigger.kind === 'cron' && !options.turn && this.scheduledTurn) options = { ...options, turn: await this.scheduledTurn(template, batchId) }
+    const task = taskForTurn(template, options.turn)
     if (!options.turn && (template.origin?.signalId || [...this.store.s.batches.values()].some(b => b.taskId === taskId && b.turn?.origin?.signalId))) {
       throw new Error('外部 Signal 任务请从来源系统重新提交，由 Task Agent 重新核对目标与角色；不能重跑旧模板。')
     }
@@ -231,7 +264,7 @@ export class TaskRunner {
     const cards = task.graphMode === 'dynamic-rounds'
       ? [{ id: `${batchId}#p1`, agentId: task.participants[0].agentId, ...(task.participants[0].brief ? { brief: task.participants[0].brief } : {}), deps: [], kind: 'agent' as const, role: 'planner' as const, round: 1 }]
       : task.participants.map((p, i) => ({ id: `${batchId}#${i}`, agentId: p.agentId, ...(p.brief ? { brief: p.brief } : {}), deps: i ? [`${batchId}#${i - 1}`] : [] }))
-    await this.store.createBatch(template, { t: 'batch/fired', at: this.now(), taskId, batch: { id: batchId, by, cards, ...(options.turn ? { turn: options.turn } : {}) } })
+    await this.store.createBatch(template, { t: 'batch/fired', at: this.now(), taskId, batch: { id: batchId, by, cards, ...(options.turn ? { turn: options.turn } : {}) } }, options.scheduleClaim)
     const problem = await this.preflight(task)
     if (problem) {
       const first = cards[0]
@@ -290,11 +323,12 @@ export class TaskRunner {
       if (!d || prior.has(id) || !batch.cardIds.includes(id)) return
       prior.set(id, d)
       // A reusable workflow's final role needs original ancestor receipts, not only a rewritten immediate handoff.
-      if (task.origin?.source === 'task-chat' && task.graphMode !== 'dynamic-rounds') d.deps.forEach(collect)
+      if (d.kind === 'gate' || task.origin?.source === 'task-chat' && task.graphMode !== 'dynamic-rounds') d.deps.forEach(collect)
     }
     card.deps.forEach(collect)
     for (const d of [...prior.values()].sort((a, b) => a.index - b.index)) upstream.push({ agentName: await this.displayName(d.agentId), summary: d.summary ?? '' })
-    const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}`
+    const previousWait = this.store.kernel.db.prepare('SELECT reason,wake_at FROM dsh_task_wakeups WHERE card_id=?').get(card.id) as any
+    const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}${previousWait ? `\n[RESUMED DURABLE WAIT]\nDue: ${new Date(previousWait.wake_at).toISOString()}\n${previousWait.reason}\nContinue verification; do not repeat completed side effects.` : ''}`
     const messageId = randomUUID()
     const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview)
     if (!claim) return
@@ -302,6 +336,7 @@ export class TaskRunner {
       runId, cardId: card.id, taskId: task.id, sessionId, messageId, consumed: false,
       handle: undefined, lastText: '', timeoutSec: task.timeoutSec,
       coreRunId: claim.run.id, claimLock: claim.lock, profileId,
+      ...(previousWait ? { deadline: Date.parse(card.startedAt ?? this.now()) + task.timeoutSec * 1000 } : {}),
     }
     this.flights.set(sessionId, flight)
     this.startHeartbeat(flight)
@@ -333,6 +368,26 @@ export class TaskRunner {
           flight.terminal = { kind, summary, metadata, reviewer }
         }
         flight.disposeTools = await registerWorkerTools(flight.handle.agent.ctx, {
+          ...(task.design?.notifications && card.role === 'planner' && this.notify ? { notify: (stage: string, exec: any) => this.notify!({ task, batch, card, sessionId, profileId }, stage, async args => {
+            const runtime = flight.handle.agent.ctx.tools
+            const names = Object.entries(spec?.mcpTools ?? {}).flatMap(([server, selected]) => selected.filter(raw => raw.replace(/-/g, '_') === 'vyibc_wecom_send_message').flatMap(raw => [publicToolName(server, raw), publicToolName(`${server}-${profileId}`, raw)]))
+            const tool = runtime.schemas(flight.handle.agent).find((s: any) => names.includes(s.name))
+            if (!tool) throw new Error('当前规划者未配置企业微信发送 MCP')
+            const result = await runtime.execute({ name: tool.name, arguments: args, agent: flight.handle.agent, callId: `notify-${randomUUID()}`, signal: exec.signal, parent: exec })
+            if (result.isError) throw new Error('企业微信 MCP 未确认发送结果')
+            return JSON.parse((result.content ?? []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join(''))
+          }) } : {}),
+          ...(task.design?.evidenceContract === 'browser-patrol-v2' && this.patrolStatus ? { patrolStatus: () => this.patrolStatus!({ task, batch, card, sessionId, profileId }) } : {}),
+          wait: async (until, reason) => {
+            if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            const wakeAt = Date.parse(until), deadline = Date.parse(card.startedAt ?? this.now()) + task.timeoutSec * 1000
+            if (!/(Z|[+-]\d\d:\d\d)$/.test(until) || !Number.isFinite(wakeAt) || wakeAt < this.clock() + 60_000 || wakeAt > deadline || !reason.trim() || reason.length > 4000) throw new Error('等待需要带时区、至少一分钟且不超过本卡总时间预算的时间及简短理由')
+            if (await this.pendingOperation?.({ task, batch, card, sessionId, profileId })) throw new Error('后台操作仍在运行，先继续查询原操作回执')
+            if (task.design?.evidenceContract === 'browser-patrol-v2') await this.patrolStatus?.({ task, batch, card, sessionId, profileId })
+            const ok = await this.store.transition(() => this.store.kernel.deferTask(card.id, flight.coreRunId, wakeAt, reason.trim()), changed => changed ? { t: 'run/deferred', at: this.now(), taskId: task.id, runId: flight.runId, wakeAt: new Date(wakeAt).toISOString(), reason: reason.trim() } : undefined)
+            if (!ok) throw new Error('等待被拒绝，当前 Run 已变化')
+            flight.terminal = { kind: 'deferred' }
+          },
           complete: async (summary, artifacts, metadata) => submit('completed', summary, artifacts, metadata),
           requestReview: async (summary, artifacts, metadata, reviewer) => {
             if (task.graphMode === 'dynamic-rounds') throw new Error('动态 DAG 使用独立评估卡，调用 task_complete 交给下游')
@@ -349,13 +404,19 @@ export class TaskRunner {
             const observed = await this.beforeBlock?.({ task, batch, card, sessionId, profileId })
             flight.terminal = { kind: 'blocked', reason: observed?.reason ?? reason, blockKind: observed?.kind ?? kind }
           },
-          planRound: async (summary) => {
+          planRound: async (summary, items) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
-            await this.store.expandRound(task, batch, card, summary)
+            const plan = await this.beforePlanRound?.({ task, batch, card, sessionId, profileId }, items)
+            if (plan) summary += `\n[FROZEN ROUND ITEMS]\n${JSON.stringify(plan.items)}`
+            await this.store.expandRound(task, batch, card, summary, plan?.commit)
             flight.terminal = { kind: 'completed', summary, metadata: { decision: card.round === 1 ? 'planned' : 'rework', round: card.round } }
           },
-          finalize: async (summary, artifactPath) => {
+          finalize: async (summary, artifactPath, disposition = 'passed') => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            if (disposition === 'unresolved' && task.design?.evidenceContract !== 'browser-patrol-v2') throw new Error('仅巡查v2允许明确的未解决收口')
+            const verified = await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata: { patrolDisposition: disposition } })
+            if (disposition === 'unresolved' && verified?.metadata.workflowOutcome !== 'unresolved') throw new Error('未通过宿主未解决收口检查')
+            if (verified) summary = verified.summary
             let finalArtifactId: string | undefined
             if (artifactPath) {
               let originalPath: string
@@ -369,7 +430,7 @@ export class TaskRunner {
               if (!selected) throw new Error(`最终产物尚未通过 task_complete 登记:${artifactPath}`)
               finalArtifactId = selected.id
             }
-            flight.terminal = { kind: 'completed', summary, metadata: { decision: 'approved', round: card.round, ...(finalArtifactId ? { finalArtifactId } : {}) } }
+            flight.terminal = { kind: 'completed', summary, metadata: { ...verified?.metadata, decision: 'approved', round: card.round, ...(finalArtifactId ? { finalArtifactId } : {}) } }
           },
         }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner', dynamicRounds: task.graphMode === 'dynamic-rounds' })
       } catch (error) { console.warn('[task-console] worker tools not registered:', error) }
@@ -395,7 +456,7 @@ export class TaskRunner {
   /** The watchdog counts working time only: it pauses while a person is being waited on. */
   private arm(f: Flight): void {
     if (f.timer) clearTimeout(f.timer)
-    f.timer = setTimeout(() => { void this.finish(f, 'run/timed_out', 'timed_out', `${f.timeoutSec} 秒没交卷`) }, f.timeoutSec * 1000)
+    f.timer = setTimeout(() => { void this.finish(f, 'run/timed_out', 'timed_out', `${f.timeoutSec} 秒没交卷`) }, f.deadline ? Math.max(0, f.deadline - this.clock()) : f.timeoutSec * 1000)
     ;(f.timer as any).unref?.()
   }
   private disarm(f: Flight): void { if (f.timer) { clearTimeout(f.timer); f.timer = undefined } }
@@ -470,6 +531,11 @@ export class TaskRunner {
     if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
     if (reason && reason.kind !== 'completed') { await this.finish(f, 'run/failed', 'failed', JSON.stringify(reason)); return }
     const t = f.terminal
+    if (t?.kind === 'deferred') {
+      this.flights.delete(f.sessionId); this.disarm(f); this.stopHeartbeat(f); f.disposeTools?.()
+      try { await f.handle?.dispose?.() } catch { /* already closed */ }
+      await this.tick(); return
+    }
     if (t?.kind === 'completed') { await this.finish(f, 'run/completed', 'completed', undefined, t.summary, false, t.metadata); return }
     if (t?.kind === 'review') { await this.finish(f, 'run/review_requested', 'review', undefined, t.summary, false, t.metadata, t.reviewer); return }
     if (t?.kind === 'changes') { await this.finishChanges(f, t.reason ?? 'changes requested'); return }
@@ -645,6 +711,7 @@ export class TaskRunner {
   async unblockCard(cardId: string): Promise<void> {
     const card = this.store.s.cards.get(cardId)
     if (!card || card.status !== 'blocked') throw new Error('这张卡不在阻塞状态')
+    if (card.wakeAt && Date.parse(card.wakeAt) > this.clock()) throw new Error('定时等待尚未到期，不能提前当作复验完成')
     const ok = await this.store.transition(
       () => this.store.kernel.unblockTask(cardId),
       changed => changed && this.store.kernel.getTask(cardId)?.status === 'ready' ? { t: 'card/ready', at: this.now(), taskId: card.taskId, cardId } : undefined,

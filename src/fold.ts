@@ -16,7 +16,7 @@
  * @module dsh-task-console/fold
  */
 
-export type Trigger = { kind: 'once' } | { kind: 'cron'; expr: string }
+export type Trigger = { kind: 'once' } | { kind: 'cron'; expr: string; timeZone?: string }
 
 export interface Participant {
   agentId: string
@@ -59,7 +59,7 @@ export interface TaskTurn {
   origin?: TaskOrigin
 }
 
-export type WorkflowDefinition = Pick<TaskSpec, 'title' | 'brief' | 'participants' | 'graphMode' | 'timeoutSec' | 'onFail' | 'maxTries' | 'workflowRecipe' | 'design'>
+export type WorkflowDefinition = Pick<TaskSpec, 'title' | 'brief' | 'participants' | 'graphMode' | 'timeoutSec' | 'onFail' | 'maxTries' | 'workflowRecipe' | 'design'> & { trigger?: Trigger }
 
 export interface TaskSpec {
   id: string
@@ -88,7 +88,7 @@ export interface TaskSpec {
 export type BlockKind = 'needs_input' | 'dependency' | 'capability' | 'transient'
 
 export type RunStatus = 'running' | 'blocked' | 'done' | 'failed' | 'timed_out' | 'crashed' | 'cancelled'
-export type RunOutcome = 'completed' | 'review' | 'changes_requested' | 'blocked' | 'crashed' | 'timed_out' | 'failed' | 'protocol_violation' | 'cancelled'
+export type RunOutcome = 'completed' | 'review' | 'changes_requested' | 'blocked' | 'crashed' | 'timed_out' | 'failed' | 'protocol_violation' | 'cancelled' | 'deferred'
 
 export interface Run {
   id: string
@@ -137,6 +137,7 @@ export interface Card {
   consecutiveFailures: number
   blockRecurrences: number
   lastBlockReason?: string
+  wakeAt?: string
   /** The summary of the run that finished this card. */
   summary?: string
   /** Why the previous review submission was returned. */
@@ -193,6 +194,7 @@ export type Event =
   | { t: 'run/session_created'; at: string; taskId: string; runId: string; sessionId: string }
   | { t: 'run/prompt_dispatched'; at: string; taskId: string; runId: string; messageId: string }
   | { t: 'run/blocked'; at: string; taskId: string; runId: string; kind: BlockKind; reason: string; terminal?: boolean }
+  | { t: 'run/deferred'; at: string; taskId: string; runId: string; wakeAt: string; reason: string }
   | { t: 'run/resumed'; at: string; taskId: string; runId: string }
   | { t: 'run/nudged'; at: string; taskId: string; runId: string }
   | { t: 'run/completed'; at: string; taskId: string; runId: string; summary: string; metadata?: Record<string, unknown> }
@@ -261,7 +263,7 @@ export function fold(events: Event[]): State {
         break
       }
       case 'gate/opened': { const c = s.cards.get(e.cardId); if (c?.kind === 'gate') { c.status = 'done'; c.endedAt = e.at; c.summary = 'Gate opened after its dependencies completed.' } break }
-      case 'card/ready': { const c = s.cards.get(e.cardId); if (c && ['todo', 'ready', 'blocked'].includes(c.status)) { c.status = 'ready'; c.error = undefined } break }
+      case 'card/ready': { const c = s.cards.get(e.cardId); if (c && ['todo', 'ready', 'blocked'].includes(c.status)) { c.status = 'ready'; c.error = undefined; c.wakeAt = undefined } break }
       case 'run/claimed': {
         const c = s.cards.get(e.cardId); if (!c) break
         s.runs.set(e.runId, { id: e.runId, cardId: c.id, batchId: c.batchId, taskId: e.taskId, attempt: e.attempt, profileId: e.profileId ?? c.agentId, sessionId: e.sessionId, startedAt: e.at, status: 'running', nudges: 0 })
@@ -279,6 +281,13 @@ export function fold(events: Event[]): State {
           if (e.terminal && c.currentRunId === r.id) c.currentRunId = undefined
           if (c.lastBlockReason === e.reason) c.blockRecurrences++; else { c.lastBlockReason = e.reason; c.blockRecurrences = 1 }
         }
+        break
+      }
+      case 'run/deferred': {
+        const r = s.runs.get(e.runId); if (!r) break
+        const c = finishRun(r, 'blocked', 'deferred', e.at)
+        r.terminalBlock = true; r.question = e.reason; r.summary = e.reason
+        if (c) { c.status = 'blocked'; c.wakeAt = e.wakeAt; c.lastBlockReason = e.reason }
         break
       }
       case 'run/resumed': { const r = s.runs.get(e.runId); if (!r) break; r.status = 'running'; r.question = undefined; r.terminalBlock = false; const c = s.cards.get(r.cardId); if (c) c.status = 'running'; break }

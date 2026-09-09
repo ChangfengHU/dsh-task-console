@@ -258,6 +258,10 @@ CREATE TABLE IF NOT EXISTS dsh_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS dsh_task_wakeups (
+  card_id TEXT PRIMARY KEY, run_id INTEGER NOT NULL, wake_at INTEGER NOT NULL,
+  reason TEXT NOT NULL, state TEXT NOT NULL, wait_count INTEGER NOT NULL DEFAULT 1
+);
 CREATE TABLE IF NOT EXISTS dsh_task_specs (
   id TEXT PRIMARY KEY,
   spec_json TEXT NOT NULL,
@@ -676,6 +680,20 @@ export class HermesKernel {
       const cur = this.db.prepare(`UPDATE tasks SET status = ? WHERE id = ? AND status IN ('blocked', 'scheduled', 'triage')`).run(status, taskId)
       if (cur.changes) this.appendEvent(taskId, 'unblocked', { status })
       return cur.changes === 1
+    })
+  }
+
+  /** End a worker without failure; only the durable wakeup may make it ready again. */
+  deferTask(taskId: string, runId: number, wakeAt: number, reason: string): boolean {
+    return this.write(() => {
+      const task = this.taskRow(taskId)
+      if (!task || task.status !== 'running' || task.current_run_id !== runId) return false
+      if ((this.db.prepare('SELECT wait_count FROM dsh_task_wakeups WHERE card_id=?').get(taskId) as any)?.wait_count >= 32) throw new Error('本卡延迟验证次数已达上限')
+      this.db.prepare("INSERT INTO dsh_task_wakeups VALUES (?,?,?,?,'pending',1) ON CONFLICT(card_id) DO UPDATE SET run_id=excluded.run_id,wake_at=excluded.wake_at,reason=excluded.reason,state='pending',wait_count=wait_count+1").run(taskId, runId, wakeAt, reason)
+      this.db.prepare("UPDATE tasks SET status='scheduled',claim_lock=NULL,claim_expires=NULL,worker_pid=NULL WHERE id=?").run(taskId)
+      this.endRun(taskId, runId, 'scheduled', 'deferred', reason, { wakeAt })
+      this.appendEvent(taskId, 'deferred', { wake_at: wakeAt, reason, status: 'scheduled' }, runId)
+      return true
     })
   }
 

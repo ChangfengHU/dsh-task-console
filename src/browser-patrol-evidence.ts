@@ -1,15 +1,21 @@
 import type { CompletionCheck } from './runner.ts'
+import { createHash } from 'node:crypto'
 
 /** Host-owned native tool events, never model-authored summary/metadata. */
-export function browserPatrolEvidence(input: CompletionCheck, events: any[]) {
-  if (input.profileId !== 'browser-manager' || input.task.design?.evidenceContract !== 'browser-patrol-v1') return
+export function collectBrowserEvidence(input: Pick<CompletionCheck, 'profileId' | 'sessionId'>, events: any[]) {
+  const names = new Map<string, string>()
+  for (const server of ['fleet-browser', `fleet-browser-${input.profileId}`]) for (const raw of ['browser_fleet_inventory', 'browser_inspect', 'browser_status']) {
+    const full = `mcp__${server}__${raw}`
+    names.set(full.length <= 64 ? full : `${full.slice(0, 51)}_${createHash('sha256').update(`${server}\0${raw}`).digest('hex').slice(0, 12)}`, raw)
+  }
   const calls = new Map<string, { name: string; args: any; seq: number }>()
   const inspections = new Map<string, any>()
   const verifications = new Map<string, any>()
+  const verificationHistory: { key: string; row: any }[] = []
   let inventory: any
   for (const e of events) {
     if (e.type === 'tool/call') {
-      const name = /^mcp__fleet-browser(?:-browser-manager)?__(browser_fleet_inventory|browser_inspect|browser_status)$/.exec(e.data.name)?.[1]
+      const name = names.get(e.data.name)
       if (!name) continue
       try { calls.set(e.data.callId, { name, args: JSON.parse(e.data.arguments), seq: e.seq }) } catch { /* malformed call cannot prove anything */ }
     }
@@ -24,20 +30,28 @@ export function browserPatrolEvidence(input: CompletionCheck, events: any[]) {
       if (call.name === 'browser_inspect' && value.ip === call.args.ip && Array.isArray(value.loginAssessment?.browsers))
         inspections.set(value.ip, { ...value.loginAssessment, evidenceSeq: e.seq })
       if (call.name === 'browser_status' && value.id === call.args.operationId && value.args?.ip === call.args.ip &&
-          value.args.sessionId === input.sessionId && ['login-verify', 'login-provision', 'login-copy'].includes(value.action) && value.phase === 'complete') {
-        const proof = value.result?.verification, v = proof?.loginVerification, a = proof?.identity?.account
+          value.args.sessionId === input.sessionId && ['login-verify', 'login-provision', 'login-copy', 'login-resume'].includes(value.action) && value.phase === 'complete') {
+        const proof = value.result?.verification ?? (value.action === 'login-resume' ? value.result : undefined), v = proof?.loginVerification, a = proof?.identity?.account
         if (proof?.instance !== value.args.instance || !v) continue
         const observedAt = value.updatedAt
         // The receipt carries real verifier timestamps, never status polling time.
         const fresh = Date.parse(v.checkedAt) <= Date.parse(observedAt) && Date.parse(v.expiresAt) > Date.parse(observedAt)
         const verified = fresh && v.status === 'verified' && proof.loginVerified === true && proof.identity?.gemini === 'in' && a?.source === 'gemini-account-control' && /^[a-f0-9]{8,64}$/.test(a.fingerprint || '')
-        verifications.set(`${value.args.ip}:${value.args.instance}`, { instance: value.args.instance,
+        const key = `${value.args.ip}:${value.args.instance}`, row = { instance: value.args.instance,
           gemini: verified ? 'verified' : fresh && v.status === 'signed_out' && proof.identity?.gemini === 'out' ? 'signed_out' : 'unknown',
           account: verified ? a : null, checkedAt: v.checkedAt, expiresAt: v.expiresAt, reason: v.reason,
-          observedAt, evidenceSeq: e.seq, operationId: value.id })
+          observedAt, evidenceSeq: e.seq, operationId: value.id }
+        verifications.set(key, row)
+        verificationHistory.push({ key, row })
       }
     }
   }
+  return { inventory, inspections, verifications, verificationHistory }
+}
+
+export function browserPatrolEvidence(input: CompletionCheck, events: any[]) {
+  if (input.profileId !== 'browser-manager' || input.task.design?.evidenceContract !== 'browser-patrol-v1') return
+  const { inventory, inspections, verifications } = collectBrowserEvidence(input, events)
   if (!inventory) return { failure: '巡查缺少本会话真实 browser_fleet_inventory 回执；不能用模型清单交卷。' }
   const items: any[] = [], nodes: any[] = []
   for (const node of inventory.nodes) {

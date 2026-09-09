@@ -3,10 +3,12 @@ import type { Api } from './Console.tsx'
 import { go } from './Console.tsx'
 import type { TaskDesign } from '../task-design.ts'
 
-const states: Record<string, string> = { pending: '待审查 · 未执行', rejected: '已退回', superseded: '已由新计划替代', approved: '已放行 · 待派发', dispatched: '已派发' }
+const states: Record<string, string> = { pending: '待审查 · 未执行', rejected: '已退回', superseded: '已由新计划替代', approved: '已放行 · 待派发', dispatched: '已派发', scheduled: '时间表已配置 · 可在看板查看启停状态' }
 export function TaskDesignView({ design }: { design?: TaskDesign }) {
   if (!design) return null
   return <section aria-label="条件与验收设计">
+    {design.browserPatrol ? <p>浏览器边界：仅现存且获准实例；允许 {design.browserPatrol.actions.join(' / ') || '只读'}，不含删除重建。修复后独立观察 {design.browserPatrol.observationMinutes} 分钟、至少 {design.browserPatrol.minSamples} 个新时间样本。</p> : null}
+    {design.notifications ? <p>企微收件群：{design.notifications.chatIds.join('、')}；由规划者经 task_notify 发送并保存回执，不广播到其他群。</p> : null}
     {design.evidenceContract ? <p>宿主证据闸门：{design.evidenceContract}（依据实际工具事件核对交卷，不接受模型自报统计）</p> : <p className="dtc-workflow-muted">未选择专用宿主证据闸门；结构化计划本身不保证执行结果正确。</p>}
     <h3>目标与范围</h3><p className="dtc-workflow-copy">{design.scope}</p>
     <h3>条件分支</h3><ol className="dtc-workflow-roles">{design.branches.map(b => <li key={b.id}>
@@ -45,15 +47,17 @@ export function TaskPlanReview({ api, id }: { api: Api; id?: string }) {
       {id && !plan && !error ? <p>读取计划…</p> : null}
       {plan ? <><div className="dtc-workflow-meta"><span>{states[plan.state] || plan.state}</span><span>指纹 {plan.hash.slice(0, 12)}</span></div><h2>{plan.definition.title}</h2>
         <h3>原始目标</h3><pre>{plan.request}</pre><p>{plan.definition.brief}</p><TaskDesignView design={plan.definition.design} />
+        {plan.definition.trigger?.kind === 'cron' ? <p>时间表：{plan.definition.trigger.expr} · {plan.definition.trigger.timeZone || '宿主时区'}。批准仅启用时间表，不立即执行；每次触发新增执行记录。</p> : null}
         <h3>参与角色</h3><ol className="dtc-workflow-roles">{plan.definition.participants.map((p: any, i: number) => <li key={i}><b>{p.agentId}</b><p>{p.brief}</p></li>)}</ol>
         <details><summary>完整冻结计划 JSON</summary><pre>{JSON.stringify(plan.definition, null, 2)}</pre></details>
         {plan.reviewReason ? <p>审查意见：{plan.reviewReason}</p> : null}
         {['pending', 'approved'].includes(plan.state) ? <section><h3>独立审查</h3><p>请核对范围、权限、条件、失败处理和验收标准。批准仅执行本计划，不增加节点或工具授权。</p>
           <textarea aria-label="审查意见" className="dtc-input" rows={3} value={reason} onChange={e => setReason(e.target.value)} placeholder="填写通过或退回的依据" style={{ width: '100%', boxSizing: 'border-box' }} />
           <label><input type="checkbox" style={{ width: 'auto', marginRight: 8 }} checked={checked} onChange={e => setChecked(e.target.checked)} />已核对当前指纹对应的计划及本次操作范围</label>
-          <div className="dtc-workflow-actions"><button className="dtc-btn" disabled={busy || !reason.trim() || plan.state !== 'pending'} onClick={() => review('reject')}>退回，不执行</button><button className="dtc-btn pri" disabled={busy || !checked || !reason.trim()} onClick={() => review('approve')}>{busy ? '提交中…' : '批准并执行'}</button></div>
+          <div className="dtc-workflow-actions"><button className="dtc-btn" disabled={busy || !reason.trim() || plan.state !== 'pending'} onClick={() => review('reject')}>退回，不执行</button><button className="dtc-btn pri" disabled={busy || !checked || !reason.trim()} onClick={() => review('approve')}>{busy ? '提交中…' : plan.definition.trigger?.kind === 'cron' ? '批准并启用时间表' : '批准并执行'}</button></div>
         </section> : null}
         {plan.taskId && plan.batchId ? <p><button className="dtc-btn" onClick={() => go(`tasks/${plan.taskId}/runs/${plan.batchId}`)}>查看真实执行记录 ↗</button></p> : null}
+        {plan.taskId && !plan.batchId ? <p><button className="dtc-btn" onClick={() => go('tasks')}>查看时间表与触发记录 ↗</button></p> : null}
       </> : null}
     </div>
   </section>

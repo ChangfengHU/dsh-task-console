@@ -83,6 +83,13 @@ export function assertToolArguments(rawName: string, rule: ToolRule | undefined,
   }
 }
 
+export function assertBrowserSession(rawName: string, candidate: unknown, exec: any): void {
+  if (!rawName.startsWith('browser_') || !candidate || typeof candidate !== 'object' || !('sessionId' in candidate)) return
+  const session = exec?.agent?.session
+  const actual = session?.id ?? session?.header?.id
+  if (!actual || (candidate as any).sessionId !== actual) throw new Error('MCP browser sessionId must match this live Agent session')
+}
+
 export async function apply(ctx: Context, config: Config): Promise<void> {
   const { allowedTools: rawAllowed, toolRules = {}, sourceEntryId, ...inlineMcp } = config
   if (!Array.isArray(rawAllowed) || rawAllowed.some(tool => typeof tool !== 'string' || !tool.trim())) {
@@ -112,6 +119,8 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
             name: publicToolName(stableServerName, rawName),
             execute(args: unknown, exec: unknown) {
               assertToolArguments(rawName, toolRules[rawName], args)
+              assertBrowserSession(rawName, args, exec)
+              if (rawName.replace(/-/g, '_') === 'vyibc_wecom_send_message' && String((exec as any)?.agent?.session?.id ?? '').startsWith('task-') && (exec as any)?.parent?.name !== 'task_notify') throw new Error('Task notifications must use task_notify with reviewed recipients and durable deduplication')
               return execute(args, exec)
             },
           } as never)

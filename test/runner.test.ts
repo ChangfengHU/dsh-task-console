@@ -2,12 +2,20 @@ import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import { TaskRunner } from '../src/runner.ts'
 import { EventStore, type TaskSpec } from '../src/tasks.ts'
 import { groupArtifacts } from '../src/artifact-delivery.ts'
 import { TaskCreator } from '../src/task-create.ts'
 import { taskCredential } from '../src/task-credentials.ts'
+
+const testResources: { root: string; runner: TaskRunner; store: EventStore }[] = []
+after(async () => {
+  for (const {root,runner,store} of testResources) {
+    runner.stop(); if (store.kernel.db.open) store.kernel.db.close()
+    await (await import('node:fs/promises')).rm(root,{recursive:true,force:true})
+  }
+})
 
 /** A fake dsh host: presets resolve, agents.create hands back a controllable session. */
 function fakeHost(presetDir: string) {
@@ -48,11 +56,70 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
   const store = new EventStore(join(root, 'store'))
   const runner = new TaskRunner(host.ctx, store, { maxInProgress: 2, ...runnerPatch })
   await runner.start()
+  testResources.push({root,runner,store})
   const task: TaskSpec = { id: 'T', title: 't', brief: 'do it', trigger: { kind: 'once' }, participants: [{ agentId: 'a' }, { agentId: 'b' }, { agentId: 'c' }], cwd: root, timeoutSec: 60, onFail: 'retry', maxTries: 2, enabled: true, createdAt: 'x', ...taskPatch }
   await store.append({ t: 'task/created', at: 'x', taskId: task.id, task })
   return { host, store, runner, task, root }
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
+
+test('unresolved patrol closes a failed Batch, not a green Task or a permanent cron overlap', async t => {
+  const {host,runner,store,root}=await setup({graphMode:'dynamic-rounds',design:{evidenceContract:'browser-patrol-v2'} as any}, {
+    beforeComplete: input => input.card.role === 'planner' ? {summary:'Unresolved fixture, not business success',metadata:{workflowOutcome:'unresolved'}} : undefined,
+  })
+  t.after(async()=>{runner.stop();store.kernel.db.close();await (await import('node:fs/promises')).rm(root,{recursive:true,force:true})})
+  const batch=await runner.fire('T','manual')
+  let session=[...host.sessions.keys()].at(-1)!;host.consumeFirst(session)
+  // This fixture does not expand a business plan; it isolates the final disposition bridge.
+  await host.callTool(session,'task_finalize',{summary:'fixture',disposition:'unresolved'})
+  host.endTurn(session);await tick()
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'failed')
+  assert.equal((store.kernel.db.prepare('SELECT COUNT(*) n FROM dsh_batches WHERE settled_at IS NULL').get() as any).n,0)
+})
+
+test('durable wait releases worker, survives reload, and resumes same card without failure', async () => {
+  let now = Date.now()
+  const { host, runner, store, root } = await setup({ timeoutSec: 1800 }, { now: () => now })
+  try {
+    const batch = await runner.fire('T', 'manual'); await tick()
+    const session = [...host.sessions.keys()][0]; host.consumeFirst(session)
+    await host.callTool(session, 'task_wait', { until: new Date(now + 300_000).toISOString(), reason: 'Read-only fixture: verify again after five minutes; no copy' })
+    host.endTurn(session); await tick()
+    assert.equal(store.kernel.getTask(batch.cardIds[0])?.status, 'scheduled')
+    assert.equal(store.kernel.getTask(batch.cardIds[0])?.consecutive_failures, 0)
+    assert.equal(host.sessions.get(session)?.disposed, true)
+    await assert.rejects(runner.unblockCard(batch.cardIds[0]), /尚未到期/)
+    runner.stop(); store.kernel.db.close()
+    const restoredStore = new EventStore(join(root, 'store')), restored = new TaskRunner(host.ctx, restoredStore, { now: () => now })
+    try {
+      await restored.start(); assert.equal(restoredStore.kernel.getTask(batch.cardIds[0])?.status, 'scheduled')
+      now += 300_000; await restored.tick(); await tick()
+      assert.equal(restoredStore.s.batches.size, 1)
+      assert.equal(restoredStore.kernel.getTask(batch.cardIds[0])?.status, 'running')
+      assert.equal(restoredStore.kernel.listRuns(batch.cardIds[0]).length, 2)
+      assert.match([...host.sessions.values()].at(-1)!.followups[0].content[0].text, /RESUMED DURABLE WAIT/)
+    } finally { restored.stop(); restoredStore.kernel.db.close() }
+  } finally { runner.stop(); if (store.kernel.db.open) store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
+})
+
+test('Creator recurring approval only schedules; frozen turn is checked again at firing', async () => {
+  const { host, runner, store, root } = await setup()
+  let hash = 'v1'
+  const creator = new TaskCreator(runner, async () => [{ id: 'a', name: 'a', profileHash: hash } as any])
+  const design = { scope: 'Read fixture', branches: [{ id: 'check', when: 'due', action: 'read', evidence: 'fixture' }], coordination: 'serial', failurePolicy: { isolateItems: true, maxAttempts: 2, stopConditions: ['missing capability'] }, acceptance: ['verified fixture'] }
+  try {
+    const plan = await creator.prepare({ decision: 'create', reason: 'hourly fixture', title: 'Hourly', brief: 'Check current fixture only', participants: [{ agentId: 'a' }], trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' }, design }, { agent: { session: { id: 'schedule-creator', deriveMessages: () => [{ role: 'user', content: 'Check the fixture hourly' }] } } }, root) as any
+    assert.equal(plan.definition.trigger.kind, 'cron'); assert.equal(host.sessions.size, 0)
+    const approved = await creator.review(plan.id, plan.hash, 'approve', 'fixture-only recurring scope approved')
+    assert.equal(approved.state, 'scheduled'); assert.equal(approved.batchId, null)
+    assert.equal(host.sessions.size, 0); assert.equal(store.s.batches.size, 0)
+    const task = store.tasks.get(approved.taskId)!
+    const turn = await creator.scheduledTurn(task, 'scheduled-occurrence')
+    assert.equal(turn?.origin?.reviewPlanId, plan.id)
+    assert.equal(turn?.origin?.signalId, 'scheduled-occurrence')
+    hash = 'v2'; await assert.rejects(creator.scheduledTurn(task, 'next'), /配置已变化/)
+  } finally { runner.stop(); store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
+})
 
 test('idle model turns retain live async operations without burning nudges or extending watchdog', async () => {
   let pending = true
@@ -377,6 +444,7 @@ test('runner: dynamic rounds materialize DB rows only after planner decisions an
   graph = store.graphSnapshot('T', batch.id)
   assert.equal(graph.live.tasks.find(row => row.role === 'gate')!.status, 'done')
   assert.equal(graph.live.runs.filter(row => row.task_id.includes('#g')).length, 0)
+  assert.match(host.sessions.get(nextSession())!.followups[0].content[0].text, /第一轮计划/, 'executor must receive the planner handoff across the Gate')
 
   session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: '执行一', artifacts: ['result.html'] }); host.endTurn(session); await tick()
   session = nextSession(); host.consumeFirst(session)

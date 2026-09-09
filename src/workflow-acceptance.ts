@@ -21,7 +21,7 @@ async function browserJobs(deps: JobDeps) {
 }
 
 export async function pendingBrowserOperation(input: CompletionCheck, deps: JobDeps = {}): Promise<string | undefined> {
-  if (input.profileId !== 'browser-manager') return
+  if (input.profileId !== 'browser-manager' && input.task.design?.evidenceContract !== 'browser-patrol-v2') return
   const now = (deps.now || Date.now)()
   const active = (await browserJobs(deps)).find(j => j.args?.sessionId === input.sessionId && j.phase === 'running' && now - Date.parse(j.updatedAt) < 360000)
   return active ? `操作 ${active.id} 仍为 running，等待真实终态；不要重复复制或提前交卷。` : undefined

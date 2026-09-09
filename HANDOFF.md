@@ -174,3 +174,44 @@ as crashed. Target node changes must be executed by visible DSH Agents, not the
 developer's direct SSH. Healthy profiles, credentials and unrelated services are
 preserved. Current live acceptance is existing-node idempotence; fresh bare-metal
 and destructive uninstall/reinstall require their own evidence.
+
+## Durable scheduled browser patrol (0.29)
+
+Keep one reviewed Task and one Batch per cron/manual occurrence. `dsh_schedule_state`
+stores the next due instant and IANA time zone; `dsh_schedule_fires` records durable
+claims, skipped overlaps, coalesced downtime and bounded dispatch failures. Batch
+insertion consumes its claim in the same SQLite transaction. Creator cron approval
+only enables scheduling; it does not immediately fire. The reviewed input and roster
+hash live in `dsh_schedule_bindings`; changed roles require another review. Query
+`taskSchedule(id,page)` for ten-row SQL pagination, not session transcripts.
+
+`task_wait(until,reason)` ends the current worker, stores `dsh_task_wakeups`, and
+resumes the same card/Batch with a new Run. It does not consume rework rounds, cannot
+overlap an unfinished Browser operation, and retains the original card deadline.
+Do not manually unblock a timer early. Dynamic executor handoffs traverse the Gate
+to include the actual planner's instructions.
+
+New recurring login workflows opt into `browser-patrol-v2`; legacy v1 remains intact.
+Planner, browser-manager and independent read-only reviewer use native tool receipts,
+not model counts. A round freezes exact instance/action items together with its Gate
+and links. The Browser MCP intersects these with host grants at execution time and
+reserves repair attempts in `dsh_browser_issues/operations` across later Sessions and
+Batches. Repeating an ambiguous mutation reservation requires reconciliation, not
+another copy. No lifecycle/rebuild authority is granted by this contract.
+
+Only repaired/unresolved instances need the reviewed stability window; healthy
+instances need current independent evidence, not another long observation run.
+`task_patrol_status` exposes scope, budgets and samples. `patrol_snapshot` events
+drive the evidence table at the selected replay position. A supported `unresolved`
+final disposition settles a FAILED Batch, retains the issue budget and permits the
+next scheduled check; it is not business success.
+
+Notifications belong to the planner's `task_notify`, which invokes the existing
+WeCom MCP under the real Agent tool scope. Configure explicit reviewed `chatIds`;
+never default to every subscriber. `dsh_task_notifications` persists per-stage/group
+deduplication and receipts. Definite pre-send failures can be retried up to three
+times; ambiguous sends stay `unknown` for human reconciliation by notification ID.
+There is no exactly-once delivery claim or automatic replay of browser work. For the
+vyibc deployment the credential-file stdio adapter is maintained in
+`linux-clash-skill/browser-manager/wecom-mcp.mjs`; it reads the existing host credential
+at request time. Neither bot secrets nor bearer values belong in Agent presets.

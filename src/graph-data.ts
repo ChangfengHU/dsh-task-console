@@ -126,6 +126,9 @@ export function replayGraph(events: GraphEventRow[], count = events.length): Gra
     } else if ((e.kind === 'completed' || e.kind === 'gate_opened') && task) {
       task.status = 'done'; task.completed_at = e.created_at; task.current_run_id = null
       if (e.run_id !== null) { const run = runs.get(e.run_id); if (run) { run.status = 'done'; run.outcome = 'completed'; run.summary = typeof p.summary === 'string' ? p.summary : null; run.ended_at = e.created_at; addEvidence(run, 'completed') } }
+    } else if (e.kind === 'deferred' && task) {
+      task.status = 'scheduled'; task.current_run_id = null
+      if (e.run_id !== null) { const run = runs.get(e.run_id); if (run) { run.status = 'scheduled'; run.outcome = 'deferred'; run.summary = String(p.reason ?? ''); run.ended_at = e.created_at } }
     } else if (e.kind === 'blocked' && task) {
       task.status = String(p.status ?? 'blocked'); task.current_run_id = null
       if (e.run_id !== null) { const run = runs.get(e.run_id); if (run) { run.status = 'blocked'; run.outcome = 'blocked'; run.error = String(p.reason ?? ''); run.ended_at = e.created_at } }
@@ -156,6 +159,7 @@ export function graphEventLabel(e: GraphEventRow): string {
     case 'artifact_finalized': return `FINAL artifact · ${String(e.payload.artifact_id ?? '')}`
     case 'artifact_published': return `PUBLISH artifact · 公网链接已生成`
     case 'blocked': return `UPDATE tasks/task_runs · ${role} 阻塞`
+    case 'deferred': return `UPDATE tasks · ${role} 定时等待，释放 worker`
     default: return `${e.kind} · ${role}`
   }
 }

@@ -30,16 +30,27 @@ export function parseCron(expr: string): Cron | null {
   return { minute, hour, dom, month, dow }
 }
 
-export function cronMatches(c: Cron, d: Date): boolean {
+const formatters = new Map<string, Intl.DateTimeFormat>()
+export function validTimeZone(zone: string): boolean {
+  try { new Intl.DateTimeFormat('en', { timeZone: zone }).format(); return true } catch { return false }
+}
+
+export function cronMatches(c: Cron, d: Date, timeZone?: string): boolean {
+  if (timeZone) {
+    let formatter = formatters.get(timeZone)
+    if (!formatter) { formatter = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', hourCycle: 'h23' }); formatters.set(timeZone, formatter) }
+    const parts = Object.fromEntries(formatter.formatToParts(d).map(p => [p.type, p.value]))
+    return c.minute.has(+parts.minute) && c.hour.has(+parts.hour) && c.dom.has(+parts.day) && c.month.has(+parts.month) && c.dow.has(new Date(Date.UTC(+parts.year, +parts.month - 1, +parts.day)).getUTCDay())
+  }
   return c.minute.has(d.getMinutes()) && c.hour.has(d.getHours()) && c.dom.has(d.getDate()) && c.month.has(d.getMonth() + 1) && c.dow.has(d.getDay())
 }
 
 /** Next matching minute strictly after `from`, or null within 366 days. */
-export function nextFire(c: Cron, from = new Date()): Date | null {
-  const d = new Date(from); d.setSeconds(0, 0); d.setMinutes(d.getMinutes() + 1)
+export function nextFire(c: Cron, from = new Date(), timeZone?: string): Date | null {
+  const d = new Date(Math.floor(from.getTime() / 60_000) * 60_000 + 60_000)
   for (let i = 0; i < 366 * 24 * 60; i++) {
-    if (cronMatches(c, d)) return d
-    d.setMinutes(d.getMinutes() + 1)
+    if (cronMatches(c, d, timeZone)) return d
+    d.setTime(d.getTime() + 60_000)
   }
   return null
 }

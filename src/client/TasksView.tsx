@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { cronHuman, nextFire, parseCron } from '../cron.ts'
+import { cronHuman, nextFire, parseCron, validTimeZone } from '../cron.ts'
 import type { AgentRow, ArtifactView, GraphSnapshot, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
 import { ArtifactResultAction, canPreviewArtifact } from './ArtifactDelivery.tsx'
@@ -19,6 +19,7 @@ export interface TasksApi {
   deleteTask: (id: string) => Promise<void>
   deleteTasks: (ids: string[]) => Promise<void>
   fireTask: (id: string, by?: 'manual' | 'retry') => Promise<{ runId: string }>
+  taskSchedule: (id: string, page: number) => Promise<any>
   cancelRun: (runId: string) => Promise<void>
   taskSnapshot: (id: string, batchId?: string) => Promise<TaskSnapshot>
   taskGraph: (id: string, batchId?: string) => Promise<GraphSnapshot>
@@ -197,10 +198,12 @@ function flowOf(r: Run, agents: AgentRow[]) {
 function TaskGroupCard({ task, latest, history, state, selected, onSelect, agents, api, reload, toast }: {
   task: TaskRow; latest?: Run; history: number; state: ReturnType<typeof taskState>; selected: boolean; onSelect: () => void; agents: AgentRow[]; api: TasksApi; reload: () => Promise<void>; toast: (m: string) => void
 }) {
+  const [scheduleOpen, setScheduleOpen] = useState(false)
   const current = latest?.legs.find(leg => leg.status === 'running' || leg.status === 'blocked' || leg.status === 'review') ?? latest?.legs.at(-1)
+  const waiting = current?.question?.startsWith('定时等待，')
   const done = latest?.legs.filter(leg => leg.status === 'done').length ?? 0
   const total = latest?.legs.length ?? task.participants.length
-  const status = ({ run: ['进行中', 'dtc-p-acc'], park: ['等待回答', 'dtc-p-park'], review: ['待验收', 'dtc-p-warn'], done: ['已完成', 'dtc-p-ok'], bad: ['执行失败', 'dtc-p-bad'], schedule: [task.enabled ? '等待触发' : '已停用', 'dtc-p-grey'], idle: ['尚未运行', 'dtc-p-grey'] } as const)[state]
+  const status = ({ run: ['进行中', 'dtc-p-acc'], park: [waiting ? '等待定时复验' : '等待处理', 'dtc-p-park'], review: ['待验收', 'dtc-p-warn'], done: ['已完成', 'dtc-p-ok'], bad: ['执行失败', 'dtc-p-bad'], schedule: [task.enabled ? '等待触发' : '已停用', 'dtc-p-grey'], idle: ['尚未运行', 'dtc-p-grey'] } as const)[state]
   const progress = total ? Math.round(done / total * 100) : 0
   const toggleSchedule = async () => { await api.setTaskEnabled(task.id, !task.enabled); toast(task.enabled ? '已停用时间表' : '已启用时间表'); await reload() }
   const retry = async () => { await api.fireTask(task.id, 'retry'); toast('已创建重试运行'); await reload() }
@@ -218,18 +221,43 @@ function TaskGroupCard({ task, latest, history, state, selected, onSelect, agent
       {state === 'bad' && current ? <div className="dtc-tasknotice bad"><b>{agentName(agents, current.agentId)} 执行失败</b><span>{current.error || LEG[current.status] || current.status}</span></div> : null}
       {state === 'done' && resultArtifact && latest ? <div className="dtc-tasknotice result"><div><span className="dtc-result-kicker">{latest.finalArtifact ? '最终交付' : '最近交付'}</span><b>{resultArtifact.name}</b><span>{latest.reworks ? `经历 ${latest.reworks} 次返工 · ` : ''}{resultArtifact.mime || '未知类型'} · SHA256 {resultArtifact.sha256.slice(0, 10)}…</span></div><ArtifactResultAction api={api} taskId={task.id} batchId={latest.id} artifact={resultArtifact} toast={toast} label={canPreviewArtifact(resultArtifact) ? '预览' : '交付详情'} /></div> : null}
       <div className="dtc-taskgroup-foot"><div>
-        {task.trigger.kind === 'cron' ? <><span className="dtc-mono">{cronHuman(task.trigger.expr)}</span><span>{task.enabled && task.nextFire ? `下次 ${fmt(task.nextFire)}` : '时间表已停用'}</span></> : latest ? <><span>{ago(latest.firedAt)} · {BY[latest.by]}</span><span>{history} 次运行</span></> : <span>单次任务</span>}
+        {task.trigger.kind === 'cron' ? <><span className="dtc-mono">{cronHuman(task.trigger.expr)} · {task.trigger.timeZone || '宿主时区'}</span><span>{task.enabled && task.nextFire ? `下次 ${new Date(task.nextFire).toLocaleString('zh-CN', { timeZone: task.trigger.timeZone })}` : '时间表已停用'}</span></> : latest ? <><span>{ago(latest.firedAt)} · {BY[latest.by]}</span><span>{history} 次运行</span></> : <span>单次任务</span>}
         </div><div className="acts">
           {task.trigger.kind === 'cron' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void toggleSchedule() }}>{task.enabled ? '停用' : '启用'}</button> : null}
+          {task.trigger.kind === 'cron' ? <button className="dtc-btn sm" aria-expanded={scheduleOpen} onClick={event => { event.stopPropagation(); setScheduleOpen(!scheduleOpen) }}>触发记录</button> : null}
           {task.origin?.source === 'task-chat' ? <TaskRunAction task={task} api={api} toast={toast} /> : task.origin?.signalId ? <span title="从来源系统重新提交 Signal，由 Task Agent 核对目标与角色">从来源重试</span> : <>
           {state === 'bad' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void retry() }}>重试</button> : null}
           {state === 'done' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void rerun() }}>再次执行</button> : null}</>}
-          {state === 'park' && current?.sessionId ? <button className="dtc-btn sm pri" onClick={event => { event.stopPropagation(); closeConsole(); void api.openSession(current.sessionId!) }}>去回答</button> : null}
+          {state === 'park' && current?.sessionId && !waiting ? <button className="dtc-btn sm pri" onClick={event => { event.stopPropagation(); closeConsole(); void api.openSession(current.sessionId!) }}>查看阻塞</button> : null}
           <span className="open">查看详情 →</span>
         </div>
       </div>
+      {scheduleOpen ? <ScheduleHistory task={task} api={api} /> : null}
     </div>
   )
+}
+
+function ScheduleHistory({ task, api }: { task: TaskRow; api: TasksApi }) {
+  const [page, setPage] = useState(1), [data, setData] = useState<any>(null), [error, setError] = useState('')
+  useEffect(() => {
+    let live = true
+    const read = () => api.taskSchedule(task.id, page).then(d => { if (live) { setData(d); setError('') } }).catch(e => { if (live) setError(String(e.message || e)) })
+    void read(); const timer = window.setInterval(read, 5000)
+    return () => { live = false; window.clearInterval(timer) }
+  }, [task.id, page, api])
+  const labels: Record<string, string> = { pending: '待派发／恢复中', dispatched: '已创建执行', skipped: '已跳过', failed: '派发失败' }
+  return <section className="dtc-workflow-body" aria-label="时间表触发记录" onClick={e => e.stopPropagation()}>
+    <h3>触发记录</h3>{error ? <p className="dtc-err">{error}</p> : null}
+    {!data ? <p>读取中…</p> : <><p>共 {data.total} 条 · {data.state?.time_zone || '宿主时区'}</p>
+      {!data.total ? <p>尚未触发。启用时间表不会立即执行，可点击“立即执行”。</p> : null}
+      <ol className="dtc-workflow-roles">{data.rows.map((row: any) => <li key={row.id}>
+        <b>{new Date(row.scheduled_at).toLocaleString('zh-CN', { timeZone: data.state?.time_zone })} · {labels[row.status] || row.status}</b>
+        {row.reason ? <p>{row.reason}</p> : null}{row.coalesced_from ? <p>停机期间漏跑已合并为本次一次巡查。</p> : null}
+        {row.status === 'dispatched' ? <button className="dtc-btn sm" onClick={() => go(`tasks/${task.id}/runs/${row.batch_id}`)}>查看执行 · {row.outcome || '未结束'}</button> : null}
+      </li>)}</ol>
+      <button className="dtc-btn sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</button> {data.page} / {data.pages} <button className="dtc-btn sm" disabled={page >= data.pages} onClick={() => setPage(page + 1)}>下一页</button>
+    </>}
+  </section>
 }
 
 // ── new task ─────────────────────────────────────────────────────────────
@@ -241,7 +269,8 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
   const [parts, setParts] = useState<{ agentId: string; brief?: string }[]>([])
   const [graphMode, setGraphMode] = useState<'dynamic-rounds' | 'static-chain'>('dynamic-rounds')
   const [kind, setKind] = useState<'once' | 'cron'>('once')
-  const [expr, setExpr] = useState('*/10 * * * *')
+  const [expr, setExpr] = useState('0 * * * *')
+  const [timeZone, setTimeZone] = useState('Asia/Shanghai')
   const [cwd, setCwd] = useState(workspaces[0]?.path ?? '')
   const [timeout, setTimeoutMin] = useState(30)
   const [onFail, setOnFail] = useState<'stop' | 'retry'>('stop')
@@ -249,7 +278,7 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState('')
   const usable = agents.filter(a => !a.broken)
-  const ok = brief.trim().length >= 4 && (graphMode === 'dynamic-rounds' ? parts.length === 3 : parts.length > 0) && (kind === 'once' || !!parseCron(expr))
+  const ok = brief.trim().length >= 4 && (graphMode === 'dynamic-rounds' ? parts.length === 3 : parts.length > 0) && (kind === 'once' || !!parseCron(expr) && validTimeZone(timeZone))
   const toggle = (id: string) => setParts(p => p.some(x => x.agentId === id) ? p.filter(x => x.agentId !== id) : [...p, { agentId: id }])
   const move = (i: number, d: number) => setParts(p => { const n = [...p]; const [x] = n.splice(i, 1); n.splice(i + d, 0, x); return n })
   const noAsk = parts.some(p => { const a = agents.find(x => x.id === p.agentId); return a?.spec && !a.spec.tools.includes('ask-user') })
@@ -257,12 +286,12 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
   const submit = async () => {
     setBusy(true); setErr('')
     try {
-      const { id } = await api.createTask({ brief, participants: parts, graphMode, trigger: kind === 'once' ? { kind: 'once' } : { kind: 'cron', expr }, cwd, timeoutSec: timeout * 60, onFail, maxTries: tries })
+      const { id } = await api.createTask({ brief, participants: parts, graphMode, trigger: kind === 'once' ? { kind: 'once' } : { kind: 'cron', expr, timeZone }, cwd, timeoutSec: timeout * 60, onFail, maxTries: tries })
       toast(kind === 'once' ? '已建卡并触发' : '已建卡')
       go(`tasks/${id}`)
     } catch (e) { setErr(String((e as Error).message ?? e)) } finally { setBusy(false) }
   }
-  const next = kind === 'cron' && parseCron(expr) ? nextFire(parseCron(expr)!) : null
+  const next = kind === 'cron' && parseCron(expr) && validTimeZone(timeZone) ? nextFire(parseCron(expr)!, new Date(), timeZone) : null
   return (
     <>
       <div className="dtc-crumb"><a onClick={() => go('tasks')}>任务</a><span>/</span><span>新建</span></div>
@@ -282,7 +311,7 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
         <div className="dtc-step"><h3><span className="no">3</span>触发</h3><div className="sub">单次任务提交后立刻进「进行中」;时间表任务进「待触发」,到点各生一张运行卡。</div>
           <div className="dtc-radio"><div className={`dtc-rd ${kind === 'once' ? 'on' : ''}`} onClick={() => setKind('once')}>现在跑一次</div><div className={`dtc-rd ${kind === 'cron' ? 'on' : ''}`} onClick={() => setKind('cron')}>按时间表</div></div>
           {kind === 'cron' ? <><div className="dtc-chips" style={{ margin: '10px 0' }}>{CRON_PRESETS.map(([e, n]) => <button key={e} className={`dtc-chip ${expr === e ? 'on' : ''}`} onClick={() => setExpr(e)}>{n}</button>)}</div>
-            <div className="dtc-chips"><input className="dtc-mono" style={{ width: 180 }} value={expr} onChange={e => setExpr(e.target.value)} /><span className="dtc-muted" style={{ fontSize: 12.5 }}>{cronHuman(expr)}{next ? ` · 下次 ${fmt(next.toISOString())}` : ''}</span></div></> : null}
+            <div className="dtc-chips"><input aria-label="Cron expression" className="dtc-mono" style={{ width: 180 }} value={expr} onChange={e => setExpr(e.target.value)} /><input aria-label="Schedule time zone" style={{ width: 180 }} value={timeZone} onChange={e => setTimeZone(e.target.value)} /><span className="dtc-muted" style={{ fontSize: 12.5 }}>{cronHuman(expr)}{next ? ` · 下次 ${next.toLocaleString('zh-CN', { timeZone })}` : ' · 表达式或时区无效'}</span></div></> : null}
         </div>
         <div className="dtc-step"><h3><span className="no">4</span>边界</h3><div className="sub">默认值一般不用动。</div>
           <div className="dtc-fields">

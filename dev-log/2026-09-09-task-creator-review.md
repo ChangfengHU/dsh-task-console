@@ -180,3 +180,60 @@ execution with reviewCard(changes), retaining both prior Runs and tool receipts.
 Actual receipts so far prove 188/browser-2 provisioned fingerprint 0c1e90d8 and
 95/browser-3 retained its existing verified account. Other instances still require
 execution and evidence. This deployment is not full business acceptance.
+
+## 0.29.0 — Durable scheduling and independently verified patrol
+
+User approved the recurring, dynamically reworked browser-login workflow. Implementation
+stays in this plugin and SQLite: durable cron claims and ten-row history, time zones,
+overlap prevention, coalesced downtime, reviewed recurring input/roster checks, and
+same-card durable waits. Waits release workers and preserve the total card deadline.
+Executor handoffs now include the planner across the Gate. No new scheduler plugin or
+Cloudflare cron was introduced.
+
+The opt-in browser-patrol-v2 contract freezes per-round target/actions atomically with
+Gate/Task/link insertion. Native inventory and verifier receipts populate an independent
+evidence ledger; changed instances require distinct timestamps and the reviewed observation
+window. Healthy instances do not repeat the prior 63 twenty-minute test. Unknown observations
+reset a continuous window without authorizing a copy. Explicit unresolved closure is a
+failed Batch, not a green result or a permanently occupied recurring slot. Browser MCP
+enforcement and persistent issue budgets are maintained in linux-clash-skill.
+
+Planner notifications delegate to the existing WeCom MCP with explicit reviewed recipients.
+The outbox distinguishes sent, definite pre-send rejection and ambiguous delivery; only the
+first kind proves delivery, not reading. It never repeats browser actions. The real MCP's
+successful result is `{sent,node,note}`, not an assumed `{ok:true}`. The adapter was checked
+with initialize, tools/list and status only; no production message was sent.
+
+Verification: all 188 DSH tests passed, build and whitespace checks passed; 81 Browser MCP
+Node tests passed in the owning repo. Fault fixtures cover lost leases, process recovery,
+pause/resume, overlap, coalescing, wait recovery, atomic grants, missing evidence, duplicate
+timestamps, stale/unknown login, persistent repair budget and ambiguous notification delivery.
+Public Chrome showed the actual Board in 19.7s cold, with no page errors; the new schedule
+form selected hourly Asia/Shanghai, and the 390px layout had no document overflow. A clearly
+labeled browser-local fixture verified schedule history pagination 10→3; no fixture Task
+was inserted into production.
+
+Final browser-local replay checks passed: step zero hides the later patrol snapshot,
+the final step displays it, and the 390px evidence table scrolls within its panel rather
+than crushing column headings or overflowing the document. No browser page errors.
+Screenshots are retained as acceptance evidence under `/tmp/dsh-patrol-029-*-fixture.png`.
+The 28 runner tests also passed after adding exact test-fixture lifecycle cleanup.
+
+Deployment followed native Session + Task Run + durable Browser-operation idle checks.
+The 6 MiB database backup is under the existing private task-console/backups directory.
+Only sop-dsh-web was restarted. The new WeCom connection references the existing credential
+file; four managed personas/MCP selections were updated while retaining live model and
+permission settings. Existing Task and Run history was preserved. No target-node action,
+browser copy/rebuild, token change, new production schedule or WeCom send occurred.
+
+A real task-create-agent conversation (`agent-task-create-agent-mttz2uwq`) received the
+business goal, read task_create_context, and called ask_user_question for the recipient group.
+It has not approved itself, generated a Task or started business execution. The next step is
+confirming the notification destination (existing bot config is recoverable from Vault key
+`service:wecom-bot`), then obtaining and independently reviewing the Creator's plan before
+manual execution. Software tests and browser-local fixtures are not fleet-login acceptance.
+
+After the final full regression runs (188 DSH / 81 Browser MCP, both exit zero), removed
+only this turn's verified `/tmp/dsh-workflow-tests.lZ9NXP` fixture tree, freeing 20,844,544
+allocated bytes. No running process held that tree. Fixtures are recreated by the test
+commands; production dependencies, built runtime, source, backup and screenshots remain.

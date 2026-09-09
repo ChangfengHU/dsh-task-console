@@ -15,7 +15,7 @@ import type { GraphEventRow, GraphLinkRow, GraphRunRow, GraphSnapshot, GraphTask
 export { actorOf, batchStatus, cardRun, describe, fold, foldTurns, migrate, readyCards, BLOCK_RECURRENCE_LIMIT } from './fold.ts'
 export type { Artifact, Batch, BlockKind, Card, CardStatus, Event, Participant, Run, RunOutcome, RunStatus, State, StepRow, TaskOrigin, TaskSpec, TaskTarget, TaskTurn, ToolRow, Trigger, TurnLedger, TurnRow } from './fold.ts'
 export { cronHuman, cronMatches, nextFire, parseCron, type Cron } from './cron.ts'
-import { parseCron } from './cron.ts'
+import { parseCron, validTimeZone } from './cron.ts'
 
 // ── store ───────────────────────────────────────────────────────────────
 
@@ -158,8 +158,15 @@ export class EventStore {
       case 'task/enabled':
         db.prepare('UPDATE dsh_task_specs SET enabled = ? WHERE id = ?').run(e.enabled ? 1 : 0, e.taskId); break
       case 'task/deleted': {
+        // Optional feature ledgers belong to this exact Task; never touch native sessions.
+        const exists = (name: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)
+        for (const table of ['dsh_patrol_inventory','dsh_patrol_observations','dsh_patrol_round_items']) if (exists(table)) db.prepare(`DELETE FROM ${table} WHERE batch_id IN (SELECT id FROM dsh_batches WHERE spec_id=?)`).run(e.taskId)
+        if (exists('dsh_browser_operations')) db.prepare('DELETE FROM dsh_browser_operations WHERE issue_id IN (SELECT id FROM dsh_browser_issues WHERE spec_id=?)').run(e.taskId)
+        if (exists('dsh_browser_issues')) db.prepare('DELETE FROM dsh_browser_issues WHERE spec_id=?').run(e.taskId)
+        for (const table of ['dsh_schedule_state','dsh_schedule_fires','dsh_schedule_bindings','dsh_task_notifications']) if (exists(table)) db.prepare(`DELETE FROM ${table} WHERE task_id=?`).run(e.taskId)
         const cards = db.prepare('SELECT card_id FROM dsh_card_bindings WHERE spec_id = ?').all(e.taskId) as { card_id: string }[]
         for (const { card_id } of cards) {
+          db.prepare('DELETE FROM dsh_task_wakeups WHERE card_id=?').run(card_id)
           db.prepare('DELETE FROM task_links WHERE parent_id = ? OR child_id = ?').run(card_id, card_id)
           db.prepare('DELETE FROM task_comments WHERE task_id = ?').run(card_id)
           db.prepare('DELETE FROM task_events WHERE task_id = ?').run(card_id)
@@ -238,10 +245,12 @@ export class EventStore {
   }
 
   /** Create executable Hermes rows for one DSH batch, then emit its UI event. */
-  async createBatch(task: TaskSpec, event: Extract<Event, { t: 'batch/fired' }>): Promise<void> {
+  async createBatch(task: TaskSpec, event: Extract<Event, { t: 'batch/fired' }>, scheduleClaim?: { id: string; token: string }): Promise<void> {
     const execution = taskForTurn(task, event.batch.turn)
     this.kernel.write(() => {
       const db = this.kernel.db
+      if (task.trigger.kind === 'cron' && db.prepare('SELECT id FROM dsh_batches WHERE spec_id=? AND settled_at IS NULL LIMIT 1').get(task.id)) throw new Error('上一轮仍未结束，不重复启动')
+      if (scheduleClaim && db.prepare("UPDATE dsh_schedule_fires SET status='dispatched',lease_token=NULL,lease_until=NULL WHERE id=? AND status='pending' AND lease_token=?").run(scheduleClaim.id, scheduleClaim.token).changes !== 1) throw new Error('定时派发租约已失效')
       db.prepare(`INSERT INTO dsh_batches(id, spec_id, fired_by, fired_at, turn_json) VALUES (?, ?, ?, ?, ?)`).run(event.batch.id, task.id, event.batch.by, toEpoch(event.at), event.batch.turn ? JSON.stringify(event.batch.turn) : null)
       const insertedCards: string[] = []
       for (const [index, card] of event.batch.cards.entries()) {
@@ -269,10 +278,11 @@ export class EventStore {
   }
 
   /** Materialize one real rework round. Nothing is inferred by the browser. */
-  async expandRound(task: TaskSpec, batch: Batch, planner: Card, summary: string): Promise<void> {
+  async expandRound(task: TaskSpec, batch: Batch, planner: Card, summary: string, commit?: () => void): Promise<void> {
     if (task.graphMode !== 'dynamic-rounds' || planner.role !== 'planner' || !planner.round) throw new Error('只有动态回合的规划者能创建下一轮')
     const execution = taskForBatch(task, batch)
     const round = planner.round
+    if (execution.design && round > execution.design.failurePolicy.maxAttempts) throw new Error('已达审查计划的累计回合上限，不能继续创建返工')
     const seeds: Extract<Event, { t: 'card/created' }>[] = []
     const next = this.queue.then(async () => {
       this.kernel.compose(() => {
@@ -280,6 +290,7 @@ export class EventStore {
         const active = this.kernel.getTask(planner.id)
         if (!active || active.status !== 'running') throw new Error('规划者已不在运行中')
         if ((db.prepare('SELECT COUNT(*) AS n FROM task_links WHERE parent_id = ?').get(planner.id) as { n: number }).n) throw new Error('这个规划者已经创建过下一轮')
+        commit?.()
         const atIso = new Date().toISOString(); const at = toEpoch(atIso)
         const rows = [
           { id: `${batch.id}#g${round}`, agentId: '__gate__', kind: 'gate' as const, role: 'gate' as const, round, deps: [planner.id], brief: `Round ${round} 放行闸门` },
@@ -451,10 +462,13 @@ export function validateTask(raw: unknown, agentIds: Set<string>): TaskSpec {
   if (!participants.length) throw new Error('至少一个参与者')
   for (const p of participants) if (!agentIds.has(p.agentId)) throw new Error(`没有这个 Agent:${p.agentId}`)
   let trigger: Trigger = { kind: 'once' }
+  if (s.trigger && !['once', 'cron'].includes(s.trigger.kind)) throw new Error('未知时间表类型')
   if ((s.trigger as Trigger)?.kind === 'cron') {
     const expr = String((s.trigger as { expr?: string }).expr ?? '').trim()
     if (!parseCron(expr)) throw new Error('cron 表达式不合法(要 5 段)')
-    trigger = { kind: 'cron', expr }
+    const timeZone = (s.trigger as { timeZone?: string }).timeZone
+    if (timeZone !== undefined && (typeof timeZone !== 'string' || !validTimeZone(timeZone))) throw new Error('时间表时区不合法')
+    trigger = { kind: 'cron', expr, ...(timeZone ? { timeZone } : {}) }
   }
   const timeoutSec = Math.min(Math.max(Number(s.timeoutSec) || 1800, 60), 6 * 3600)
   const onFail = s.onFail === 'retry' ? 'retry' : 'stop'

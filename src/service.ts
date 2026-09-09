@@ -30,6 +30,8 @@ import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
 import { TaskCreator } from './task-create.ts'
 import { browserPatrolEvidence } from './browser-patrol-evidence.ts'
+import { BrowserPatrolWorkflow } from './browser-patrol-workflow.ts'
+import { TaskNotifications, type NotificationStage } from './task-notifications.ts'
 import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation } from './workflow-acceptance.ts'
 import type { Artifact, Card } from './tasks.ts'
 import type { ArtifactView, BoardView } from './wire.ts'
@@ -62,6 +64,15 @@ export class TaskConsoleService extends TypertRemoteService {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
       beforeComplete: async input => {
         if (await pendingBrowserOperation(input)) throw new Error('浏览器后台操作仍在运行；继续 browser_status，不能提前 task_complete。')
+        if (input.task.design?.evidenceContract === 'browser-patrol-v2') {
+          const patrol = await this.patrolWorkflow(input)
+          const report = patrol.complete(input)
+          if (input.card.role === 'planner') {
+            const notifications = new TaskNotifications(this.runner.store).requireStage(input,input.metadata?.patrolDisposition === 'unresolved' ? 'unresolved' : 'restored')
+            return { ...report, summary: `${report.summary}\n企微：${notifications.length ? notifications.map(n=>n.state).join('、') : '本任务未配置通知'}`, metadata: { ...report.metadata, notifications } }
+          }
+          return report
+        }
         await validateWorkflowCompletion(input)
         const report = await this.patrolEvidence(input)
         if (report?.failure) throw new Error(report.failure)
@@ -74,6 +85,15 @@ export class TaskConsoleService extends TypertRemoteService {
         if (report?.failure) return { reason: report.failure, kind: 'capability' }
       },
       pendingOperation: input => pendingBrowserOperation(input),
+      scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
+      beforePlanRound: async (input, items) => {
+        if (input.task.design?.evidenceContract !== 'browser-patrol-v2') return
+        const patrol = await this.patrolWorkflow(input); patrol.snapshot(input)
+        new TaskNotifications(this.runner.store).requireStage(input,input.card.round === 1 ? 'started' : 'rework')
+        return patrol.plan(input, items)
+      },
+      patrolStatus: async input => ({ ...(await this.patrolWorkflow(input)).snapshot(input), notifications: new TaskNotifications(this.runner.store).rows(input.batch.id) }),
+      notify: async (input, stage, deliver) => new TaskNotifications(this.runner.store).send(input, stage as NotificationStage, (await this.patrolWorkflow(input)).snapshot(input), deliver),
     })
     this.intake = new TaskIntakeCoordinator(this.runner, {
       agents: () => this.intakeAgents(),
@@ -91,6 +111,14 @@ export class TaskConsoleService extends TypertRemoteService {
     const ctx = this.ctx as any, live = ctx.get('sessions')?.get(input.sessionId)
     const events = live?.events ?? (await ctx.get('sessionPersistence')?.inspect(input.sessionId))?.events ?? []
     return browserPatrolEvidence(input, events)
+  }
+
+  private async patrolWorkflow(input: import('./runner.ts').CompletionCheck) {
+    const ctx = this.ctx as any, live = ctx.get('sessions')?.get(input.sessionId)
+    const events = live?.events ?? (await ctx.get('sessionPersistence')?.inspect(input.sessionId))?.events ?? []
+    const patrol = new BrowserPatrolWorkflow(this.runner.store)
+    patrol.capture(input, events)
+    return patrol
   }
 
   /** Hide task-owned sessions from ordinary DSH discovery while retaining direct access. */
@@ -468,11 +496,20 @@ export class TaskConsoleService extends TypertRemoteService {
   }
 
   private withNext(t: any) {
-    return { ...t, nextFire: t.trigger.kind === 'cron' && t.enabled ? (nextFire(parseCron(t.trigger.expr)!)?.toISOString() ?? null) : null }
+    const schedule = t.trigger.kind === 'cron' ? this.runner.schedule.state(t.id) : null
+    return { ...t, nextFire: t.trigger.kind === 'cron' && t.enabled ? (schedule?.next_at ? new Date(schedule.next_at).toISOString() : nextFire(parseCron(t.trigger.expr)!, new Date(), t.trigger.timeZone)?.toISOString() ?? null) : null }
+  }
+
+  async taskSchedule(payload: string): Promise<string> {
+    await this.ready
+    const { id, page } = JSON.parse(payload)
+    if (!this.runner.store.tasks.has(id)) throw new Error('没有这个任务')
+    return JSON.stringify(this.runner.schedule.view(id, page))
   }
 
   /** Every map as arrays — one payload for the board and the detail page. */
   async board(): Promise<string> {
+    await this.ready
     const st = this.runner.store.s
     const out: BoardView = {
       tasks: [...st.tasks.values()].map(t => this.withNext(t)),
@@ -488,12 +525,13 @@ export class TaskConsoleService extends TypertRemoteService {
    * with `legs`. Kept until the 0.5 pages land; then removed.
    */
   async tasks(): Promise<string> {
+    await this.ready
     const st = this.runner.store.s
     const runs = [...st.batches.values()].sort((a, b) => b.firedAt.localeCompare(a.firedAt)).map(b => {
       const legs = b.cardIds.map(id => st.cards.get(id)).filter(Boolean).map(c => {
         const r = cardRun(st, c!)
         const status = c!.status === 'done' ? 'done' : c!.status === 'review' ? 'review' : c!.status === 'running' ? 'running' : c!.status === 'blocked' ? 'blocked' : c!.status === 'failed' ? (r?.status === 'timed_out' ? 'timed_out' : r?.status === 'crashed' ? 'lost' : 'failed') : c!.status === 'cancelled' ? 'cancelled' : 'queued'
-        return { agentId: c!.kind === 'gate' ? '系统闸门' : c!.agentId, status, tries: c!.runIds.length, sessionId: r?.sessionId || undefined, startedAt: c!.startedAt, endedAt: c!.endedAt, handoff: c!.summary, question: r?.status === 'blocked' ? r.question : undefined, error: c!.error }
+        return { agentId: c!.kind === 'gate' ? '系统闸门' : c!.agentId, status, tries: c!.runIds.length, sessionId: r?.sessionId || undefined, startedAt: c!.startedAt, endedAt: c!.endedAt, handoff: c!.summary, question: c!.wakeAt ? `定时等待，${c!.wakeAt} 自动继续：${r?.question || ''}` : r?.status === 'blocked' ? r.question : undefined, error: c!.error }
       })
       const bs = batchStatus(st, b)
       const cards = b.cardIds.map(id => st.cards.get(id)).filter(Boolean)
@@ -527,6 +565,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const { id, enabled } = JSON.parse(payload) as { id: string; enabled: boolean }
     if (!this.runner.store.tasks.has(id)) throw new Error('没有这个任务')
     await this.runner.store.append({ t: 'task/enabled', at: new Date().toISOString(), taskId: id, enabled: !!enabled })
+    this.runner.schedule.sync(this.runner.store.tasks.get(id)!, Date.now(), true)
     return JSON.stringify({ ok: true })
   }
 

@@ -299,3 +299,14 @@ Post-restart verification preserved the one manual Batch, disabled Task, awaitin
 review state and the same pending12:55:35UTC reviewer wakeup. Core tasks.status=scheduled;
 the compatibility card projects blocked plus wakeAt, while the database DAG labels it
 定时等待. No target service was restarted and no delivery receipt was rewritten.
+
+Public Chrome on0.29.2 again showed定时等待, with no page errors; screenshot
+durable-wait-0292.png remains with the earlier three screenshots in
+/tmp/dsh-wecom-0291.Z24aTc. The live enable request was refused while the manual Batch
+was unaccepted, and enabled=false was rechecked. With all fixture tests completed and
+/proc cwd/fd/maps showing no references to the task-specific temporary tree, removed only
+198 owned fixture/cache directories (17,219,584 allocated bytes); tests recreate them.
+Production dependencies, built runtime, source, database, backups and unique screenshots
+remain. Owner approval for DSH-mediated recovery of the existing WeCom connection is
+pending. The manual Task remains in its durable wait; no cron activation or business
+completion is claimed, and no additional Task or manual Batch was created.

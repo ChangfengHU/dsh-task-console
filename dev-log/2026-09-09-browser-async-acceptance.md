@@ -36,3 +36,12 @@ Owner clarified: developer improves/tests DSH Agent capabilities, not day-to-day
 machine login monitoring. Account-pool policy/tool changes belong to linux-clash;
 five discovered accounts are not proof of five currently eligible sources. One
 owner-excluded account must not be copied; valid existing logins remain preserved.
+
+Account-pool policy and browser-manager preset are now updated by the owning
+linux-clash project. New-generation session agent-browser-manager-mttkrxrj used only
+two candidate queries: all five discovered accounts were explained, the owner denial
+was respected, allowed-but-unverified was kept distinct, and valid target logins were
+preserved. This is a read-only Agent decision test, not another cookie transfer or
+multi-account allocation test. No new DSH core change or restart was necessary;
+75 relevant Node tests passed in the owning project. Target-independent role rules
+and the existing host policy own this behavior, not a second account database here.

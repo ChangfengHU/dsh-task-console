@@ -36,6 +36,17 @@ execution phase without lifting any other permissions. A completed Run is still 
 Agent claim unless the relevant business evidence gate verifies it; independent review
 must not confuse a green status with correct per-target results.
 
+For a Gemini Fleet patrol requiring verification/necessary login, Creator selects
+`design.evidenceContract=browser-patrol-v1` from context.evidenceContracts. This
+explicit business adapter (not the generic DAG kernel) joins actual native tool-call
+and tool-result events from the current worker Session. It retains the first inventory
+baseline and last normalized inspect per instance; model-authored counters are ignored.
+Unknown or authorized signed-out targets reject task_complete and give an evidence-linked
+block reason. Completed patrol summaries are derived from those observations, not LLM
+prose. A copy needs a subsequent inspect with real verification. List-only, legacy,
+other-role and other-business tasks do not acquire this opt-in requirement. This is
+point-in-time patrol evidence, not another 20-minute stability requirement.
+
 `task-create-agent` is an installed, scoped Agent preset. It reads the trusted Agent
 roster and enabled chat workflows, chooses create/reuse and delegates to the existing
 TaskRunner. It has no SSH, shell or business MCP grants. Install/update the managed

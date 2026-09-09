@@ -7,6 +7,7 @@ const states: Record<string, string> = { pending: '待审查 · 未执行', reje
 export function TaskDesignView({ design }: { design?: TaskDesign }) {
   if (!design) return null
   return <section aria-label="条件与验收设计">
+    {design.evidenceContract ? <p>宿主证据闸门：{design.evidenceContract}（依据实际工具事件核对交卷，不接受模型自报统计）</p> : <p className="dtc-workflow-muted">未选择专用宿主证据闸门；结构化计划本身不保证执行结果正确。</p>}
     <h3>目标与范围</h3><p className="dtc-workflow-copy">{design.scope}</p>
     <h3>条件分支</h3><ol className="dtc-workflow-roles">{design.branches.map(b => <li key={b.id}>
       <header><b>{b.id}</b></header><p>条件：{b.when}</p><p>动作：{b.action}</p><p>证据：{b.evidence}</p>

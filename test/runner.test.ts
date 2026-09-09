@@ -101,6 +101,20 @@ test('a rejected completion gate keeps the run active and permits a corrected su
   } finally {runner.stop()}
 })
 
+test('a completion evidence callback replaces model summary and metadata with verified results', async () => {
+  const { host, runner, store, root } = await setup({ onFail: 'stop', maxTries: 1 }, {
+    beforeComplete: () => ({ summary: 'host evidence: one verified target', metadata: { verified: 1 } }),
+  })
+  try {
+    const batch = await runner.fire('T', 'manual'); await tick()
+    const session = [...host.sessions.keys()][0]; host.consumeFirst(session)
+    await host.callTool(session, 'task_complete', { summary: 'all 999 verified', metadata: { verified: 999 } })
+    host.endTurn(session); await tick()
+    const run = [...store.s.runs.values()].find(r => r.cardId === batch.cardIds[0])!
+    assert.equal(run.summary, 'host evidence: one verified target'); assert.deepEqual(run.metadata, { verified: 1 })
+  } finally { runner.stop(); store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
+})
+
 test('a pending-operation block gate keeps the run active until the operation is terminal', async () => {
   let running = true
   const {host,runner,store} = await setup({onFail:'stop',maxTries:1}, {beforeBlock: () => { if(running)throw Error('poll running operation') }})

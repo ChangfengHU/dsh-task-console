@@ -40,6 +40,7 @@ export class TaskCreator {
 
   async context() {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
+      evidenceContracts: [{ id: 'browser-patrol-v1', purpose: 'Fleet 浏览器 Gemini 巡查与必要补登录；design.evidenceContract 显式选择后，宿主读取本 Session 真实 inventory/inspect 事件校验逐目标结果。unknown 或授权未登录不允许 task_complete，汇总收口后 task_block；列表查询和其他业务不要选择。复制完成后须 inspect 留下最终新鲜验证。' }],
       contract: 'Task 是可复用目标/流程，不绑定 IP。task_create_submit 只保存待审查计划，不启动执行；审查入口独立于创建 Agent。每次先提供 design:{scope,branches:[{id,when,action,evidence}],coordination,failurePolicy:{isolateItems,maxAttempts,stopConditions:[]},acceptance:[]}。条件由业务 Agent 根据真实工具证据执行，不能把自然语言条件伪装成内核自动 DAG。static-chain 按所选业务角色交接，也可只选一个业务 Agent 处理多目标分支；dynamic-rounds 仅用于规划者、执行者、评估者三人返工协议。不得改变 Agent 权限。' }
   }
 

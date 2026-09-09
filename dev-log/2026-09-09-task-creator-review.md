@@ -50,3 +50,44 @@ preset drift, approval idempotency and redaction. The final targeted 25-test run
 covers exact workflow reuse and creation-stage release in the worker prompt. Builds
 pass. No dependencies installed; tracked lib assets remain production dependencies.
 Unique public-browser screenshots under /tmp/task-creator-* are retained evidence.
+
+## Deterministic completion boundary (0.28.1)
+
+Creator chose a stronger frozen design in P-chat-b2ca9d5f0bed2699f59b and corrected
+two rejected submissions (changed design cannot exact-reuse; create needs reason).
+Review approved the new version T-chat-0246030798dff00850bc. Its Agent correctly
+kept six instances unknown, but again submitted a contradictory all-authorized-valid
+summary. Independent acceptance rejects that completed claim too. Prompt changes
+alone are insufficient; retain the full evidence rather than rewriting either Run.
+
+Add opt-in design.evidenceContract=browser-patrol-v1, advertised to Creator. The host
+joins the current Session's real paired inventory/inspect call/results, computes
+instance outcomes and ignores model counters. Unknown/authorized signed-out targets
+reject completion; final block reasons retain concrete instance/event/time evidence.
+Successful completion uses the computed summary/metadata. Other tasks retain their
+existing gates. This is a business adapter, not a rewrite of the generic kernel or
+a new verifier/SSH action. Third real Creator session agent-task-create-agent-mttr2njm
+is preparing an explicitly guarded plan. 173 DSH regressions pass; build passes.
+
+Public desktop/390px tests confirm no horizontal overflow, Task → review → Creator
+session navigation and no page errors. Retained screenshots include
+/tmp/task-creator-first-run-rendered.png, /tmp/task-creator-mobile-plan.png and
+/tmp/task-creator-final-session-navigation.png. Removed only the premature blank
+/tmp/task-creator-approved-task.png (14,317 bytes; about16KiB allocated), superseded
+by the rendered evidence; it is regenerable by opening the same Task page. No new
+dependencies were installed or production dependencies removed.
+
+The first evidence-contract draft P-chat-22e43b350f13dcc59c0b mentioned the contract
+only in prose; independent review rejected it without execution. The same Creator
+session corrected the actual JSON field and submitted P-chat-302a4f7a5135763e960b.
+This is why review checks effective configuration, not merely explanatory prose.
+The public UI now distinguishes selected/no dedicated host evidence gate.
+
+Replaying the second Run's unmodified native events exposed the real MCP namespace
+prefix (unlike the display projection); the parser and fixtures now use that exact
+registered namespace and reject another server's lookalike tool. The resulting
+computed counts are 11 total, 3 verified, 6 unknown, 2 skipped, rejecting the previous
+all-valid claim. The unreachable node with no browser rows remains separately reported.
+Tests include native result pairing, missing/failed inventory, stale proof, untrusted
+namespace, opt-in isolation and actual Runner replacement of fabricated completion
+summary/metadata. All 173 DSH tests pass after these changes.

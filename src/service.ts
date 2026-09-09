@@ -29,6 +29,7 @@ import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, valid
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
 import { TaskCreator } from './task-create.ts'
+import { browserPatrolEvidence } from './browser-patrol-evidence.ts'
 import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation } from './workflow-acceptance.ts'
 import type { Artifact, Card } from './tasks.ts'
 import type { ArtifactView, BoardView } from './wire.ts'
@@ -62,8 +63,16 @@ export class TaskConsoleService extends TypertRemoteService {
       beforeComplete: async input => {
         if (await pendingBrowserOperation(input)) throw new Error('浏览器后台操作仍在运行；继续 browser_status，不能提前 task_complete。')
         await validateWorkflowCompletion(input)
+        const report = await this.patrolEvidence(input)
+        if (report?.failure) throw new Error(report.failure)
+        if (report?.summary && report.metadata) return { summary: report.summary, metadata: report.metadata }
       },
-      beforeBlock: input => validateWorkflowBlock(input),
+      beforeBlock: async input => {
+        const operation = await validateWorkflowBlock(input)
+        if (operation) return operation
+        const report = await this.patrolEvidence(input)
+        if (report?.failure) return { reason: report.failure, kind: 'capability' }
+      },
       pendingOperation: input => pendingBrowserOperation(input),
     })
     this.intake = new TaskIntakeCoordinator(this.runner, {
@@ -75,6 +84,13 @@ export class TaskConsoleService extends TypertRemoteService {
       .then(() => this.markExistingTaskSessionsInternal())
       .then(() => this.intake.start())
     void this.ready.catch(err => console.error('[task-console] runner failed to start:', err))
+  }
+
+  private async patrolEvidence(input: import('./runner.ts').CompletionCheck) {
+    if (input.task.design?.evidenceContract !== 'browser-patrol-v1' || input.profileId !== 'browser-manager') return
+    const ctx = this.ctx as any, live = ctx.get('sessions')?.get(input.sessionId)
+    const events = live?.events ?? (await ctx.get('sessionPersistence')?.inspect(input.sessionId))?.events ?? []
+    return browserPatrolEvidence(input, events)
   }
 
   /** Hide task-owned sessions from ordinary DSH discovery while retaining direct access. */

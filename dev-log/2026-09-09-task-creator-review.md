@@ -91,3 +91,23 @@ all-valid claim. The unreachable node with no browser rows remains separately re
 Tests include native result pairing, missing/failed inventory, stale proof, untrusted
 namespace, opt-in isolation and actual Runner replacement of fabricated completion
 summary/metadata. All 173 DSH tests pass after these changes.
+
+## Final real execution
+
+Public Chrome approved P-chat-302a4f7a5135763e960b with the actual evidence-contract
+field visible, starting T-chat-40a78cfa15b039ba4589 / b-chat-40a78cfa15b039ba4589.
+Browser-manager alone used inventory, five node inspections and a candidates query.
+It autonomously called task_block, with no developer prompt or host nudge, and Run
+ended blocked at 2026-09-09T07:10:56.221Z. The service's block callback replaced the
+model prose with native-event-derived evidence: 11 instances, 3 verified at observation,
+6 unknown, 2 skipped. The three verified observations are 187/browser-2 and63/browser-1/2;
+unknown legacy instances lack checkedAt/expiresAt, not proof of logout. 187/browser-1
+is signed out without write permission;107/browser-1 is not read-authorized.206 has no
+observed browsers and is separately unreachable. No cookie transfer, browser restart,
+node deployment, source/target authorization change or repeated20-minute test occurred.
+
+This validates the creation → independent review → actual Agent execution → truthful
+evidence-based terminal path, including rejection and correction. It does not establish
+all-fleet login coverage or real new multi-account transfer acceptance. Earlier completed
+claims remain failed acceptance evidence. Dedicated guarded-plan and final Run screenshots
+are /tmp/task-creator-host-evidence-gate.png and /tmp/task-creator-final-blocked.png.

@@ -195,6 +195,22 @@ the latest retained Run even when tasks.current_run_id has been cleared.
 
 ## Verification and boundaries
 
+Task list cleanup uses `setTasksArchived({ids,archived})`, not deletion. The host
+validates the entire exact-ID selection and rejects claimed/running work, then
+atomically appends per-Task `task/archived` events. `archivedAt` and disabled state
+persist in the existing spec JSON; no new store or table is introduced. The normal
+`tasks` listing/search/counts exclude archived definitions and their batches;
+`board`, snapshots, Agent history and original detail links retain the evidence.
+Archived definitions cannot be fired, claimed, resumed by durable waits, enabled,
+or selected by Task Intake. Restore removes the archive marker but does not enable
+cron; restoring an unfinished definition may resume its ready cards on the next tick.
+Do not restore an old unfinished workflow without explicit execution authorization.
+The original sessions, notification receipts, plans and execution rows are never
+deleted by archival. Archive is a current-work selection, not a declaration that
+old failed/blocked work succeeded.
+Select explicit Task IDs from the current inventory; never infer an archive target
+from age, status, a directory name or a blanket rule that hides disabled schedules.
+
 Run `NODE_ENV=test node --import tsx --test --test-concurrency=1 test/*.test.ts`
 under the supported Node runtime, then `node scripts/build.mjs`. Check real @
 selection/submission, reuse without a new Task, handoffs, DB step replay, fullscreen

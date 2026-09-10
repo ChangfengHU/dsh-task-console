@@ -64,6 +64,34 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
 
+test('archived tasks cannot fire or resume waiting cards; restore never enables cron', async () => {
+  const { runner, store, task, host } = await setup({ trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' } })
+  await store.createBatch(task, { t: 'batch/fired', at: new Date().toISOString(), taskId: task.id, batch: { id: 'archive-fixture', by: 'manual', cards: [{ id: 'archive-fixture#0', agentId: 'a', deps: [] }] } })
+  await store.setTasksArchived(['T'], true)
+  await runner.tick()
+  assert.equal(host.sessions.size, 0)
+  await assert.rejects(runner.fire('T', 'manual'), /归档/)
+  assert.equal(await store.claimCard('archive-fixture#0', 'run-archived', 'session-archived', 1), undefined)
+  await assert.rejects(store.createBatch(task, { t: 'batch/fired', at: new Date().toISOString(), taskId: 'T', batch: { id: 'stale-template', by: 'manual', cards: [] } }), /归档/)
+  assert.equal(runner.schedule.state('T')?.enabled, 0)
+  assert.equal(store.s.batches.size, 1)
+  await store.setTasksArchived(['T'], false)
+  assert.equal(store.tasks.get('T')?.enabled, false)
+  assert.equal(store.tasks.get('T')?.archivedAt, undefined)
+})
+
+test('archiving rejects active work and validates the whole selection before writing', async () => {
+  const { runner, store, task } = await setup()
+  const other = { ...task, id: 'other' }
+  await store.append({ t: 'task/created', at: task.createdAt, taskId: other.id, task: other })
+  await assert.rejects(store.setTasksArchived(['other', 'missing'], true), /没有这个任务/)
+  assert.equal(store.tasks.get('other')?.archivedAt, undefined)
+  const b = await runner.fire('T', 'manual')
+  await assert.rejects(store.setTasksArchived(['other', 'T'], true), /仍在执行/)
+  assert.equal(store.tasks.get('other')?.archivedAt, undefined)
+  await runner.cancelBatch(b.id)
+})
+
 test('delegated notifications are real idempotent side cards with frozen reports and independent sessions', async () => {
   let outbox: TaskNotifications
   const delivered:string[]=[]

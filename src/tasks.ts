@@ -156,7 +156,15 @@ export class EventStore {
       case 'task/created':
         db.prepare(`INSERT OR REPLACE INTO dsh_task_specs(id, spec_json, enabled, created_at) VALUES (?, ?, ?, ?)`).run(e.task.id, JSON.stringify(e.task), e.task.enabled ? 1 : 0, toEpoch(e.at)); break
       case 'task/enabled':
+        if (e.enabled && this.tasks.get(e.taskId)?.archivedAt) throw new Error('任务已归档，请先恢复')
         db.prepare('UPDATE dsh_task_specs SET enabled = ? WHERE id = ?').run(e.enabled ? 1 : 0, e.taskId); break
+      case 'task/archived': {
+        const task = this.tasks.get(e.taskId)
+        if (!task) throw new Error('没有这个任务')
+        const spec = { ...task, enabled: false, archivedAt: e.archived ? e.at : undefined }
+        db.prepare('UPDATE dsh_task_specs SET spec_json = ?, enabled = 0 WHERE id = ?').run(JSON.stringify(spec), e.taskId)
+        break
+      }
       case 'task/deleted': {
         // Optional feature ledgers belong to this exact Task; never touch native sessions.
         const exists = (name: string) => db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name)
@@ -223,6 +231,32 @@ export class EventStore {
     return next
   }
 
+  /** Archive exact definitions atomically, retaining their execution and evidence rows. */
+  setTasksArchived(ids: string[], archived: boolean): Promise<number> {
+    const next = this.queue.then(() => {
+      const events: Event[] = []
+      this.kernel.write(() => {
+        for (const id of ids) {
+          if (!this.tasks.has(id)) throw new Error(`没有这个任务：${id}`)
+          if (this.kernel.db.prepare(`SELECT 1 FROM tasks t JOIN dsh_card_bindings b ON b.card_id=t.id
+            WHERE b.spec_id=? AND t.current_run_id IS NOT NULL LIMIT 1`).get(id)) throw new Error('任务仍在执行，不能归档或恢复')
+        }
+        for (const id of new Set(ids)) {
+          if (Boolean(this.tasks.get(id)!.archivedAt) === archived) continue
+          const event: Event = { t: 'task/archived', at: new Date().toISOString(), taskId: id, archived }
+          this.applyExtension(event)
+          this.kernel.db.prepare('INSERT INTO dsh_events(event_type, task_id, occurred_at, payload_json) VALUES (?, ?, ?, ?)')
+            .run(event.t, id, event.at, JSON.stringify(event))
+          events.push(event)
+        }
+      })
+      this.events.push(...events); this.state = fold(this.events)
+      return events.length
+    })
+    this.queue = next.then(() => undefined, () => undefined)
+    return next
+  }
+
   /** Atomically mutate the normalized core and persist the matching DSH read event. */
   transition<T>(mutate: () => T, project: (result: T) => Event | undefined): Promise<T> {
     let projected: Event | undefined
@@ -246,6 +280,7 @@ export class EventStore {
 
   /** Create executable Hermes rows for one DSH batch, then emit its UI event. */
   async createBatch(task: TaskSpec, event: Extract<Event, { t: 'batch/fired' }>, scheduleClaim?: { id: string; token: string }): Promise<void> {
+    if (this.tasks.get(task.id)?.archivedAt) throw new Error('任务已归档，请先恢复')
     const execution = taskForTurn(task, event.batch.turn)
     this.kernel.write(() => {
       const db = this.kernel.db
@@ -386,7 +421,7 @@ export class EventStore {
 
   async claimCard(cardId: string, externalRunId: string, sessionId: string, attempt: number, fromReview = false): Promise<ClaimResult | undefined> {
     return this.transition(
-      () => this.kernel.claimTask(cardId, { fromReview }),
+      () => this.tasks.get(this.state.cards.get(cardId)?.taskId ?? '')?.archivedAt ? undefined : this.kernel.claimTask(cardId, { fromReview }),
       claim => {
         if (!claim) return undefined
         this.kernel.db.prepare(`INSERT INTO dsh_run_bindings(external_run_id, core_run_id, session_id) VALUES (?, ?, ?)`).run(externalRunId, claim.run.id, sessionId)

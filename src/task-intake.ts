@@ -479,6 +479,7 @@ export class TaskIntakeCoordinator {
     const goalMatches = signal.goal.key ? new Set((db.prepare(`SELECT DISTINCT task_id FROM dsh_task_signals WHERE goal_key=? AND task_id IS NOT NULL`).all(signal.goal.key) as { task_id: string }[]).map(row => row.task_id)) : new Set<string>()
     const candidates: IntakeTaskCandidate[] = []
     for (const task of this.runner.store.s.tasks.values()) {
+      if (task.archivedAt) continue
       const batches = [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === task.id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))
       const active = batches.some(batch => !batch.settled)
       const latest = batches[0]
@@ -494,7 +495,7 @@ export class TaskIntakeCoordinator {
     }
     candidates.sort((a, b) => b.score - a.score || Number(a.state !== 'active') - Number(b.state !== 'active') || a.id.localeCompare(b.id))
     const usable = agents.filter(agent => agent.id !== 'task-intake')
-    const recommendedTaskId = direct.find(id => this.runner.store.s.tasks.has(id))
+    const recommendedTaskId = direct.find(id => this.runner.store.s.tasks.has(id) && !this.runner.store.s.tasks.get(id)?.archivedAt)
     return {
       policy: [
         'Task identity is a durable goal/root-cause boundary; never use a node, IP, account, or other target as the Task identity.',

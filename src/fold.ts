@@ -78,6 +78,8 @@ export interface TaskSpec {
   /** Consecutive-failure limit per card before it gives up (hermes' circuit breaker). */
   maxTries: number
   enabled: boolean
+  /** Hidden from current work; definition and execution history remain readable. */
+  archivedAt?: string
   createdAt: string
   /** Present when this durable Task was first materialized by Task Intake. */
   origin?: TaskOrigin
@@ -185,6 +187,7 @@ export interface Artifact {
 export type Event =
   | { t: 'task/created'; at: string; taskId: string; task: TaskSpec }
   | { t: 'task/enabled'; at: string; taskId: string; enabled: boolean }
+  | { t: 'task/archived'; at: string; taskId: string; archived: boolean }
   | { t: 'task/deleted'; at: string; taskId: string }
   | { t: 'batch/fired'; at: string; taskId: string; batch: { id: string; by: Batch['by']; cards: CardSeed[]; turn?: TaskTurn } }
   | { t: 'card/created'; at: string; taskId: string; batchId: string; card: CardSeed }
@@ -241,6 +244,7 @@ export function fold(events: Event[]): State {
     switch (e.t) {
       case 'task/created': s.tasks.set(e.task.id, e.task); break
       case 'task/enabled': { const t = s.tasks.get(e.taskId); if (t) s.tasks.set(t.id, { ...t, enabled: e.enabled }); break }
+      case 'task/archived': { const t = s.tasks.get(e.taskId); if (t) s.tasks.set(t.id, { ...t, enabled: false, archivedAt: e.archived ? e.at : undefined }); break }
       case 'task/deleted': {
         s.tasks.delete(e.taskId)
         for (const b of [...s.batches.values()]) if (b.taskId === e.taskId) s.batches.delete(b.id)
@@ -379,7 +383,7 @@ export function cardRun(s: State, c: Card): Run | undefined {
 /** Who moved: the host dispatcher, the agent itself, a person, or the clock. */
 export function actorOf(e: Event, s?: State): 'dispatcher' | 'agent' | 'person' | 'clock' {
   switch (e.t) {
-    case 'task/created': case 'task/enabled': case 'task/deleted': case 'card/review_approved': case 'artifact/published': return 'person'
+    case 'task/created': case 'task/enabled': case 'task/archived': case 'task/deleted': case 'card/review_approved': case 'artifact/published': return 'person'
     case 'card/changes_requested': {
       if (e.reviewer) return 'agent'
       const run = s?.runs.get(e.runId)
@@ -401,6 +405,7 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
   switch (e.t) {
     case 'task/created': return `建卡「${e.task.title}」,${e.task.participants.map(p => agentName(p.agentId)).join(' → ')}`
     case 'task/enabled': return e.enabled ? '启用时间表' : '停用时间表'
+    case 'task/archived': return e.archived ? '归档任务并停用，保留历史' : '恢复任务，时间表仍停用'
     case 'task/deleted': return '删除任务'
     case 'batch/fired': return `${({ cron: '到点', manual: '手动', retry: '重试' })[e.batch.by]}触发,${e.batch.cards.length} 张卡排好队`
     case 'card/created': return `数据库新增${e.card.kind === 'gate' ? '闸门' : '角色'}:${e.card.role ?? card(e.card.id)}`
@@ -447,7 +452,7 @@ export function migrate(events: LegacyEvent[]): Event[] {
   for (const e of events) {
     switch (e.t) {
       case 'task/created': out.push({ t: 'task/created', at: e.at, taskId: e.task.id, task: e.task }); break
-      case 'task/enabled': case 'task/deleted': out.push(e as Event); break
+      case 'task/enabled': case 'task/archived': case 'task/deleted': out.push(e as Event); break
       case 'run/fired': {
         if (e.run?.cards) { out.push(e as Event); break }   // already new
         const agents: string[] = e.run.legs; const cards = agents.map((agentId, i) => ({ id: `${e.run.id}#${i}`, agentId, deps: i ? [`${e.run.id}#${i - 1}`] : [] }))

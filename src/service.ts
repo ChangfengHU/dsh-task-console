@@ -536,7 +536,9 @@ export class TaskConsoleService extends TypertRemoteService {
   async tasks(): Promise<string> {
     await this.ready
     const st = this.runner.store.s
-    const runs = [...st.batches.values()].sort((a, b) => b.firedAt.localeCompare(a.firedAt)).map(b => {
+    const tasks = [...st.tasks.values()].filter(t => !t.archivedAt)
+    const visible = new Set(tasks.map(t => t.id))
+    const runs = [...st.batches.values()].filter(b => visible.has(b.taskId)).sort((a, b) => b.firedAt.localeCompare(a.firedAt)).map(b => {
       const legs = b.cardIds.map(id => st.cards.get(id)).filter(Boolean).map(c => {
         const r = cardRun(st, c!)
         const status = c!.status === 'done' ? 'done' : c!.status === 'review' ? 'review' : c!.status === 'running' ? 'running' : c!.status === 'blocked' ? 'blocked' : c!.status === 'failed' ? (r?.status === 'timed_out' ? 'timed_out' : r?.status === 'crashed' ? 'lost' : 'failed') : c!.status === 'cancelled' ? 'cancelled' : 'queued'
@@ -556,7 +558,7 @@ export class TaskConsoleService extends TypertRemoteService {
         ...(rounds ? { rounds, reworks: Math.max(0, rounds - 1) } : {}),
       }
     })
-    return JSON.stringify({ tasks: [...st.tasks.values()].map(t => this.withNext(t)), runs })
+    return JSON.stringify({ tasks: tasks.map(t => this.withNext(t)), runs })
   }
 
   async createTask(payload: string): Promise<string> {
@@ -584,6 +586,16 @@ export class TaskConsoleService extends TypertRemoteService {
     if (!this.runner.store.tasks.has(id)) throw new Error('没有这个任务')
     for (const b of this.runner.store.s.batches.values()) if (b.taskId === id && !b.settled) await this.runner.cancelBatch(b.id)
     await this.runner.store.append({ t: 'task/deleted', at: new Date().toISOString(), taskId: id })
+  }
+
+  /** Reversible list cleanup, not deletion of execution rows or native sessions. */
+  async setTasksArchived(payload: string): Promise<string> {
+    await this.ready
+    const { ids, archived } = JSON.parse(payload)
+    if (!Array.isArray(ids) || !ids.length || ids.some(id => typeof id !== 'string' || !id) || typeof archived !== 'boolean') throw new Error('请选择明确的任务和归档状态')
+    const changed = await this.runner.store.setTasksArchived(ids, archived)
+    for (const id of new Set<string>(ids)) this.runner.schedule.sync(this.runner.store.tasks.get(id)!, Date.now(), true)
+    return JSON.stringify({ ok: true, changed, archived })
   }
 
   async deleteTask(payload: string): Promise<string> {

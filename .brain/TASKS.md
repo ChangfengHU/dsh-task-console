@@ -1,5 +1,7 @@
 # 后续优化
 
+- [x] [TASK-BOARD-ARCHIVE-008] 0.30.1：用户要求页面只显示仍需使用的任务；已精确归档30个旧Task，保留装机 T-chat-b4c6fcb369f0c20a9739 与巡查 T-chat-bbb714b2ba8439b69178。旧任务停用并从主列表/搜索/执行候选隐藏，全部历史执行、通知、计划及494个会话不删；两个主Task定义/状态不变，巡查仍关闭定时。201测试、构建、公网1600/390px两卡、旧任务搜索隐藏及历史链接禁执行验收通过。详见既有dev-log本日归档段。
+
 - [ ] [TASK-PATROL-SCHEDULE-007] 0.30.0：已创建独立 wecom-notifier 与真实 Creator 生成、独立退回修订后批准的 Task T-chat-bbb714b2ba8439b69178（计划 P-chat-91f9b5b7a521eb173e4b；会话 agent-task-create-agent-mtv4oqrs）。三个业务角色与通知支线分离，真实 SQLite 卡/link/event、冻结报告、独立会话及去重回执；通知失败不取消浏览器修复。小时定时仍关闭、awaiting_trial、0 Batch，未进行全机群手动执行；不能声称全部登录或通知交付已通过。独立企微MCP已在linux-clash f7af5ab修复部署，本轮真实Agent只读确认84连接/唯一群可用。旧Task及失败b-mtu2iur4sah与四条通知完整保留；206覆盖缺口不豁免，不重建、不扩账号授权、不重复63旧专项。后续在此新Task进行一次真实手动业务+通知验收，通过后才启用同Task小时定时。详见既有 dev-log/2026-09-09-task-creator-review.md。
 
 - [x] [TASK-CREATOR-REVIEW-004] 0.28.1：结构化设计/独立审查/幂等放行/分页审查上线。两次错误完成报告保留；增强 MCP 登录证据分类及显式 browser-patrol-v1 宿主闸门。最终真实 Task T-chat-40a78cfa15b039ba4589 于 2026-09-09 07:10:56 UTC 自主 task_block、nudges=0；宿主从真实工具事件计算 11 实例=3 verified/6 unknown/2 skipped，未伪造绿色完成。173 项回归、公网桌面/390px审查与导航通过。见 `dev-log/2026-09-09-task-creator-review.md`。

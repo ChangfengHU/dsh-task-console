@@ -436,3 +436,48 @@ production database, runtime, user file or shared cache directory was removed.
 Code/review-state delivery was pushed as c8f57e2. The runtime handoff additionally
 records the verified schema-versus-grant distinction from the native rejected
 schedule_list receipt; the notifier remains limited to its selected MCP capabilities.
+
+## 2026-09-10 — 0.30.1 current-work list cleanup
+
+User authorized hiding all no-longer-needed Tasks, leaving archive versus delete
+to the implementer. Kept exactly T-chat-b4c6fcb369f0c20a9739 (Fleet installer)
+and T-chat-bbb714b2ba8439b69178 (Gemini patrol + independent notifier). Archived
+the other30 existing definitions through the new Console setTasksArchived API.
+No hard deletion, browser/SSH operation, Task firing, notification send or cron
+activation was performed. The retained installer's old blocked result is unchanged;
+the patrol remains disabled/awaiting_trial with zero Batches.
+
+Minimal implementation: optional archivedAt in existing spec/event projection,
+atomic exact-ID batch validation, idempotent archive/restore, normal list filtering,
+manual/claim/wakeup/Intake guards and an archived disabled action on old details.
+Restoration leaves cron off; unfinished ready cards can resume after explicit restore.
+No new plugin, table, dependency, scheduler or archive-management page.
+
+Verification:201/201 tests passed under Node22 with an isolated TMPDIR; build and
+git diff --check passed. Native sessions and claimed core Runs were idle before
+restarting only sop-dsh-web. Owner0600 online SQLite backup retained at
+/home/claude/.dsh/task-console/backups/pre-archive-0301-20260910.sqlite.
+Compared exact before/after Batch/card/Run API arrays and9 SQLite evidence tables
+(task_runs, task_links, task_events, task_attachments, dsh_batches,
+dsh_card_bindings, dsh_run_bindings, dsh_task_notifications, dsh_task_plans): unchanged.
+494 native session IDs unchanged (sorted ID SHA256
+58e4bcca58407bdf1868d59e2ceb9c0cd69ed821640006757eb0e9832fcbb207).
+32 definitions retained,30 archive events added, normal list returns2; quick_check ok.
+
+Actual public Chrome1600px Board loaded in23.35s with exactly the two retained IDs.
+Searching the old Gomoku title returns no card;390px viewport has no horizontal
+document overflow. Original T-mtj1xwah URL still loads real history and exposes a
+disabled archived action. No page errors. Screenshots retained and inspected:
+/tmp/dsh-archive-0301-board.png, /tmp/dsh-archive-0301-mobile.png;
+/tmp/dsh-archive-0301-history.png also retained as history-link evidence.
+This is list cleanup, not a page-load optimization or completed business acceptance.
+
+GitHub credentials resolved from Vault service:github; read-only /user and repository
+permission checks confirmed ChangfengHU and push access to the configured repository.
+No credential values written to the repository, logs or temporary files.
+
+Cleanup after all tests/browser processes finished: checked /proc cwd/root/fd/maps
+for references, then removed only /tmp/dsh-archive-verify.SYxtXR (3,522,560 allocated
+bytes, about3.36MiB). Fixtures are reconstructible by the checked-in tests with a
+fresh TMPDIR; browser checks use the documented URLs/selectors. Production lib,
+dependencies, source, lockfile, SQLite backup and unique screenshots remain retained.

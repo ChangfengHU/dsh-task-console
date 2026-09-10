@@ -4,6 +4,7 @@ import { go } from './Console.tsx'
 
 /** Each invocation supplies fresh inputs; never silently replay an old target/credential. */
 export function TaskRunAction({ task, api, toast }: { task: TaskSpec; api: TasksApi; toast: (text: string) => void }) {
+  if (task.archivedAt) return <button className="dtc-btn" disabled title="历史记录保留；恢复任务后才可再次执行">已归档</button>
   const chat = task.origin?.source === 'task-chat'
   const external = Boolean(task.origin?.signalId) && !chat
   const scheduled = task.trigger.kind === 'cron'

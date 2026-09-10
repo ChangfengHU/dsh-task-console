@@ -163,7 +163,7 @@ export class TaskRunner {
     const rows = this.store.kernel.db.prepare("SELECT w.card_id FROM dsh_task_wakeups w JOIN tasks t ON t.id=w.card_id WHERE w.state='pending' AND w.wake_at<=? AND t.status='scheduled'").all(this.clock()) as { card_id: string }[]
     for (const row of rows) {
       const card = this.store.s.cards.get(row.card_id)
-      if (!card) continue
+      if (!card || this.store.tasks.get(card.taskId)?.archivedAt) continue
       await this.store.transition(() => {
         const ok = this.store.kernel.unblockTask(card.id)
         if (ok) this.store.kernel.db.prepare("UPDATE dsh_task_wakeups SET state='resumed' WHERE card_id=?").run(card.id)
@@ -202,7 +202,7 @@ export class TaskRunner {
     ready.sort((a, b) => a.batchId.localeCompare(b.batchId) || Number(a.role === 'notifier') - Number(b.role === 'notifier') || a.index - b.index)
     for (const c of ready) {
       if (inProgress >= this.maxInProgress) break
-      const template = this.store.tasks.get(c.taskId); if (!template) continue
+      const template = this.store.tasks.get(c.taskId); if (!template || template.archivedAt) continue
       const batch = this.store.s.batches.get(c.batchId); if (!batch || batch.settled) continue
       const task = taskForBatch(template, batch)
       if (c.consecutiveFailures > 0 && (c.role === 'notifier' || task.onFail !== 'retry' || c.consecutiveFailures >= task.maxTries)) {
@@ -222,7 +222,7 @@ export class TaskRunner {
   /** Close batches whose cards are all terminal; cancel cards a failure made unreachable. */
   private async settleBatches(): Promise<void> {
     for (const b of this.store.s.batches.values()) {
-      if (b.settled) continue
+      if (b.settled || this.store.tasks.get(b.taskId)?.archivedAt) continue
       const cards = b.cardIds.map(id => this.store.s.cards.get(id)).filter(Boolean) as Card[]
       if (!cards.length) continue
       const dead = cards.filter(c => c.status === 'failed' || c.status === 'cancelled')
@@ -254,6 +254,7 @@ export class TaskRunner {
   async fire(taskId: string, by: Batch['by'], options: FireOptions = {}): Promise<Batch> {
     const template = this.store.tasks.get(taskId)
     if (!template) throw new Error('没有这个任务')
+    if (template.archivedAt) throw new Error('任务已归档，请先恢复')
     const batchId = options.batchId ?? `b-${this.clock().toString(36)}${Math.random().toString(36).slice(2, 5)}`
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(batchId)) throw new Error('batchId 不合法')
     const existing = this.store.s.batches.get(batchId)

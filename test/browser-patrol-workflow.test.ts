@@ -69,9 +69,49 @@ test('an unreachable zero-observation node remains uncovered, not an empty succe
   assert.equal(patrol.status(input).ready,false)
   assert.equal(patrol.status(input).uncovered.length,1)
 })
+test('an uncovered node can close unresolved after unchanged independent checks expire, never pass',async t=>{
+  const {input,patrol,store}=await setup(t), now=Date.now()
+  const inventory=JSON.parse((store.kernel.db.prepare('SELECT inventory_json FROM dsh_patrol_inventory').get() as any).inventory_json)
+  inventory.nodes.push({nodeId:'unreachable',reachable:false,readAuthorized:false,browsers:[]})
+  store.kernel.db.prepare('UPDATE dsh_patrol_inventory SET inventory_json=?').run(JSON.stringify(inventory))
+  assert.equal(patrol.status(input,now).canCloseUnresolved,false) // missing checks are not excused
+  patrol.capture(input,proof(input,now-11*60_000))
+  assert.equal(patrol.status(input,now).canCloseUnresolved,false) // executor-only proof is insufficient
+  const reviewer={...input,card:{id:'batch#r1',role:'reviewer',round:1},profileId:'fleet-ops-reviewer',sessionId:'task-fixture-reviewer'}
+  patrol.capture(reviewer,proof(reviewer,now-11*60_000))
+  const report=patrol.status(input,now)
+  assert.equal(report.ready,false)
+  assert.equal(report.items[0].accepted,false)
+  assert.equal(report.items[0].reason,'not-currently-verified')
+  assert.equal(report.uncovered.length,1)
+  assert.equal(report.canCloseUnresolved,true)
+  assert.throws(()=>patrol.complete(input),/不能收口/)
+  assert.equal(patrol.complete({...input,metadata:{patrolDisposition:'unresolved'}}).metadata.workflowOutcome,'unresolved')
+  // A changed target still needs its independent stability window; expiry does not waive it.
+  store.kernel.db.prepare("INSERT INTO dsh_browser_issues(spec_id,target_key,status,attempts,opened_at) VALUES ('fixture','192.0.2.10:1','open',1,?)").run(new Date(now-30*60_000).toISOString())
+  assert.equal(patrol.status(input,now).canCloseUnresolved,false)
+})
+test('without a coverage gap, expired evidence does not bypass the ordinary recheck policy',async t=>{
+  const {input,patrol}=await setup(t), now=Date.now()
+  const reviewer={...input,card:{id:'batch#r1',role:'reviewer',round:1},profileId:'fleet-ops-reviewer',sessionId:'task-fixture-reviewer'}
+  patrol.capture(reviewer,proof(reviewer,now-11*60_000))
+  assert.equal(patrol.status(input,now).ready,false)
+  assert.equal(patrol.status(input,now).canCloseUnresolved,false)
+})
 test('a model cannot impersonate another Task session in Browser MCP arguments',()=>{
   assert.throws(()=>assertBrowserSession('browser_login_provision',{sessionId:'agent-browser-manager-forged'},{agent:{session:{id:'task-real'}}}),/must match/)
   assert.doesNotThrow(()=>assertBrowserSession('browser_login_verify',{sessionId:'task-real'},{agent:{session:{id:'task-real'}}}))
+})
+test('a round past the reviewed budget cannot queue a misleading rework notification',async t=>{
+  const {input,store}=await setup(t), outbox=new TaskNotifications(store)
+  input.card.round=design.failurePolicy.maxAttempts+1
+  input.task={...input.task,design:{...design,notifications:{channel:'wecom',agentId:'wecom-notifier',chatIds:['fixture-group']}}}
+  let created=0
+  store.createNotification=async()=>{created++;return 'fixture-notice'}
+  await assert.rejects(outbox.request(input,'rework',{ready:false}),/回合上限/)
+  assert.equal(created,0)
+  await outbox.request(input,'unresolved',{ready:false})
+  assert.equal(created,1) // reporting the actual unresolved outcome remains possible
 })
 test('WeCom outbox requires reviewed recipients, deduplicates and never repeats ambiguous delivery',async t=>{
   const {input,store}=await setup(t), outbox=new TaskNotifications(store), calls:any[]=[]

@@ -24,6 +24,8 @@ export class TaskNotifications {
 
   async request(input: CompletionCheck, stage: NotificationStage, report: any) {
     if (input.card.role !== 'planner' || !Object.hasOwn(labels,stage)) throw new Error('只有规划者可交接通知')
+    if (stage === 'rework' && input.task.design && (input.card.round ?? 0) > input.task.design.failurePolicy.maxAttempts)
+      throw new Error('已达审查计划的累计回合上限，不能通知继续返工；请交接真实未解决结果')
     if (stage === 'restored' && !report.ready || stage === 'unresolved' && report.ready) throw new Error('通知阶段与真实验收结果不一致')
     const cardId = await this.store.createNotification(input.task,input.batch,input.card,stage,report)
     return { state:'queued', cardId, agentId:input.task.design?.notifications?.agentId, notice:'通知员将在规划者交接后独立执行；尚未发送，不阻塞浏览器主流程。' }

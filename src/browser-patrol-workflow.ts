@@ -99,7 +99,13 @@ export class BrowserPatrolWorkflow {
     }
     const uncovered = inventory.nodes.filter((n: any) => n.reachable !== true && !n.browsers.length).map((n: any) => ({ nodeId: n.nodeId, reason: 'unreachable-no-browser-observation' }))
     const plan = db.prepare('SELECT target_key,action,reason FROM dsh_patrol_round_items WHERE batch_id=? AND round=?').all(input.batch.id, input.card.round ?? 0)
-    const canCloseUnresolved = items.every(i => i.accepted || !i.readAuthorized || !inventory.nodes.find((n: any) => n.ip === i.ip)?.reachable || i.independentlyObserved > 0 && ((input.card.round ?? 0) > input.task.design!.failurePolicy.maxAttempts || i.attempts >= input.task.design!.failurePolicy.maxAttempts || i.state === 'unknown' && i.independentlyObserved >= 2)) && (items.length > 0 || uncovered.length > 0)
+    // A known coverage gap already prevents success. Expiry during planner/notifier
+    // handoff must not force unchanged, independently checked browsers into rework
+    // just to report that failure. This never changes ready or accepted evidence.
+    const canCloseUnresolved = items.every(i => i.accepted || !i.readAuthorized || !inventory.nodes.find((n: any) => n.ip === i.ip)?.reachable || i.independentlyObserved > 0 && (
+      uncovered.length > 0 && i.state === 'verified' && i.reason === 'not-currently-verified' && !i.observation ||
+      (input.card.round ?? 0) > input.task.design!.failurePolicy.maxAttempts || i.attempts >= input.task.design!.failurePolicy.maxAttempts || i.state === 'unknown' && i.independentlyObserved >= 2
+    )) && (items.length > 0 || uncovered.length > 0)
     return { ready: items.length > 0 && items.every(i => i.accepted) && uncovered.length === 0, canCloseUnresolved, plan,
       items, uncovered, summary: `${items.length} 个已观测浏览器：${items.filter(i => i.accepted).length} 验收通过，${items.filter(i => !i.accepted).length} 未通过；${uncovered.length} 个节点无法确认浏览器覆盖。` }
   }

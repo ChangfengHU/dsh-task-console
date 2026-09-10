@@ -530,3 +530,80 @@ retains11 executor verified observations with missing-independent-verification a
 the uncovered206 node. /tmp/dsh-patrol-0301-failed-reviewer.png was viewed and retained.
 No new installer Batch or active core Run existed in the final readback. The runtime
 and reviewed role models were left unchanged pending the model-availability decision.
+
+## 2026-09-10 — restored-model trial and bounded unresolved handoff (0.30.2)
+
+The user restored model availability and asked about Qwen backup. A real read-only
+tryRun of fleet-ops-reviewer returned MODEL_READY in17,642ms, Session
+tc-try-fleet-ops-reviewer-mtv9v22d. It used codex-local/gpt-5.6-terra and no tools,
+machines or notifications. This is provider connectivity, not business acceptance.
+Browser-manager and wecom-notifier already use deepseek-official/qwen-plus-latest;
+planner/reviewer explicitly select Codex. Runner loads the Agent's chosen model and
+fails an incomplete model turn; retry does not change provider. No automatic
+Codex-to-Qwen fallback was present or added, and no reviewed Agent was silently edited.
+
+Fired only the retained patrol Task T-chat-bbb714b2ba8439b69178, once, yielding Batch
+b-mtv9vz6v19v (08:35:57.813Z–09:03:30.165Z). Two real Gate/executor/reviewer rounds
+and three planner cards executed, plus six independent notifier cards. The developer
+did not send steering prompts into these Task Sessions or operate target machines.
+Thirty archived Tasks and the other retained installer definition remain unchanged.
+
+First executor:10 verified receipts and187/b1 adapter-check-failed. Sanitized local
+receipt d19ac8a87ce504a454e815bf8c97ae91 showed FileNotFoundError in safe_tree/lstat.
+The linux-clash repository fixed disappearing descendants only in read-only live
+disk observation, retaining strict destructive checks and all grants (bd31001949e5).
+Its transport reads remote.py per invocation; no target/DSH restart was necessary.
+Real independent reviewer operation b030ea40a4113282697aca5d7d912b62 then verified
+187/b1 at08:50:47.828Z. The original failure remains intact.
+
+First independent reviewer obtained11/11 verified point-in-time receipts, checked
+08:50:41Z–08:52:57Z. These are not perpetual login or20-minute stability evidence.
+At08:53:40 the next planner could close unresolved for the206 coverage gap. By its
+08:53:56 finalize call,6 receipts had passed their3-minute expiry; the host rejected
+closure and forced another round. Second executor obtained6 additional verified
+receipts; second reviewer obtained5 and refused95/b3 as browser-work-in-progress.
+The busy browser was not restarted or overwritten. No provision/copy/prepare or
+lifecycle action occurred in this Batch. Final snapshot retained5 accepted,6 expired,
+and206 unreachable/unreadable with zero browser observations. Planner finalized
+unresolved; Batch is failed, not successfully repaired. All observed11 had passed an
+earlier independent check, which does not supersede the final freshness limitation.
+
+All six actual notifier cards have sent receipts with one attempt each: started;
+round2 findings/unresolved/rework; round3 rework/unresolved. These are MCP delivery
+acknowledgements, not proof of reading. Round3 rework notice was queued before the
+corresponding plan was refused by the round limit; this misleading historical notice
+is retained, not rewritten as an actual third execution round.
+
+Minimal fixes:
+- With a known unreachable/no-observation coverage gap, already independently checked,
+  unchanged verified targets that become stale may close as unresolved. ready and
+  accepted remain false; no TTL change, timestamp refresh, authorization expansion,
+  missing-reviewer waiver or repair-stability waiver. Without that coverage gap the
+  ordinary recheck policy remains unchanged.
+- Refuse a rework notification when the reviewed round budget already prevents
+  creating that round. Reporting unresolved remains available.
+
+Both regressions failed before their fixes. Final204 tests pass with existing Node22,
+tsx and dependencies; build and diff-check pass. The service was restarted only after
+both Task Runs and native Sessions were confirmed idle, after this Batch settled.
+The fixes do not retroactively change its failed outcome and have not yet completed
+a new real patrol Batch. No new dependency install or temporary build tree; production
+lib is retained runtime output, and test fixture directories clean themselves up.
+
+The running public DAG was browser-checked in21.61s without page/history errors;
+/tmp/dsh-patrol-0301-restored-live.png was viewed and retained. Hourly cron remains
+disabled/awaiting_trial; a failed coverage trial cannot enable it. Installer Task
+T-chat-b4c6fcb369f0c20a9739 has not been fired again: asked whether its original full
+dual-browser20-minute contract should be retained. Until answered, do not substitute
+a shorter test or another Session's old acceptance receipt.
+
+Post-deployment browser checks: desktop final Run loaded in24.90s and390px Board
+in24.66s, both with no page/history errors. Screenshots
+/tmp/dsh-patrol-0302-final.png and /tmp/dsh-patrol-0302-mobile.png were viewed.
+Scrolled to the persisted patrol evidence section and expanded its notifications:
+11 actual browser rows,5 accepted/6 unaccepted at the final event, explicit uncovered
+node, and6 notification receipts. /tmp/dsh-patrol-0302-evidence.png was viewed and
+retained. The role cards being done is not overall acceptance; the evidence table
+retains the failure. Board RPC after restart confirms only2 visible Tasks,30 archived,
+zero running Tasks, unchanged failed Batch and disabled patrol cron. No cleanup of
+private receipts, source, runtime lib/dependencies or unique screenshots was performed.

@@ -256,6 +256,10 @@ another copy. No lifecycle/rebuild authority is granted by this contract.
 
 Only repaired/unresolved instances need the reviewed stability window; healthy
 instances need current independent evidence, not another long observation run.
+When an unreachable zero-observation node already prevents full coverage, unchanged
+independently checked targets whose evidence expires during handoff may close as
+unresolved. They remain unaccepted; this neither extends evidence expiry nor waives
+repair stability, missing independent checks or the manual-before-cron gate.
 `task_patrol_status` exposes scope, budgets and samples. `patrol_snapshot` events
 drive the evidence table at the selected replay position. A supported `unresolved`
 final disposition settles a FAILED Batch, retains the issue budget and permits the

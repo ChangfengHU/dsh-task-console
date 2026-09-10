@@ -42,7 +42,7 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, opt
     execute: () => hooks.patrolStatus!(),
   })))
   if (hooks.wait) disposers.push(agentCtx.tools.register(defineTool({
-    name: 'task_wait', description: '持久化等待到指定时间再继续当前卡。结束本次 worker，届时同一 Task/Batch/卡会创建新 Run；不是失败，不耗返工轮次。先记录已有证据与下次检查目标，不能用等待伪造稳定性。存在未完成后台操作时应继续查询原回执，不调用本工具。',
+    name: 'task_wait', description: '持久化等待到指定时间再继续当前卡。结束本次 worker，届时同一 Task/Batch/卡会创建新 Run；不是失败，不耗返工轮次。巡查v2仅独立评估者可等待；执行者取得操作终态即 task_complete 交接，不等待下游采样或全局ready。先记录已有证据与下次检查目标，不能用等待伪造稳定性。存在未完成后台操作时应继续查询原回执，不调用本工具。',
     parameters: { until: { type: 'string', required: true, description: '带时区的 ISO8601 唤醒时间' }, reason: { type: 'string', required: true, description: '已有证据、等待理由和到期后要检查的事项；不含凭据' } },
     output: { schema: OUT, render },
     async execute(args: any) { await hooks.wait!(String(args.until ?? ''), String(args.reason ?? '')); return { ok: true, note: '已持久化等待；结束本次运行，到期自动继续原卡。' } },

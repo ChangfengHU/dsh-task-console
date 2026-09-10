@@ -92,3 +92,15 @@ test('WeCom outbox requires reviewed recipients, deduplicates and never repeats 
   await outbox.send(input,'rework',report,send)
   assert.equal(outbox.rows(input.batch.id).find((r:any)=>r.stage==='rework').state,'sent')
 })
+
+test('connection recovery refusal is bounded retryable; unproven delivery is not',async t=>{
+  const {input,store}=await setup(t), outbox=new TaskNotifications(store)
+  input.task={...input.task,design:{...design,notifications:{channel:'wecom',chatIds:['fixture-group']}}}
+  let calls=0
+  const send=async()=>{calls++;return {error:'发送失败',detail:{ok:false,code:'wecom_connection_unavailable',delivery:'not_sent',sent:0}}}
+  for(let i=0;i<5;i++)await outbox.send(input,'started',{ready:false,items:[]},send)
+  const row=outbox.rows(input.batch.id)[0] as any
+  assert.equal(calls,3);assert.equal(row.state,'failed');assert.equal(row.attempts,3);assert.match(row.reason,/消息尚未发送/)
+  const unproven=await outbox.send(input,'findings',{ready:false,items:[]},async()=>({ok:false,code:'wecom_connection_unavailable',sent:0}))
+  assert.equal(unproven.notifications[0].state,'unknown')
+})

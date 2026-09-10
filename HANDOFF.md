@@ -193,6 +193,11 @@ resumes the same card/Batch with a new Run. It does not consume rework rounds, c
 overlap an unfinished Browser operation, and retains the original card deadline.
 Do not manually unblock a timer early. Dynamic executor handoffs traverse the Gate
 to include the actual planner's instructions.
+For browser-patrol-v2 only the independent reviewer may defer. Executor completion
+is a factual handoff after its frozen actions end, not a requirement that the whole
+Task is ready. Waiting for downstream reviewer samples would deadlock the DAG.
+Other business contracts retain generic durable waits. Reviewer refreshes expired
+healthy-target evidence at the end of a repair window without repeating its stability test.
 
 New recurring login workflows opt into `browser-patrol-v2`; legacy v1 remains intact.
 Planner, browser-manager and independent read-only reviewer use native tool receipts,
@@ -217,6 +222,8 @@ to select when multiple groups exist. Do not request existing bot credentials/ch
 hand or use Vault secrets as model context. `dsh_task_notifications` persists per-stage/group
 deduplication and receipts. Definite pre-send failures can be retried up to three
 times; ambiguous sends stay `unknown` for human reconciliation by notification ID.
+The Fleet sender's structured connection refusal (`delivery=not_sent`, `sent=0`)
+is retryable within that same cap; a timeout after dispatch remains ambiguous.
 There is no exactly-once delivery claim or automatic replay of browser work. For the
 vyibc deployment the credential-file stdio adapter is maintained in
 `linux-clash-skill/browser-manager/wecom-mcp.mjs`; it reads the existing host credential

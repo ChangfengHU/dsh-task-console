@@ -379,6 +379,8 @@ export class TaskRunner {
           ...(task.design?.evidenceContract === 'browser-patrol-v2' && this.patrolStatus ? { patrolStatus: () => this.patrolStatus!({ task, batch, card, sessionId, profileId }) } : {}),
           wait: async (until, reason) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            if (task.design?.evidenceContract === 'browser-patrol-v2' && card.role !== 'reviewer')
+              throw new Error('巡查v2的分时独立复验由下游评估者负责，当前角色不能 task_wait 等待评估者采样。执行者完成本轮动作并取得后台终态后调用 task_complete 交接；规划者根据证据创建下一轮或收口。ready=false 不代表执行者不能交接。')
             const wakeAt = Date.parse(until), deadline = Date.parse(card.startedAt ?? this.now()) + task.timeoutSec * 1000
             if (!/(Z|[+-]\d\d:\d\d)$/.test(until) || !Number.isFinite(wakeAt) || wakeAt < this.clock() + 60_000 || wakeAt > deadline || !reason.trim() || reason.length > 4000) throw new Error('等待需要带时区、至少一分钟且不超过本卡总时间预算的时间及简短理由')
             if (await this.pendingOperation?.({ task, batch, card, sessionId, profileId })) throw new Error('后台操作仍在运行，先继续查询原操作回执')

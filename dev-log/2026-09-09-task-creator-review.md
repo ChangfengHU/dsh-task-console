@@ -310,3 +310,49 @@ Production dependencies, built runtime, source, database, backups and unique scr
 remain. Owner approval for DSH-mediated recovery of the existing WeCom connection is
 pending. The manual Task remains in its durable wait; no cron activation or business
 completion is claimed, and no additional Task or manual Batch was created.
+
+## 0.29.3 — Repair role handoff and connection-failure handling
+
+The previous checkpoint is superseded: manual Batch b-mtu2iur4sah settled failed at
+2026-09-09T15:16:16.233Z. Its third executor performed one real187/b2 login copy,
+then repeatedly waited/reverified while the downstream reviewer could not start.
+The7200-second original card budget expired; reviewer3/final planner were cancelled.
+All receipts remain. An executor's own samples cannot satisfy independent review.
+
+Host code now rejects task_wait for non-reviewer browser-patrol-v2 roles. Generic
+durable waits remain unchanged. Per-role prompts and Creator context distinguish
+task_complete handoff from whole-Task ready; the reviewer alone collects spaced
+samples and refreshes expired healthy-target evidence without repeating20-minute
+tests. The original reviewed definitions, presets, grants and repair budget are
+not rewritten. No new Agent, Task, scheduler or privileged machine tool was added.
+
+Notifications recognize Fleet's explicit code/delivery/sent pre-send refusal as
+failed and bounded to three attempts. An absent proof of non-delivery remains
+unknown. New tests drive real TaskRunner planner→Gate→executor→reviewer transitions,
+reject premature waits, accept reviewer deferral in the same Batch, and preserve
+ambiguous-send protection. Full193 DSH regressions and build passed. The unrelated
+Fleet/Browser suites passed186/81 tests in their owner repository.
+
+At2026-09-10T02:21:44Z a0600 online backup was made at
+backups/pre-wecom-handoff-0293-2026-09-10T02-21-44.278Z.sqlite. Native session.list,
+core running Tasks, pending wakeups and fresh Browser operations were all idle.
+Only the existing user sop-dsh-web service restarted. Readback preserved31 Tasks,
+210 core Runs, the single failed trial, disabled schedule and four notification
+states(three failed,one unknown). Public Chrome1600/390 loaded the actual retained
+DAG in21.14s with no page errors/history error/document overflow. The UI labels the
+failed executor需处理, not a passed run. Screenshots:
+/tmp/dsh-wecom-handoff-0293-{desktop,mobile}.png, both viewed.
+
+Fleet connection recovery is source-tested but NOT deployed or activated: a separate
+permission question asks to let the existing DSH Task reactivate only the configured
+84 bot with unchanged credentials. No real notification or new manual Batch was
+started in this slice. The unreachable206 coverage gap is not waived; software tests
+are not full-fleet login or notification acceptance. Continue through the real Task
+only after the connection recovery boundary is approved; keep hourly scheduling off
+until manual business and delivery acceptance actually pass.
+
+After all processes finished, checked/proc cwd/fd/maps for references and removed only
+this slice's /tmp/dsh-wecom-recovery.7gNsk6 (54 entries,4,853,760 allocated bytes).
+Recreate with the checked-in tests and a fresh TMPDIR. Retained runtime lib and
+dependencies, source/locks, production DB/backup and both unique screenshots. No
+unrelated shared/tmp directory or another session's cache was cleaned.

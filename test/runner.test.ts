@@ -77,6 +77,27 @@ test('unresolved patrol closes a failed Batch, not a green Task or a permanent c
   assert.equal((store.kernel.db.prepare('SELECT COUNT(*) n FROM dsh_batches WHERE settled_at IS NULL').get() as any).n,0)
 })
 
+test('patrol executor hands off before independent waiting; only reviewer can defer', async () => {
+  const now=Date.now(), {host,runner,store}=await setup({graphMode:'dynamic-rounds',timeoutSec:1800,design:{evidenceContract:'browser-patrol-v2',failurePolicy:{maxAttempts:3}} as any},{now:()=>now})
+  try {
+    const batch=await runner.fire('T','manual');await tick()
+    let session=[...host.sessions.keys()].at(-1)!;host.consumeFirst(session)
+    const wait={until:new Date(now+300_000).toISOString(),reason:'fixture independent observation'}
+    await assert.rejects(host.callTool(session,'task_wait',wait),/下游评估者/)
+    await host.callTool(session,'task_plan_round',{summary:'fixture read and independent review'});host.endTurn(session);await tick()
+    session=[...host.sessions.keys()].at(-1)!;host.consumeFirst(session)
+    assert.match(host.sessions.get(session)!.followups[0].content[0].text,/不得 task_wait 等待下游采样/)
+    await assert.rejects(host.callTool(session,'task_wait',wait),/ready=false 不代表执行者不能交接/)
+    assert.equal((store.kernel.db.prepare('SELECT COUNT(*) n FROM dsh_task_wakeups').get() as any).n,0)
+    await host.callTool(session,'task_complete',{summary:'fixture operation ended; independent samples pending'});host.endTurn(session);await tick()
+    session=[...host.sessions.keys()].at(-1)!;host.consumeFirst(session)
+    assert.match(host.sessions.get(session)!.followups[0].content[0].text,/只有你负责分时独立复验/)
+    await host.callTool(session,'task_wait',wait);host.endTurn(session);await tick()
+    assert.equal((store.kernel.db.prepare('SELECT COUNT(*) n FROM dsh_task_wakeups').get() as any).n,1)
+    assert.equal(store.s.batches.size,1);assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  } finally {runner.stop()}
+})
+
 test('durable wait releases worker, survives reload, and resumes same card without failure', async () => {
   let now = Date.now()
   const { host, runner, store, root } = await setup({ timeoutSec: 1800 }, { now: () => now })

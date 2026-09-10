@@ -44,6 +44,10 @@ export class TaskNotifications {
           const failure = result?.detail ?? result
           if (result?.ok !== false && !result?.error && result?.sent === 1) { state = 'sent'; reason = 'MCP 确认送达1个群，不代表用户已阅读' }
           // Only definite pre-send refusals are safely retryable. Network failures are ambiguous.
+          else if (failure?.ok === false && failure?.code === 'wecom_connection_unavailable' && failure?.delivery === 'not_sent' && failure?.sent === 0) {
+            state = 'failed'
+            reason = '企业微信连接恢复未通过，消息尚未发送；最多重试3次通知，不重复浏览器操作'
+          }
           else if (/^(no subscribers|指定的 chatid 不在已订阅列表里|no alerter designated|alerter node [\w-]+ unavailable|this node is not the connected alerter|wecom bridge not loaded)$/.test(String(failure?.error))) {
             state = 'failed'
             reason = /connected alerter|bridge not loaded/.test(failure.error)

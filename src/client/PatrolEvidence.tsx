@@ -6,6 +6,7 @@ export function PatrolEvidence({ events }: { events: GraphEventRow[] }) {
   if (!snapshot) return null
   const report = snapshot.payload as any
   const notices = new Map(events.filter(e => e.kind === 'notification_delivery').map(e => [String(e.payload.notification_id), e.payload]))
+  const queued = events.filter(e=>e.kind==='notification_requested' && !events.some(n=>n.task_id===e.task_id && ['notification_delivery','notification_blocked'].includes(n.kind)))
   const date = (at: unknown) => typeof at === 'string' ? new Date(at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '—'
   return <section className="dtc-cpanel" aria-label="浏览器巡查验收" style={{ padding: 16 }}>
     <h3>浏览器巡查 · 真实证据</h3><p>{report.summary || report.reason}</p>
@@ -21,6 +22,8 @@ export function PatrolEvidence({ events }: { events: GraphEventRow[] }) {
       </tr>)}</tbody>
     </table></div>
     {(report.uncovered ?? []).map((r: any) => <p className="dtc-warn" key={r.nodeId}>{r.nodeId}：无法确认浏览器覆盖，不能视为已通过。</p>)}
+    {queued.map(e=><p key={e.id}>✉ {String(e.payload.stage)} · 通知员待发送 · {e.task_id}</p>)}
+    {events.filter(e=>e.kind==='notification_blocked').map(e=><p key={e.id}>✉ 通知未完成：{String(e.payload.reason)}</p>)}
     {notices.size ? <details><summary>企微通知 · {notices.size} 条</summary>{[...notices].map(([id,n]) => <p key={id}>{String(n.stage)} · {String(n.state)} · {String(n.reason)}<br /><small>{id}</small></p>)}</details> : null}
   </section>
 }

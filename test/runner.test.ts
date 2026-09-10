@@ -8,6 +8,7 @@ import { EventStore, type TaskSpec } from '../src/tasks.ts'
 import { groupArtifacts } from '../src/artifact-delivery.ts'
 import { TaskCreator } from '../src/task-create.ts'
 import { taskCredential } from '../src/task-credentials.ts'
+import { TaskNotifications } from '../src/task-notifications.ts'
 
 const testResources: { root: string; runner: TaskRunner; store: EventStore }[] = []
 after(async () => {
@@ -62,6 +63,84 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
   return { host, store, runner, task, root }
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
+
+test('delegated notifications are real idempotent side cards with frozen reports and independent sessions', async () => {
+  let outbox: TaskNotifications
+  const delivered:string[]=[]
+  const design:any={evidenceContract:'browser-patrol-v2',failurePolicy:{maxAttempts:3},notifications:{channel:'wecom',agentId:'notifier',chatIds:['group-fixture']}}
+  const {host,runner,store}=await setup({graphMode:'dynamic-rounds',design},{
+    notify:async(input,stage)=>input.card.role==='planner'
+      ? outbox.request(input,stage as any,{ready:false,summary:'frozen-before-repair',items:[]})
+      : outbox.send(input,stage as any,{ready:true,summary:'must-not-use-live-report'},async args=>{delivered.push(args.markdown);return{sent:1}}),
+    beforeComplete:input=>input.card.role==='notifier'?outbox.complete(input):undefined,
+  })
+  outbox=new TaskNotifications(store)
+  const batch=await runner.fire('T','manual'), planner=[...host.sessions.keys()].at(-1)!
+  host.consumeFirst(planner)
+  const first=await host.callTool(planner,'task_notify',{stage:'started'})
+  const duplicate=await host.callTool(planner,'task_notify',{stage:'started'})
+  assert.equal(first.cardId,duplicate.cardId)
+  assert.equal(store.kernel.getTask(first.cardId)?.status,'todo')
+  assert.equal([...store.s.cards.values()].filter(c=>c.role==='notifier').length,1)
+  assert.equal(store.graphSnapshot('T',batch.id).live.tasks.find(t=>t.id===first.cardId)?.role,'notifier')
+  await host.callTool(planner,'task_plan_round',{summary:'real next round, notifier does not consume planning lock'})
+  host.endTurn(planner);await tick()
+  const noticeSession=[...store.s.runs.values()].find(r=>r.cardId===first.cardId)!.sessionId
+  host.consumeFirst(noticeSession)
+  assert.match(host.sessions.get(noticeSession)!.followups[0].content[0].text,/企微通知协作/)
+  await assert.rejects(host.callTool(noticeSession,'task_notify',{stage:'restored'}),/冻结的阶段/)
+  await host.callTool(noticeSession,'task_notify',{stage:'started'})
+  await host.callTool(noticeSession,'task_notify',{stage:'started'})
+  assert.equal(delivered.length,1);assert.match(delivered[0],/frozen-before-repair/);assert.doesNotMatch(delivered[0],/must-not-use/)
+  await host.callTool(noticeSession,'task_complete',{summary:'model summary'})
+  host.endTurn(noticeSession);await tick()
+  assert.equal(store.s.cards.get(first.cardId)?.status,'done')
+  assert.equal(store.s.cards.get(`${batch.id}#e1`)?.status,'running')
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  assert.equal(store.kernel.getTask(first.cardId)?.max_runtime_seconds,300)
+})
+
+test('a failed notification branch does not cancel browser work', async()=>{
+  const {host,runner,store}=await setup({graphMode:'dynamic-rounds',onFail:'stop',design:{failurePolicy:{maxAttempts:3},notifications:{agentId:'notifier',chatIds:['fixture']}} as any})
+  const batch=await runner.fire('T','manual'), plannerSession=[...host.sessions.keys()].at(-1)!
+  host.consumeFirst(plannerSession)
+  const planner=store.s.cards.get(batch.cardIds[0])!
+  const id=await store.createNotification(store.tasks.get('T')!,batch,planner,'started',{summary:'fixture'})
+  // Simulate an exhausted notification worker before the repair dependency is released.
+  store.kernel.giveUpTask(id,'notification transport fixture')
+  await store.append({t:'card/gave_up',at:new Date().toISOString(),taskId:'T',cardId:id,error:'notification fixture'})
+  await host.callTool(plannerSession,'task_plan_round',{summary:'continue browser work'})
+  host.endTurn(plannerSession);await tick()
+  assert.equal(store.s.cards.get(`${batch.id}#e1`)?.status,'running')
+  assert.equal(store.s.cards.get(`${batch.id}#r1`)?.status,'todo')
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+})
+
+test('Creator reviews auxiliary notifier permissions and pins its profile for hourly execution',async()=>{
+  const {runner,root}=await setup()
+  const design:any={evidenceContract:'browser-patrol-v2',scope:'Existing authorized fleet browsers',branches:[{id:'verify',when:'unknown',action:'read only verify',evidence:'fresh result'}],coordination:'three roles and notifier side branch',failurePolicy:{isolateItems:true,maxAttempts:3,stopConditions:['no permission']},acceptance:['independent login evidence and sent receipts'],browserPatrol:{scope:'fleet-existing-authorized',actions:['provision','resume'],observationMinutes:20,minSamples:4},notifications:{channel:'wecom',agentId:'notifier',chatIds:['fixture-group']}}
+  const agents:any[]=['a','browser-manager','c'].map(id=>({id,name:id,tools:[],skills:[],mcpTools:{browser:['browser_fleet_inventory','browser_login_verify','browser_status']}}))
+  const notifier:any={id:'notifier',name:'notifier',tools:[],skills:[],mcpTools:{wecom:['vyibc-wecom_send_message']},profileHash:'v1'}
+  agents.push(notifier)
+  const creator=new TaskCreator(runner,async()=>agents)
+  const proposal:any={decision:'create',reason:'isolated reports',title:'Patrol with notifier',brief:'Verify existing authorized browsers and report',participants:['a','browser-manager','c'].map(agentId=>({agentId})),graphMode:'dynamic-rounds',trigger:{kind:'cron',expr:'0 * * * *',timeZone:'Asia/Shanghai'},design}
+  const exec:any={agent:{session:{id:'notifier-review-fixture',deriveMessages:()=>[{role:'user',content:'Prepare an hourly browser patrol with independent notifications'}]}}}
+  notifier.tools=['bash']
+  await assert.rejects(creator.prepare(proposal,exec,root),/通知员仅允许/)
+  notifier.tools=[]
+  const plan:any=await creator.prepare(proposal,exec,root)
+  notifier.profileHash='v2'
+  await assert.rejects(creator.review(plan.id,plan.hash,'approve','independent fixture review'),/能力或配置已变化/)
+  notifier.profileHash='v1'
+  const approved=await creator.review(plan.id,plan.hash,'approve','independent fixture review')
+  assert.equal(approved.state,'awaiting_trial')
+  const task=runner.store.tasks.get(approved.taskId!)!
+  assert.equal(task.enabled,false)
+  assert.equal(task.design?.notifications?.agentId,'notifier')
+  assert.ok(await creator.scheduledTurn(task,'fixture-hour'))
+  notifier.profileHash='v2'
+  await assert.rejects(creator.scheduledTurn(task,'fixture-next-hour'),/角色配置已变化/)
+})
 
 test('unresolved patrol closes a failed Batch, not a green Task or a permanent cron overlap', async t => {
   const {host,runner,store,root}=await setup({graphMode:'dynamic-rounds',design:{evidenceContract:'browser-patrol-v2'} as any}, {

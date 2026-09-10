@@ -1,4 +1,5 @@
 import { batchStatus, type State } from './fold.ts'
+import { taskAgentIds } from './task-design.ts'
 import type { AgentHistoryPage, AgentHistoryQuery, AgentSessionRow, AgentTaskRow } from './wire.ts'
 
 /** Metadata only: no transcript or tool-result reads in listing paths. */
@@ -60,13 +61,14 @@ export function agentHistory(st: State, headers: AgentSessionHeader[], query: Re
     }
   }
   for (const task of st.tasks.values()) {
-    if (task.participants.some(p => p.agentId === agentId)) addTask(task.id, 'participant')
+    if (taskAgentIds(task).includes(agentId)) addTask(task.id, 'participant')
     origin(task.id, task.origin?.intakeSessionId)
   }
   for (const batch of st.batches.values()) {
     // A later turn replaces the template team; never borrow the old participants.
     const participants = batch.turn?.participants ?? st.tasks.get(batch.taskId)?.participants ?? []
-    if (participants.some(p => p.agentId === agentId)) addTask(batch.taskId, 'participant', batch.id)
+    const design = batch.turn?.workflow?.definition.design ?? st.tasks.get(batch.taskId)?.design
+    if (taskAgentIds({participants,design}).includes(agentId)) addTask(batch.taskId, 'participant', batch.id)
     origin(batch.taskId, batch.turn?.origin?.intakeSessionId, batch.id)
   }
   for (const card of st.cards.values()) if (card.agentId === agentId && card.kind !== 'gate') addTask(card.taskId, 'participant', card.batchId)

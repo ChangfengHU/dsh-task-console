@@ -277,6 +277,31 @@ export class EventStore {
     this.events.push(event); this.state = fold(this.events)
   }
 
+  /** A durable side branch: notification failure never becomes a repair dependency. */
+  async createNotification(task: TaskSpec, batch: Batch, planner: Card, stage: string, report: unknown): Promise<string> {
+    const agentId = task.design?.notifications?.agentId
+    if (!agentId || planner.role !== 'planner' || !planner.round) throw new Error('没有已审查的通知员配置')
+    const id = `${batch.id}#n${planner.round}-${stage}`
+    await this.transition(() => {
+      const db = this.kernel.db
+      if (this.kernel.getTask(planner.id)?.status !== 'running' || this.state.batches.get(batch.id)?.settled) throw new Error('规划者已不在运行中')
+      if (this.kernel.getTask(id)) return undefined
+      const at = new Date().toISOString(), epoch = toEpoch(at)
+      const position = (db.prepare('SELECT COALESCE(MAX(position),-1)+1 AS n FROM dsh_card_bindings WHERE batch_id=?').get(batch.id) as {n:number}).n
+      const brief = `只负责 ${stage} 阶段企微通知；先 task_patrol_status 读取冻结交接，再 task_notify(stage="${stage}")，按真实回执 task_complete。`
+      const card = { id, agentId, kind: 'agent' as const, role: 'notifier' as const, round: planner.round, deps: [planner.id], brief }
+      db.prepare('INSERT INTO dsh_card_bindings(card_id,spec_id,batch_id,position,brief) VALUES (?,?,?,?,?)').run(id,task.id,batch.id,position,brief)
+      db.prepare(`INSERT INTO tasks(id,title,body,assignee,status,priority,created_by,created_at,workspace_kind,workspace_path,tenant,max_runtime_seconds,max_retries,node_kind,round,role)
+        VALUES (?,?,?,?,'todo',?,'dsh-task-console',?,'dir',?,?,300,1,'agent',?,'notifier')`).run(id,`企微通知 · ${stage}`,brief,agentId,-position,epoch,task.cwd,batch.id,planner.round)
+      db.prepare("INSERT INTO task_links(parent_id,child_id,kind,created_at) VALUES (?,?,'dependency',?)").run(planner.id,id,epoch)
+      this.kernel.recordEvent(id,'created',{title:`企微通知 · ${stage}`,body:brief,assignee:agentId,status:'todo',parents:[planner.id],tenant:batch.id,node_kind:'agent',round:planner.round,role:'notifier',created_at:epoch})
+      this.kernel.recordEvent(id,'linked',{parent_id:planner.id,kind:'dependency'})
+      this.kernel.recordEvent(id,'notification_requested',{source_card_id:planner.id,stage,report})
+      return { t: 'card/created' as const, at, taskId:task.id, batchId:batch.id, card }
+    }, event => event)
+    return id
+  }
+
   /** Materialize one real rework round. Nothing is inferred by the browser. */
   async expandRound(task: TaskSpec, batch: Batch, planner: Card, summary: string, commit?: () => void): Promise<void> {
     if (task.graphMode !== 'dynamic-rounds' || planner.role !== 'planner' || !planner.round) throw new Error('只有动态回合的规划者能创建下一轮')
@@ -289,7 +314,7 @@ export class EventStore {
         const db = this.kernel.db
         const active = this.kernel.getTask(planner.id)
         if (!active || active.status !== 'running') throw new Error('规划者已不在运行中')
-        if ((db.prepare('SELECT COUNT(*) AS n FROM task_links WHERE parent_id = ?').get(planner.id) as { n: number }).n) throw new Error('这个规划者已经创建过下一轮')
+        if ((db.prepare("SELECT COUNT(*) AS n FROM task_links l JOIN tasks t ON t.id=l.child_id WHERE parent_id = ? AND COALESCE(t.role,'') != 'notifier'").get(planner.id) as { n: number }).n) throw new Error('这个规划者已经创建过下一轮')
         commit?.()
         const atIso = new Date().toISOString(); const at = toEpoch(atIso)
         const rows = [
@@ -406,6 +431,14 @@ export function taskForBatch(task: TaskSpec, batch: Batch): TaskSpec {
 
 /** The one user message a card's session gets: brief, its part, the upstream handoffs, and the contract. */
 export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstream: { agentName: string; summary: string }[]): string {
+  if (card.role === 'notifier') return [
+    `# 企微通知协作 · Task ${task.id} · 执行 ${batchId}`, card.brief,
+    '你是独立通知员，不执行浏览器检查、登录或修复，也不恢复企业微信服务。',
+    '调用 task_patrol_status 读取本卡冻结的 stage/report；这是上游在当时提交的事实，不把之后发生的结果冒充该阶段事实。',
+    '调用 task_notify(stage) 经你的企微 MCP 发送。收件群和事实正文由已审查契约限定，禁止直接 send_message 绕过发件箱。',
+    'sent 表示服务确认发送，不代表已读；failed 仅在明确未发送时可重试最多3次，unknown 禁止重发。',
+    '得到终态回执后调用 task_complete 如实交接；通知失败不能要求重复浏览器操作。没有文件产物，不要创建文件。',
+  ].join('\n\n')
   const lines = [`# 任务:${task.title} · ${batchId} · 第 ${card.index + 1}/${task.participants.length} 张卡`, '',
     task.origin?.reviewPlanId ? '[ORIGINAL REQUEST — CREATION STAGE ALREADY REVIEWED]' : '[TASK]', task.brief.trim()]
   if (task.origin) lines.push('', '[ORIGIN]', [

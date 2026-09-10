@@ -12,7 +12,7 @@ export interface GraphTaskRow {
   result: string | null
   node_kind: 'agent' | 'gate'
   round: number | null
-  role: 'planner' | 'executor' | 'reviewer' | 'gate' | null
+  role: 'planner' | 'executor' | 'reviewer' | 'gate' | 'notifier' | null
   current_run_id: number | null
 }
 
@@ -87,7 +87,7 @@ const blankTask = (e: GraphEventRow): GraphTaskRow => {
     result: null,
     node_kind: p.node_kind === 'gate' ? 'gate' : 'agent',
     round: typeof p.round === 'number' ? p.round : null,
-    role: ['planner', 'executor', 'reviewer', 'gate'].includes(String(p.role)) ? p.role as GraphTaskRow['role'] : null,
+    role: ['planner', 'executor', 'reviewer', 'gate', 'notifier'].includes(String(p.role)) ? p.role as GraphTaskRow['role'] : null,
     current_run_id: null,
   }
 }

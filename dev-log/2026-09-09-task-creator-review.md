@@ -356,3 +356,79 @@ this slice's /tmp/dsh-wecom-recovery.7gNsk6 (54 entries,4,853,760 allocated byte
 Recreate with the checked-in tests and a fresh TMPDIR. Retained runtime lib and
 dependencies, source/locks, production DB/backup and both unique screenshots. No
 unrelated shared/tmp directory or another session's cache was cleaned.
+
+## 0.30.0 — Independent WeCom notifier and reviewed recurring Task (2026-09-10)
+
+User authorized creating a separate notification Agent and the DSH patrol Task.
+The previous temporary MCP-only boundary is superseded for this work. No developer
+machine/browser action, login copy, restart of a target service, credential rotation,
+history deletion, or real fleet patrol was performed in this slice.
+
+Installed wecom-notifier with the existing deepseek-official/qwen-plus-latest model
+and three selected WeCom MCP tools: list_groups/status/send_message. It has no native
+business tools or skills. Creator/planner persona updates preserve their installed
+models and grants. Current independent MCP readbacks confirm the configured84
+connection and the single subscribed group. The earlier claim above that WeCom
+deployment/activation is pending is obsolete: owner linux-clash commit f7af5ab
+deployed and independently verified that service before this slice.
+
+Added optional notifications.agentId rather than changing the three-role Hermes
+main protocol. The planner's task_notify queues a persisted side card with a frozen
+notification_requested report, task_links dependency, own Run/Session and bounded
+MCP outbox. Roster hashing/preflight/review and Agent histories include the auxiliary
+Agent. The DAG has a separate notifier lane and real creation/delivery events. An
+isolated notification failure does not cancel browser work; unknown never blindly
+resends and notification failure prevents successful schedule acceptance.
+
+Real Creator session: agent-task-create-agent-mtv4oqrs. It queried the actual roster
+and WeCom groups, submitted an initial invalid missing-reason call and corrected it.
+Draft P-chat-3877552a7c4cc01c5b1f was independently rejected: failed targets must not
+wait merely to accumulate stability samples; a single lifetime provision conflicts
+with bounded rework; a lifecycle prohibition must not accidentally forbid the normal
+approved login MCP; WeCom reconciliation uses notification IDs, not browser operation IDs.
+The same Creator session read the updated roster and produced the corrected draft.
+
+Approved P-chat-91f9b5b7a521eb173e4b at2026-09-10T06:17:40Z:
+Task T-chat-bbb714b2ba8439b69178, Fleet Gemini 登录巡查与企微协作通知.
+Main participants: fleet-ops-planner/browser-manager/fleet-ops-reviewer; auxiliary:
+wecom-notifier. Hourly0 * * * * Asia/Shanghai, enabled=false, awaiting_trial, zero
+Batches. This is an actual created Task, NOT a completed fleet patrol. Preserve the
+old disabled T-chat-ddae64d380f24e8e23a2 and every existing receipt.206 is not waived;
+no deletion/rebuild authorization, no new account authorization, excluded source
+account unchanged, healthy logins preserved and no repeat63 special test.
+
+Regression197 tests passed, plus a component execution regression added after a real
+browser caught an unbound plan variable in the shared design view. The defect was
+fixed before final UI acceptance. Real notifier read-only trial sessions are retained:
+tc-try-wecom-notifier-mtv4vgfu and tc-try-wecom-notifier-mtv4y3u7. The host still presents
+late injected schedule_* names in a request header; these are NOT grants. Actual
+tc-try-wecom-notifier-mtv4zpf6 schedule_list was rejected by the tool guard with no
+fallback or write. An attempted visibility-only fence change did not fix this host
+presentation limitation and was removed; no unverified fence refactor is shipped.
+
+Before deployment native sessions, running core Tasks and pending wakeups were idle.
+Private0600 online backup:
+backups/pre-notifier-0300-2026-09-10T06-09-29.570Z.sqlite.
+Only the local user sop-dsh-web was restarted. Initial31 Tasks/210 core Runs retained;
+the one newly approved Task brings the definition count to32, with no new core Runs.
+No new dependencies were installed. Tracked lib is the production runtime, not trash.
+Boss task binding succeeded; linux-clash Brain portability remains partial because
+its existing Brain is Git-ignored. This work does not change that repository policy.
+
+Final acceptance: all198 tests and build passed. Public Chrome1600px plan page
+loaded in21.28s; corrected unexecuted Task page in23.84s, with no page errors and
+no390px document overflow. The unexecuted view now exposes the reviewed plan,
+auxiliary notifier, Creator Session and a manual-run button; it no longer displays
+synthetic start/end DAG nodes as if they were persisted execution rows. No button
+that starts browser work was clicked. Final readback:32 definitions,210 core Runs,
+the same4 historical notification rows, new Task disabled with0 Batches.
+Evidence retained and viewed:
+/tmp/dsh-notifier-0300-task-final.png, task-mobile.png, agent-final.png (same prefix).
+Plan desktop/mobile screenshots are also retained. These unique evidence files and
+the online SQLite backup are not temporary build trash.
+
+After the final isolated tests finished, checked/proc cwd/fd/maps for references and
+removed only /tmp/dsh-notifier-verify.OogK6a:7,049,216 allocated bytes of test-generated
+fixtures (including dummy keys/SQLite databases). Rebuild with the checked-in tests
+using a fresh TMPDIR and TSX_DISABLE_CACHE=1. No dependencies were installed, and no
+production database, runtime, user file or shared cache directory was removed.

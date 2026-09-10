@@ -11,6 +11,8 @@ import { TurnLedgerView, useLedger, type LedgerApi } from './TurnLedger.tsx'
 import { DynamicTaskReplay } from './DynamicTaskReplay.tsx'
 import { ArtifactDelivery } from './ArtifactDelivery.tsx'
 import { ExecutionPicker } from './ExecutionPicker.tsx'
+import { WorkflowPlan } from './WorkflowPlan.tsx'
+import { TaskRunAction } from './TaskRunAction.tsx'
 
 const fmt = (iso?: string) => iso ? new Date(iso).toLocaleTimeString('zh-CN', { hour12: false }) : ''
 const dur = (a?: string, b?: string) => { if (!a) return ''; const s = Math.max(0, Math.round(((b ? +new Date(b) : Date.now()) - +new Date(a)) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` }
@@ -223,6 +225,11 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
   const agentName = (aid: string) => agents.find(a => a.id === aid)?.name ?? aid
   if (!task) return <div className="dtc-empty">{error || (events.length ? '没有这个任务' : <><span className="dtc-spin" /> 读取事件流…</>)}</div>
   if ((task.graphMode === 'dynamic-rounds' || task.origin?.source === 'task-chat') && selId) return <DynamicTaskReplay api={api} agents={agents} task={task} batches={batches} batchId={selId} sessionId={sessionId} toast={toast} />
+  if (!selId && task.origin) return <section className="dtc-workflow">
+    <header><div><h2>{task.title}</h2><p>已创建 · 尚未执行 · 0 次执行记录</p></div><TaskRunAction task={task} api={api} toast={toast} /></header>
+    <p>{task.trigger.kind === 'cron' ? `时间表：${task.trigger.expr} · ${task.trigger.timeZone || '宿主时区'} · ${task.enabled ? '已启用' : '未启用，等待手动验收'}` : '等待首次手动执行。'}运行前没有角色、闸门或依赖行，不展示虚构 DAG。</p>
+    <WorkflowPlan task={task} nameOf={agentName} openSession={sid=>void api.openSession(sid).catch(e=>toast(String(e.message||e)))} trace={sid=>void api.openSession(sid).catch(e=>toast(String(e.message||e)))} />
+  </section>
 
   const cardsNow = batchNow ? batchNow.cardIds.map(cid => now.cards.get(cid)).filter(Boolean) as Card[] : []
   const cardsFull = batchFull ? batchFull.cardIds.map(cid => full.cards.get(cid)).filter(Boolean) as Card[] : []

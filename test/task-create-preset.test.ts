@@ -3,6 +3,15 @@ import { readFile } from 'node:fs/promises'
 import { test } from 'node:test'
 import { validateSpec } from '../src/presets.ts'
 
+test('notifier ships only the independent WeCom capability; creator delegates it',async()=>{
+  const spec=validateSpec(JSON.parse(await readFile(new URL('../presets/wecom-notifier/task-console.json',import.meta.url),'utf8')))
+  assert.deepEqual(spec.tools,[]);assert.deepEqual(spec.skills,[])
+  assert.deepEqual(spec.mcpTools,{'vyibc-wecom':['vyibc-wecom_list_groups','vyibc-wecom_status','vyibc-wecom_send_message']})
+  assert.match(spec.persona,/unknown 不得重发/)
+  const creator=JSON.parse(await readFile(new URL('../presets/task-create-agent/task-console.json',import.meta.url),'utf8'))
+  assert.match(creator.persona,/design.notifications.agentId/)
+})
+
 test('creator ships reusable onboarding/login rules but no business execution grants', async () => {
   const spec = validateSpec(JSON.parse(await readFile(new URL('../presets/task-create-agent/task-console.json', import.meta.url), 'utf8')))
   assert.deepEqual(spec.tools, ['ask-user', 'task-create-runtime'])

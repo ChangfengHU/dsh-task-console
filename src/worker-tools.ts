@@ -32,7 +32,7 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, opt
   const defineTool: (spec: any) => any = process.env.NODE_ENV === 'test' ? (spec => spec) : (await import('@deepseek-ai/dsh-tools')).defineTool
   const disposers: (() => void)[] = []
   if (hooks.notify) disposers.push(agentCtx.tools.register(defineTool({
-    name: 'task_notify', description: '规划者通过现有企微 MCP 汇报真实巡查进度；收件群、内容和去重编号由已审查契约与数据库证据生成。重复调用同阶段只重试确定未发送的通知，绝不重复浏览器修复；unknown 不盲目重发。',
+    name: 'task_notify', description: '已配置独立通知员时，规划者调用只创建真实通知协作卡；通知员在自己的会话调用才经企微 MCP 发送。收件群、阶段正文和去重编号由已审查契约与冻结证据生成。重复调用只重试确定未发送的通知；unknown 不盲目重发，通知失败不重复浏览器修复。',
     parameters: { stage: { type: 'string', required: true, enum: ['started','findings','rework','restored','unresolved'] } },
     output: { schema: { type: 'object', additionalProperties: true }, render }, execute: (args: any, exec: any) => hooks.notify!(args.stage, exec),
   })))

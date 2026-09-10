@@ -13,6 +13,31 @@ not an adjacent source checkout. Its generated `lib/` plugin assets are tracked.
 
 ## Chat-created workflows
 
+For browser-patrol-v2, `design.notifications.agentId` selects an independently
+reviewed auxiliary notifier without replacing any of the three business roles.
+The managed `wecom-notifier` preset uses the existing ordinary tool-based model
+and only WeCom group/status/send MCP grants (no CLI backend, browser or Vault tools).
+Install it through the existing Agent save API, which resolves the actual host MCP
+entry rather than copying credentials. Preserve existing models/grants when updating
+the Creator/planner personas. Notify participants are included in roster hashes,
+schedule preflight, review/plan display and Agent task history.
+
+With delegation configured, planner `task_notify` atomically creates a real SQLite
+Task/link/event side card, dependent only on that planner. Its notification_requested
+event freezes the report. After planner handoff, the notifier gets its own Run and
+Session and calls task_notify against that frozen stage. Receipt deduplication and
+unknown-send protection still use the existing outbox. The notification branch has
+a five-minute worker budget and one worker attempt; definite pre-send failures may
+retry transport up to three times, never ambiguous sends. Failed/blocked notifications
+make overall acceptance unresolved without cancelling repair descendants. No second
+queue service or scheduler is introduced. Older designs without agentId keep the
+planner-direct path; their historical receipts are not rewritten.
+
+WeCom connection recovery belongs to the independent Fleet MCP service, not a DSH
+Agent activation prerequisite. Keep hourly schedules disabled until an actual manual
+Batch passes both business evidence and notification receipts. Creating the Agent,
+approving a plan, or passing unit tests is not a passed fleet patrol.
+
 Creator submissions now prepare a structured decision contract in SQLite
 `dsh_task_plans`; they do not create a Task/Batch or start a worker. Each plan records
 scope, evidence-based branches, coordination, bounded failure policy and acceptance.

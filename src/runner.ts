@@ -19,6 +19,7 @@ import { captureArtifacts } from './artifacts.ts'
 import { readSpec } from './presets.ts'
 import { EventStore, NUDGE, cardMessage, cronMatches, parseCron, taskForBatch, taskForTurn, type Batch, type BlockKind, type Card, type TaskSpec, type TaskTurn } from './tasks.ts'
 import { registerWorkerTools } from './worker-tools.ts'
+import { taskAgentIds } from './task-design.ts'
 import { ScheduleLedger, type ScheduleClaim } from './scheduler.ts'
 import { publicToolName } from './filtered-mcp-client.ts'
 import { dispatchNotification } from './notification-dispatch.ts'
@@ -198,13 +199,13 @@ export class TaskRunner {
     }
     const ready = core.filter(row => row.status === 'ready' || (row.status === 'review' && automatedReview(row.id)))
       .map(row => s.cards.get(row.id)).filter(Boolean) as Card[]
-    ready.sort((a, b) => a.batchId.localeCompare(b.batchId) || a.index - b.index)
+    ready.sort((a, b) => a.batchId.localeCompare(b.batchId) || Number(a.role === 'notifier') - Number(b.role === 'notifier') || a.index - b.index)
     for (const c of ready) {
       if (inProgress >= this.maxInProgress) break
       const template = this.store.tasks.get(c.taskId); if (!template) continue
       const batch = this.store.s.batches.get(c.batchId); if (!batch || batch.settled) continue
       const task = taskForBatch(template, batch)
-      if (c.consecutiveFailures > 0 && (task.onFail !== 'retry' || c.consecutiveFailures >= task.maxTries)) {
+      if (c.consecutiveFailures > 0 && (c.role === 'notifier' || task.onFail !== 'retry' || c.consecutiveFailures >= task.maxTries)) {
         const failure = c.error ?? `连续失败 ${c.consecutiveFailures} 次`
         await this.store.transition(
           () => this.store.kernel.giveUpTask(c.id, failure),
@@ -226,6 +227,10 @@ export class TaskRunner {
       if (!cards.length) continue
       const dead = cards.filter(c => c.status === 'failed' || c.status === 'cancelled')
       if (dead.length) {
+        if (dead.every(c => c.role === 'notifier')) {
+          if (cards.every(c => ['done','failed','cancelled'].includes(c.status))) await this.settleBatch(b,'failed')
+          continue
+        }
         for (const c of cards) if (c.status === 'todo' || c.status === 'ready') {
           await this.store.transition(
             () => this.store.kernel.cancelTask(c.id, '上游失败，任务不可达'),
@@ -292,8 +297,8 @@ export class TaskRunner {
   private async preflight(task: TaskSpec): Promise<string | null> {
     const presets = (this.ctx as any).get('agentPresets')
     if (!presets) return '这个部署没有 preset 服务'
-    for (const p of task.participants) {
-      try { const r = await presets.resolve(p.agentId); if (r.broken) return `preset ${p.agentId} 坏了:${r.broken}` } catch { return `preset ${p.agentId} 不在名册上` }
+    for (const id of taskAgentIds(task)) {
+      try { const r = await presets.resolve(id); if (r.broken) return `preset ${id} 坏了:${r.broken}` } catch { return `preset ${id} 不在名册上` }
     }
     try { const { stat } = await import('node:fs/promises'); if (!(await stat(task.cwd)).isDirectory()) return `工作目录不存在:${task.cwd}` } catch { return `工作目录不存在:${task.cwd}` }
     return null
@@ -335,7 +340,7 @@ export class TaskRunner {
     if (!claim) return
     const flight: Flight = {
       runId, cardId: card.id, taskId: task.id, sessionId, messageId, consumed: false,
-      handle: undefined, lastText: '', timeoutSec: task.timeoutSec,
+      handle: undefined, lastText: '', timeoutSec: card.role === 'notifier' ? 300 : task.timeoutSec,
       coreRunId: claim.run.id, claimLock: claim.lock, profileId,
       ...(previousWait ? { deadline: Date.parse(card.startedAt ?? this.now()) + task.timeoutSec * 1000 } : {}),
     }
@@ -369,11 +374,11 @@ export class TaskRunner {
           flight.terminal = { kind, summary, metadata, reviewer }
         }
         flight.disposeTools = await registerWorkerTools(flight.handle.agent.ctx, {
-          ...(task.design?.notifications && card.role === 'planner' && this.notify ? { notify: (stage: string, exec: any) => this.notify!({ task, batch, card, sessionId, profileId }, stage, async args => {
+          ...(task.design?.notifications && ['planner','notifier'].includes(card.role ?? '') && this.notify ? { notify: (stage: string, exec: any) => this.notify!({ task, batch, card, sessionId, profileId }, stage, async args => {
             const runtime = flight.handle.agent.ctx.tools
             const names = Object.entries(spec?.mcpTools ?? {}).flatMap(([server, selected]) => selected.filter(raw => raw.replace(/-/g, '_') === 'vyibc_wecom_send_message').flatMap(raw => [publicToolName(server, raw), publicToolName(`${server}-${profileId}`, raw)]))
             const tool = runtime.schemas(flight.handle.agent).find((s: any) => names.includes(s.name))
-            if (!tool) throw new Error('当前规划者未配置企业微信发送 MCP')
+            if (!tool) throw new Error('当前通知角色未配置企业微信发送 MCP')
             return dispatchNotification(runtime, flight.handle.agent, tool.name, args, exec)
           }) } : {}),
           ...(task.design?.evidenceContract === 'browser-patrol-v2' && this.patrolStatus ? { patrolStatus: () => this.patrolStatus!({ task, batch, card, sessionId, profileId }) } : {}),
@@ -402,6 +407,11 @@ export class TaskRunner {
           },
           block: async (reason, kind) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            if (card.role === 'notifier') {
+              this.store.kernel.recordEvent(card.id,'notification_blocked',{reason,kind},flight.coreRunId)
+              flight.terminal = {kind:'completed',summary:`通知未完成：${reason}`,metadata:{workflowOutcome:'unresolved',notificationBlocked:true}}
+              return
+            }
             const observed = await this.beforeBlock?.({ task, batch, card, sessionId, profileId })
             flight.terminal = { kind: 'blocked', reason: observed?.reason ?? reason, blockKind: observed?.kind ?? kind }
           },

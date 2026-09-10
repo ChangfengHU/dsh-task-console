@@ -63,6 +63,7 @@ export class TaskConsoleService extends TypertRemoteService {
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
       beforeComplete: async input => {
+        if (input.card.role === 'notifier') return new TaskNotifications(this.runner.store).complete(input)
         if (await pendingBrowserOperation(input)) throw new Error('浏览器后台操作仍在运行；继续 browser_status，不能提前 task_complete。')
         if (input.task.design?.evidenceContract === 'browser-patrol-v2') {
           const patrol = await this.patrolWorkflow(input)
@@ -92,8 +93,16 @@ export class TaskConsoleService extends TypertRemoteService {
         new TaskNotifications(this.runner.store).requireStage(input,input.card.round === 1 ? 'started' : 'rework')
         return patrol.plan(input, items)
       },
-      patrolStatus: async input => ({ ...(await this.patrolWorkflow(input)).snapshot(input), notifications: new TaskNotifications(this.runner.store).rows(input.batch.id) }),
-      notify: async (input, stage, deliver) => new TaskNotifications(this.runner.store).send(input, stage as NotificationStage, (await this.patrolWorkflow(input)).snapshot(input), deliver),
+      patrolStatus: async input => {
+        const outbox = new TaskNotifications(this.runner.store)
+        return { ...(input.card.role === 'notifier' ? outbox.job(input) : (await this.patrolWorkflow(input)).snapshot(input)), notifications:outbox.rows(input.batch.id) }
+      },
+      notify: async (input, stage, deliver) => {
+        const outbox = new TaskNotifications(this.runner.store)
+        if (input.card.role === 'notifier') return outbox.send(input,stage as NotificationStage,undefined,deliver)
+        const report = (await this.patrolWorkflow(input)).snapshot(input)
+        return input.task.design?.notifications?.agentId ? outbox.request(input,stage as NotificationStage,report) : outbox.send(input,stage as NotificationStage,report,deliver)
+      },
     })
     this.intake = new TaskIntakeCoordinator(this.runner, {
       agents: () => this.intakeAgents(),

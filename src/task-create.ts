@@ -8,7 +8,7 @@ import type { TaskRunner } from './runner.ts'
 import type { IntakeAgent } from './task-intake.ts'
 import { workflowDefinition } from './workflow-plan.ts'
 import { composeRecipe, workflowRecipes, type WorkflowRecipe } from './workflow-recipes.ts'
-import { validateDesign, type TaskDesign } from './task-design.ts'
+import { validateDesign, taskAgentIds, type TaskDesign } from './task-design.ts'
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export function userInput(exec: ToolExecutionLike) {
@@ -42,7 +42,7 @@ export class TaskCreator {
   async context() {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
       scheduling: { trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' }, approval: '批准后创建暂停的时间表；先手动执行，通过业务和通知验收后才能启用定时。每次复用同一Task、新增Batch。', overlap: '上一轮未结束时跳过并留记录', missed: '重启后漏跑合并为最近一次', waiting: 'task_wait(until,reason) 持久化等待，同一Batch/卡新Run继续；等待不消耗返工轮次，但受总时长限制。', permissions: '定时不增加权限；当前角色配置变化会停止派发并要求重新审查。' },
-      evidenceContracts: [{ id: 'browser-patrol-v2', purpose: '周期性浏览器登录巡查：dynamic-rounds 的规划者→Gate→浏览器管理员→只读评估者→规划者。规划者每轮用 task_plan_round(summary,items:[{ip,instance,action:verify|provision|resume,reason}]) 冻结真实目标和动作；未知先验证，有未登录证据才允许 provision。MCP 强制逐目标累计修复预算；无删除重建权限。执行者取得本轮操作终态即 task_complete 交给独立评估者，不等待整个Task ready。仅评估者可 task_wait 对修改过的实例分时独立复验，同一卡新Run；其他角色不能等待下游采样。已健康实例只做当前检查。评估者 task_complete 交接通过/返工结论，不等于业务通过；规划者 task_finalize 由真实工具证据把关。', browserPatrol: { scope: 'fleet-existing-authorized', actions: ['provision','resume'], observationMinutes: 20, minSamples: 4 }, notifications: '需要企微时显式设置 design.notifications={channel:"wecom",chatIds:[已确认群ID]}。规划者必须具备实际企微发送MCP，通过 task_notify 生成基于证据的通知并持久化结果；先用 vyibc-wecom_list_groups 发现现有订阅群；只有一个群时预填其真实chatId交审查，多个群再询问。禁止索要已有密钥或默认广播。' },
+      evidenceContracts: [{ id: 'browser-patrol-v2', purpose: '周期性浏览器登录巡查：dynamic-rounds 的规划者→Gate→浏览器管理员→只读评估者→规划者。规划者每轮用 task_plan_round(summary,items:[{ip,instance,action:verify|provision|resume,reason}]) 冻结真实目标和动作；未知先验证，有未登录证据才允许 provision。MCP 强制逐目标累计修复预算；无删除重建权限。执行者取得本轮操作终态即 task_complete 交给独立评估者，不等待整个Task ready。仅评估者可 task_wait 对修改过的实例分时独立复验，同一卡新Run；其他角色不能等待下游采样。已健康实例只做当前检查。评估者 task_complete 交接通过/返工结论，不等于业务通过；规划者 task_finalize 由真实工具证据把关。', browserPatrol: { scope: 'fleet-existing-authorized', actions: ['provision','resume'], observationMinutes: 20, minSamples: 4 }, notifications: '需要企微时显式设置 design.notifications={channel:"wecom",chatIds:[已确认群ID]}。有独立通知员时加 agentId:"wecom-notifier"，通知员只配企微MCP，三个主角色不变。规划者 task_notify 冻结报告并创建通知支线；通知员经自己的MCP发送，不阻塞修复，记录独立卡/会话/回执。旧计划没有agentId才由规划者直接发送；先用 vyibc-wecom_list_groups 发现现有订阅群；只有一个群时预填其真实chatId交审查，多个群再询问。禁止索要已有密钥或默认广播。' },
         { id: 'browser-patrol-v1', purpose: '旧版单角色巡查兼容；新定时和动态返工目标使用v2，不为兼容改写历史计划。' }],
       contract: 'Task 是可复用目标/流程，不绑定 IP。task_create_submit 只保存待审查计划，不启动执行；审查入口独立于创建 Agent。每次先提供 design:{scope,branches:[{id,when,action,evidence}],coordination,failurePolicy:{isolateItems,maxAttempts,stopConditions:[]},acceptance:[]}。条件由业务 Agent 根据真实工具证据执行，不能把自然语言条件伪装成内核自动 DAG。static-chain 按所选业务角色交接，也可只选一个业务 Agent 处理多目标分支；dynamic-rounds 仅用于规划者、执行者、评估者三人返工协议。不得改变 Agent 权限。' }
   }
@@ -71,7 +71,7 @@ export class TaskCreator {
     if (!task.origin) return undefined
     const row = this.plansDb().prepare('SELECT * FROM dsh_schedule_bindings WHERE task_id=?').get(task.id) as any
     if (!row) throw new Error('缺少独立审查的定时输入，不能重放旧 Signal')
-    const roster = (await this.context()).agents, selected = task.participants.map(p => roster.find(a => a.id === p.agentId) ?? null)
+    const roster = (await this.context()).agents, selected = taskAgentIds(task).map(id => roster.find(a => a.id === id) ?? null)
     if (digest(selected) !== row.roster_hash) throw new Error('定时任务角色配置已变化，需重新审查')
     const turn = JSON.parse(row.turn_json) as TaskTurn
     if (digest(workflowDefinition(task)) !== digest(turn.workflow!.definition)) throw new Error('定时任务定义与审查快照不一致')
@@ -129,7 +129,7 @@ export class TaskCreator {
         db.prepare("UPDATE dsh_task_plans SET state='rejected',reviewed_at=?,review_reason=? WHERE id=? AND state='pending'").run(new Date().toISOString(), reason.trim(), id)
         return this.plan(id)
       }
-      const selected = p.task.participants.map((a: any) => roster.find(r => r.id === a.agentId) ?? null)
+      const selected = taskAgentIds(p.task).map(id => roster.find(r => r.id === id) ?? null)
       if (digest(selected) !== p.rosterHash) throw new Error('参与 Agent 的能力或配置已变化，需创建并审查新计划')
       if (p.decision === 'reuse') {
         const current = this.runner.store.tasks.get(p.task.id)
@@ -235,7 +235,13 @@ export class TaskCreator {
         }
         if (team[1].id !== 'browser-manager') throw new Error('当前巡查执行者必须是已受限的浏览器管理员')
         for (const role of [team[0],team[2]]) if (Object.values(role.mcpTools).flat().some(t => /^browser_(create|retire|restore|purge|prepare|login_(copy|provision|resume|acceptance))$/.test(t))) throw new Error('规划者和独立评估者只允许浏览器只读能力')
-        if (task.design.notifications && !Object.values(team[0].mcpTools).flat().some(t => t.replace(/-/g, '_') === 'vyibc_wecom_send_message')) throw new Error('规划者没有配置企业微信发送 MCP，不能承诺通知')
+        const notificationAgent = task.design.notifications?.agentId
+        if (notificationAgent) {
+          const notifier = roster.find(r => r.id === notificationAgent)
+          if (!notifier || team.some(r=>r.id===notificationAgent)) throw new Error('通知员必须是名册中独立于三个业务角色的 Agent')
+          const tools = Object.values(notifier.mcpTools).flat().map(t=>t.replace(/-/g,'_'))
+          if (!tools.includes('vyibc_wecom_send_message') || tools.some(t=>!['vyibc_wecom_send_message','vyibc_wecom_list_groups','vyibc_wecom_status','vyibc_wecom_list_messages'].includes(t)) || notifier.tools.length || notifier.skills.length) throw new Error('通知员仅允许企微 MCP，不得包含浏览器、SSH、金库或其他业务工具/技能')
+        } else if (task.design.notifications && !Object.values(team[0].mcpTools).flat().some(t => t.replace(/-/g, '_') === 'vyibc_wecom_send_message')) throw new Error('规划者没有配置企业微信发送 MCP，不能承诺通知')
       }
       const hash = digest({ proposal, text: scrub(input.text), cwd })
       if (old && old.payload_hash !== hash) throw new Error('同一提交已被接受；不能替换尚未派发的计划')
@@ -250,7 +256,7 @@ export class TaskCreator {
         const planId = `P-chat-${digest([input.requestId, hash]).slice(0, 20)}`, db = this.plansDb()
         const payload = JSON.stringify({ task, input: { ...input, text: scrub(input.text) }, cwd, batchId,
           decision: proposal.decision, reason: proposal.reason, targets: ips.map(ip => ({ kind: 'fleet-node', id: ip })),
-          rosterHash: digest(task.participants.map(a => roster.find(r => r.id === a.agentId))) })
+          rosterHash: digest(taskAgentIds(task).map(id => roster.find(r => r.id === id))) })
         const oldPlan = db.prepare('SELECT id FROM dsh_task_plans WHERE id=?').get(planId)
         if (!oldPlan) {
           const accepted = db.prepare("SELECT id FROM dsh_task_plans WHERE request_id=? AND state IN ('approved','dispatched','scheduled','awaiting_trial')").get(input.requestId)

@@ -8,7 +8,7 @@ export function TaskDesignView({ design }: { design?: TaskDesign }) {
   if (!design) return null
   return <section aria-label="条件与验收设计">
     {design.browserPatrol ? <p>浏览器边界：仅现存且获准实例；允许 {design.browserPatrol.actions.join(' / ') || '只读'}，不含删除重建。修复后独立观察 {design.browserPatrol.observationMinutes} 分钟、至少 {design.browserPatrol.minSamples} 个新时间样本。</p> : null}
-    {design.notifications ? <p>企微收件群：{design.notifications.chatIds.join('、')}；由规划者经 task_notify 发送并保存回执，不广播到其他群。</p> : null}
+    {design.notifications ? <p>企微收件群：{design.notifications.chatIds.join('、')}；{design.notifications.agentId ? <>独立通知员 <a href={`#/tc/agents/${design.notifications.agentId}`}>{design.notifications.agentId} ↗</a>，阶段触发通知支线，保留自己的执行卡、会话和发送回执。通知失败不重跑浏览器。</> : '由规划者经 task_notify 发送并保存回执。'}不广播到其他群。</p> : null}
     {design.evidenceContract ? <p>宿主证据闸门：{design.evidenceContract}（依据实际工具事件核对交卷，不接受模型自报统计）</p> : <p className="dtc-workflow-muted">未选择专用宿主证据闸门；结构化计划本身不保证执行结果正确。</p>}
     <h3>目标与范围</h3><p className="dtc-workflow-copy">{design.scope}</p>
     <h3>条件分支</h3><ol className="dtc-workflow-roles">{design.branches.map(b => <li key={b.id}>
@@ -48,7 +48,7 @@ export function TaskPlanReview({ api, id }: { api: Api; id?: string }) {
       {plan ? <><div className="dtc-workflow-meta"><span>{states[plan.state] || plan.state}</span><span>指纹 {plan.hash.slice(0, 12)}</span></div><h2>{plan.definition.title}</h2>
         <h3>原始目标</h3><pre>{plan.request}</pre><p>{plan.definition.brief}</p><TaskDesignView design={plan.definition.design} />
         {plan.definition.trigger?.kind === 'cron' ? <p>时间表：{plan.definition.trigger.expr} · {plan.definition.trigger.timeZone || '宿主时区'}。批准后先手动验收，通过后才可启用定时；每次触发复用同一任务、新增执行记录。</p> : null}
-        <h3>参与角色</h3><ol className="dtc-workflow-roles">{plan.definition.participants.map((p: any, i: number) => <li key={i}><b>{p.agentId}</b><p>{p.brief}</p></li>)}</ol>
+        <h3>参与角色</h3><ol className="dtc-workflow-roles">{plan.definition.participants.map((p: any, i: number) => <li key={i}><b>{p.agentId}</b><p>{p.brief}</p></li>)}{plan.definition.design?.notifications?.agentId ? <li><b>{plan.definition.design.notifications.agentId}</b><p>辅助参与者 · 企微通知支线；按阶段创建独立卡和会话，不成为浏览器修复的前置依赖。</p></li> : null}</ol>
         <details><summary>完整冻结计划 JSON</summary><pre>{JSON.stringify(plan.definition, null, 2)}</pre></details>
         {plan.reviewReason ? <p>审查意见：{plan.reviewReason}</p> : null}
         {['pending', 'approved'].includes(plan.state) ? <section><h3>独立审查</h3><p>请核对范围、权限、条件、失败处理和验收标准。批准仅执行本计划，不增加节点或工具授权。</p>

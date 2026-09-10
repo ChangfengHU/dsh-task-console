@@ -5,7 +5,7 @@ import type { CompletionCheck } from './runner.ts'
 export type NotificationStage = 'started' | 'findings' | 'rework' | 'restored' | 'unresolved'
 const labels = { started: '开始巡查', findings: '巡查发现', rework: '继续返工', restored: '独立验收通过', unresolved: '仍有未解决项' }
 
-/** Outbox for the planner's existing WeCom MCP. It cannot perform browser work. */
+/** Durable, recipient-pinned outbox. Delegated cards reuse the same MCP transport. */
 export class TaskNotifications {
   constructor(private store: EventStore) {
     store.kernel.db.exec(`CREATE TABLE IF NOT EXISTS dsh_task_notifications(
@@ -15,10 +15,35 @@ export class TaskNotifications {
     ); CREATE INDEX IF NOT EXISTS idx_dsh_notifications_batch ON dsh_task_notifications(batch_id,updated_at);`)
   }
 
+  job(input: CompletionCheck) {
+    if (input.card.role !== 'notifier' || input.profileId !== input.task.design?.notifications?.agentId) throw new Error('不是本任务已审查的通知员')
+    const row = this.store.kernel.listEvents(input.card.id).find(e => e.kind === 'notification_requested')
+    if (!row?.payload) throw new Error('没有冻结的通知交接')
+    return JSON.parse(row.payload) as {stage:NotificationStage;report:any;source_card_id:string}
+  }
+
+  async request(input: CompletionCheck, stage: NotificationStage, report: any) {
+    if (input.card.role !== 'planner' || !Object.hasOwn(labels,stage)) throw new Error('只有规划者可交接通知')
+    if (stage === 'restored' && !report.ready || stage === 'unresolved' && report.ready) throw new Error('通知阶段与真实验收结果不一致')
+    const cardId = await this.store.createNotification(input.task,input.batch,input.card,stage,report)
+    return { state:'queued', cardId, agentId:input.task.design?.notifications?.agentId, notice:'通知员将在规划者交接后独立执行；尚未发送，不阻塞浏览器主流程。' }
+  }
+
+  complete(input: CompletionCheck) {
+    const job = this.job(input), rows = this.rows(input.batch.id).filter((r:any)=>r.card_id===input.card.id && r.stage===job.stage) as any[]
+    if (rows.length !== input.task.design!.notifications!.chatIds.length || rows.some(r=>['pending','sending'].includes(r.state))) throw new Error('先 task_notify 留下真实发送回执')
+    return {summary:`企微 ${labels[job.stage]}：${rows.map(r=>`${r.state} (${r.id})`).join('、')}。不代表用户已阅读。`,metadata:{notifications:rows,...(rows.some(r=>r.state!=='sent')?{workflowOutcome:'unresolved'}:{})}}
+  }
+
   async send(input: CompletionCheck, stage: NotificationStage, report: any, deliver: (args: { markdown: string; chatids: string[] }) => Promise<any>) {
     const config = input.task.design?.notifications
-    if (input.card.role !== 'planner' || !config?.chatIds.length) throw new Error('只有已审查并明确配置收件群的规划者可以发送通知，禁止默认广播')
-    if (!(stage in labels) || stage === 'restored' && !report.ready || stage === 'unresolved' && report.ready) throw new Error('通知阶段与真实验收结果不一致')
+    if (!config?.chatIds.length) throw new Error('未明确配置收件群，禁止默认广播')
+    if (config.agentId) {
+      const job = this.job(input)
+      if (stage !== job.stage) throw new Error('通知员只能发送本卡冻结的阶段')
+      report = job.report
+    } else if (input.card.role !== 'planner') throw new Error('只有已审查的规划者可发送通知')
+    if (!Object.hasOwn(labels,stage) || stage === 'restored' && !report.ready || stage === 'unresolved' && report.ready) throw new Error('通知阶段与真实验收结果不一致')
     const db = this.store.kernel.db, results: any[] = []
     for (const chatId of config.chatIds) {
       const id = createHash('sha256').update(JSON.stringify([input.batch.id, input.card.round, stage, chatId])).digest('hex').slice(0, 24)
@@ -69,6 +94,12 @@ export class TaskNotifications {
 
   requireStage(input: CompletionCheck, stage: NotificationStage) {
     if (!input.task.design?.notifications) return []
+    if (input.task.design.notifications.agentId) {
+      const cardId = `${input.batch.id}#n${input.card.round}-${stage}`
+      const exists = this.store.kernel.listEvents(cardId).some(e=>e.kind==='notification_requested')
+      if (!exists) throw new Error(`先 task_notify(stage="${stage}") 将真实报告交给通知员`)
+      return [{card_id:cardId,stage,state:'queued'}]
+    }
     const rows = this.rows(input.batch.id).filter((r: any) => r.card_id === input.card.id && r.stage === stage) as any[]
     if (rows.length !== input.task.design.notifications.chatIds.length || rows.some(r => ['pending','sending'].includes(r.state))) throw new Error(`先调用 task_notify(stage="${stage}") 留下发送回执；只重试通知，不重复浏览器操作`)
     return rows

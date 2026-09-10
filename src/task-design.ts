@@ -2,7 +2,7 @@
 export interface TaskDesign {
   evidenceContract?: 'browser-patrol-v1' | 'browser-patrol-v2'
   browserPatrol?: { scope: 'fleet-existing-authorized'; actions: ('provision' | 'resume')[]; observationMinutes: number; minSamples: number }
-  notifications?: { channel: 'wecom'; chatIds: string[] }
+  notifications?: { channel: 'wecom'; chatIds: string[]; agentId?: string }
   scope: string
   branches: { id: string; when: string; action: string; evidence: string }[]
   coordination: string
@@ -27,7 +27,8 @@ export function validateDesign(value: unknown): TaskDesign {
   if (d.notifications !== undefined) {
     const n = d.notifications
     if (d.evidenceContract !== 'browser-patrol-v2' || n.channel !== 'wecom' || !Array.isArray(n.chatIds) || !n.chatIds.length || n.chatIds.length > 5 || n.chatIds.some(id => typeof id !== 'string' || !/^[A-Za-z0-9@_.:-]{1,200}$/.test(id))) throw new Error('通知需要明确的企业微信群 chatIds；不能默认发送给全部群')
-    notifications = { channel: 'wecom', chatIds: [...new Set(n.chatIds)] }
+    if (n.agentId !== undefined && (typeof n.agentId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(n.agentId))) throw new Error('通知员 agentId 不合法')
+    notifications = { channel: 'wecom', chatIds: [...new Set(n.chatIds)], ...(n.agentId ? { agentId: n.agentId } : {}) }
   }
   if (d.evidenceContract === 'browser-patrol-v2') {
     const p = d.browserPatrol
@@ -46,4 +47,9 @@ export function validateDesign(value: unknown): TaskDesign {
   return { ...(d.evidenceContract ? { evidenceContract: d.evidenceContract } : {}), ...(browserPatrol ? { browserPatrol } : {}), ...(notifications ? { notifications } : {}), scope: text(d.scope, 'scope'), branches, coordination: text(d.coordination, 'coordination'),
     failurePolicy: { isolateItems: d.failurePolicy.isolateItems, maxAttempts: d.failurePolicy.maxAttempts, stopConditions: list(d.failurePolicy.stopConditions, 'stopConditions') },
     acceptance: list(d.acceptance, 'acceptance') }
+}
+
+/** Three business roles stay intact; the optional notifier is a reviewed side participant. */
+export function taskAgentIds(task: { participants: { agentId: string }[]; design?: TaskDesign }): string[] {
+  return [...new Set([...task.participants.map(p => p.agentId), ...(task.design?.notifications?.agentId ? [task.design.notifications.agentId] : [])])]
 }

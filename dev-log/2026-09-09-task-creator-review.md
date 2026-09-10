@@ -481,3 +481,52 @@ for references, then removed only /tmp/dsh-archive-verify.SYxtXR (3,522,560 allo
 bytes, about3.36MiB). Fixtures are reconstructible by the checked-in tests with a
 fresh TMPDIR; browser checks use the documented URLs/selectors. Production lib,
 dependencies, source, lockfile, SQLite backup and unique screenshots remain retained.
+
+## 2026-09-10 — first retained patrol manual execution (not accepted)
+
+User requested one complete idempotent execution of each retained main Task. Fired
+only T-chat-bbb714b2ba8439b69178, creating Batch b-mtv8po8clob at08:03:04.060Z.
+The developer triggered and observed; all probes and notification delivery were
+performed by real DSH Task Agents. No direct target SSH/browser mutation, new Task,
+unarchive, credential change, dependency install or service restart was performed.
+
+The real planner froze11 verify-only instance actions from the7-node inventory:
+95/b3,84/b1/b2,107/b1,187/b1/b2,188/b1/b2/b3,63/b1/b2. The executor obtained one
+complete verified receipt for each, checked between08:04:41 and08:11:08 UTC. These
+are point-in-time executor observations, not independent final acceptance or a
+20-minute stability result.206 remained unreachable/unreadable with no browser
+observation; it was not silently dropped or treated as healthy. No login provision,
+copy, prepare or lifecycle operation was used in this Batch.
+
+Independent notifier Session task-t-chat-bbb714b2ba8439b69178-b-mtv8po8clob-2
+sent stage started. Outbox f5de1f2ac8d99cb05c831a5b has state sent, attempts1 and
+MCP confirmation for the reviewed single group; this does not prove the user read it.
+Its task_notify and task_complete are visible in the native Session. The executor
+had its own Session ending-4 and continued independently of the notification card.
+
+Reviewer Session task-t-chat-bbb714b2ba8439b69178-b-mtv8po8clob-5 failed before
+independent probing: codex-local/gpt-5.6-terra returned RATE_LIMIT with an explicit
+usage-limit message. Batch settled failed at08:11:51.907Z; planner p2 was cancelled.
+There is no findings/final notice or successful evaluation. The existing ordinary
+Qwen backend completed browser/notifier work, but no role model was silently changed.
+Changing reviewed roles requires a newly reviewed plan; do not fabricate receipts,
+blindly retry exhausted quota, or enable hourly cron against this failed trial.
+
+The second retained installer T-chat-b4c6fcb369f0c20a9739 was not fired. Its installer
+and Runner roles also currently select the same Codex backend. Historical63 results
+remain historical; this slice does not establish a new full installer acceptance.
+
+Browser checks: public Task Run page loaded in25.48s, notifier native Session in20.51s,
+with no page errors/history-loading error. Screenshots /tmp/dsh-patrol-0301-live.png
+and /tmp/dsh-patrol-0301-notifier-session.png are retained as acceptance evidence.
+No temporary dependencies/build directory were created; private operation receipts
+and original failed execution history remain intact. This is execution evidence only,
+not a code release; runtime remains0.30.1. Task progress supersedes the earlier
+zero-Batch description above.
+
+Final public-browser readback loaded the failed Batch in26.77s, without page errors.
+The database inspector shows reviewer Run235 failed, while the evidence table correctly
+retains11 executor verified observations with missing-independent-verification and
+the uncovered206 node. /tmp/dsh-patrol-0301-failed-reviewer.png was viewed and retained.
+No new installer Batch or active core Run existed in the final readback. The runtime
+and reviewed role models were left unchanged pending the model-availability decision.

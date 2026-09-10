@@ -391,3 +391,56 @@ submission. It is not automatic completion, does not change models, scopes, time
 or existing evidence checks. Tests cover foreign/stale/running receipts, private-field
 exclusion, blocked outcomes and actual completion after wake.208 tests pass. Follow-up
 deployment and a fresh end-to-end execution remain required to verify model behavior.
+
+### Second fresh execution: actual Task completion and public acceptance
+
+0.30.4 commit145d2152 was pushed after Vault-backed GitHub identity/repository checks
+and deployed only with no running Task or native Session. The same retained Task
+started Batch b-chat-dda870d91626c9e0a9e6 at2026-09-10 10:23:52 UTC and settled DONE
+at10:53:36.438Z. Developer only triggered/observed; all node actions were performed
+by its three real DSH Agent Sessions, not direct developer SSH.
+
+Installer ledger onb-c39a113f-9cba-4125-86fa-a55c5665d787 belongs to Session suffix-1,
+reports complete and all10stages passed at10:26:07. Nine stages reused; stage9 was
+repaired and verified. Ledger mode=repair remains authoritative; the Agent's
+execution_type=new labels its new invocation, not a fresh physical installation.
+Runner receipt belongs to suffix-2: job-mtvdvi67-c6e44b3277a5, signatureVerified=true,
+nodeHealthy=true, all8checks ok, existing release/service/public route reused.
+
+Browser suffix-3 correctly used default prepare, operation
+0b2354ed9e86a8861e93f796d8714f39: changed=[], profilesPreserved=true,
+browserProcessesRestarted=false. Its provision operations
+01ad8bca5b162eb139a0ab1397abbb6d and5e07c193d970cfa485977435160f744a both reused
+existing effective logins. No login copy, browser rebuild/restart, token rotation or
+account authorization expansion was substituted. Healthy accounts were not
+redistributed merely because both browsers already use the same identity.
+
+Current-session acceptance2fd4b727b7fde3d9210d17a05b0a20f5 completed at10:53:04.340Z,
+probeVersion3, requiredMs1200000, stable=true. Browser1:22distinct samples,
+10:31:52.143–10:52:51.861Z, observedMs1259718. Browser2:23distinct samples,
+10:30:58.697–10:52:58.434Z, observedMs1319737. Rounded minute labels were not used
+to bypass the exact duration threshold. This receipt is not borrowed from the
+first failed attempt, and only proves this observation window, not permanent login.
+
+Qwen actually called task_complete at10:53:24.168Z with this receipt ID in metadata;
+the host returned ok after independent current-Fleet validation. All three Cards
+and Runs are done and the Batch really settled. In this second execution the model
+kept polling through terminal status, so the new background-outcome nudge was NOT
+exercised live; that branch remains covered by the208-test suite, not falsely
+claimed as live coverage. The prior failed Batch remains unchanged as evidence.
+
+Public Chrome loaded the current execution in19.31s, initially showed2done/1running,
+and automatically changed to3done/0unfinished with an active "查看执行报告" button.
+Clicked report, checked all three role summaries, opened browser Session Trace and
+then its actual native Session; correct session URL, no history error or pageerrors,
+no horizontal overflow at1600px. Screenshot `/tmp/dsh-0304-final-report.png` was
+visually reviewed. Report prose does not repeat the browser operation ID; its actual
+task_complete metadata/Trace contains it. This is not a claim of startup optimization.
+
+Final readback:32Task definitions,30previously archived, only the original installer
+Batch newly archived; two fresh executions remain visible (failed then done). The
+other patrol Task and its disabled hourly schedule are unchanged, including its206
+coverage gap. No native Sessions or historical graph evidence were deleted.
+No dependencies were installed and no rebuildable cache remains to clean from this
+verification. Tracked lib/ is production runtime, not temporary output. Keep the
+private7.8MiB pre-archive SQLite backup and screenshots as recovery/acceptance evidence.

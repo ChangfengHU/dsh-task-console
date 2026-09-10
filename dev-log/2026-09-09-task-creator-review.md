@@ -432,3 +432,7 @@ removed only /tmp/dsh-notifier-verify.OogK6a:7,049,216 allocated bytes of test-g
 fixtures (including dummy keys/SQLite databases). Rebuild with the checked-in tests
 using a fresh TMPDIR and TSX_DISABLE_CACHE=1. No dependencies were installed, and no
 production database, runtime, user file or shared cache directory was removed.
+
+Code/review-state delivery was pushed as c8f57e2. The runtime handoff additionally
+records the verified schema-versus-grant distinction from the native rejected
+schedule_list receipt; the notifier remains limited to its selected MCP capabilities.

@@ -22,6 +22,12 @@ entry rather than copying credentials. Preserve existing models/grants when upda
 the Creator/planner personas. Notify participants are included in roster hashes,
 schedule preflight, review/plan display and Agent task history.
 
+Some host-injected schedule_* schemas can still appear after preset mounting. A
+schema name is not an execution grant: the selected-tool guard rejects those calls.
+Verify permissions using the actual tool receipt, not the model's tool-list summary.
+The notifier's retained read-only schedule_list probe confirmed that denial; it did
+not create a schedule or send a message. Do not remove the guard to hide this UI issue.
+
 With delegation configured, planner `task_notify` atomically creates a real SQLite
 Task/link/event side card, dependent only on that planner. Its notification_requested
 event freezes the report. After planner handoff, the notifier gets its own Run and

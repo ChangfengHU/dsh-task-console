@@ -163,7 +163,7 @@ export class TaskRunner {
     const rows = this.store.kernel.db.prepare("SELECT w.card_id FROM dsh_task_wakeups w JOIN tasks t ON t.id=w.card_id WHERE w.state='pending' AND w.wake_at<=? AND t.status='scheduled'").all(this.clock()) as { card_id: string }[]
     for (const row of rows) {
       const card = this.store.s.cards.get(row.card_id)
-      if (!card || this.store.tasks.get(card.taskId)?.archivedAt) continue
+      if (!card || this.store.tasks.get(card.taskId)?.archivedAt || this.store.s.batches.get(card.batchId)?.archivedAt) continue
       await this.store.transition(() => {
         const ok = this.store.kernel.unblockTask(card.id)
         if (ok) this.store.kernel.db.prepare("UPDATE dsh_task_wakeups SET state='resumed' WHERE card_id=?").run(card.id)
@@ -203,7 +203,7 @@ export class TaskRunner {
     for (const c of ready) {
       if (inProgress >= this.maxInProgress) break
       const template = this.store.tasks.get(c.taskId); if (!template || template.archivedAt) continue
-      const batch = this.store.s.batches.get(c.batchId); if (!batch || batch.settled) continue
+      const batch = this.store.s.batches.get(c.batchId); if (!batch || batch.settled || batch.archivedAt) continue
       const task = taskForBatch(template, batch)
       if (c.consecutiveFailures > 0 && (c.role === 'notifier' || task.onFail !== 'retry' || c.consecutiveFailures >= task.maxTries)) {
         const failure = c.error ?? `连续失败 ${c.consecutiveFailures} 次`
@@ -222,7 +222,7 @@ export class TaskRunner {
   /** Close batches whose cards are all terminal; cancel cards a failure made unreachable. */
   private async settleBatches(): Promise<void> {
     for (const b of this.store.s.batches.values()) {
-      if (b.settled || this.store.tasks.get(b.taskId)?.archivedAt) continue
+      if (b.settled || b.archivedAt || this.store.tasks.get(b.taskId)?.archivedAt) continue
       const cards = b.cardIds.map(id => this.store.s.cards.get(id)).filter(Boolean) as Card[]
       if (!cards.length) continue
       const dead = cards.filter(c => c.status === 'failed' || c.status === 'cancelled')
@@ -660,6 +660,7 @@ export class TaskRunner {
 
   async cancelBatch(batchId: string): Promise<void> {
     const b = this.store.s.batches.get(batchId); if (!b) return
+    if (b.archivedAt) throw new Error('执行记录已归档，历史状态保持不变')
     this.dispatchSuspended++
     try {
       for (const f of [...this.flights.values()]) { const r = this.store.s.runs.get(f.runId); if (r?.batchId === batchId) await this.finish(f, 'run/cancelled', 'cancelled', '人工取消') }
@@ -690,6 +691,7 @@ export class TaskRunner {
   /** Resolve the explicit human review gate for one card. */
   async reviewCard(cardId: string, decision: 'approve' | 'changes', note = '', targetCardId?: string): Promise<void> {
     const card = this.store.s.cards.get(cardId)
+    if (card && this.store.s.batches.get(card.batchId)?.archivedAt) throw new Error('执行记录已归档，历史状态保持不变')
     if (!card || card.status !== 'review' || !card.currentRunId && !card.runIds.length) throw new Error('这张卡不在待验收状态')
     const runId = card.runIds[card.runIds.length - 1]
     if (decision === 'approve') {
@@ -722,6 +724,7 @@ export class TaskRunner {
   /** Hermes unblock semantics: a blocked run stays closed and a new run is claimed. */
   async unblockCard(cardId: string): Promise<void> {
     const card = this.store.s.cards.get(cardId)
+    if (card && this.store.s.batches.get(card.batchId)?.archivedAt) throw new Error('执行记录已归档；请新建执行重新检查，不改写历史阻塞')
     if (!card || card.status !== 'blocked') throw new Error('这张卡不在阻塞状态')
     if (card.wakeAt && Date.parse(card.wakeAt) > this.clock()) throw new Error('定时等待尚未到期，不能提前当作复验完成')
     const ok = await this.store.transition(

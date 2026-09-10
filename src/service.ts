@@ -538,7 +538,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const st = this.runner.store.s
     const tasks = [...st.tasks.values()].filter(t => !t.archivedAt)
     const visible = new Set(tasks.map(t => t.id))
-    const runs = [...st.batches.values()].filter(b => visible.has(b.taskId)).sort((a, b) => b.firedAt.localeCompare(a.firedAt)).map(b => {
+    const runs = [...st.batches.values()].filter(b => visible.has(b.taskId) && !b.archivedAt).sort((a, b) => b.firedAt.localeCompare(a.firedAt)).map(b => {
       const legs = b.cardIds.map(id => st.cards.get(id)).filter(Boolean).map(c => {
         const r = cardRun(st, c!)
         const status = c!.status === 'done' ? 'done' : c!.status === 'review' ? 'review' : c!.status === 'running' ? 'running' : c!.status === 'blocked' ? 'blocked' : c!.status === 'failed' ? (r?.status === 'timed_out' ? 'timed_out' : r?.status === 'crashed' ? 'lost' : 'failed') : c!.status === 'cancelled' ? 'cancelled' : 'queued'
@@ -584,7 +584,7 @@ export class TaskConsoleService extends TypertRemoteService {
 
   private async removeTask(id: string): Promise<void> {
     if (!this.runner.store.tasks.has(id)) throw new Error('没有这个任务')
-    for (const b of this.runner.store.s.batches.values()) if (b.taskId === id && !b.settled) await this.runner.cancelBatch(b.id)
+    for (const b of this.runner.store.s.batches.values()) if (b.taskId === id && !b.settled && !b.archivedAt) await this.runner.cancelBatch(b.id)
     await this.runner.store.append({ t: 'task/deleted', at: new Date().toISOString(), taskId: id })
   }
 
@@ -596,6 +596,14 @@ export class TaskConsoleService extends TypertRemoteService {
     const changed = await this.runner.store.setTasksArchived(ids, archived)
     for (const id of new Set<string>(ids)) this.runner.schedule.sync(this.runner.store.tasks.get(id)!, Date.now(), true)
     return JSON.stringify({ ok: true, changed, archived })
+  }
+
+  async setBatchArchived(payload: string): Promise<string> {
+    await this.ready
+    const { taskId, batchId, archived } = JSON.parse(payload)
+    if (typeof taskId !== 'string' || !taskId || typeof batchId !== 'string' || !batchId || typeof archived !== 'boolean') throw new Error('需要明确任务、执行记录及归档状态')
+    const changed = await this.runner.store.setBatchArchived(taskId, batchId, archived)
+    return JSON.stringify({ ok:true, changed, archived })
   }
 
   async deleteTask(payload: string): Promise<string> {
@@ -640,7 +648,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const { id, batchId } = JSON.parse(payload) as { id: string; batchId?: string }
     const events = this.runner.store.all().filter((e: any) => e.taskId === id).map((e: any) => e.t === 'artifact/registered' ? { ...e, artifact: this.artifactView(e.artifact) } : e)
     if (!this.runner.store.s.tasks.has(id)) return JSON.stringify({ events, artifacts: [], batchId: null })
-    const selected = batchId ?? [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]?.id
+    const selected = batchId ?? [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === id && !batch.archivedAt).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]?.id
     const artifacts = selected ? (await this.artifactsFor(id, selected)).map(a => this.artifactView(a)) : []
     return JSON.stringify({ events, artifacts, batchId: selected ?? null })
   }
@@ -649,7 +657,7 @@ export class TaskConsoleService extends TypertRemoteService {
   async taskGraph(payload: string): Promise<string> {
     const { id, batchId } = JSON.parse(payload) as { id: string; batchId?: string }
     if (!this.runner.store.s.tasks.has(id)) throw new Error('没有这个任务')
-    const selected = batchId ?? [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]?.id
+    const selected = batchId ?? [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === id && !batch.archivedAt).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]?.id
     if (!selected) throw new Error('这个任务还没有运行')
     return JSON.stringify(this.runner.store.graphSnapshot(id, selected))
   }

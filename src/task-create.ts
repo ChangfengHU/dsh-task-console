@@ -90,7 +90,7 @@ export class TaskCreator {
     if (row?.state !== 'awaiting_trial') return
     await this.scheduledTurn(task, 'activation-check')
     const batches = [...this.runner.store.s.batches.values()].filter(b => b.taskId === task.id)
-    if (batches.some(b => !b.settled)) throw new Error('首次手动执行尚未结束，不能启用定时')
+    if (batches.some(b => !b.settled && !b.archivedAt)) throw new Error('首次手动执行尚未结束，不能启用定时')
     const manual = batches.filter(b => b.by === 'manual').sort((a,b) => b.firedAt.localeCompare(a.firedAt))[0]
     if (!manual || manual.settled?.outcome !== 'done' || !manual.turn?.workflow || digest(manual.turn.workflow.definition) !== digest(workflowDefinition(task)))
       throw new Error('先对当前已审查计划手动执行并通过业务验收，再启用定时')

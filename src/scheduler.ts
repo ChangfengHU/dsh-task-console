@@ -52,7 +52,7 @@ export class ScheduleLedger {
         row = db.prepare('SELECT * FROM dsh_schedule_fires WHERE id=?').get(id) as FireRow
       }
       if (!row || row.status !== 'pending' || row.available_at > now || (row.lease_until ?? 0) > now) return
-      if (db.prepare('SELECT id FROM dsh_batches WHERE spec_id=? AND settled_at IS NULL LIMIT 1').get(task.id)) {
+      if (db.prepare('SELECT id FROM dsh_batches WHERE spec_id=? AND settled_at IS NULL AND archived_at IS NULL LIMIT 1').get(task.id)) {
         db.prepare("UPDATE dsh_schedule_fires SET status='skipped',reason='上一轮仍未结束，不重叠执行' WHERE id=?").run(row.id); return
       }
       if (row.attempts >= 3) { db.prepare("UPDATE dsh_schedule_fires SET status='failed',reason='派发恢复预算已用尽，需检查调度器' WHERE id=?").run(row.id); return }

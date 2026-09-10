@@ -317,3 +317,31 @@ recipe/free-form proposals are rejected before materialization, actual Agent IDs
 are still validated, and no business permissions are granted by selecting a recipe.
 Both recipe and free-form workflows retain the same Task/Batch scheduling/kernel.
 146 tests and build pass. Fresh live recipe execution remains pending here.
+
+## 2026-09-10 — explicit fresh execution and recoverable Batch archival (0.30.3)
+
+Owner continuation confirmed one fresh run of the retained installer Task on node63,
+including the existing dual-browser20-minute contract. Only the old installer Batch
+is hidden; no Task, raw session, browser data or acceptance evidence may be deleted.
+
+Added an execution-scoped archive event/projection and Console API/UI. Live claims and
+pending/scheduled roles reject archival. Archived batches cannot dispatch, wake,
+unblock, cancel or settle; explicit historical URLs and restore-display remain available.
+Default selectors exclude them, while schedule activation still inspects the latest
+manual attempt even if archived. Fresh Fleet recipe prompts distinguish current
+observations from stale challenge prose and forbid unsupported auto-resume claims.
+
+206 serial Node tests and production esbuild passed. No dependency installation.
+After verifying zero active Task Runs and zero running native Sessions, made private
+SQLite online backup `batch-archive-backup-VPU3WJ/task.db` (integrity_check=ok) and
+restarted the existing DSH web service. Public Chrome loaded the old Task in37.55s,
+showed its archive entry and emitted no page errors; this is not a load-time optimization.
+
+At09:43:40.772Z the normal API archived only b-chat-b4c6fcb369f0c20a9739. Readback hashes
+proved all32Task definitions, all Cards/Runs, its90core graph events and all unrelated
+Batches unchanged. Browser role remains historically blocked; default selection is empty
+until a new Batch exists. Thirty archived Task definitions and the patrol Task remain.
+Public browser confirmed hidden default, show-archive dropdown, original historical
+URL, restore-display entry, absent cancel action and zero page errors. Screenshot
+evidence stays in `/tmp/dsh-0303-archive-before.png` and `archive-after.png` (same prefix).
+This deployment/cleanup is not business acceptance; new installer execution is pending.

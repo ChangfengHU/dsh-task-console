@@ -92,6 +92,24 @@ test('archiving rejects active work and validates the whole selection before wri
   await runner.cancelBatch(b.id)
 })
 
+test('a fresh execution uses a new session while archived blocked history stays inert', async () => {
+  const { runner, store, host } = await setup({ participants:[{agentId:'a'}], onFail:'stop', maxTries:1 })
+  const old = await runner.fire('T','manual'); await tick()
+  const original = [...host.sessions.keys()][0]; host.consumeFirst(original)
+  await host.callTool(original,'task_block',{reason:'observed challenge',kind:'needs_input'})
+  host.endTurn(original); await tick()
+  await store.setBatchArchived('T',old.id,true)
+  await runner.tick()
+  assert.equal(host.sessions.size,1)
+  const fresh = await runner.fire('T','manual'); await tick()
+  assert.notEqual(fresh.id,old.id)
+  assert.equal(host.sessions.size,2)
+  assert.notEqual([...host.sessions.keys()][1],original)
+  assert.equal(store.s.cards.get(old.cardIds[0])?.status,'blocked')
+  assert.equal(store.tasks.size,1)
+  await runner.cancelBatch(fresh.id)
+})
+
 test('delegated notifications are real idempotent side cards with frozen reports and independent sessions', async () => {
   let outbox: TaskNotifications
   const delivered:string[]=[]

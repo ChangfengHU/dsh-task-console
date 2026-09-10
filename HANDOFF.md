@@ -11,6 +11,19 @@ Package remains `dsh-task-console`; Agent and Board are modules of the same plug
 Use the installed DSH service's actual executable/configuration to identify the host,
 not an adjacent source checkout. Its generated `lib/` plugin assets are tracked.
 
+Execution-level archival uses the Console-only `setBatchArchived(taskId,batchId,archived)`
+API and an append-only `batch/archived` event, projected to `dsh_batches.archived_at`.
+Only ended/blocked role sets without active claims or pending/scheduled roles qualify.
+It hides that Batch from default selection and prevents claim, wake, unblock, cancel
+or settlement; it never deletes native Sessions or rewrites the original outcome.
+The execution picker can show archived history; explicit old URLs remain readable.
+Restoring visibility does not unblock or rerun it. A new execution reuses the Task
+definition with a fresh input, Batch and Sessions. The latest manual acceptance check
+still includes archived attempts, so hiding a failed trial cannot enable a schedule.
+Fleet-base-v2 prompts require fresh observations, not reuse of historical challenge
+claims or acceptance receipts. Manual rerun is explicit recovery, not an automatic
+Google-challenge watcher; only a real task_wait/trigger can justify an auto-resume claim.
+
 ## Chat-created workflows
 
 For browser-patrol-v2, `design.notifications.agentId` selects an independently

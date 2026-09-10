@@ -155,6 +155,8 @@ export interface Batch {
   firedAt: string
   by: 'cron' | 'manual' | 'retry'
   cardIds: string[]
+  /** Hidden from current work, with original cards, outcomes and sessions retained. */
+  archivedAt?: string
   /** The signal-specific request that caused this firing. */
   turn?: TaskTurn
   settled?: { at: string; outcome: 'done' | 'failed' | 'cancelled' }
@@ -211,6 +213,7 @@ export type Event =
   | { t: 'artifact/finalized'; at: string; taskId: string; batchId: string; artifactId: string; artifactCardId: string; cardId: string; runId: string; sha256: string }
   | { t: 'artifact/published'; at: string; taskId: string; artifactId: string; publicUrl: string }
   | { t: 'batch/settled'; at: string; taskId: string; batchId: string; outcome: 'done' | 'failed' | 'cancelled' }
+  | { t: 'batch/archived'; at: string; taskId: string; batchId: string; archived: boolean }
 
 export interface State {
   tasks: Map<string, TaskSpec>
@@ -347,6 +350,7 @@ export function fold(events: Event[]): State {
       }
       case 'artifact/published': { const a = s.artifacts.get(e.artifactId); if (a) a.publicUrl = e.publicUrl; break }
       case 'batch/settled': { const b = s.batches.get(e.batchId); if (b) b.settled = { at: e.at, outcome: e.outcome }; break }
+      case 'batch/archived': { const b = s.batches.get(e.batchId); if (b) b.archivedAt = e.archived ? e.at : undefined; break }
     }
   }
   return s
@@ -356,6 +360,7 @@ export function fold(events: Event[]): State {
 export function readyCards(s: State): Card[] {
   const out: Card[] = []
   for (const c of s.cards.values()) {
+    if (s.batches.get(c.batchId)?.archivedAt || s.tasks.get(c.taskId)?.archivedAt) continue
     if (c.kind === 'gate') continue
     if (c.status !== 'todo' && c.status !== 'ready') continue
     if (c.deps.every(d => s.cards.get(d)?.status === 'done')) out.push(c)
@@ -383,7 +388,7 @@ export function cardRun(s: State, c: Card): Run | undefined {
 /** Who moved: the host dispatcher, the agent itself, a person, or the clock. */
 export function actorOf(e: Event, s?: State): 'dispatcher' | 'agent' | 'person' | 'clock' {
   switch (e.t) {
-    case 'task/created': case 'task/enabled': case 'task/archived': case 'task/deleted': case 'card/review_approved': case 'artifact/published': return 'person'
+    case 'task/created': case 'task/enabled': case 'task/archived': case 'batch/archived': case 'task/deleted': case 'card/review_approved': case 'artifact/published': return 'person'
     case 'card/changes_requested': {
       if (e.reviewer) return 'agent'
       const run = s?.runs.get(e.runId)
@@ -437,6 +442,7 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
     case 'artifact/finalized': return `${card(e.cardId)} 确认最终产物:${s.artifacts.get(e.artifactId)?.name ?? e.artifactId}`
     case 'artifact/published': return `产物已发布:${s.artifacts.get(e.artifactId)?.name ?? e.artifactId}`
     case 'batch/settled': return ({ done: '这次运行完成', failed: '这次运行失败', cancelled: '这次运行取消' })[e.outcome]
+    case 'batch/archived': return e.archived ? '归档本次执行，原始记录保留' : '恢复本次执行的显示'
   }
 }
 

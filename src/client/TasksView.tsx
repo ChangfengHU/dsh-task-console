@@ -16,6 +16,7 @@ export interface TasksApi {
   tasks: () => Promise<{ tasks: (TaskSpec & { nextFire: string | null })[]; runs: Run[] }>
   createTask: (spec: Partial<TaskSpec>) => Promise<{ id: string }>
   setTaskEnabled: (id: string, enabled: boolean) => Promise<void>
+  setBatchArchived: (taskId: string, batchId: string, archived: boolean) => Promise<void>
   deleteTask: (id: string) => Promise<void>
   deleteTasks: (ids: string[]) => Promise<void>
   fireTask: (id: string, by?: 'manual' | 'retry') => Promise<{ runId: string }>

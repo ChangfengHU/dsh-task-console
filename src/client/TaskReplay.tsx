@@ -49,7 +49,7 @@ function eventGroup(e: Event): Exclude<EventFilter, 'all'> {
 
 function belongsToBatch(e: Event, batchId: string): boolean {
   if (e.t === 'batch/fired') return e.batch.id === batchId
-  if (e.t === 'batch/settled') return e.batchId === batchId
+  if (e.t === 'batch/settled' || e.t === 'batch/archived') return e.batchId === batchId
   if (e.t === 'artifact/registered') return e.artifact.batchId === batchId
   if ('cardId' in e && typeof e.cardId === 'string') return e.cardId.startsWith(`${batchId}#`)
   if ('runId' in e && typeof e.runId === 'string') return e.runId.startsWith(`${batchId}#`)
@@ -161,9 +161,9 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
         const next = await api.taskEvents(id)
         if (!stop) {
           const state = fold(next as Event[])
-          const selected = runId ? state.batches.get(runId) : [...state.batches.values()].filter(batch => batch.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]
+          const selected = runId ? state.batches.get(runId) : [...state.batches.values()].filter(batch => batch.taskId === id && !batch.archivedAt).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]
           setEvents(next as Event[]); setError('')
-          if (!selected?.settled) poll = window.setTimeout(loadEvents, 4000)
+          if (selected && !selected.settled && !selected.archivedAt) poll = window.setTimeout(loadEvents, 4000)
         }
       } catch (e) { if (!stop) setError(String((e as Error).message ?? e)) }
     }
@@ -175,7 +175,7 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
           const state = fold(next.events as Event[])
           const spec = state.tasks.get(id)
           const selected = next.batchId ? state.batches.get(next.batchId) : undefined
-          if (spec?.graphMode !== 'dynamic-rounds' && spec?.origin?.source !== 'task-chat' && !selected?.settled) poll = window.setTimeout(loadEvents, 4000)
+          if (spec?.graphMode !== 'dynamic-rounds' && spec?.origin?.source !== 'task-chat' && selected && !selected.settled && !selected.archivedAt) poll = window.setTimeout(loadEvents, 4000)
         }
       } catch (e) { if (!stop) setError(String((e as Error).message ?? e)) }
     }
@@ -188,7 +188,7 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
   const now = useMemo(() => cursor === null ? full : fold(events.slice(0, upto)), [events, upto, cursor, full])
   const task: TaskSpec | undefined = full.tasks.get(id)
   const batches = [...full.batches.values()].filter(b => b.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))
-  const selId = runId ?? batches[0]?.id
+  const selId = runId ?? batches.find(batch => !batch.archivedAt)?.id
   const batchFull: Batch | undefined = selId ? full.batches.get(selId) : undefined
   const batchNow: Batch | undefined = selId ? now.batches.get(selId) : undefined
   const batchEvents = useMemo(() => batchFull ? events.map((e, index) => ({ e, index })).filter(x => belongsToBatch(x.e, batchFull.id)) : [], [events, batchFull?.id])
@@ -223,10 +223,17 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
   }, [playing, eventStep, batchEvents, playbackSpeed])
 
   const agentName = (aid: string) => agents.find(a => a.id === aid)?.name ?? aid
+  const archiveBatch = async (batchId: string, archived: boolean) => {
+    await api.setBatchArchived(id, batchId, archived)
+    const next = await api.taskSnapshot(id)
+    setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId)
+    toast(archived ? '执行已归档，原始历史与会话保留' : '已恢复显示，不会自动重跑')
+    go(`tasks/${id}`)
+  }
   if (!task) return <div className="dtc-empty">{error || (events.length ? '没有这个任务' : <><span className="dtc-spin" /> 读取事件流…</>)}</div>
-  if ((task.graphMode === 'dynamic-rounds' || task.origin?.source === 'task-chat') && selId) return <DynamicTaskReplay api={api} agents={agents} task={task} batches={batches} batchId={selId} sessionId={sessionId} toast={toast} />
+  if ((task.graphMode === 'dynamic-rounds' || task.origin?.source === 'task-chat') && selId) return <DynamicTaskReplay api={api} agents={agents} task={task} batches={batches} batchId={selId} sessionId={sessionId} toast={toast} onBatchArchive={archiveBatch} />
   if (!selId && task.origin) return <section className="dtc-workflow">
-    <header><div><h2>{task.title}</h2><p>已创建 · 尚未执行 · 0 次执行记录</p></div><TaskRunAction task={task} api={api} toast={toast} /></header>
+    <header><div><h2>{task.title}</h2><p>{batches.length ? `没有当前执行 · ${batches.length} 条历史已归档` : '已创建 · 尚未执行 · 0 次执行记录'}</p></div><ExecutionPicker batches={batches} value="" onChange={bid => go(`tasks/${id}/runs/${bid}`)} onArchive={archiveBatch} /><TaskRunAction task={task} api={api} toast={toast} /></header>
     <p>{task.trigger.kind === 'cron' ? `时间表：${task.trigger.expr} · ${task.trigger.timeZone || '宿主时区'} · ${task.enabled ? '已启用' : '未启用，等待手动验收'}` : '等待首次手动执行。'}运行前没有角色、闸门或依赖行，不展示虚构 DAG。</p>
     <WorkflowPlan task={task} nameOf={agentName} openSession={sid=>void api.openSession(sid).catch(e=>toast(String(e.message||e)))} trace={sid=>void api.openSession(sid).catch(e=>toast(String(e.message||e)))} />
   </section>
@@ -275,13 +282,14 @@ export function TaskReplay({ api, agents, id, runId, sessionId, toast }: { api: 
         <div className="dtc-cartoon-title"><span>DSH TASK STUDIO</span><h1>{task.title}</h1><small>{batchFull ? `${batchFull.id} · ${graph.nodes.filter(node => node.kind === 'role' || node.kind === 'reviewer' || node.kind === 'human').length} 个角色节点${total ? ` · ${total}` : ''}` : '还没运行'}</small></div>
         <div className="dtc-cartoon-live"><i />Hermes 0.20.4 兼容内核在线</div>
         <div className="dtc-cartoon-actions">
-          <ExecutionPicker batches={batches} value={selId ?? ''} onChange={id => go(`tasks/${task.id}/runs/${id}`)} />
-          <button className="dtc-btn pri" disabled={Boolean(task.origin?.signalId)} title="外部任务请从来源系统重新提交" onClick={async () => { const { runId: rid } = await api.fireTask(task.id); toast('已触发'); go(`tasks/${task.id}/runs/${rid}`) }}>{task.origin?.signalId ? '从来源重试' : '▶ 再跑一次'}</button>
-          {batchFull && (bst === 'run' || bst === 'park') ? <button className="dtc-btn" onClick={async () => { await api.cancelRun(batchFull.id); toast('已取消') }}>取消</button> : null}
+          <ExecutionPicker batches={batches} value={selId ?? ''} onChange={id => go(`tasks/${task.id}/runs/${id}`)} onArchive={archiveBatch} />
+          <TaskRunAction task={task} api={api} toast={toast} />
+          {batchFull && !batchFull.archivedAt && (bst === 'run' || bst === 'park') ? <button className="dtc-btn" onClick={async () => { await api.cancelRun(batchFull.id); toast('已取消') }}>取消</button> : null}
           <button className="dtc-btn danger" onClick={async () => { if (!window.confirm('删除任务和它的运行记录?会话本身不删。')) return; await api.deleteTask(task.id); go('tasks') }}>删除</button>
         </div>
       </header>
       {error ? <div className="dtc-err">{error}</div> : null}
+      {batchFull?.archivedAt ? <p role="status">已归档执行 · 原始状态、证据和会话保留，不参与当前调度。</p> : null}
 
       <section className="dtc-cartoon-summary dtc-dag-summary">
         <div><span>事项组进度</span><strong>{doneCount} / {metricCards.length}</strong><div className="track"><i style={{ width: `${progress}%` }} /></div></div>

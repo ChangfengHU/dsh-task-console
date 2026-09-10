@@ -190,6 +190,8 @@ export class EventStore {
       }
       case 'batch/settled':
         db.prepare('UPDATE dsh_batches SET settled_at = ?, outcome = ? WHERE id = ?').run(toEpoch(e.at), e.outcome, e.batchId); break
+      case 'batch/archived':
+        db.prepare('UPDATE dsh_batches SET archived_at = ? WHERE id = ? AND spec_id = ?').run(e.archived ? toEpoch(e.at) : null, e.batchId, e.taskId); break
       case 'run/session_created':
         db.prepare('UPDATE dsh_run_bindings SET session_id = ? WHERE external_run_id = ?').run(e.sessionId, e.runId); break
       case 'run/prompt_dispatched':
@@ -257,6 +259,18 @@ export class EventStore {
     return next
   }
 
+  /** Archive a parked/ended execution without settling it or rewriting its evidence. */
+  setBatchArchived(taskId: string, batchId: string, archived: boolean): Promise<boolean> {
+    return this.transition(() => {
+      const batch = this.s.batches.get(batchId)
+      if (!batch || batch.taskId !== taskId) throw new Error('执行记录不存在或不属于这个任务')
+      const rows = this.kernel.db.prepare('SELECT status,current_run_id FROM tasks WHERE tenant=?').all(batchId) as { status: string; current_run_id: number | null }[]
+      if (rows.some(r => r.current_run_id !== null || r.status === 'running')) throw new Error('执行记录仍在执行，不能归档或恢复')
+      if (rows.some(r => !['done','blocked','failed','cancelled'].includes(r.status))) throw new Error('仍有待执行或定时等待的角色，不能归档或恢复')
+      return Boolean(batch.archivedAt) !== archived
+    }, changed => changed ? { t:'batch/archived', at:new Date().toISOString(), taskId, batchId, archived } : undefined)
+  }
+
   /** Atomically mutate the normalized core and persist the matching DSH read event. */
   transition<T>(mutate: () => T, project: (result: T) => Event | undefined): Promise<T> {
     let projected: Event | undefined
@@ -284,7 +298,7 @@ export class EventStore {
     const execution = taskForTurn(task, event.batch.turn)
     this.kernel.write(() => {
       const db = this.kernel.db
-      if (task.trigger.kind === 'cron' && db.prepare('SELECT id FROM dsh_batches WHERE spec_id=? AND settled_at IS NULL LIMIT 1').get(task.id)) throw new Error('上一轮仍未结束，不重复启动')
+      if (task.trigger.kind === 'cron' && db.prepare('SELECT id FROM dsh_batches WHERE spec_id=? AND settled_at IS NULL AND archived_at IS NULL LIMIT 1').get(task.id)) throw new Error('上一轮仍未结束，不重复启动')
       if (scheduleClaim && db.prepare("UPDATE dsh_schedule_fires SET status='dispatched',lease_token=NULL,lease_until=NULL WHERE id=? AND status='pending' AND lease_token=?").run(scheduleClaim.id, scheduleClaim.token).changes !== 1) throw new Error('定时派发租约已失效')
       db.prepare(`INSERT INTO dsh_batches(id, spec_id, fired_by, fired_at, turn_json) VALUES (?, ?, ?, ?, ?)`).run(event.batch.id, task.id, event.batch.by, toEpoch(event.at), event.batch.turn ? JSON.stringify(event.batch.turn) : null)
       const insertedCards: string[] = []
@@ -421,7 +435,7 @@ export class EventStore {
 
   async claimCard(cardId: string, externalRunId: string, sessionId: string, attempt: number, fromReview = false): Promise<ClaimResult | undefined> {
     return this.transition(
-      () => this.tasks.get(this.state.cards.get(cardId)?.taskId ?? '')?.archivedAt ? undefined : this.kernel.claimTask(cardId, { fromReview }),
+      () => this.tasks.get(this.state.cards.get(cardId)?.taskId ?? '')?.archivedAt || this.s.batches.get(this.s.cards.get(cardId)?.batchId ?? '')?.archivedAt ? undefined : this.kernel.claimTask(cardId, { fromReview }),
       claim => {
         if (!claim) return undefined
         this.kernel.db.prepare(`INSERT INTO dsh_run_bindings(external_run_id, core_run_id, session_id) VALUES (?, ?, ?)`).run(externalRunId, claim.run.id, sessionId)
@@ -487,6 +501,9 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (task.origin?.reviewPlanId) lines.push('', '[HOST REVIEW RELEASE]',
     `本 Run 已由独立审查放行，审批计划 ${task.origin.reviewPlanId}。原始消息中“先生成计划、等待审查、不执行”描述的创建阶段已完成；现在执行下方已审查的业务范围。其他禁止事项、宿主权限及验收要求仍有效，不因批准而扩大。`)
   if (card.brief?.trim()) lines.push('', '[YOUR PART]', card.brief.trim())
+  if (task.workflowRecipe?.id === 'fleet-base-v2') lines.push('', '[FRESH EXECUTION / RECOVERY]',
+    '本次使用当前工具重新检查目标。其他执行或历史会话的 blocked/人工验证原因不代表当前仍故障；健康组件及有效登录只复用，不为重跑而重装或再次复制。',
+    'Google 交互验证若当前仍真实存在，按回执 task_block，不能绕过。未安排 task_wait 或真实恢复触发时，不得承诺“完成验证后自动恢复”。本次新会话必须取得自己的完整验收回执。')
   if (task.design) lines.push('', '[REVIEWED DECISION CONTRACT]', JSON.stringify(task.design, null, 2),
     '以上为已审查的业务决策契约：依据真实工具证据选分支，不能将 unknown 当失败或未登录；它不是自动执行的脚本。逐目标记录匹配分支、证据、动作和结果；隔离的失败不得遗漏或伪装成整体成功。重试上限不授予重复副作用或扩大权限。最终报告覆盖全部目标和验收条件；有未达标项必须明确列出。')
   for (const u of upstream) lines.push('', `[UPSTREAM HANDOFF from ${u.agentName}]`, u.summary.trim() || '(上游没有留下交接单)')

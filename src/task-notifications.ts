@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import type { EventStore } from './tasks.ts'
 import type { CompletionCheck } from './runner.ts'
+import { patrolItemView } from './patrol-report.ts'
 
 export type NotificationStage = 'started' | 'findings' | 'rework' | 'restored' | 'unresolved'
 const labels = { started: '开始巡查', findings: '巡查发现', rework: '继续返工', restored: '独立验收通过', unresolved: '仍有未解决项' }
@@ -50,7 +51,7 @@ export class TaskNotifications {
     for (const chatId of config.chatIds) {
       const id = createHash('sha256').update(JSON.stringify([input.batch.id, input.card.round, stage, chatId])).digest('hex').slice(0, 24)
       const markdown = [`## 浏览器巡查 · ${labels[stage]}`, `Task: ${input.task.id}`, `执行: ${input.batch.id} · 第 ${input.card.round} 轮`,
-        report.summary || report.reason, ...(report.items ?? []).map((r: any) => `- ${r.ip}/browser-${r.instance}: ${r.accepted ? '已验收' : r.state}；修复尝试 ${r.attempts}；${r.reason}`),
+        report.summary || report.reason, ...(report.items ?? []).map((r: any) => { const view = patrolItemView(r); return `- ${r.ip}/browser-${r.instance}: ${view.state}；${view.verdict}；${view.reason}；修复尝试 ${r.attempts}；下一步：${view.next}` }),
         ...(report.uncovered ?? []).map((r: any) => `- ${r.nodeId}: 无法确认覆盖`), `通知编号: ${id}`].filter(Boolean).join('\n')
       db.prepare("INSERT OR IGNORE INTO dsh_task_notifications VALUES (?,?,?,?,?,?,?,'pending',0,?,NULL,?)").run(id,input.task.id,input.batch.id,input.card.id,stage,chatId,markdown,Date.now(),input.sessionId)
       const claim = this.store.kernel.write(() => {

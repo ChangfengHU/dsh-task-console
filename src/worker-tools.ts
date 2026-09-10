@@ -37,7 +37,7 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, opt
     output: { schema: { type: 'object', additionalProperties: true }, render }, execute: (args: any, exec: any) => hooks.notify!(args.stage, exec),
   })))
   if (hooks.patrolStatus) disposers.push(agentCtx.tools.register(defineTool({
-    name: 'task_patrol_status', description: '读取宿主从真实工具回执提取的逐浏览器证据、当前轮次精确授权、累计修复次数、独立采样和下次检查时间。不是重新执行探针，不接受模型伪造状态。',
+    name: 'task_patrol_status', description: '读取真实逐浏览器证据、授权、修复预算和独立采样。accepted 是本轮检查结论，freshness 是快照时新鲜度；过期不等于未登录或需要修复。后续不利证据仍阻止验收。不是实时探针，不接受模型伪造状态。',
     parameters: {}, output: { schema: { type: 'object', additionalProperties: true }, render },
     execute: () => hooks.patrolStatus!(),
   })))

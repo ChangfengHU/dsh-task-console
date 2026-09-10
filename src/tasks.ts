@@ -512,10 +512,11 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (card.reviewNote?.trim()) lines.push('', '[REVIEW CHANGES]', card.reviewNote.trim())
   if (task.design?.evidenceContract === 'browser-patrol-v2') lines.push('', '[PATROL ROLE HANDOFF]',
     'task_patrol_status.ready 表示整个 Task 的独立验收，不是当前角色的交接条件。执行者自己的检查不计入评估者独立采样。',
+    '本轮有效独立检查的 accepted 与实时 freshness 分开：accepted=true 且 freshness=expired 表示检查时通过、实时证据待刷新，不是登录失败，不得仅因此返工/复制/重建。后续未知、掉线、账号变化或新的修复操作会使旧检查不能继续充当验收；以宿主当前逐项目结论为准。未覆盖节点单独报告，不将其算作其他浏览器未登录。',
     card.role === 'executor'
       ? '你只完成本轮冻结 items 的动作，取得后台操作终态后立即 task_complete({summary:"真实结果及下游待验项"}) 交给评估者。不得 task_wait 等待下游采样，也不得为填满独立采样重复 provision。'
       : card.role === 'reviewer'
-        ? '只有你负责分时独立复验并可 task_wait。新鲜探针才算新采样；缓存/重复回执不算。优先检查本轮修复目标；等待 observation.nextCheckAt，观察结束时刷新其他已过期目标的当前证据，不对健康目标重做20分钟观察。明确仍未登录/挑战时交接返工结论，不空等凑稳定样本。得到通过或返工结论后 task_complete 交给规划者。'
+        ? '只有你负责分时独立复验并可 task_wait。新鲜探针才算新采样；缓存/重复回执不算。优先检查本轮修复目标，等待 observation.nextCheckAt，修复后仍须完整观察窗口；健康目标取得本轮独立检查后不因其回执在交接中到期而重做检查或20分钟观察。明确仍未登录/挑战时交接返工结论，不空等凑稳定样本。得到通过或返工结论后 task_complete 交给规划者。'
         : '先通过 task_notify 留下通知回执；根据真实证据 task_plan_round 或 task_finalize。不要 task_wait 等待尚未执行的下游；通知失败只处理通知，不能重跑已完成浏览器动作。')
   if (task.graphMode === 'dynamic-rounds' && card.role === 'planner') {
     lines.push('', '[DYNAMIC DAG CONTRACT]',

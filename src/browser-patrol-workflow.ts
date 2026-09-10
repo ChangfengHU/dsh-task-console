@@ -1,6 +1,7 @@
 import type { CompletionCheck } from './runner.ts'
 import type { EventStore } from './tasks.ts'
 import { collectBrowserEvidence } from './browser-patrol-evidence.ts'
+import { patrolReportSummary } from './patrol-report.ts'
 
 export interface PatrolRoundItem { ip: string; instance: number; action: 'verify' | 'provision' | 'resume'; reason: string }
 
@@ -33,6 +34,11 @@ export class BrowserPatrolWorkflow {
       if (!Number.isFinite(Date.parse(row.checkedAt)) || Date.parse(row.checkedAt) < Date.parse(input.batch.firedAt)) continue
       insert.run(input.batch.id, key, input.card.id, input.sessionId, input.card.role ?? '', row.checkedAt, row.expiresAt ?? null, row.gemini, row.account?.fingerprint ?? null, row.operationId ?? null, row.evidenceSeq ?? null)
     }
+    for (const failure of proof.verificationFailures) {
+      if (Date.parse(failure.at) < Date.parse(input.batch.firedAt)) continue
+      if (!db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='patrol_verification_unavailable' AND json_extract(payload,'$.operationId')=?").get(input.card.id, failure.operationId))
+        this.store.kernel.recordEvent(input.card.id, 'patrol_verification_unavailable', failure)
+    }
   }
 
   plan(input: CompletionCheck, candidate: unknown) {
@@ -49,8 +55,9 @@ export class BrowserPatrolWorkflow {
       if (keys.has(key) || !browser || !node.readAuthorized || !['verify', 'provision', 'resume'].includes(row.action) || typeof row.reason !== 'string' || !row.reason.trim() || row.reason.length > 1000) throw new Error('轮次目标/动作不在本次真实可读清单，或缺少决策理由')
       if (row.action !== 'verify' && (!browser.loginAuthorized || !input.task.design.browserPatrol!.actions.includes(row.action))) throw new Error('本计划没有该目标的登录修复授权')
       if (row.action !== 'verify') {
-        const latest = db.prepare('SELECT state FROM dsh_patrol_observations WHERE batch_id=? AND target_key=? ORDER BY checked_at DESC LIMIT 1').get(input.batch.id, key) as any
-        if (row.action === 'provision' && latest?.state !== 'signed_out') throw new Error('复制前需要本次真实未登录证据；未知先验证')
+        const latest = db.prepare('SELECT state,checked_at,expires_at FROM dsh_patrol_observations WHERE batch_id=? AND target_key=? ORDER BY checked_at DESC LIMIT 1').get(input.batch.id, key) as any
+        const unavailable = db.prepare("SELECT json_extract(payload,'$.at') at FROM task_events WHERE graph_id=? AND kind='patrol_verification_unavailable' AND json_extract(payload,'$.key')=? ORDER BY at DESC LIMIT 1").get(input.batch.id,key) as any
+        if (row.action === 'provision' && (latest?.state !== 'signed_out' || Date.parse(latest.checked_at) > Date.now() || !(Date.parse(latest.expires_at) > Date.now()) || unavailable && Date.parse(unavailable.at) >= Date.parse(latest.checked_at))) throw new Error('复制前需要本次新鲜真实未登录证据；未知、过期或后续验证失败先复验')
         if (row.action === 'resume' && (latest?.state === 'verified' || !db.prepare('SELECT 1 FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id WHERE i.spec_id=? AND i.target_key=? AND i.status=\'open\'').get(input.task.id,key))) throw new Error('正常续接仅用于已有授权复制尚未通过的目标，不改动健康登录')
       }
       keys.add(key); items.push({ ip: row.ip, instance: row.instance, action: row.action, reason: row.reason.trim() })
@@ -72,42 +79,55 @@ export class BrowserPatrolWorkflow {
     const db = this.db(), inventory = this.inventory(input.batch.id)
     if (!inventory) return { ready: false, canCloseUnresolved: false, reason: '等待规划者建立真实清单', items: [], uncovered: [] }
     const items: any[] = []
+    const failures = (db.prepare("SELECT payload FROM task_events WHERE graph_id=? AND kind='patrol_verification_unavailable'").all(input.batch.id) as any[])
+      .map(r => JSON.parse(r.payload)).filter(r => Date.parse(r.at) >= Date.parse(input.batch.firedAt) && Date.parse(r.at) <= now)
     for (const node of inventory.nodes) for (const browser of node.browsers) {
       const key = `${node.ip}:${browser.instance}`
-      const proof = db.prepare('SELECT * FROM dsh_patrol_observations WHERE batch_id=? AND target_key=? ORDER BY checked_at DESC LIMIT 1').get(input.batch.id, key) as any
-      const samples = db.prepare("SELECT * FROM dsh_patrol_observations WHERE batch_id=? AND target_key=? AND role='reviewer' ORDER BY checked_at").all(input.batch.id, key) as any[]
+      const history = (db.prepare('SELECT * FROM dsh_patrol_observations WHERE batch_id=? AND target_key=? ORDER BY checked_at,card_id').all(input.batch.id, key) as any[])
+        .filter(s => Date.parse(s.checked_at) >= Date.parse(input.batch.firedAt) && Date.parse(s.checked_at) <= now)
+      const proof = history.at(-1)
+      const samples = history.filter(s => s.role === 'reviewer')
       const issue = db.prepare("SELECT * FROM dsh_browser_issues WHERE spec_id=? AND target_key=? AND status='open'").get(input.task.id, key) as any
       const changedThisBatch = (db.prepare('SELECT COUNT(*) n FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id WHERE o.batch_id=? AND i.target_key=?').get(input.batch.id,key) as any).n
-      const lastChange = issue ? db.prepare('SELECT created_at FROM dsh_browser_operations WHERE issue_id=? ORDER BY created_at DESC LIMIT 1').get(issue.id) as any : null
-      const afterChange = samples.filter(s => !lastChange || Date.parse(s.checked_at) > Date.parse(lastChange.created_at))
-      // A transient unknown sample resets the observation window, not browser state.
-      const lastAccount = afterChange.at(-1)?.fingerprint
-      const invalid = afterChange.findLastIndex(s => s.state !== 'verified' || s.fingerprint !== lastAccount)
-      const relevant = afterChange.slice(invalid + 1)
+      const needsStability = !!issue || changedThisBatch > 0
+      // Closing an issue must not discard this Batch's repair/observation requirement.
+      const lastChange = db.prepare('SELECT o.created_at FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id WHERE i.spec_id=? AND i.target_key=? AND (o.batch_id=? OR i.id=?) ORDER BY o.created_at DESC LIMIT 1').get(input.task.id,key,input.batch.id,issue?.id ?? -1) as any
+      // Any later negative/unknown result or identity change invalidates older review,
+      // including executor receipts; a later executor success alone cannot restore it.
+      const adverse = history.findLast(s => s.state !== 'verified' || s.fingerprint !== proof?.fingerprint)
+      const failure = failures.filter(r => r.key === key).sort((a,b) => a.at.localeCompare(b.at)).at(-1)
+      const relevant = [...new Map(samples.filter(s => s.state === 'verified' && s.fingerprint && Date.parse(s.expires_at) > Date.parse(s.checked_at) &&
+        (!lastChange || Date.parse(s.checked_at) > Date.parse(lastChange.created_at)) &&
+        (!failure || Date.parse(s.checked_at) > Date.parse(failure.at)) &&
+        (!adverse || Date.parse(s.checked_at) > Date.parse(adverse.checked_at))).map(s => [s.checked_at, s])).values()]
       const last = relevant.at(-1), first = relevant[0]
       const cfg = input.task.design!.browserPatrol!
-      const fresh = last && Date.parse(last.checked_at) <= now && Date.parse(last.expires_at) > now && now - Date.parse(last.checked_at) <= 15 * 60_000 && last.state === 'verified'
-      const stable = !issue || (relevant.length >= cfg.minSamples && Date.parse(last?.checked_at) - Date.parse(first?.checked_at) >= cfg.observationMinutes * 60_000 && relevant.every(s => s.state === 'verified' && s.fingerprint === last.fingerprint))
-      const accepted = node.readAuthorized === true && node.reachable === true && fresh && stable
-      const nextCheckAt = issue && first && !stable && relevant.every(s => s.state === 'verified') ? new Date(Math.max(now + 60_000, Date.parse(first.checked_at) + cfg.observationMinutes * 60_000 * Math.min(relevant.length, cfg.minSamples - 1) / (cfg.minSamples - 1))).toISOString() : null
+      const stable = !needsStability || (relevant.length >= cfg.minSamples && Date.parse(last?.checked_at) - Date.parse(first?.checked_at) >= cfg.observationMinutes * 60_000)
+      // Acceptance is this Batch's point-in-time evidence, not a promise that every
+      // short-lived receipt stays fresh while downstream agents finish their work.
+      const accepted = node.readAuthorized === true && node.reachable === true && !!last && stable
+      const reference = last ?? proof
+      const freshness = !reference || !Number.isFinite(Date.parse(reference.expires_at)) ? 'unknown' : Date.parse(reference.expires_at) > now && now - Date.parse(reference.checked_at) <= 15 * 60_000 ? 'fresh' : 'expired'
+      const nextCheckAt = needsStability && first && !stable ? new Date(Math.max(now + 60_000, Date.parse(first.checked_at) + cfg.observationMinutes * 60_000 * Math.min(relevant.length, cfg.minSamples - 1) / (cfg.minSamples - 1))).toISOString() : null
       items.push({ ip: node.ip, instance: browser.instance, state: proof?.state ?? 'unknown', fingerprint: proof?.fingerprint ?? null,
         checkedAt: proof?.checked_at ?? null, operationId: proof?.operation_id ?? null, accepted: !!accepted,
+        freshness, independentCheckedAt: last?.checked_at ?? null, independentExpiresAt: last?.expires_at ?? null,
+        independentOperationId: last?.operation_id ?? null, evidenceSeq: last?.evidence_seq ?? proof?.evidence_seq ?? null,
+        expiresAt: reference?.expires_at ?? null, lastChangeAt: lastChange?.created_at ?? null,
+        verificationFailure: failure && !last ? failure : null,
         readAuthorized: node.readAuthorized, loginAuthorized: browser.loginAuthorized, attempts: issue?.attempts ?? changedThisBatch,
         independentlyObserved: samples.length,
-        observation: issue ? { samples: relevant.length, requiredSamples: cfg.minSamples, minutes: cfg.observationMinutes, passed: stable, nextCheckAt } : null,
-        reason: !node.readAuthorized ? 'read-not-authorized' : !node.reachable ? 'unreachable' : !last ? 'missing-independent-verification' : !fresh ? 'not-currently-verified' : !stable ? 'observation-window-pending-or-failed' : 'independent-verification-passed' })
+        observation: needsStability ? { samples: relevant.length, requiredSamples: cfg.minSamples, minutes: cfg.observationMinutes, passed: stable, nextCheckAt } : null,
+        reason: !node.readAuthorized ? 'read-not-authorized' : !node.reachable ? 'unreachable' : failure && (!proof || Date.parse(failure.at) >= Date.parse(proof.checked_at)) ? 'verification-operation-incomplete' : proof?.state === 'signed_out' ? 'signed-out' : proof && proof.state !== 'verified' ? 'verification-unknown' : !last ? samples.length ? 'independent-recheck-required' : 'missing-independent-verification' : !stable ? 'observation-window-pending-or-failed' : 'independent-verification-passed' })
     }
     const uncovered = inventory.nodes.filter((n: any) => n.reachable !== true && !n.browsers.length).map((n: any) => ({ nodeId: n.nodeId, reason: 'unreachable-no-browser-observation' }))
     const plan = db.prepare('SELECT target_key,action,reason FROM dsh_patrol_round_items WHERE batch_id=? AND round=?').all(input.batch.id, input.card.round ?? 0)
-    // A known coverage gap already prevents success. Expiry during planner/notifier
-    // handoff must not force unchanged, independently checked browsers into rework
-    // just to report that failure. This never changes ready or accepted evidence.
     const canCloseUnresolved = items.every(i => i.accepted || !i.readAuthorized || !inventory.nodes.find((n: any) => n.ip === i.ip)?.reachable || i.independentlyObserved > 0 && (
-      uncovered.length > 0 && i.state === 'verified' && i.reason === 'not-currently-verified' && !i.observation ||
       (input.card.round ?? 0) > input.task.design!.failurePolicy.maxAttempts || i.attempts >= input.task.design!.failurePolicy.maxAttempts || i.state === 'unknown' && i.independentlyObserved >= 2
     )) && (items.length > 0 || uncovered.length > 0)
-    return { ready: items.length > 0 && items.every(i => i.accepted) && uncovered.length === 0, canCloseUnresolved, plan,
-      items, uncovered, summary: `${items.length} 个已观测浏览器：${items.filter(i => i.accepted).length} 验收通过，${items.filter(i => !i.accepted).length} 未通过；${uncovered.length} 个节点无法确认浏览器覆盖。` }
+    return { assessmentMode: 'point-in-time-v1', assessedAt: new Date(now).toISOString(),
+      ready: items.length > 0 && items.every(i => i.accepted) && uncovered.length === 0, canCloseUnresolved, plan,
+      items, uncovered, ...patrolReportSummary(items, uncovered) }
   }
 
   complete(input: CompletionCheck) {
@@ -125,7 +145,8 @@ export class BrowserPatrolWorkflow {
   snapshot(input: CompletionCheck) {
     const report = this.status(input), encoded = JSON.stringify(report)
     const last = this.db().prepare("SELECT payload FROM task_events WHERE task_id=? AND kind='patrol_snapshot' ORDER BY id DESC LIMIT 1").get(input.card.id) as any
-    if (last?.payload !== encoded) this.store.kernel.recordEvent(input.card.id, 'patrol_snapshot', report)
+    const facts = (value: any) => { const { assessedAt, ...rest } = value; return JSON.stringify(rest) }
+    if (!last || facts(JSON.parse(last.payload)) !== facts(JSON.parse(encoded))) this.store.kernel.recordEvent(input.card.id, 'patrol_snapshot', report)
     return report
   }
 }

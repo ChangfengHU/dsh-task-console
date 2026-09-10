@@ -29,6 +29,7 @@ const eventEffect = (event: GraphEventRow, frame: GraphFrame) => {
   const p = event.payload
   const run = event.run_id === null ? undefined : frame.runs.find(row => row.id === event.run_id)
   switch (event.kind) {
+    case 'patrol_verification_unavailable': return { icon: '!', title: '后续验证未完成', copy: '记录验证操作的真实拒绝/中断；不是登录失败，也不能继续用旧成功回执充当本次复验。', facts: [String(p.key), String(p.reason), String(p.operationId)] }
     case 'patrol_snapshot': return { icon: '◎', title: '逐浏览器验收证据更新', copy: String(p.summary || p.reason), facts: ['下方证据表同步到本事件', `task_events.id=${event.id}`] }
     case 'patrol_round_planned': return { icon: '◇', title: '本轮精确目标与动作已冻结', copy: '规划者的结构化决策与 Gate 在同一事务落库；MCP 不能执行清单以外的动作。', facts: [`第 ${p.round} 轮`, `${Array.isArray(p.items) ? p.items.length : 0} 个目标动作`] }
     case 'notification_requested': return { icon:'✉', title:'已创建通知协作卡', copy:'规划者提交冻结报告，通知员独立发送；不阻塞浏览器主流程。', facts:[String(p.stage),String(p.source_card_id)] }

@@ -279,8 +279,9 @@ to include the actual planner's instructions.
 For browser-patrol-v2 only the independent reviewer may defer. Executor completion
 is a factual handoff after its frozen actions end, not a requirement that the whole
 Task is ready. Waiting for downstream reviewer samples would deadlock the DAG.
-Other business contracts retain generic durable waits. Reviewer refreshes expired
-healthy-target evidence at the end of a repair window without repeating its stability test.
+Other business contracts retain generic durable waits. Healthy targets need one valid
+independent check in this Batch; expiry during other targets' repair windows does not
+require repeating those checks or long stability observations.
 
 New recurring login workflows opt into `browser-patrol-v2`; legacy v1 remains intact.
 Planner, browser-manager and independent read-only reviewer use native tool receipts,
@@ -290,14 +291,32 @@ reserves repair attempts in `dsh_browser_issues/operations` across later Session
 Batches. Repeating an ambiguous mutation reservation requires reconciliation, not
 another copy. No lifecycle/rebuild authority is granted by this contract.
 
-Only repaired/unresolved instances need the reviewed stability window; healthy
-instances need current independent evidence, not another long observation run.
-When an unreachable zero-observation node already prevents full coverage, unchanged
-independently checked targets whose evidence expires during handoff may close as
-unresolved. They remain unaccepted; this neither extends evidence expiry nor waives
-repair stability, missing independent checks or the manual-before-cron gate.
-`task_patrol_status` exposes scope, budgets and samples. `patrol_snapshot` events
-drive the evidence table at the selected replay position. A supported `unresolved`
+Only repaired/unresolved instances need the reviewed stability window. Patrol
+`assessmentMode=point-in-time-v1` separates `accepted` (this Batch's independent
+check/stability result) from `freshness` (receipt validity at `assessedAt`). A receipt
+must be valid when actually observed, from this Batch and the real reviewer's paired
+tool result. Its original checkedAt/expiresAt are never extended. Later expiry alone
+does not erase that successful historical check or authorize copy/rebuild. Subsequent
+negative/unknown evidence, identity changes or new mutation reservations invalidate
+older review; executor success alone cannot reinstate it. Independent sample counts
+and the full repair window remain, including after this Batch's issue is resolved.
+New copy plans still require fresh explicit signed-out evidence, never stale evidence
+or a check superseded by a failed verification. Coverage gaps remain separate blockers.
+
+Same-session blocked/interrupted Browser status receipts append deduplicated
+`patrol_verification_unavailable` events using the operation's actual updatedAt.
+They invalidate earlier checks but are not fabricated login samples or logout proof.
+Only a subsequent independent check restores acceptance; model summaries and another
+Session's failures cannot supply these facts. Source sessions/operations are preserved.
+
+`task_patrol_status` exposes scope, budgets, samples, freshness, precise independent
+receipt times and categorized reasons. `patrol_snapshot` events drive the evidence
+panel at the selected replay position; an assessment-clock change alone creates no
+new event. Replay never reads today's Fleet state or re-evaluates against today's
+clock. Older snapshots retain their original accepted/ready/outcome/summary and are
+explicitly labelled historical; display explains expired evidence without changing
+it to passed or signed-out. Notification text uses the same reason vocabulary;
+previously queued/sent outbox reports remain frozen. A supported `unresolved`
 final disposition settles a FAILED Batch, retains the issue budget and permits the
 next scheduled check; it is not business success.
 

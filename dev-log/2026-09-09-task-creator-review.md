@@ -607,3 +607,68 @@ retained. The role cards being done is not overall acceptance; the evidence tabl
 retains the failure. Board RPC after restart confirms only2 visible Tasks,30 archived,
 zero running Tasks, unchanged failed Batch and disabled patrol cron. No cleanup of
 private receipts, source, runtime lib/dependencies or unique screenshots was performed.
+
+## 2026-09-10 — 0.30.6 patrol facts versus receipt freshness
+
+The owner confirmed that a short-lived verification receipt expiring during Agent
+handoff must not be described as a browser logging out. The original 16:35 Beijing
+patrol remains failed; its persisted last states were verified, with six expired
+review receipts and a separate uncovered node. Example:187/b2 checked16:51:51,
+expires16:54:51 (180 seconds). This is the original verifier TTL, not a cookie TTL.
+
+Implemented in the DSH business adapter, not the generic Hermes kernel or Fleet:
+- Separate this Batch's point-in-time accepted result from freshness at assessedAt.
+  Paired independent evidence must have been valid at the actual observation time,
+  be from this Batch, and not be future-dated. Original verifier timestamps remain.
+  Later expiry alone no longer forces healthy targets through rework.
+- Subsequent signed-out/unknown results, changed identity, failed verification
+  operations and new repair reservations invalidate older independent success.
+  Executor success alone cannot restore acceptance. Blocked/interrupted status
+  receipts create a deduplicated patrol_verification_unavailable event with the
+  operation's real time; they do not invent a login sample or a logout.
+- Keep the reviewed sample count and full stability window on repaired targets,
+  including after resolving the issue. New operations reset those prerequisites.
+  A copy plan requires fresh explicit signed-out evidence and no superseding
+  verification failure; expiry is not authorization to copy or rebuild.
+- Scope gaps, missing evidence and actual login failures remain separate blockers.
+  No Task/role grants, reviewed workflow definitions or automatic scheduling changed.
+- Patrol evidence UI displays check facts, snapshot-time freshness and the result/
+  next action separately. It supports attention filtering, raw reason/operation/time
+  details, historical-summary disclosure, and responsive light/dark layouts.
+  Legacy snapshots remain clearly historical, with original accepted/ready/outcome
+  values; replay never consults current Fleet or today's clock to rewrite the past.
+  A clock tick alone does not generate another replay snapshot.
+- Role handoff/tool guidance and newly frozen WeCom text use these distinctions.
+  Existing queued/sent reports and receipts are unchanged. No real message was sent.
+
+Verification:
+- Existing Node22/tsx environment;219/219 serial tests passed in31.99s. New coverage
+  exercises 3-minute expiry, cross-Batch isolation, future/expired-at-observation
+  evidence, later executor failure/unknown/account change, resolved-issue stability,
+  mutation resets, stale-copy refusal, blocked-verification invalidation/deduplication,
+  historical report immutability, snapshot deduplication and notification vocabulary.
+- Build and git diff checks passed. Deployment restarted the existing linked DSH
+  service only after verifying zero active Task Runs and native Sessions.
+- Public historical page:11 browser rows, attention filter6, raw accepted=false and
+  original5/6 outcome retained. Earliest replay position has no future patrol evidence;
+  returning to the final position restores the retained snapshot and failed header.
+  Initial full public interaction verification took27.80s; no startup speed claim.
+- Browser-only interception of the read-only taskGraph response exercised new
+  passed-but-expired, signed-out, blocked-verification and stability-pending states.
+  These use192.0.2.x fixtures and create no production Task, Batch or machine action.
+  Public desktop/mobile/dark checks had no page errors or horizontal page overflow.
+  Screenshots were viewed: /tmp/dsh-0306-patrol-final-desktop.png,
+  /tmp/dsh-0306-patrol-dark-mobile.png and the explicitly labelled
+  /tmp/dsh-0306-patrol-fixture-dark-mobile.png. Other dsh-0306-patrol screenshots
+  retain the expanded original evidence and fixture layouts for this verification.
+- Exact before/after row hashes match for dsh_task_specs(32),dsh_batches(63),
+  task_events(2124),task_runs(233),dsh_patrol_observations(93),
+  dsh_task_notifications(11),dsh_schedule_bindings(2),dsh_schedule_fires(0).
+  Both existing patrol attempts remain failed and hourly cron remains disabled.
+
+This is implementation/UI verification, not a newly passed real fleet patrol.
+The developer did not SSH to target machines or launch live business Agents.
+No dependency installation or temporary build tree; test-owned fixture directories
+are removed by their test teardown. Tracked lib and installed dependencies remain
+production runtime assets. Unique browser acceptance screenshots are retained;
+no user data, credentials, original receipts or unrelated project files were cleaned.

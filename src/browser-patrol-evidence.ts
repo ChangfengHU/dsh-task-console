@@ -12,6 +12,7 @@ export function collectBrowserEvidence(input: Pick<CompletionCheck, 'profileId' 
   const inspections = new Map<string, any>()
   const verifications = new Map<string, any>()
   const verificationHistory: { key: string; row: any }[] = []
+  const verificationFailures: { key: string; at: string; operationId: string; reason: string; evidenceSeq: number }[] = []
   let inventory: any
   for (const e of events) {
     if (e.type === 'tool/call') {
@@ -30,6 +31,14 @@ export function collectBrowserEvidence(input: Pick<CompletionCheck, 'profileId' 
       if (call.name === 'browser_inspect' && value.ip === call.args.ip && Array.isArray(value.loginAssessment?.browsers))
         inspections.set(value.ip, { ...value.loginAssessment, evidenceSeq: e.seq })
       if (call.name === 'browser_status' && value.id === call.args.operationId && value.args?.ip === call.args.ip &&
+          value.args.sessionId === input.sessionId && Number.isInteger(value.args.instance) && value.args.instance > 0 &&
+          ['login-verify', 'login-provision', 'login-copy', 'login-resume'].includes(value.action) && ['blocked', 'interrupted'].includes(value.phase) && Number.isFinite(Date.parse(value.updatedAt))) {
+        // A failed attempt has no verifier checkedAt. Preserve its actual operation
+        // time separately; never fabricate a login sample or reuse polling time.
+        verificationFailures.push({ key: `${value.args.ip}:${value.args.instance}`, at: value.updatedAt, operationId: value.id,
+          reason: /^[a-z0-9-]{1,100}$/.test(value.error ?? '') ? value.error : 'verification-operation-incomplete', evidenceSeq: e.seq })
+      }
+      if (call.name === 'browser_status' && value.id === call.args.operationId && value.args?.ip === call.args.ip &&
           value.args.sessionId === input.sessionId && ['login-verify', 'login-provision', 'login-copy', 'login-resume'].includes(value.action) && value.phase === 'complete') {
         const proof = value.result?.verification ?? (value.action === 'login-resume' ? value.result : undefined), v = proof?.loginVerification, a = proof?.identity?.account
         if (proof?.instance !== value.args.instance || !v) continue
@@ -46,7 +55,7 @@ export function collectBrowserEvidence(input: Pick<CompletionCheck, 'profileId' 
       }
     }
   }
-  return { inventory, inspections, verifications, verificationHistory }
+  return { inventory, inspections, verifications, verificationHistory, verificationFailures }
 }
 
 export function browserPatrolEvidence(input: CompletionCheck, events: any[]) {

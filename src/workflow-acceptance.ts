@@ -27,6 +27,25 @@ export async function pendingBrowserOperation(input: CompletionCheck, deps: JobD
   return active ? `操作 ${active.id} 仍为 running，等待真实终态；不要重复复制或提前交卷。` : undefined
 }
 
+/** Refresh a resumed model's facts; this notice never grants or completes a Task. */
+export async function browserOperationOutcome(input: CompletionCheck, deps: JobDeps = {}): Promise<string | undefined> {
+  if (input.profileId !== 'browser-manager' && input.task.design?.evidenceContract !== 'browser-patrol-v2') return
+  const now = (deps.now || Date.now)()
+  const rows = (await browserJobs(deps)).filter(j => j.args?.sessionId === input.sessionId
+    && /^[a-f0-9]{32}$/.test(j.id || '') && ['complete','blocked','interrupted'].includes(j.phase)
+    && now - Date.parse(j.updatedAt) >= -5000 && now - Date.parse(j.updatedAt) < 360000)
+    .sort((a,b) => Date.parse(b.updatedAt)-Date.parse(a.updatedAt)).slice(0,4)
+  if (!rows.length) return
+  const observations = rows.map(j => ({ operationId:j.id, action:/^[a-z-]{1,40}$/.test(j.action || '') ? j.action : undefined,
+    ip:/^[0-9.]{7,15}$/.test(j.args.ip || '') ? j.args.ip : undefined, phase:j.phase, observedAt:j.updatedAt,
+    error:/^[a-z0-9-]{1,100}$/.test(j.error || '') ? j.error : undefined,
+    stable:typeof j.result?.stable === 'boolean' ? j.result.stable : undefined,
+    requiredMs:typeof j.result?.requiredMs === 'number' ? j.result.requiredMs : undefined,
+  }))
+  return '[BACKGROUND OPERATION UPDATE — HOST OBSERVATION]\n' + JSON.stringify(observations) +
+    '\n上面是等待结束后宿主新读取的真实状态，取代你上轮看到的 running。先实际调用 browser_status(ip,operationId) 获取完整终态回执，不要仅输出“准备调用”。若符合本角色全部验收条件，实际调用 task_complete(summary,metadata)；fleet-base-v2 的 metadata.browserAcceptanceOperationId 填本会话真实稳定性验收 ID。仍有异常则基于回执诊断或 task_block，不能因终态通知自动宣称通过。禁止重新执行已完成操作或扩大原授权。'
+}
+
 export async function validateWorkflowBlock(input: CompletionCheck, deps: JobDeps = {}): Promise<BlockDecision | void> {
   if (input.profileId !== 'browser-manager') return
   const jobs = await browserJobs(deps)

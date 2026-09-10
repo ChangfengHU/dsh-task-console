@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createHash } from 'node:crypto'
-import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation } from '../src/workflow-acceptance.ts'
+import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation, browserOperationOutcome } from '../src/workflow-acceptance.ts'
 
 function fixture() {
   const now = 2_000_000, sessionId = 'task-example-current-3', requestId = 'accept-current', ip = '192.0.2.10'
@@ -22,6 +22,19 @@ test('only a fresh running operation of this browser session prevents premature 
 })
 test('managed workflow accepts actual same-session stability and current Fleet readback', async () => {
   const f = fixture(); await validateWorkflowCompletion(f.input, f.deps)
+})
+
+test('async wake carries fresh scoped terminal facts, not stale running prose or private payloads', async () => {
+  const f=fixture(),job={...f.job,updatedAt:new Date(f.deps.now()).toISOString(),secret:'never-forward',args:{...f.job.args,password:'never-forward'}}
+  const text=(await browserOperationOutcome(f.input,{now:f.deps.now,jobs:async()=>[job]}))!
+  assert.match(text,/BACKGROUND OPERATION UPDATE/); assert.match(text,/"phase":"complete"/)
+  assert.match(text,/"stable":true/); assert.match(text,/browser_status/); assert.match(text,/metadata.browserAcceptanceOperationId/)
+  assert.doesNotMatch(text,/never-forward|password|secret/)
+  for(const change of [{phase:'running'},{args:{sessionId:'other'}},{updatedAt:new Date(f.deps.now()-360001).toISOString()}])
+    assert.equal(await browserOperationOutcome(f.input,{now:f.deps.now,jobs:async()=>[{...job,...change}]}),undefined)
+  const blocked=await browserOperationOutcome(f.input,{now:f.deps.now,jobs:async()=>[{...job,phase:'blocked',error:'interactive-verification-required',result:undefined}]})
+  assert.match(blocked!,/interactive-verification-required/); assert.doesNotMatch(blocked!,/"stable":true/)
+  assert.equal(await browserOperationOutcome({...f.input,profileId:'fleet-installer'},{jobs:async()=>{throw Error('must not read')}}),undefined)
 })
 test('custom browser workflows retain only their own fresh live operation, independent of recipe', async () => {
   const f=fixture(); delete f.input.task.workflowRecipe

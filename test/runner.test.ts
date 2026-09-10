@@ -108,6 +108,8 @@ test('a fresh execution uses a new session while archived blocked history stays 
   assert.equal(store.s.cards.get(old.cardIds[0])?.status,'blocked')
   assert.equal(store.tasks.size,1)
   await runner.cancelBatch(fresh.id)
+  assert.equal(await store.setBatchArchived('T',fresh.id,true),true)
+  assert.equal(store.s.cards.get(fresh.cardIds[0])?.status,'cancelled')
 })
 
 test('delegated notifications are real idempotent side cards with frozen reports and independent sessions', async () => {
@@ -271,6 +273,15 @@ test('Creator recurring approval only schedules; frozen turn is checked again at
     const session = [...host.sessions.keys()].at(-1)!
     host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'fixture passed' }); host.endTurn(session); await tick()
     await creator.assertScheduleActivation(task)
+    const failed = await runner.fire(task.id,'manual',{turn})
+    const failedSession = [...host.sessions.keys()].at(-1)!
+    host.consumeFirst(failedSession); await host.callTool(failedSession,'task_block',{reason:'fresh challenge',kind:'needs_input'}); host.endTurn(failedSession); await tick()
+    await store.setBatchArchived(task.id,failed.id,true)
+    await assert.rejects(creator.assertScheduleActivation(task), /先对当前已审查计划手动执行/)
+    await runner.fire(task.id,'manual',{turn})
+    const freshSession = [...host.sessions.keys()].at(-1)!
+    host.consumeFirst(freshSession); await host.callTool(freshSession,'task_complete',{summary:'fresh acceptance passed'}); host.endTurn(freshSession); await tick()
+    await creator.assertScheduleActivation(task)
     creator.scheduleActivated(task); assert.equal(creator.plan(plan.id).state, 'scheduled')
     hash = 'v2'; await assert.rejects(creator.scheduledTurn(task, 'next'), /配置已变化/)
   } finally { runner.stop(); store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
@@ -278,7 +289,8 @@ test('Creator recurring approval only schedules; frozen turn is checked again at
 
 test('idle model turns retain live async operations without burning nudges or extending watchdog', async () => {
   let pending = true
-  const {host,runner,store,root}=await setup({onFail:'stop',maxTries:1},{pendingOperation:async()=>pending?'operation running':undefined})
+  let outcomeReads = 0
+  const {host,runner,store,root}=await setup({onFail:'stop',maxTries:1},{pendingOperation:async()=>pending?'operation running':undefined,operationOutcome:async()=>{outcomeReads++;return 'operation-1 complete; read current receipt before submission'}})
   try {
     const batch=await runner.fire('T','manual');await tick()
     const session=[...host.sessions.keys()][0];host.consumeFirst(session)
@@ -289,9 +301,13 @@ test('idle model turns retain live async operations without burning nudges or ex
     assert.equal(host.sessions.get(session)?.followups.length,1)
     assert.equal(flight.timer,watchdog)
     assert.ok(flight.idleTimer)
+    assert.equal(outcomeReads,0)
     pending=false;host.endTurn(session);await tick()
     assert.equal(flight.idleTimer,undefined)
     assert.equal(host.sessions.get(session)?.followups.length,2)
+    assert.equal(outcomeReads,1)
+    assert.match(host.sessions.get(session)!.followups.at(-1).content[0].text,/operation-1 complete/)
+    assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
     await host.callTool(session,'task_complete',{summary:'actual terminal receipt'});host.endTurn(session);await tick()
     assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'done')
   } finally {runner.stop();store.kernel.db.close();await (await import('node:fs/promises')).rm(root,{recursive:true,force:true})}

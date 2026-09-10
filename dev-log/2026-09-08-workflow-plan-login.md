@@ -345,3 +345,49 @@ Public browser confirmed hidden default, show-archive dropdown, original histori
 URL, restore-display entry, absent cancel action and zero page errors. Screenshot
 evidence stays in `/tmp/dsh-0303-archive-before.png` and `archive-after.png` (same prefix).
 This deployment/cleanup is not business acceptance; new installer execution is pending.
+
+### Fresh execution started (not yet final acceptance)
+
+Archive release ff0c6ad8 was committed and pushed after Vault-verified GitHub identity
+and repository permission checks. Stable request e699ffa3-86d5-4f8c-a379-1b1f7a37017c
+launched exactly one Batch b-chat-53c7651dd3a78824d506 at09:46:04.908Z under the retained
+Task. Desktop1600px/mobile390px public browser checks selected only this new Batch by
+default; neither viewport overflowed and no page errors occurred (29.17s cold load).
+
+Installer ledger onb-8e447f40-8c27-4af6-b712-ef3a4e35f63c belongs to the new Session:
+10 stages passed,9 reused, stage9 repaired-and-verified. Ledger mode is repair (the
+Agent's prose called the new invocation "new"); no raw receipt is rewritten.
+Runner reused its service/route and signed job job-mtvcli15-8f9acaf78d95 passed all8
+checks, signatureVerified=true, including fresh TCP/UDP verification.
+
+Browser-manager selected the legacy image-only prepare component and received
+legacy-login-observer-required on the base node. It continued with the already
+installed independent API; both login-provision receipts returned reused=true.
+No login copy or lifecycle operation was substituted. Acceptance operation
+32e5614ad7e91082499a2894da1b084b belongs to this new browser Session and is still running.
+At the model turn end the existing host pending-operation guard retained the same
+live Run and polls without LLM calls. Do not count this as passed until the actual
+20-minute receipt and host completion gate both pass.
+
+Follow-up source tests exposed Hermes cancelled cards' core status "archived"; the
+Batch archive validation now accepts that ended state. Added a latest-failed-manual
+archive regression proving old passed trials cannot enable cron. Base recipe browser
+context now distinguishes default API prepare from the explicitly narrow legacy
+component without broadening scope.207 tests pass; deployment waits for this live
+execution to finish, so these follow-up changes did not influence its current behavior.
+
+### Terminal protocol failure after successful business observation
+
+The operation completed at10:16:13.279Z with stable=true: both instances supplied21
+distinct samples, with spans1200406ms and1200397ms. The first new Batch nevertheless
+FAILED at10:16:31.756Z: after its generic10:16:18 nudge, Qwen still described the old
+running state and did not call any tool. The native request/header proves task_complete
+was available; maxTokens32768 and finish=stop rule out a missing tool or token truncation.
+No successful task completion is claimed and this failed attempt remains unchanged.
+
+0.30.4 adds a narrow async operationOutcome continuation carrying fresh, allowlisted,
+same-session terminal facts and a directive to read the real receipt before actual
+submission. It is not automatic completion, does not change models, scopes, timeouts
+or existing evidence checks. Tests cover foreign/stale/running receipts, private-field
+exclusion, blocked outcomes and actual completion after wake.208 tests pass. Follow-up
+deployment and a fresh end-to-end execution remain required to verify model behavior.

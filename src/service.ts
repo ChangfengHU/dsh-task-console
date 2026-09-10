@@ -32,7 +32,7 @@ import { TaskCreator } from './task-create.ts'
 import { browserPatrolEvidence } from './browser-patrol-evidence.ts'
 import { BrowserPatrolWorkflow } from './browser-patrol-workflow.ts'
 import { TaskNotifications, type NotificationStage } from './task-notifications.ts'
-import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation } from './workflow-acceptance.ts'
+import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation, browserOperationOutcome } from './workflow-acceptance.ts'
 import type { Artifact, Card } from './tasks.ts'
 import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
@@ -86,6 +86,7 @@ export class TaskConsoleService extends TypertRemoteService {
         if (report?.failure) return { reason: report.failure, kind: 'capability' }
       },
       pendingOperation: input => pendingBrowserOperation(input),
+      operationOutcome: input => browserOperationOutcome(input),
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
       beforePlanRound: async (input, items) => {
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2') return

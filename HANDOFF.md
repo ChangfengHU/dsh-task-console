@@ -23,6 +23,15 @@ still includes archived attempts, so hiding a failed trial cannot enable a sched
 Fleet-base-v2 prompts require fresh observations, not reuse of historical challenge
 claims or acceptance receipts. Manual rerun is explicit recovery, not an automatic
 Google-challenge watcher; only a real task_wait/trigger can justify an auto-resume claim.
+After a real async wait ends, the runner's `operationOutcome` callback appends fresh,
+same-session terminal facts to the continuation message. It explicitly asks the Agent
+to read browser_status and actually invoke its terminator; it never calls task_complete
+on the Agent's behalf. Raw private job payloads are not forwarded and all existing
+receipt/Fleet checks, deadlines and protocol budgets remain. A completion tool present
+in request/header is distinct from a model actually invoking it.
+Base-node browser preparation uses default browser_prepare without component; the
+login-observation component is specifically for an already-installed legacy image
+observer, not a prerequisite to install image services on a base node.
 
 ## Chat-created workflows
 

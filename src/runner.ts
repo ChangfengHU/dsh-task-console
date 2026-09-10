@@ -43,6 +43,7 @@ interface Flight {
   timer?: ReturnType<typeof setTimeout>
   heartbeatTimer?: ReturnType<typeof setInterval>
   idleTimer?: ReturnType<typeof setTimeout>
+  waitedForOperation?: boolean
   timeoutSec: number
   deadline?: number
 }
@@ -55,6 +56,7 @@ export interface RunnerOptions {
   beforeComplete?: (input: CompletionCheck) => CompletionDecision | void | Promise<CompletionDecision | void>
   beforeBlock?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
   pendingOperation?: (input: CompletionCheck) => Promise<string | undefined>
+  operationOutcome?: (input: CompletionCheck) => Promise<string | undefined>
   scheduledTurn?: (task: TaskSpec, occurrenceId: string) => Promise<TaskTurn | undefined>
   beforePlanRound?: (input: CompletionCheck, items: unknown) => Promise<{ items: unknown; commit: () => void } | undefined>
   patrolStatus?: (input: CompletionCheck) => Promise<unknown>
@@ -89,6 +91,7 @@ export class TaskRunner {
   private readonly beforeComplete?: RunnerOptions['beforeComplete']
   private readonly beforeBlock?: RunnerOptions['beforeBlock']
   private readonly pendingOperation?: RunnerOptions['pendingOperation']
+  private readonly operationOutcome?: RunnerOptions['operationOutcome']
   private readonly scheduledTurn?: RunnerOptions['scheduledTurn']
   private readonly beforePlanRound?: RunnerOptions['beforePlanRound']
   private readonly patrolStatus?: RunnerOptions['patrolStatus']
@@ -103,6 +106,7 @@ export class TaskRunner {
     this.beforeComplete = opts.beforeComplete
     this.beforeBlock = opts.beforeBlock
     this.pendingOperation = opts.pendingOperation
+    this.operationOutcome = opts.operationOutcome
     this.scheduledTurn = opts.scheduledTurn
     this.beforePlanRound = opts.beforePlanRound
     this.patrolStatus = opts.patrolStatus
@@ -556,22 +560,28 @@ export class TaskRunner {
     if (run?.status === 'blocked') return   // ask_user_question in flight
     const card = this.store.s.cards.get(f.cardId), batch = card && this.store.s.batches.get(card.batchId)
     const base = this.store.tasks.get(f.taskId)
+    let outcomeNotice: string | undefined
     if (card && batch && base && this.pendingOperation) {
       try {
         const pending = await this.pendingOperation({ task: taskForBatch(base, batch), batch, card, sessionId: f.sessionId, profileId: f.profileId })
         if (!this.flights.has(f.sessionId)) return
         if (pending) {
+          f.waitedForOperation = true
           // An async operation outlives a model turn. Retain its live Run/CAS
           // binding; poll receipts without LLM calls, without extending timeout.
           f.idleTimer = setTimeout(() => { void this.onTurnEnd(f, reason) }, 30_000)
           ;(f.idleTimer as any).unref?.()
           return
         }
+        if (f.waitedForOperation) {
+          outcomeNotice = await this.operationOutcome?.({ task: taskForBatch(base, batch), batch, card, sessionId: f.sessionId, profileId: f.profileId })
+          f.waitedForOperation = false
+        }
       } catch { await this.finish(f, 'run/failed', 'failed', '无法核验后台操作状态，未宣称完成'); return }
     }
     if ((run?.nudges ?? 0) < 1) {
       await this.append({ t: 'run/nudged', taskId: f.taskId, runId: f.runId })
-      f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: NUDGE }], source: { kind: 'user' } })
+      f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: outcomeNotice ? `${outcomeNotice}\n\n${NUDGE}` : NUDGE }], source: { kind: 'user' } })
       return
     }
     await this.finish(f, 'run/failed', 'protocol_violation', '停了两次都没有调用 task_complete / task_block')

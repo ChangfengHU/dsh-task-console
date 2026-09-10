@@ -40,6 +40,17 @@ test('a signal turn gives every card the real Task, Signal, Incident and target 
   assert.match(message, /\[TARGETS — RESOURCE METADATA ONLY\]\nsynthetic-node:runner-loop \(No machine\)/)
 })
 
+test('fresh Fleet browser context separates base API preparation from the legacy image observer', () => {
+  const card: Card = { id:'b#0', batchId:'b', taskId:task.id, index:0, agentId:'browser-manager', deps:[], status:'ready', runIds:[], consecutiveFailures:0, blockRecurrences:0 }
+  const fresh = { ...task, workflowRecipe:{id:'fleet-base-v2',login:'provision-gemini'} } as TaskSpec
+  const message = cardMessage(fresh,card,'b',[])
+  assert.match(message,/默认 browser_prepare（省略 component）/)
+  assert.match(message,/legacy-login-observer-required 表示选错专项组件/)
+  assert.match(message,/不能通过省略 component 绕过/)
+  assert.match(message,/未安排 task_wait 或真实恢复触发时/)
+  assert.doesNotMatch(cardMessage(task,card,'b',[]),/BASE NODE BROWSER API/)
+})
+
 test('validateTask fills defaults and rejects unknown agents', () => {
   const ids = new Set(['installer'])
   assert.throws(() => validateTask({ brief: '短' }, ids), /任务书/)

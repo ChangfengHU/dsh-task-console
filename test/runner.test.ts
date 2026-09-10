@@ -287,6 +287,40 @@ test('Creator recurring approval only schedules; frozen turn is checked again at
   } finally { runner.stop(); store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
 })
 
+test('paused cron remains manually reusable through @ without changing schedule or bypassing review', async () => {
+  const {host,runner,store,root}=await setup()
+  let profileHash='v1'
+  const creator=new TaskCreator(runner,async()=>[{id:'a',name:'A',profileHash} as any])
+  const design={scope:'Read fixture only',branches:[{id:'check',when:'requested',action:'read',evidence:'fixture'}],coordination:'serial',failurePolicy:{isolateItems:true,maxAttempts:2,stopConditions:['no permission']},acceptance:['verified fixture']}
+  const plan:any=await creator.prepare({decision:'create',reason:'fixture',title:'Paused hourly',brief:'Check fixture with reviewed boundaries',participants:[{agentId:'a'}],trigger:{kind:'cron',expr:'0 * * * *',timeZone:'Asia/Shanghai'},design},{agent:{session:{id:'fixture-creator',deriveMessages:()=>[{role:'user',content:'Check fixture hourly; do not change anything'}]}}},root)
+  const approved=await creator.review(plan.id,plan.hash,'approve','fixture approval'),task=store.tasks.get(approved.taskId!)!
+  assert.equal(task.enabled,false)
+  assert.equal(creator.catalog().find(t=>t.id===task.id)?.scheduleEnabled,false)
+  const id='manual-paused-fixture-000001'
+  const result=await creator.launch(task.id,'Run the reviewed fixture once',id,root)
+  assert.equal((await creator.launch(task.id,'Run the reviewed fixture once',id,root)).batchId,result.batchId)
+  assert.equal(store.s.batches.size,1)
+  assert.equal(store.tasks.get(task.id)?.enabled,false)
+  assert.equal(runner.schedule.claim(task,Date.now()+3600_000),undefined)
+  const batch=store.s.batches.get(result.batchId)!
+  assert.equal(batch.turn?.origin?.reviewPlanId,plan.id)
+  assert.equal(batch.turn?.origin?.intakeSessionId,undefined)
+  assert.equal(batch.turn?.userRequest,'Run the reviewed fixture once')
+  assert.match(batch.turn!.objective,/do not change anything/)
+  await assert.rejects(creator.launch(task.id,'Different parameters',id,root),/同一提交/)
+  await assert.rejects(creator.launch(task.id,'Check again','manual-paused-fixture-overlap',root),/已有|未结束|运行/)
+  const session=[...host.sessions.keys()].at(-1)!;host.consumeFirst(session)
+  await host.callTool(session,'task_complete',{summary:'fixture passed'});host.endTurn(session);await tick()
+  await creator.assertScheduleActivation(task)
+  assert.equal(task.enabled,false);assert.equal(creator.plan(plan.id).state,'awaiting_trial')
+  profileHash='changed'
+  await assert.rejects(creator.launch(task.id,'Check once','manual-paused-fixture-000002',root),/配置已变化/)
+  profileHash='v1'
+  await store.setTasksArchived([task.id],true)
+  assert.equal(creator.catalog().some(t=>t.id===task.id),false)
+  await assert.rejects(creator.launch(task.id,'Check once','manual-paused-fixture-000003',root),/未归档/)
+})
+
 test('idle model turns retain live async operations without burning nudges or extending watchdog', async () => {
   let pending = true
   let outcomeReads = 0

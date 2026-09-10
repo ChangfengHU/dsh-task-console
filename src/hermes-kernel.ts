@@ -298,6 +298,8 @@ CREATE TABLE IF NOT EXISTS dsh_events (
   payload_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS dsh_events_task_seq ON dsh_events(task_id, seq);
+CREATE INDEX IF NOT EXISTS dsh_batches_spec_time ON dsh_batches(spec_id, fired_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS dsh_batches_time ON dsh_batches(fired_at DESC, id DESC);
 `
 
 const VALID_STATUSES = new Set<KernelTaskStatus>(['triage', 'todo', 'scheduled', 'ready', 'running', 'blocked', 'review', 'done', 'archived'])

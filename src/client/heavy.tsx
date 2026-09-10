@@ -20,6 +20,7 @@ export function activate(ctx: any): Promise<Api> {
       return JSON.parse(unwrap<string>(result, method)) as T
     }
     return {
+      executionHistory: query => call('executionHistory', query),
       agentHistory: query => call('agentHistory', query),
       workflowCatalog: () => call('workflowCatalog'),
       taskPlans: (page: number) => call('taskPlans', { page }),

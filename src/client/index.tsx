@@ -121,7 +121,7 @@ function currentCwd(ctx: any, action: any): string | undefined {
 function lazyAgentSource(ctx: any) {
   const expanded = new Set<string>()
   let roster: AgentRow[] = []
-  let workflows: { id: string; title: string; brief: string }[] = []
+  let workflows: { id: string; title: string; brief: string; scheduleEnabled?: boolean | null }[] = []
   let refreshedAt = 0
   const api = async () => (await loadHeavy()).activate(ctx)
   const refresh = async () => { if (Date.now() - refreshedAt < 1500) return; const service = await api(); const [agents, tasks] = await Promise.all([service.agents(), service.workflowCatalog()]); roster = agents.filter(agent => !agent.broken); workflows = tasks; refreshedAt = Date.now() }
@@ -137,7 +137,7 @@ function lazyAgentSource(ctx: any) {
     trigger: '@' as const, name: 'Agent', order: -10, warm: () => undefined,
     candidates: async (session: { sessionId: string }, request: { query: string }) => { await refresh(); const query = (request.query ?? '').toLowerCase(); return [
       ...agentCandidates(roster, query, expanded.has(session.sessionId)),
-      ...workflows.filter(task => !query || task.title.toLowerCase().includes(query) || task.id.toLowerCase().includes(query)).map(task => ({ name: task.title, description: task.brief, hint: '复用工作流 · 新执行', value: `task:${task.id}`, section: 'Task / Workflow' })),
+      ...workflows.filter(task => !query || task.title.toLowerCase().includes(query) || task.id.toLowerCase().includes(query)).map(task => ({ name: task.title, description: `${task.scheduleEnabled === false ? '定时已暂停 · 可手动执行。' : ''}${task.brief}`, hint: '复用工作流 · 新执行', value: `task:${task.id}`, section: 'Task / Workflow' })),
     ] },
     onPick: (pick: { candidate: { value?: string }; session: { sessionId: string } }) => {
       if (pick.candidate.value === AGENT_EXPAND || pick.candidate.value === AGENT_COLLAPSE) {

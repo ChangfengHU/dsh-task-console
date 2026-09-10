@@ -29,6 +29,7 @@ import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, valid
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
 import { TaskCreator } from './task-create.ts'
+import { executionHistory } from './execution-history.ts'
 import { browserPatrolEvidence } from './browser-patrol-evidence.ts'
 import { BrowserPatrolWorkflow } from './browser-patrol-workflow.ts'
 import { TaskNotifications, type NotificationStage } from './task-notifications.ts'
@@ -515,6 +516,11 @@ export class TaskConsoleService extends TypertRemoteService {
     const { id, page } = JSON.parse(payload)
     if (!this.runner.store.tasks.has(id)) throw new Error('没有这个任务')
     return JSON.stringify(this.runner.schedule.view(id, page))
+  }
+
+  async executionHistory(payload: string): Promise<string> {
+    await this.ready
+    return JSON.stringify(executionHistory(this.runner.store, JSON.parse(payload)))
   }
 
   /** Every map as arrays — one payload for the board and the detail page. */

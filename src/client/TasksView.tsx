@@ -12,6 +12,7 @@ import { ArtifactResultAction, canPreviewArtifact } from './ArtifactDelivery.tsx
 import { TaskRunAction } from './TaskRunAction.tsx'
 
 export interface TasksApi {
+  executionHistory: (query: import('../execution-history.ts').ExecutionQuery) => Promise<import('../execution-history.ts').ExecutionPage>
   launchWorkflow: (taskId: string, text: string, requestId: string, cwd?: string) => Promise<{ taskId: string; batchId: string; path: string }>
   tasks: () => Promise<{ tasks: (TaskSpec & { nextFire: string | null })[]; runs: Run[] }>
   createTask: (spec: Partial<TaskSpec>) => Promise<{ id: string }>
@@ -224,7 +225,8 @@ function TaskGroupCard({ task, latest, history, state, selected, onSelect, agent
       <div className="dtc-taskgroup-foot"><div>
         {task.trigger.kind === 'cron' ? <><span className="dtc-mono">{cronHuman(task.trigger.expr)} · {task.trigger.timeZone || '宿主时区'}</span><span>{task.enabled && task.nextFire ? `下次 ${new Date(task.nextFire).toLocaleString('zh-CN', { timeZone: task.trigger.timeZone })}` : '时间表已停用'}</span></> : latest ? <><span>{ago(latest.firedAt)} · {BY[latest.by]}</span><span>{history} 次运行</span></> : <span>单次任务</span>}
         </div><div className="acts">
-          {task.trigger.kind === 'cron' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void toggleSchedule() }}>{task.enabled ? '停用' : '启用'}</button> : null}
+          <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); go(`tasks/executions?task=${encodeURIComponent(task.id)}`) }}>执行记录（{history}）</button>
+          {task.trigger.kind === 'cron' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void toggleSchedule().catch(e => toast(String(e.message ?? e))) }}>{task.enabled ? '关闭定时' : '启用定时'}</button> : null}
           {task.trigger.kind === 'cron' ? <button className="dtc-btn sm" aria-expanded={scheduleOpen} onClick={event => { event.stopPropagation(); setScheduleOpen(!scheduleOpen) }}>触发记录</button> : null}
           {task.origin?.source === 'task-chat' ? <TaskRunAction task={task} api={api} toast={toast} /> : task.origin?.signalId ? <span title="从来源系统重新提交 Signal，由 Task Agent 核对目标与角色">从来源重试</span> : <>
           {state === 'bad' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void retry() }}>重试</button> : null}

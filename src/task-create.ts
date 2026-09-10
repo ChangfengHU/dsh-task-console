@@ -34,8 +34,9 @@ export class TaskCreator {
   constructor(readonly runner: TaskRunner, readonly agents: () => Promise<IntakeAgent[]>) {}
 
   catalog() {
-    return [...this.runner.store.tasks.values()].filter(t => t.enabled && t.origin?.source === 'task-chat')
+    return [...this.runner.store.tasks.values()].filter(t => !t.archivedAt && (t.enabled || t.trigger.kind === 'cron') && t.origin?.source === 'task-chat')
       .map(({ id, title, brief, participants, graphMode, workflowRecipe, design, trigger }) => ({ id, title, brief, participants, trigger,
+        scheduleEnabled: trigger.kind === 'cron' ? this.runner.store.tasks.get(id)!.enabled : null,
         ...(graphMode ? { graphMode } : {}), ...(workflowRecipe ? { workflowRecipe } : {}), ...(design ? { design } : {}) }))
   }
 
@@ -206,7 +207,7 @@ export class TaskCreator {
       let task: TaskSpec
       if (proposal.decision === 'reuse') {
         const found = store.tasks.get(proposal.taskId ?? '')
-        if (!found || !found.enabled || found.origin?.source !== 'task-chat') throw new Error('只能复用已启用的聊天工作流；不能重放巡检 Signal')
+        if (!found || found.archivedAt || (!found.enabled && found.trigger.kind !== 'cron') || found.origin?.source !== 'task-chat') throw new Error('只能复用未归档且允许手动执行的聊天工作流；不能重放巡检 Signal')
         task = found
         if (proposal.trigger && JSON.stringify(proposal.trigger) !== JSON.stringify(task.trigger)) throw new Error('复用不能修改时间表；需创建新的待审查计划')
       } else {
@@ -246,6 +247,10 @@ export class TaskCreator {
       const hash = digest({ proposal, text: scrub(input.text), cwd })
       if (old && old.payload_hash !== hash) throw new Error('同一提交已被接受；不能替换尚未派发的计划')
       if (old && store.s.batches.has(old.batch_id)) return this.status(old.task_id, old.batch_id)
+      // Pausing cron does not disable manual use. The same reviewed definition and
+      // role hashes are mandatory for @ as for the card's manual trigger.
+      const reviewedTurn = !stageOnly && proposal.decision === 'reuse' && task.trigger.kind === 'cron'
+        ? await this.scheduledTurn(task, batchId) : undefined
       // Credential bytes never enter a Task, event, prompt, handoff or tool result.
       if (leases.length) {
         const root = join(store.root, 'private-inputs'); await mkdir(root, { recursive: true, mode: 0o700 })
@@ -272,10 +277,10 @@ export class TaskCreator {
       if (!old) db.prepare('INSERT INTO dsh_task_requests VALUES (?, ?, ?, ?, ?, ?)').run(input.requestId, hash, task.id, batchId, input.sessionId, new Date().toISOString())
       if (!store.tasks.has(task.id)) await store.append({ t: 'task/created', at: new Date().toISOString(), taskId: task.id, task })
       const definition = workflowDefinition(task)
-      const turn: TaskTurn = { objective: `${task.brief}\n\n[THIS EXECUTION — USER REQUEST]\n${scrub(input.text)}`, participants: task.participants,
+      const turn: TaskTurn = { objective: `${reviewedTurn?.objective ?? task.brief}\n\n[THIS EXECUTION — USER REQUEST]\n${scrub(input.text)}`, participants: task.participants,
         userRequest: scrub(input.text), workflow: { id: digest(definition), definition },
         ...(cwd ? { cwd } : {}), targets: ips.map(ip => ({ kind: 'fleet-node', id: ip })),
-        origin: { source: 'task-chat', signalId: input.requestId, ...(!directWorkflow ? { intakeSessionId: input.sessionId } : {}), decision: proposal.decision, reason: scrub(proposal.reason) } }
+        origin: { ...(reviewedTurn?.origin?.reviewPlanId ? { reviewPlanId: reviewedTurn.origin.reviewPlanId } : {}), source: 'task-chat', signalId: input.requestId, ...(!directWorkflow ? { intakeSessionId: input.sessionId } : {}), decision: proposal.decision, reason: scrub(proposal.reason) } }
       await this.runner.fire(task.id, 'manual', { batchId, turn })
       return this.status(task.id, batchId)
     } finally { for (const lease of leases) lease.material.fill(0) }

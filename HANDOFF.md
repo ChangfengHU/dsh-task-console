@@ -16,6 +16,12 @@ API and an append-only `batch/archived` event, projected to `dsh_batches.archive
 Only ended/blocked role sets without active claims or pending/scheduled roles qualify.
 It hides that Batch from default selection and prevents claim, wake, unblock, cancel
 or settlement; it never deletes native Sessions or rewrites the original outcome.
+The one-line execution picker opens recent records on demand; archive/restore lives
+in its more menu. Full Beijing timestamps and IDs appear in the popover/history, not
+stacked controls in the header. `#/tc/tasks/executions` supports task/status/query/page
+and archived-execution filters; `executionHistory` performs ten-row SQLite pagination,
+returning only row metadata and task titles, never prompts or session transcripts.
+Archived Tasks stay hidden from the global history unless explicitly task-scoped.
 The execution picker can show archived history; explicit old URLs remain readable.
 Restoring visibility does not unblock or rerun it. A new execution reuses the Task
 definition with a fresh input, Batch and Sessions. The latest manual acceptance check
@@ -107,7 +113,7 @@ Correct blocking is not all-browser login completion; fix capabilities and conti
 actual DSH execution, retaining failed attempts and the original authorization boundary.
 
 `task-create-agent` is an installed, scoped Agent preset. It reads the trusted Agent
-roster and enabled chat workflows, chooses create/reuse and delegates to the existing
+roster and manually available chat workflows, chooses create/reuse and delegates to the existing
 TaskRunner. It has no SSH, shell or business MCP grants. Install/update the managed
 preset with `npm run preset:creator` after building; a differing existing preset
 requires inspection before explicit `--force`. Do not overwrite unrelated presets.
@@ -119,7 +125,14 @@ changing its payload is rejected. A direct workflow invocation has no invented
 intake Session URL. Only actual user-source messages may supply the request;
 time-context plugin messages can also have role=user and must be excluded.
 
-New Session `@` offers Agents and enabled chat workflows, not historical sessions.
+New Session `@` offers Agents and manually available chat workflows, not historical sessions.
+For a cron Task, enabled controls automatic scheduling only: false still permits
+manual @ reuse and the card's manual action. Disabled once-only Tasks and archived
+Tasks remain unavailable. Both direct @ and Creator reuse of cron Tasks validate
+the original reviewed input, workflow definition and role hashes via scheduledTurn;
+new manual parameters never alter the saved cron binding or enable cron. Stable
+request UUIDs retain deduplication. Bootstrap passwords are still forbidden in cron
+input. Full business/notification acceptance remains required to enable a schedule.
 The version-guarded host patch suppresses only native @ history suggestions while
 the plugin is active; it does not remove the sidebar history or file references.
 After a host upgrade revalidate the exact patch; never guess a replacement anchor.
@@ -198,10 +211,11 @@ after the operation ends. Completion/block calls cannot abandon a running browse
 operation. This is operation lifecycle protection, not a new generic Gemini gate;
 other Agents and stale/unrelated receipts retain their existing behavior.
 
-Execution-history pickers show the actual firedAt date/time in Asia/Shanghai
-(explicit Beijing UTC+8), followed by an eight-character display code. Full Batch
-IDs remain the select values, route identifiers and hover text; display codes are
-not database keys. Both legacy and DB-replay pickers share this presentation.
+The collapsed execution control shows actual Asia/Shanghai firedAt to the minute
+and outcome. Its popover and history list show full seconds, Beijing UTC+8 and an
+eight-character display code. Full Batch IDs remain navigation identifiers and
+hover text; display codes are not database keys. Both legacy and DB-replay pickers
+share this presentation. Search accepts the displayed code including its leading #.
 
 Bootstrap credentials are resolved by the host, scrubbed from Task/event/handoff
 data and held in owner-only per-Batch `private-inputs` files with a 24-hour read

@@ -23,7 +23,7 @@ async function setup(t:any){
   await store.claimCard('fixture-batch#p1','fixture-run','task-fixture-planner',1)
   const input:any={task,batch:store.s.batches.get('fixture-batch'),card:store.s.cards.get('fixture-batch#p1'),sessionId:'task-fixture-planner',profileId:'planner'}
   store.kernel.db.exec('CREATE TABLE dsh_patrol_inventory(batch_id TEXT PRIMARY KEY,inventory_json TEXT,session_id TEXT)')
-  store.kernel.db.prepare('INSERT INTO dsh_patrol_inventory VALUES (?,?,?)').run(input.batch.id,JSON.stringify({nodes:[{ip,readAuthorized:true}]}),input.sessionId)
+  store.kernel.db.prepare('INSERT INTO dsh_patrol_inventory VALUES (?,?,?)').run(input.batch.id,JSON.stringify({nodes:[{ip,readAuthorized:true,browsers:[{instance:1}]}]}),input.sessionId)
   return {store,input,workflow:new ProxyWorkflow(store)}
 }
 test('reviewed proxy participant is explicit; unsupported fields and missing scope remain denied',()=>{
@@ -60,6 +60,7 @@ test('proxy receipts gate login and require actual independent reviewer rather t
   assert.equal((store.kernel.db.prepare('SELECT session_id FROM dsh_proxy_checks WHERE operation_id=?').get(id) as any).session_id,proxy.sessionId)
   assert.doesNotThrow(()=>workflow.assertBrowser(input,{ip}))
   assert.ok(workflow.complete(proxy))
+  assert.ok(store.kernel.db.prepare("SELECT 1 FROM task_events WHERE kind='proxy_snapshot'").get())
   assert.throws(()=>workflow.complete(input),/independent-review/)
   const reviewer={...input,card:store.s.cards.get('fixture-batch#r1'),profileId:'reviewer',sessionId:'task-fixture-reviewer'}
   await assert.rejects(workflow.invoke(reviewer,'proxy_status',{operationId:id},async()=>wrap(complete)),/owned-by-session/)
@@ -103,4 +104,14 @@ test('freshness and all five paths are necessary; old, mismatched, model flags c
   assert.equal(validProxyProof({...p,result:{ok:true}},'line-100',since,at),false)
   p.result.evidence.paths.udp_google_exit_ip='198.51.100.20'
   assert.equal(validProxyProof(p,'line-100',since,at),false)
+})
+
+test('a focused repair round cannot hide other inventoried nodes from final proxy acceptance',async t=>{
+  const {store,input,workflow}=await setup(t)
+  store.kernel.db.prepare('UPDATE dsh_patrol_inventory SET inventory_json=?').run(JSON.stringify({nodes:[{ip,readAuthorized:true,browsers:[{instance:1}]},{ip:'198.51.100.11',readAuthorized:true,browsers:[{instance:1}]}]}))
+  const plan=workflow.plan(input,[{ip}],[{ip,action:'verify',reason:'focused fixture'}])!
+  await store.expandRound(input.task,input.batch,input.card,'fixture',plan.commit)
+  assert.equal(workflow.status(input)!.plan.length,1)
+  assert.equal(workflow.status(input)!.items.length,2)
+  assert.throws(()=>workflow.complete(input),/independent-review/)
 })

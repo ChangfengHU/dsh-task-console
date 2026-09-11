@@ -30,7 +30,8 @@ const eventEffect = (event: GraphEventRow, frame: GraphFrame) => {
   const p = event.payload
   const run = event.run_id === null ? undefined : frame.runs.find(row => row.id === event.run_id)
   switch (event.kind) {
-    case 'proxy_round_planned': return {icon:'⇄',title:'代理目标与动作已冻结',copy:'代理处理节点完成真实网络验收后，浏览器闸门才可放行。',facts:[String(p.lineId),`${Array.isArray(p.items)?p.items.length:0} 台机器`]}
+    case 'proxy_round_planned': return {icon:'⇄',title:'代理目标与动作已冻结',copy:'代理阶段交接后，宿主按每台机器的网络证据决定是否允许登录写入。',facts:[String(p.lineId),`${Array.isArray(p.items)?p.items.length:0} 台机器`]}
+    case 'proxy_snapshot': return {icon:'⇄',title:'网络证据快照已更新',copy:'该事件位置的原始网络回执已写入代理检查区域，不引用未来状态。',facts:[String(p.lineId),`${Array.isArray(p.items)?p.items.filter((r:any)=>r.independent).length:0} 台独立验收通过`]}
     case 'proxy_operation': return {icon:'⇄',title:'代理操作进度',copy:`${String(p.ip)} · ${String(p.action)} · ${String(p.state)}`,facts:[String(p.operationId??p.requestId),String(p.reason??'仅以真实操作回执判断')]}
     case 'patrol_verification_unavailable': return { icon: '!', title: '后续验证未完成', copy: '记录验证操作的真实拒绝/中断；不是登录失败，也不能继续用旧成功回执充当本次复验。', facts: [String(p.key), String(p.reason), String(p.operationId)] }
     case 'patrol_snapshot': return { icon: '◎', title: '逐浏览器验收证据更新', copy: String(p.summary || p.reason), facts: ['下方证据表同步到本事件', `task_events.id=${event.id}`] }

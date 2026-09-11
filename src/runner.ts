@@ -448,7 +448,7 @@ export class TaskRunner {
             }
             flight.terminal = { kind: 'completed', summary, metadata: { ...verified?.metadata, decision: 'approved', round: card.round, ...(finalArtifactId ? { finalArtifactId } : {}) } }
           },
-        }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner', dynamicRounds: task.graphMode === 'dynamic-rounds' })
+        }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner', dynamicRounds: task.graphMode === 'dynamic-rounds', nativeEvidence: task.design?.evidenceContract === 'browser-patrol-v2' })
       } catch (error) { console.warn('[task-console] worker tools not registered:', error) }
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }
       try {
@@ -579,12 +579,15 @@ export class TaskRunner {
         }
       } catch { await this.finish(f, 'run/failed', 'failed', '无法核验后台操作状态，未宣称完成'); return }
     }
-    if ((run?.nudges ?? 0) < 1) {
+    const nativeEvidence = !!base && !!batch && taskForBatch(base,batch).design?.evidenceContract === 'browser-patrol-v2' && card?.role !== 'planner'
+    const maxNudges = nativeEvidence ? 2 : 1
+    if ((run?.nudges ?? 0) < maxNudges) {
       await this.append({ t: 'run/nudged', taskId: f.taskId, runId: f.runId })
-      f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: outcomeNotice ? `${outcomeNotice}\n\n${NUDGE}` : NUDGE }], source: { kind: 'user' } })
+      const correction = nativeEvidence ? `${(run?.nudges ?? 0) > 0 ? '最后一次协议纠正。' : ''}上次只有普通文本，没有执行交卷工具。现在请实际调用 task_complete，仅传 JSON 对象 {"summary":"简短如实交接"}，省略 metadata 和 artifacts；或实际调用 task_block 说明阻塞。宿主自动读取证据，不接受你口述成功。不要复查或重发业务操作，不要再次只输出“我将调用”的文字。` : NUDGE
+      f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: outcomeNotice ? `${outcomeNotice}\n\n${correction}` : correction }], source: { kind: 'user' } })
       return
     }
-    await this.finish(f, 'run/failed', 'protocol_violation', '停了两次都没有调用 task_complete / task_block')
+    await this.finish(f, 'run/failed', 'protocol_violation', `经过 ${maxNudges} 次协议纠正仍未调用 task_complete / task_block`)
   }
 
   private async finish(f: Flight, t: 'run/completed' | 'run/review_requested' | 'run/failed' | 'run/timed_out' | 'run/cancelled', outcome: string, error?: string, summary?: string, giveUpNow = false, metadata?: Record<string, unknown>, reviewer?: string): Promise<void> {

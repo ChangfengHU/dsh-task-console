@@ -73,7 +73,8 @@ export class ProxyWorkflow {
   status(input:CompletionCheck){
     if(!input.task.design?.proxy)return undefined
     const db=this.db(), planned=db.prepare('SELECT ip,action,reason FROM dsh_proxy_round_items WHERE batch_id=? AND round=? ORDER BY ip').all(input.batch.id,input.card.round??0)
-    const ips=(db.prepare('SELECT DISTINCT ip FROM dsh_proxy_round_items WHERE batch_id=?').all(input.batch.id) as any[]).map(r=>r.ip)
+    const inventory=db.prepare('SELECT inventory_json FROM dsh_patrol_inventory WHERE batch_id=?').get(input.batch.id) as any
+    const ips=inventory?JSON.parse(inventory.inventory_json).nodes.filter((n:any)=>n.readAuthorized&&n.browsers?.length).map((n:any)=>n.ip):[]
     const operations=db.prepare('SELECT operation_id,ip,action,state,created_at,updated_at,session_id FROM dsh_proxy_calls WHERE batch_id=? ORDER BY created_at').all(input.batch.id)
     return {lineId:input.task.design.proxy.lineId,plan:planned,items:ips.map(ip=>{
       const proof=this.proof(input,ip),independent=this.proof(input,ip,Date.now(),true)
@@ -92,7 +93,8 @@ export class ProxyWorkflow {
         return this.proof(input,item.ip)||call?.state==='blocked'
       })
       if(!status.plan.length||!terminal)throw Error('proxy-completion-needs-fresh-native-evidence')
-      return {summary:`代理阶段交接：${status.items.filter(row=>row.accepted).length}/${status.items.length} 台通过 TCP/UDP 验收；未通过目标禁止登录写入，其他目标继续。\n${JSON.stringify(status.items)}`,metadata:{proxy:status}}
+      const current=status.items.filter(row=>(status.plan as any[]).some(item=>item.ip===row.ip))
+      return {summary:`代理阶段交接：本轮 ${current.filter(row=>row.accepted).length}/${current.length} 台通过 TCP/UDP 验收；未通过目标禁止登录写入，其他目标继续。\n${JSON.stringify(current)}`,metadata:{proxy:status}}
     }
     if(input.card.role==='planner'&&input.metadata?.patrolDisposition!=='unresolved'&&(!status.items.length||status.items.some(row=>!row.independent)))throw Error('proxy-finalization-needs-independent-review')
   }
@@ -157,6 +159,7 @@ export class ProxyWorkflow {
         db.prepare('INSERT INTO dsh_proxy_checks VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(operation_id) DO UPDATE SET checked_at=excluded.checked_at,accepted=excluded.accepted,result_json=excluded.result_json').run(row.operation_id,input.batch.id,input.card.id,row.session_id,input.card.role??'',row.ip,checked,Number(accepted),JSON.stringify(value))
         if(accepted&&input.card.role==='reviewer')db.prepare("UPDATE dsh_proxy_issues SET state='resolved' WHERE spec_id=? AND ip=? AND state='open'").run(input.task.id,row.ip)
       }
+      if(state!==row.state)this.store.kernel.recordEvent(input.card.id,'proxy_snapshot',this.status(input))
     })
   }
   /** Read local operation ownership only; never SSH/poll the remote from the host. */

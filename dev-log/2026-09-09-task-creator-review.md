@@ -890,3 +890,25 @@ running; its Run remains in history. Reloaded and unblocked the same card/Batch 
 official Console API, new Session suffix -3-t2. No lock/database row manually cleared.
 Public real Task detail at33.2s showed the proxy role, expandable six-node network
 gate snapshot; no pageerrors or390px overflow. Cold startup is still not optimized.
+
+The first real Batch subsequently failed, not passed: proxy role recovered its reads
+and handed off five passing nodes plus84's exit mismatch, but Qwen's browser role
+only narrated task_complete twice after checking11 instances. No actual terminator
+was called; the kernel recorded protocol_violation and archived dependent cards.
+No proxy repair/login copy occurred in that Batch. This is preserved failure evidence.
+
+Native-evidence worker completion now exposes only the small summary/artifacts
+schema (legacy generic metadata remains); host evidence remains authoritative.
+Non-planner patrol workers receive at most two explicit tool-call corrections, never
+automatic success or repeated business writes. Added bounded-failure regression.
+Live proxy receipt changes emit replayable snapshots. Final independent network
+coverage is based on the whole real inventory, not the focused round's targets;
+added regression preventing focused repair from hiding other nodes.
+
+241 Node tests passed (including20 Python mocked cases), build passed using existing
+dependencies. With all Sessions idle and no running/unknown proxy operations,
+reloaded DSH and launched the same Task's new manual Batch
+b-chat-7d8ffe7f5c933a59ef69. Requested fresh planner evidence before freezing repair
+actions, prioritizing84 without weakening full-inventory or20-minute/four-sample
+acceptance. Cron remains disabled; no historical records removed. At this entry
+the new planner is collecting real inventory;84 repair remains unverified.

@@ -868,6 +868,23 @@ test('runner: cancelling a live batch archives active and waiting core tasks', a
   runner.stop()
 })
 
+test('native evidence workers expose minimal completion and have bounded actual-tool correction, never automatic completion', async () => {
+  const { host, store, runner } = await setup({participants:[{agentId:'a'}],maxTries:1,onFail:'stop',design:{evidenceContract:'browser-patrol-v2'} as any})
+  const batch=await runner.fire('T','manual'),session=[...host.sessions.keys()][0]
+  host.consumeFirst(session)
+  const complete=host.sessions.get(session)!.tools.find(t=>t.name==='task_complete')
+  assert.equal(complete.parameters.metadata,undefined)
+  host.endTurn(session);await tick();host.endTurn(session);await tick()
+  assert.equal(store.s.runs.get(`${batch.id}#0#1`)!.nudges,2)
+  assert.equal(store.s.cards.get(`${batch.id}#0`)!.status,'running')
+  assert.match(host.sessions.get(session)!.followups.at(-1).content[0].text,/JSON.*summary/)
+  assert.match(host.sessions.get(session)!.followups.at(-1).content[0].text,/不要复查或重发/)
+  host.endTurn(session);await tick()
+  assert.equal(store.s.runs.get(`${batch.id}#0#1`)!.outcome,'protocol_violation')
+  assert.equal(store.s.batches.get(batch.id)!.settled?.outcome,'failed')
+  runner.stop()
+})
+
 test('runner: task_block(needs_input) closes the run; unblock creates a fresh run', async () => {
   const { host, store, runner } = await setup({ participants: [{ agentId: 'a' }] })
   const batch = await runner.fire('T', 'manual')

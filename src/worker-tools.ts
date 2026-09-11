@@ -27,7 +27,7 @@ const render = (_args: unknown, value: unknown) => [{ type: 'text' as const, tex
 export const WORKER_TOOL_NAMES = ['task_complete', 'task_block', 'task_request_review', 'task_request_changes', 'task_plan_round', 'task_finalize', 'task_wait', 'task_patrol_status', 'task_notify'] as const
 
 /** Register the four tools on one agent scope. Returns the disposer. */
-export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, options: { planner?: boolean; dynamicRounds?: boolean } = {}): Promise<() => void> {
+export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, options: { planner?: boolean; dynamicRounds?: boolean; nativeEvidence?: boolean } = {}): Promise<() => void> {
   // The real compiler is host-owned. Unit tests use identity descriptors so they do not need to install the whole dsh host.
   const defineTool: (spec: any) => any = process.env.NODE_ENV === 'test' ? (spec => spec) : (await import('@deepseek-ai/dsh-tools')).defineTool
   const disposers: (() => void)[] = []
@@ -53,7 +53,7 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, opt
     parameters: {
       summary: { type: 'string', required: true, description: '交接单正文,给下游看的。' },
       artifacts: { type: 'array', items: { type: 'string' }, description: '交付文件路径,相对路径按任务工作区解析。没有文件可省略。' },
-      metadata: { type: 'object', additionalProperties: true, description: '可选的结构化结果数据。' },
+      ...(!options.nativeEvidence ? {metadata: { type: 'object', additionalProperties: true, description: '可选的结构化结果数据。' }} : {}),
     },
     output: { schema: OUT, render },
     async execute(args: any) {

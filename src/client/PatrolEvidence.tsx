@@ -8,6 +8,8 @@ export function PatrolEvidence({ events }: { events: GraphEventRow[] }) {
   const snapshot = events.findLast(e => e.kind === 'patrol_snapshot')
   if (!snapshot) return null
   const report = snapshot.payload as any
+  const proxyEvent = events.findLast(e=>e.kind==='proxy_snapshot')
+  const proxy = proxyEvent && proxyEvent.id > snapshot.id ? proxyEvent.payload as any : report.proxy
   const items = report.items ?? [], uncovered = report.uncovered ?? []
   const { counts, summary } = patrolReportSummary(items, uncovered)
   const legacy = report.assessmentMode !== 'point-in-time-v1'
@@ -19,9 +21,9 @@ export function PatrolEvidence({ events }: { events: GraphEventRow[] }) {
     <header><div><h3>浏览器巡查 · 检查结果</h3><small>数据库回放 · 证据事件 #{snapshot.id} · 北京时间 {date(report.assessedAt ?? new Date(snapshot.created_at * 1000).toISOString())}</small></div><span>{legacy ? '历史验收记录' : '本轮检查快照'}</span></header>
     <p className="dtc-patrol-summary">{items.length || uncovered.length ? summary : report.reason || '等待本轮检查证据'}</p>
     <p className="dtc-patrol-note">{legacy ? '历史执行结果保持不变。旧口径曾将回执过期计为未通过，不代表浏览器已退出登录。' : '本轮有效的独立检查不会因交接耗时失效；后续掉线、未知、账号变化或修复操作仍需重新验收。'}这里的新鲜度是该事件发生时的状态，不是此刻 Fleet 的实时状态。</p>
-    {report.proxy ? <details className="dtc-patrol-original"><summary>代理前置检查 · {report.proxy.lineId} · 独立验收 {report.proxy.items.filter((r:any)=>r.independent).length}/{report.proxy.items.length}</summary>
+    {proxy ? <details className="dtc-patrol-original"><summary>代理前置检查 · {proxy.lineId} · 独立验收 {proxy.items.filter((r:any)=>r.independent).length}/{proxy.items.length}</summary>
       <p className="dtc-patrol-note">新登录写入需要新鲜网络证据；独立验收保留本轮检查事实，新的异常或修复仍使它失效。以下均为该回放位置的数据。</p>
-      <div className="dtc-patrol-rows">{report.proxy.items.map((r:any)=><article className="dtc-patrol-row" key={r.ip}>
+      <div className="dtc-patrol-rows">{proxy.items.map((r:any)=><article className="dtc-patrol-row" key={r.ip}>
         <div><b>{r.ip}</b><small>{date(r.checkedAt)}</small></div>
         <div><span className="dtc-patrol-label">本轮独立验收</span><b>{r.independent ? '已通过' : '未通过 / 待检查'}</b></div>
         <div><span className="dtc-patrol-label">快照时登录写入闸门</span><b>{r.accepted ? '可继续判定登录' : '禁止写入，先取得网络证据'}</b><small>{r.reason}</small></div>

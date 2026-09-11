@@ -55,6 +55,9 @@ test('proxy receipts gate login and require actual independent reviewer rather t
   await workflow.invoke(proxy,'proxy_repair',args,async forwarded=>{assert.notEqual(forwarded.requestId,args.requestId);complete=proof(id,'repair');return wrap({...complete,state:'running',result:null})})
   assert.throws(()=>workflow.assertBrowser(input,{ip}),/proxy-gate/)
   await workflow.invoke(proxy,'proxy_status',{operationId:id},async()=>wrap(complete))
+  const recovery={...proxy,sessionId:'task-fixture-proxy-recovery'}
+  await workflow.invoke(recovery,'proxy_status',{operationId:id},async()=>wrap(complete))
+  assert.equal((store.kernel.db.prepare('SELECT session_id FROM dsh_proxy_checks WHERE operation_id=?').get(id) as any).session_id,proxy.sessionId)
   assert.doesNotThrow(()=>workflow.assertBrowser(input,{ip}))
   assert.ok(workflow.complete(proxy))
   assert.throws(()=>workflow.complete(input),/independent-review/)

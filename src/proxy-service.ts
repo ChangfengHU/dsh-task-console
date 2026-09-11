@@ -8,7 +8,7 @@ import { authorizeProxy, proxyIp, type ProxyPolicy } from './proxy-policy.ts'
 
 export type ProxyAction = 'inspect'|'verify'|'repair'|'receipt'
 export type ProxyResult = { ok: boolean; reason?: string; phase?: string; quiescent?: boolean; [key:string]: unknown }
-export type ProxyTransport = (action: ProxyAction, ip: string, operationId: string, emit:(event:Record<string,unknown>)=>void)=>Promise<ProxyResult>
+export type ProxyTransport = (action: ProxyAction, ip: string, operationId: string, emit:(event:Record<string,unknown>)=>void, receiptAction?: ProxyAction)=>Promise<ProxyResult>
 const requestId=z.string().regex(/^[a-zA-Z0-9_-]{16,96}$/)
 const schemas={ proxy_inspect:z.object({ip:proxyIp}).strict(),
   proxy_verify:z.object({ip:proxyIp,requestId}).strict(), proxy_repair:z.object({ip:proxyIp,requestId}).strict(),
@@ -93,7 +93,7 @@ export class ProxyService {
       this.db.prepare("UPDATE proxy_operations SET state='unknown' WHERE id=? AND state='running'").run(id);row={...row,state:'unknown'}
     }
     if(row.state==='unknown'){
-      try{const result=await this.transport('receipt',row.ip,id,()=>{});if(result.quiescent===true&&result.receiptOperationId===id){this.finish(id,result);row=this.db.prepare('SELECT * FROM proxy_operations WHERE id=?').get(id) as Row}}
+      try{const result=await this.transport('receipt',row.ip,id,()=>{},row.action);if(result.quiescent===true&&result.receiptOperationId===id){this.finish(id,result);row=this.db.prepare('SELECT * FROM proxy_operations WHERE id=?').get(id) as Row}}
       catch{/* unknown remains locked; no repair is resubmitted */}
     }
     const rows=this.db.prepare('SELECT seq,at,payload_json FROM proxy_events WHERE operation_id=? AND seq>? ORDER BY seq LIMIT 51').all(id,after) as any[]

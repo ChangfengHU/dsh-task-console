@@ -163,3 +163,13 @@ tools or external SSH operations. No related installation Task is invoked implic
 Existing login stability/notification gates and prior execution history are preserved;
 cron remains disabled until explicitly enabled after real acceptance. Tests and tool
 availability are not proof that any production machine has been repaired.
+
+Recovery checks the existing trusted host-key entry before connecting; it never
+accepts an unknown host automatically. The fixed verifier includes standard sbin
+paths and distinguishes a missing probe dependency from a broken machine TUN.
+An absent **read-only** verification receipt may be negatively fenced under the
+remote node lock only when no in-flight marker exists. The exact-ID negative receipt
+prevents a late original reader from starting and releases only that read reservation.
+An absent repair receipt, active worker or unfinished marker remains unknown/locked.
+Same Task/card recovery may query its original operation without transferring that
+evidence to the new Session or granting access to other cards' operations.

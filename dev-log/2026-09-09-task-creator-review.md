@@ -869,3 +869,24 @@ Original two Batch rows retained SHA256
 before/after revision. Explicit manual request launched the same Task's new Batch
 b-chat-2e3320dc3f0735d11e1f; cron remains disabled. At this entry, execution has started
 but machine repair/login/notification acceptance has not yet been established.
+
+Real execution exposed integration defects that fixture checks did not: the verifier's
+restricted PATH omitted sbin, making installed TUN devices appear missing;63's host
+identity was absent from the proxy connection's trusted file. Added standard system
+paths and a missing-tool refusal; reused63's identical existing Browser/Runner host
+key (no keyscan/SSH by developer). Host preflight now checks target identity before
+SSH.187's initial provider refusal did not reproduce on the follow-up read; it is not
+reported as a persistent credential failure.188 returned controller-busy.84's actual
+verify returned proxy-exit-mismatch, and an out-of-plan repair attempt was denied by
+the host, proving the real scope fence rather than silently performing that mutation.
+
+Lost read recovery now creates an explicit negative exact-ID fence only after the
+remote lock and absence of any in-flight marker prove quiescence; late original reads
+deduplicate against it. Missing repair receipts remain unknown and cannot use this
+path. Same-card recovery can query the original receipt while preserving the original
+Session attribution.239 Node and20 mocked Python checks passed, build/diffcheck passed.
+The Agent itself task_blocked for controlled reload after no proxy operation was
+running; its Run remains in history. Reloaded and unblocked the same card/Batch via
+official Console API, new Session suffix -3-t2. No lock/database row manually cleared.
+Public real Task detail at33.2s showed the proxy role, expandable six-node network
+gate snapshot; no pageerrors or390px overflow. Cold startup is still not optimized.

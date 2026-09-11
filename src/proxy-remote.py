@@ -23,7 +23,7 @@ STATE = Path('/var/lib/linux-clash-skill/proxy-mcp')
 SCRIPT = Path('/usr/local/lib/linux-clash-skill/scripts/linux-clash-skill.sh')
 UNIT = 'linux-clash-node-controller.service'
 PATH_FIELDS = ['generic_exit_ip', 'cloudflare_exit_ip', 'claude_exit_ip', 'udp_cloudflare_exit_ip', 'udp_google_exit_ip']
-ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'}
+ENV = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
 
 
 class Refused(Exception):
@@ -109,6 +109,8 @@ def snapshot(raw, expected, source_matches):
 
 def independent_verify(expected):
     root_file(SCRIPT)
+    if any(shutil.which(command, path=ENV['PATH']) is None for command in ['ip', 'systemctl', 'curl', 'python3']):
+        return {'ok': False, 'reason': 'proxy-verifier-dependency-unavailable', 'startedAt': now(), 'checkedAt': now()}
     directory = tempfile.mkdtemp(prefix='proxy-verify-')
     started = now()
     try:
@@ -232,8 +234,8 @@ class Operation:
         verified = independent_verify(request['expectedIp'])
         changed = any(e['stage'] == 'controller-recovery' for e in self.record['events'])
         if request['action'] == 'repair' and (not verified['ok'] or not matches):
-            if verified.get('reason') == 'proxy-verification-timeout':
-                raise Refused('proxy-verification-timeout')
+            if verified.get('reason') in ['proxy-verification-timeout', 'proxy-verifier-dependency-unavailable']:
+                raise Refused(verified['reason'])
             if matches and not verified['ok'] and verified.get('reason') not in ['proxy-exit-mismatch', 'proxy-paths-disagree', 'mihomo-inactive', 'tun-missing']:
                 raise Refused('proxy-repair-evidence-inconclusive')
             # Controller's replace owns disable, direct preflight, install and rollback.
@@ -268,6 +270,28 @@ def dispatch(request):
     if action == 'receipt':
         path = STATE / (request['operationId'] + '.json')
         if not path.exists():
+            # A lost read may be fenced only when no worker/unfinished operation
+            # exists. Persist an explicit negative receipt; never infer success,
+            # clear a mutation marker, or apply this to a lost repair.
+            if request.get('receiptAction') == 'verify':
+                STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+                info = STATE.lstat()
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o077:
+                    raise Refused('private-remote-state-required')
+                lock = os.open(STATE / 'node.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+                try:
+                    try:
+                        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        return {'ok': False, 'reason': 'remote-read-still-running', 'quiescent': False}
+                    if path.exists() or (STATE / 'inflight.json').exists():
+                        return {'ok': False, 'reason': 'remote-operation-incomplete', 'quiescent': False}
+                    result = {'ok': False, 'reason': 'verification-unrecorded-and-fenced', 'quiescent': True, 'reconciledAt': now()}
+                    record = Operation({**request, 'action': 'verify'}).record
+                    save(path, {**record, 'result': result, 'quiescent': True})
+                    return {**result, 'receiptOperationId': request['operationId']}
+                finally:
+                    os.close(lock)
             return {'ok': False, 'reason': 'remote-receipt-unavailable', 'quiescent': False}
         record = read_json(path)
         if record.get('operatorMachineId') != request['operatorMachineId'] or record.get('operationId') != request['operationId']:

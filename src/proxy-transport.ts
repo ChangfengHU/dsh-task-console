@@ -53,7 +53,7 @@ function capture(command:string,args:string[],input:string,env:NodeJS.ProcessEnv
   })
 }
 export function proxyTransport(policy:ProxyPolicy|undefined):ProxyTransport {
-  return async(action,ip,operationId,emit)=>{
+  return async(action,ip,operationId,emit,receiptAction)=>{
     // A failed receipt lookup says nothing about the earlier mutation's outcome.
     const untouched=action!=='receipt'
     if(!policy)return {ok:false,reason:'proxy-policy-unconfigured',quiescent:untouched}
@@ -64,6 +64,8 @@ export function proxyTransport(policy:ProxyPolicy|undefined):ProxyTransport {
       machineId=(await readFile('/etc/machine-id','utf8')).trim()
       if(!/^[a-f0-9]{32}$/.test(machineId))throw new Error('operator-identity-unavailable')
       const known=await stat(policy.knownHostsFile);if(!known.isFile()||(known.mode&0o022))throw new Error('known-hosts-unavailable')
+      const trusted=await capture('/usr/bin/ssh-keygen',['-F',ip,'-f',policy.knownHostsFile],'',{PATH:'/usr/bin:/bin',LANG:'C.UTF-8'},5000,65536)
+      if(trusted.code!==0)throw new Error('known-host-target-unavailable')
     }catch(e){return {ok:false,reason:e instanceof Error&&/^[a-z][a-z0-9-]{1,95}$/.test(e.message)?e.message:'proxy-provider-or-host-configuration-unavailable',quiescent:untouched}}
     const dir=await mkdtemp(join(tmpdir(),'dsh-proxy-agent-')),socket=join(dir,'agent.sock')
     const env={PATH:'/usr/bin:/bin',LANG:'C.UTF-8',SSH_AUTH_SOCK:socket}
@@ -80,7 +82,7 @@ export function proxyTransport(policy:ProxyPolicy|undefined):ProxyTransport {
         '-o','ConnectTimeout=15','-o','ServerAliveInterval=15','-o','ServerAliveCountMax=3','-o','ControlMaster=no',
         'claude@'+ip,'sudo -n /usr/bin/python3 -c '+quote(source)]
       // stdin only; no credentials/URL in argv or unfiltered subprocess output.
-      const input=JSON.stringify({action,operationId,operatorMachineId:machineId,lineId:material.line.id,
+      const input=JSON.stringify({action,operationId,operatorMachineId:machineId,lineId:material.line.id,...(action==='receipt'?{receiptAction}:{}),
         configUrl:material.line.config_url,expectedIp:material.line.expected_ip})
       return await new Promise<ProxyResult>(resolve=>{
         const child=spawn('/usr/bin/ssh',args,{env,stdio:['pipe','pipe','pipe']});let buffer='',bytes=0,result:ProxyResult|undefined

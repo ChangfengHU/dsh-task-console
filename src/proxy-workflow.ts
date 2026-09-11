@@ -104,7 +104,7 @@ export class ProxyWorkflow {
       return invoke(args)
     }
     if(raw==='proxy_status'){
-      const row=db.prepare('SELECT * FROM dsh_proxy_calls WHERE operation_id=? AND session_id=?').get(args.operationId,input.sessionId) as any
+      const row=db.prepare('SELECT * FROM dsh_proxy_calls WHERE operation_id=? AND spec_id=? AND card_id=?').get(args.operationId,input.task.id,input.card.id) as any
       if(!row)throw Error('proxy-operation-not-owned-by-session')
       const value=await invoke(args);this.observe(input,row,decoded(value));return value
     }
@@ -154,7 +154,7 @@ export class ProxyWorkflow {
       db.prepare('UPDATE dsh_proxy_calls SET state=?,result_json=?,updated_at=? WHERE request_id=?').run(state,JSON.stringify(value),at,row.request_id)
       if(state!==row.state)this.store.kernel.recordEvent(input.card.id,'proxy_operation',{operationId:row.operation_id,ip:row.ip,action:row.action,state,reason:value.result?.reason??null})
       if(state==='succeeded'||state==='blocked'||state==='unknown'){
-        db.prepare('INSERT INTO dsh_proxy_checks VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(operation_id) DO UPDATE SET checked_at=excluded.checked_at,accepted=excluded.accepted,result_json=excluded.result_json').run(row.operation_id,input.batch.id,input.card.id,input.sessionId,input.card.role??'',row.ip,checked,Number(accepted),JSON.stringify(value))
+        db.prepare('INSERT INTO dsh_proxy_checks VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(operation_id) DO UPDATE SET checked_at=excluded.checked_at,accepted=excluded.accepted,result_json=excluded.result_json').run(row.operation_id,input.batch.id,input.card.id,row.session_id,input.card.role??'',row.ip,checked,Number(accepted),JSON.stringify(value))
         if(accepted&&input.card.role==='reviewer')db.prepare("UPDATE dsh_proxy_issues SET state='resolved' WHERE spec_id=? AND ip=? AND state='open'").run(input.task.id,row.ip)
       }
     })

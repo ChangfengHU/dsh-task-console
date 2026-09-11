@@ -113,13 +113,24 @@ class AdapterTests(unittest.TestCase):
 
     def test_independent_verifier_has_no_timezone_or_proxy_environment_and_rejects_stale_result(self):
         old = {'verified_at': '2020-01-01T00:00:00+00:00', 'tcp_udp_consistent': True, **{k: REQUEST['expectedIp'] for k in m.PATH_FIELDS}}
-        with patch.object(m.subprocess, 'run', return_value=Mock(returncode=0)) as run, patch.object(m, 'read_json', return_value=old):
+        with patch.object(m.shutil, 'which', return_value='/usr/bin/fixture'), patch.object(m.subprocess, 'run', return_value=Mock(returncode=0)) as run, patch.object(m, 'read_json', return_value=old):
             result = m.independent_verify(REQUEST['expectedIp'])
             self.assertFalse(result['ok'])
             argv = run.call_args.args[0]; env = run.call_args.kwargs['env']
             self.assertNotIn('--align-timezone', argv)
             self.assertFalse(any('proxy' in key.lower() for key in env))
             self.assertFalse(Path(env['SOP_OUTPUT_DIR']).exists())
+
+    def test_verifier_includes_system_binary_paths_and_missing_tool_never_repairs(self):
+        self.assertEqual(m.ENV['PATH'], '/usr/sbin:/usr/bin:/sbin:/bin')
+        with patch.object(m.shutil, 'which', return_value=None), patch.object(m.subprocess, 'run') as run:
+            result = m.independent_verify(REQUEST['expectedIp'])
+            self.assertEqual(result['reason'], 'proxy-verifier-dependency-unavailable')
+            run.assert_not_called()
+        op = self.operation(); op.action = Mock()
+        with patch.object(m, 'controller', return_value=RAW), patch.object(m, 'independent_verify', return_value=result):
+            with self.assertRaisesRegex(m.Refused, 'dependency-unavailable'): op.run()
+        op.action.assert_not_called()
 
     def test_snapshot_never_exposes_controller_url_token_or_free_form_message(self):
         secret = 'fixture-secret-not-real'
@@ -172,6 +183,36 @@ class AdapterTests(unittest.TestCase):
             other = m.dispatch({**REQUEST, 'operationId': '22222222-2222-4222-a222-222222222222'})
             self.assertEqual(other['reason'], 'previous-proxy-operation-unresolved')
             self.assertEqual(m.dispatch(dict(REQUEST)), first)
+
+    def test_absent_read_can_be_negatively_fenced_but_missing_repair_cannot(self):
+        original_lstat = Path.lstat
+        def owned(path):
+            info = original_lstat(path)
+            return SimpleNamespace(st_uid=0, st_mode=info.st_mode)
+        with tempfile.TemporaryDirectory(prefix='proxy-remote-test-') as root, patch.object(m, 'STATE', Path(root)), patch.object(m.Path, 'lstat', owned), patch.object(m, 'root_file', side_effect=lambda p: p.read_text()), patch.object(m.Operation, 'run') as run:
+            receipt = {**REQUEST, 'action': 'receipt'}
+            self.assertFalse(m.dispatch({**receipt, 'receiptAction': 'repair'})['quiescent'])
+            result = m.dispatch({**receipt, 'receiptAction': 'verify'})
+            self.assertFalse(result['ok']); self.assertTrue(result['quiescent'])
+            self.assertEqual(result['receiptOperationId'], REQUEST['operationId'])
+            self.assertEqual(result['reason'], 'verification-unrecorded-and-fenced')
+            # A delayed original reader sees this exact tombstone, not a new run.
+            self.assertEqual(m.dispatch({**REQUEST, 'action': 'verify'})['reason'], result['reason'])
+            run.assert_not_called()
+
+    def test_absent_read_cannot_be_fenced_over_an_inflight_marker_or_active_lock(self):
+        original_lstat = Path.lstat
+        def owned(path):
+            info = original_lstat(path)
+            return SimpleNamespace(st_uid=0, st_mode=info.st_mode)
+        with tempfile.TemporaryDirectory(prefix='proxy-remote-test-') as root, patch.object(m, 'STATE', Path(root)), patch.object(m.Path, 'lstat', owned):
+            marker = Path(root) / 'inflight.json'; marker.write_text('{}')
+            receipt = {**REQUEST, 'action': 'receipt', 'receiptAction': 'verify'}
+            self.assertFalse(m.dispatch(receipt)['quiescent'])
+            self.assertTrue(marker.exists()); marker.unlink()
+            with patch.object(m.fcntl, 'flock', side_effect=BlockingIOError()):
+                self.assertFalse(m.dispatch(receipt)['quiescent'])
+            self.assertFalse((Path(root) / (REQUEST['operationId'] + '.json')).exists())
 
 
 if __name__ == '__main__': unittest.main()

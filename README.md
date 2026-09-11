@@ -2,6 +2,11 @@
 
 任务台 for DeepSeek Harness (dsh).
 
+**Optional proxy MCP (0.30.8):** `lib/proxy-mcp.js` exposes protected-node inspection,
+independent verification, bounded Clash recovery and persistent operation status.
+It reuses the existing Controller, defaults to deny-all, and does not automatically
+grant Agent tools or execute a Task. See [setup and boundaries](docs/proxy-mcp.md).
+
 **Task Signal intake (since 0.21.0):** an authenticated producer such as Fleet submits facts and intent, never an Agent choice. A capability-free internal Task Agent reads the current Task candidates and registered Agent roster, proposes `create`, `reuse`, or `triage`, and the host independently validates that it selected only existing capabilities. Task identity is the durable goal/root cause—not an IP or other target. A materialized actionable Signal becomes an auditable Turn and Batch; triage does not create a Task. Later signals in the same Incident can reuse the Task without overwriting its objective, team, targets, or provenance. Deterministic Signal and Batch IDs make producer retries idempotent.
 
 **Report intake (0.23.0):** a Signal may contain a flat `items` array (including an empty array).

@@ -743,3 +743,86 @@ environment; test-owned temporary SQLite/fixture directories are removed by test
 teardown, and the isolated browser was closed. No material user files were deleted.
 Tracked lib remains the production build; unique screenshots stay as acceptance
 evidence, not as a new dependency cache.
+
+## 2026-09-11 — 0.30.8: optional protected proxy MCP, no production node actions
+
+User approved implementing the discussed proxy MCP. This turn is scoped to DSH
+plugin code and isolated verification; existing Agent grants, Task history, disabled
+patrol cron and the no-direct-target-machine-operation boundary remain unchanged.
+
+Delivered:
+- Packaged `lib/proxy-mcp.js` / `dsh-task-console/proxy-mcp`: MCP SDK stdio server,
+  tools `proxy_inspect`, `proxy_verify`, `proxy_repair`, `proxy_status`. No-config
+  initialization/discovery works and denies all targets. No eager host plugin import,
+  new public endpoint, service installation or automatic Agent connection.
+- Owner-only explicit node/line/read-vs-repair policy. Agent parameters cannot select
+  commands, credential values, paths or source URLs. Read-only policy denies actual
+  repair calls in addition to hiding the tool. Another principal cannot read an
+  operation; all host principals share node reservations through the same stateDir.
+- Fixed adapter resolves the managed claude SSH identity and exact approved
+  `clash:lines` row through existing Vault providers. It supports the already private
+  onboarding env file without eval, copying a token or calling the old public token
+  endpoint. An isolated ssh-agent receives the key over stdin; credential values
+  never enter argv, model outputs, receipts or files created by this feature.
+- Reused existing Controller replace/enable rather than hand-editing configurations.
+  Self-machine repair is refused. Explicit source/runtime/exit/path faults may
+  repair; inconclusive evidence does not. Authentication failure and unknown
+  connection errors cannot authorize Controller restart. Only the existing managed
+  root-owned Controller unit is eligible for connection-refused recovery, and not
+  with a retained unfinished transaction. No full onboarding/browser/credential work.
+- Independent verifier uses new per-call temporary output, no proxy environment or
+  timezone flag; checks expected generic/Cloudflare/Claude TCP and both STUN UDP
+  addresses, optional China evidence and unchanged source/runtime. Historical
+  Controller snapshots remain labelled non-acceptance. Controller success alone is
+  not the final repair result.
+- Dedicated SQLite operations/events/reservations, per-node remote flock and retained
+  exact-ID receipts/in-flight marker. Idempotent calls reuse an operation; changed
+  request payloads fail. Lost POST/SSH, superseded operations and uncertain worker
+  outcomes retain locks. Status reconciles only the original final remote receipt;
+  it never resends a mutation. Dead remote workers without final receipts still need
+  explicit operational reconciliation, not marker deletion or invented success.
+
+Verification:
+- Existing MCP SDK1.30.0 was already in the dependency tree (6.1MiB); promoted to a
+  pinned direct dependency and reused offline. No packages downloaded/rebuilt.
+  The first offline resolver lacked metadata; using the already locked snapshot
+  succeeded. Repository-ignored pnpm-lock.yaml remains local per existing policy.
+- Full supported-Node22 serial suite:233/233 passed. Focused suite covers protected
+  files, strict input/target grants, Vault material parsing, actual repair denial,
+  SQLite cross-caller locking, duplicate/conflicting requests, restart uncertainty,
+  exact-receipt reconciliation, error redaction, pagination and SDK client calls.
+  Final review added a regression for failed receipt-provider lookups and unrelated
+  terminal replies: neither may release a previously unknown mutation's reservation.
+  Only an explicit matching final remote receipt can reconcile it; outer remote
+  exceptions remain conservatively unknown even if saving a receipt failed.
+- Python17/17 mocked system/network cases cover healthy reuse, disabled enable after
+  replacement preflight, independent verification, stale/source mismatch refusal,
+  insufficient-evidence refusal, self repair, authentication vs connection refused,
+  bounded managed-unit recovery, pending-transaction protection, failed/superseded/
+  lost Controller actions, remote receipt deduplication and persistent unknown state.
+- Built package smoke via a real SDK stdio client negotiated vyibc-proxy0.1.0,
+  listed3 read tools in deny-all mode and returned isError/proxy-scope-denied for
+  an unconfigured fixture node. The isolated in-memory server also exercised allowed
+  verify/repair/status with fake transport. No live proxy repair is claimed.
+- Build and diff checks passed. Host bundle index.js is unchanged; no DSH restart is
+  required for the standalone entry, and none was performed. No browser UI changed.
+- Original patrol spec/batches remained the prior verified hashes
+  f1f3d4caa45e4a78ca996fc2ee66769c0e72b70247167d626dc273597680b93b /
+  63ec95d1eb1f2df64e10e4bec9856e1cf70e2ec53c13bd9aa875e5b7a6308da3;
+  enabled=0, schedule fires=0. No production policy, Agent grant, Task/Batch, real
+  SSH session, Controller action, login copy or notification was created.
+
+Remaining authority/integration boundary:
+An approved host policy and separately reviewed Agent tool grants are needed before
+business use. The prior prohibition on changing existing Agent permissions was
+preserved; this MCP is not yet connected to those Agents. The Task proxy side branch,
+related-Task read model and network-before-login host gate are still separate work.
+84's actual proxy/login repair remains unexecuted by this feature. Tests and packaged
+availability must not be presented as a successful production repair.
+
+Temporary test-owned directories (`proxy-policy-test-*`, `proxy-material-test-*`,
+`proxy-lock-test-*`, `proxy-receipt-test-*`, `proxy-remote-test-*`, `proxy-verify-*`)
+were removed by their scoped teardown; SDK clients/subprocesses were closed. No
+material user data was deleted. Existing runtime dependencies, local lockfile and
+tracked lib are retained; no new download/build cache was introduced. Freed test
+space was not measured and is not reported as a guessed number.

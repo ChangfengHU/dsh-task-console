@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-console",
-  "version": "0.30.7",
+  "version": "0.30.8",
   "description": "Local-first Agent presets and task orchestration for DeepSeek Harness, backed by SQLite.",
   "license": "MIT",
   "type": "module",
@@ -30,6 +30,9 @@
     "./task-create-tools": {
       "default": "./lib/task-create-tools.js"
     },
+    "./proxy-mcp": {
+      "default": "./lib/proxy-mcp.js"
+    },
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml"
   },
@@ -37,6 +40,7 @@
     "lib",
     "src",
     "presets",
+    "docs/proxy-mcp.md",
     "scripts/preset-skills.mjs",
     "scripts/install-task-intake.mjs",
     "scripts/install-task-create.mjs",
@@ -91,6 +95,7 @@
   },
   "dependencies": {
     "@deepseek-ai/dsh-mcp-client": "0.1.1-rc.2",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "better-sqlite3": "12.4.1",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"

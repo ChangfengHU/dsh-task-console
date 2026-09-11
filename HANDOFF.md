@@ -11,6 +11,13 @@ Package remains `dsh-task-console`; Agent and Board are modules of the same plug
 Use the installed DSH service's actual executable/configuration to identify the host,
 not an adjacent source checkout. Its generated `lib/` plugin assets are tracked.
 
+The optional `lib/proxy-mcp.js` stdio entry is documented in `docs/proxy-mcp.md`.
+It reuses existing managed Clash operations behind a protected node/line policy;
+no policy, Agent grant or startup connection is created on plugin upgrade. No-config
+startup supports discovery but denies every target. Its SQLite/node receipts and
+unknown-outcome locks are separate from Task history and must not be blindly removed.
+MCP availability is not proxy Task integration or proof of repaired machines.
+
 Execution-level archival uses the Console-only `setBatchArchived(taskId,batchId,archived)`
 API and an append-only `batch/archived` event, projected to `dsh_batches.archived_at`.
 Only ended/blocked role sets without active claims or pending/scheduled roles qualify.

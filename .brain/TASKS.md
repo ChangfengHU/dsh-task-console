@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [TASK-PROXY-WORKFLOW-014] 0.30.9：受限代理MCP接入原巡查Task；241测试/构建及公网桌面/390px证据区域通过，冷启动未优化。真实DSH代理Agent在Batch b-chat-7d8ffe7f5c933a59ef69中成功修复84 line-100，五条TCP/UDP路径均63.124.160.54，其余五节点仅验证；但Qwen再次未实际交卷，Batch如实失败，登录未执行。官方saveAgent仅切换browser-manager/proxy-operator至现有Codex模型，其他配置哈希不变；Creator修正工具协议/动态返工后，计划P-chat-24bacc49766e558ff0d2独立批准，原Task新Batch b-chat-505cc3698915b4635bb1执行中。全部历史保留、定时关闭；尚未全量业务验收，不宣称双浏览器登录稳定。证据见既有Creator dev-log末尾。
+- [ ] [TASK-PROXY-WORKFLOW-014] 0.30.9：代理MCP已接入原巡查Task；241测试/构建、公网桌面/390px验收通过，冷启动未优化。真实DSH Agent已修复84 line-100，五路径63.124.160.54；两浏览器由browser-manager各复制一次不同授权账号，独立4样本分别跨22m02s/21m46s通过，末次只读代理复验亦通过。原Task Batch b-chat-505cc3698915b4635bb1已收口：17卡完成、6通知sent，业务unresolved/failed（10/11浏览器通过，187/b2 cdp-unavailable、206未覆盖），不是执行协议失败。原Task与所有失败历史保留；两业务角色仅切至已验证Codex模型，其余配置哈希不变，经Creator新计划独立审查；定时仍关闭、无活跃操作。不宣称全机群已达标；187/206是剩余覆盖问题。完整回执、采样与浏览器证据见既有Creator dev-log末尾。
 
 - [ ] [TASK-PROXY-MCP-013] 0.30.8：已开发可独立启动的vyibc-proxy stdio MCP（inspect/verify/repair/status），SDK真实客户端握手/隔离调用、233全量测试及17远端模拟故障测试通过。复用Controller事务预检/替换/启用/回滚，受限恢复既有Controller；独立五路径出口证据、同机自修拦截、逐节点授权、幂等/持久锁/不确定结果保护、无凭据回显。回执查询失败不能解除旧操作锁，必须精确匹配终态回执。未写生产策略或MCP加载连接、未改Agent权限/Task历史/定时，未SSH目标机，不能称84已修复。待审查工具授权及Task执行支线/网络闸门接入；配置和限制见docs/proxy-mcp.md，证据见既有Creator dev-log最新段。
 

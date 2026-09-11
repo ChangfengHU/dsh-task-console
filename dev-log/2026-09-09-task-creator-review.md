@@ -938,3 +938,45 @@ showed six fresh passing write-gate receipts but0/6 independent reviewer accepta
 not a false overall success. Desktop and390px mobile had no overflow or script
 errors. Context closed, no browser profile/download dependency installed. Latest
 Batch is still pending real business acceptance at this entry.
+
+## 2026-09-11 · completed84 repair/login acceptance; fleet-wide result remains unresolved
+
+Batch b-chat-505cc3698915b4635bb1 ran10:49:30–11:37:24 UTC and settled failed
+with the explicit business disposition unresolved, not a protocol/runtime failure.
+All17 real cards completed. It dynamically generated two Gate/proxy/browser/reviewer
+rounds; round1 authorized reads only, and out-of-plan provision attempts were refused
+before writes. After actual signed_out evidence the planner froze round2 provision
+for84's two instances. All healthy proxy nodes were verified/reused, not repaired again.
+
+The real browser-manager Session ending -12 performed exactly two successful writes:
+
+-84/browser-1: operation821ff3bb8feaaf99ff3c8d93cbfc1744, authorized eligible source
+  188/browser-3, account fingerprint42c8855c; target verified and matched source.
+-84/browser-2: operation0cacaf506809806c0075823ed9d98f36, authorized eligible source
+  188/browser-1, distinct account fingerprint648190cc; target verified and matched source.
+
+No excluded account, browser lifecycle/rebuild, token rotation or developer SSH was
+used. Independent reviewer card #r2 persisted three waits and automatically continued
+with new Runs/Sessions (-13, -13-t2, -13-t3, -13-t4) inside the SAME Task/Batch/card.
+Four distinct verified samples with a stable fingerprint per target covered:
+
+-browser-1:11:11:45.431–11:33:47.372 UTC,22m01.941s.
+-browser-2:11:12:29.765–11:34:16.066 UTC,21m46.301s.
+
+The last reviewer Session also performed a visible extra read-only84 proxy check,
+b69c1178-3ef2-4c7e-a72c-cd81ff89e5fc: succeeded, changed=false, all five TCP/UDP
+paths63.124.160.54 at11:34:34 UTC. Both browser targets are accepted=true with4/4
+samples and passed=true. Six nodes have independent network acceptance. Final fleet
+inventory outcome is10/11 browsers accepted,187/browser-2 unknown(cdp-unavailable),
+and206 unreachable/no browser observation. Neither remaining item was hidden or
+converted into permission to rebuild. Six stage notifications have state sent.
+Cron remains disabled; all Sessions idle and zero running/unknown proxy reservations.
+
+Final public browser verification opened the real Batch, expanded both84 evidence
+rows, observed accepted=true,4/4 over20minutes and the distinct fingerprints, plus
+the honest overall 未通过 and six notifications. Desktop/390px had no script errors
+or horizontal overflow. No new dependencies or persistent test/browser downloads;
+all test browser contexts closed and test-owned temporary directories cleaned by
+their existing teardown. Production policies/state/presets and tracked builds remain.
+This verifies84's repair through DSH Agents; it is not full fleet acceptance or
+automatic cron activation. Remaining187/206 coverage is separate unresolved work.

@@ -188,6 +188,7 @@ export interface Artifact {
 
 export type Event =
   | { t: 'task/created'; at: string; taskId: string; task: TaskSpec }
+  | { t: 'task/revised'; at: string; taskId: string; task: TaskSpec; previous: TaskSpec; planId: string }
   | { t: 'task/enabled'; at: string; taskId: string; enabled: boolean }
   | { t: 'task/archived'; at: string; taskId: string; archived: boolean }
   | { t: 'task/deleted'; at: string; taskId: string }
@@ -246,6 +247,7 @@ export function fold(events: Event[]): State {
   for (const e of events) {
     switch (e.t) {
       case 'task/created': s.tasks.set(e.task.id, e.task); break
+      case 'task/revised': s.tasks.set(e.task.id, e.task); break
       case 'task/enabled': { const t = s.tasks.get(e.taskId); if (t) s.tasks.set(t.id, { ...t, enabled: e.enabled }); break }
       case 'task/archived': { const t = s.tasks.get(e.taskId); if (t) s.tasks.set(t.id, { ...t, enabled: false, archivedAt: e.archived ? e.at : undefined }); break }
       case 'task/deleted': {
@@ -388,7 +390,7 @@ export function cardRun(s: State, c: Card): Run | undefined {
 /** Who moved: the host dispatcher, the agent itself, a person, or the clock. */
 export function actorOf(e: Event, s?: State): 'dispatcher' | 'agent' | 'person' | 'clock' {
   switch (e.t) {
-    case 'task/created': case 'task/enabled': case 'task/archived': case 'batch/archived': case 'task/deleted': case 'card/review_approved': case 'artifact/published': return 'person'
+    case 'task/created': case 'task/revised': case 'task/enabled': case 'task/archived': case 'batch/archived': case 'task/deleted': case 'card/review_approved': case 'artifact/published': return 'person'
     case 'card/changes_requested': {
       if (e.reviewer) return 'agent'
       const run = s?.runs.get(e.runId)
@@ -409,6 +411,7 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
   const card = (cardId: string) => { const c = s.cards.get(cardId); return c ? agentName(c.agentId) : cardId }
   switch (e.t) {
     case 'task/created': return `建卡「${e.task.title}」,${e.task.participants.map(p => agentName(p.agentId)).join(' → ')}`
+    case 'task/revised': return `审查更新「${e.task.title}」，保留旧执行，定时仍停用`
     case 'task/enabled': return e.enabled ? '启用时间表' : '停用时间表'
     case 'task/archived': return e.archived ? '归档任务并停用，保留历史' : '恢复任务，时间表仍停用'
     case 'task/deleted': return '删除任务'

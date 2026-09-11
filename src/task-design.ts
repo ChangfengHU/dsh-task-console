@@ -12,6 +12,8 @@ export interface TaskDesign {
 
 export function validateDesign(value: unknown): TaskDesign {
   const d = value as TaskDesign
+  if (d && Object.keys(d).some(key => !['evidenceContract','browserPatrol','notifications','scope','branches','coordination','failurePolicy','acceptance'].includes(key)))
+    throw new Error('计划包含当前插件不支持的设计字段；不能将未实现的代理支线或跨任务 Gate 当成可执行能力')
   const text = (v: unknown, name: string) => {
     if (typeof v !== 'string' || !v.trim() || v.length > 4000) throw new Error(`计划 ${name} 必须是非空文本（最多4000字符）`)
     return v.trim()

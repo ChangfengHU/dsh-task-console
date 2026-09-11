@@ -233,6 +233,34 @@ export class EventStore {
     return next
   }
 
+  /** CAS the paused definition, review and schedule binding together; never rewrite a Batch. */
+  reviseReviewedTask(previous: TaskSpec, task: TaskSpec, planId: string, commitReview: () => void): Promise<void> {
+    const next = this.queue.then(() => {
+      const current = this.tasks.get(previous.id)
+      if (!current || JSON.stringify(current) !== JSON.stringify(previous)) throw new Error('待更新工作流已变化，需重新审查')
+      if (current.enabled || current.archivedAt || current.trigger.kind !== 'cron' || task.trigger.kind !== 'cron' || task.enabled || task.id !== current.id)
+        throw new Error('只能审查更新已暂停、未归档的定时 Task')
+      const db = this.kernel.db
+      const event: Event = { t: 'task/revised', at: new Date().toISOString(), taskId: task.id, task, previous, planId }
+      this.kernel.write(() => {
+        const row = db.prepare('SELECT spec_json,enabled FROM dsh_task_specs WHERE id=?').get(task.id) as { spec_json: string; enabled: number } | undefined
+        if (!row || JSON.stringify({ ...JSON.parse(row.spec_json), enabled: Boolean(row.enabled) }) !== JSON.stringify(previous))
+          throw new Error('数据库中的工作流已变化，需重新审查')
+        if (db.prepare('SELECT 1 FROM dsh_batches WHERE spec_id=? AND settled_at IS NULL AND archived_at IS NULL LIMIT 1').get(task.id))
+          throw new Error('仍有未结束的执行，不能更新任务定义')
+        if (db.prepare("SELECT 1 FROM dsh_batches WHERE spec_id=? AND json_extract(turn_json,'$.workflow.definition') IS NULL LIMIT 1").get(task.id))
+          throw new Error('旧执行缺少冻结定义；不能用新设计替换历史展示')
+        if (db.prepare('UPDATE dsh_task_specs SET spec_json=?,enabled=0 WHERE id=? AND enabled=0').run(JSON.stringify(task), task.id).changes !== 1)
+          throw new Error('任务暂停状态已变化，需重新审查')
+        commitReview()
+        db.prepare('INSERT INTO dsh_events(event_type,task_id,occurred_at,payload_json) VALUES (?,?,?,?)').run(event.t,task.id,event.at,JSON.stringify(event))
+      })
+      this.events.push(event); this.state = fold(this.events)
+    })
+    this.queue = next.catch(() => undefined)
+    return next
+  }
+
   /** Archive exact definitions atomically, retaining their execution and evidence rows. */
   setTasksArchived(ids: string[], archived: boolean): Promise<number> {
     const next = this.queue.then(() => {

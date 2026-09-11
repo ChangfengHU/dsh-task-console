@@ -467,6 +467,84 @@ test('Creator review persists a frozen plan without a Task, fences changed appro
   } finally { runner.stop(); store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
 })
 
+test('Creator revises the same paused Task by review without executing or rewriting old evidence', async () => {
+  const { host, store, runner, root } = await setup()
+  const agents = [{ id: 'a', name: 'a', profileHash: 'v1' } as any]
+  const creator = new TaskCreator(runner, async () => agents)
+  const design = { scope: 'Fixture scope', branches: [{ id: 'inspect', when: 'current evidence', action: 'inspect', evidence: 'receipt' }],
+    coordination: 'one worker', failurePolicy: { isolateItems: true, maxAttempts: 1, stopConditions: ['permission missing'] }, acceptance: ['independent evidence'] }
+  const input = (id: string) => ({ agent: { session: { id, deriveMessages: () => [{ role: 'user', content: 'Inspect the fixture; preserve history' }] } } })
+  const create: any = await creator.prepare({ decision: 'create', reason: 'fixture', title: 'Original', brief: 'Inspect fixture only',
+    participants: [{ agentId: 'a' }], trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' }, design }, input('revision-create'), root)
+  const first: any = await creator.review(create.id, create.hash, 'approve', 'fixture scope')
+  const batch = await runner.fire(first.taskId, 'manual', { turn: await creator.scheduledTurn(store.tasks.get(first.taskId)!, 'first-manual') })
+  const session = [...host.sessions.keys()].at(-1)!; host.consumeFirst(session)
+  await host.callTool(session, 'task_complete', { summary: 'Original fixture evidence' }); host.endTurn(session); await tick()
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome, 'done')
+  const original = store.tasks.get(first.taskId)!, oldBatch = JSON.stringify(store.s.batches.get(batch.id))
+  const raw = store.kernel.db.prepare('SELECT * FROM task_runs').all()
+  const revision = { decision: 'revise' as const, taskId: original.id, reason: 'review changed scope', title: 'Updated',
+    brief: 'Inspect the fixture with a stronger prerequisite', design: { ...design, acceptance: [...design.acceptance, 'prerequisite checked'] } }
+  const p: any = await creator.prepare(revision, input('revision-new'), root)
+  const competing: any = await creator.prepare({ ...revision, title: 'Competing' }, input('revision-competing'), root)
+  assert.equal(p.revisionTaskId, original.id); assert.equal(p.previousDefinition.title, 'Original')
+  assert.equal(store.tasks.get(original.id)?.title, 'Original')
+  const count = store.tasks.size, sessions = host.sessions.size
+  const updated: any = await creator.review(p.id, p.hash, 'approve', 'independently reviewed revision')
+  assert.equal(updated.state, 'awaiting_trial'); assert.equal(updated.taskId, original.id); assert.equal(updated.batchId, null)
+  assert.equal(store.tasks.size, count); assert.equal(host.sessions.size, sessions)
+  assert.equal(store.tasks.get(original.id)?.title, 'Updated'); assert.equal(store.tasks.get(original.id)?.enabled, false)
+  assert.equal(store.tasks.get(original.id)?.createdAt, original.createdAt)
+  assert.equal(JSON.stringify(store.s.batches.get(batch.id)), oldBatch)
+  assert.deepEqual(store.kernel.db.prepare('SELECT * FROM task_runs').all(), raw)
+  assert.equal(store.all().filter(e => e.t === 'task/revised').length, 1)
+  await creator.review(p.id, p.hash, 'approve', 'duplicate approval')
+  assert.equal(store.all().filter(e => e.t === 'task/revised').length, 1)
+  await assert.rejects(creator.review(competing.id, competing.hash, 'approve', 'stale draft'), /已变化/)
+  await assert.rejects(creator.assertScheduleActivation(store.tasks.get(original.id)!), /先对当前已审查计划/)
+  const next = await creator.scheduledTurn(store.tasks.get(original.id)!, 'next-fixture')
+  assert.equal(next?.workflow?.definition.title, 'Updated')
+  runner.stop(); const restored = new EventStore(store.root); await restored.load()
+  assert.equal(restored.tasks.get(original.id)?.title, 'Updated')
+  assert.equal(JSON.stringify(restored.s.batches.get(batch.id)), oldBatch)
+  restored.kernel.db.close()
+})
+
+test('Creator exposes blocked rather than running for a parked dependency', async () => {
+  const { host, store, runner, task } = await setup({ participants: [{ agentId: 'a' }] })
+  const creator = new TaskCreator(runner, async () => [])
+  const batch = await runner.fire(task.id, 'manual')
+  const session = [...host.sessions.keys()][0]; host.consumeFirst(session)
+  assert.equal(creator.status(task.id, batch.id).active, true)
+  await host.callTool(session, 'task_block', { reason: 'Fixture dependency unavailable', kind: 'capability' }); host.endTurn(session); await tick()
+  assert.equal(creator.status(task.id, batch.id).outcome, 'blocked')
+  assert.equal(creator.status(task.id, batch.id).active, false)
+  assert.equal(creator.status(task.id, batch.id).blockedCards[0].reason, 'Fixture dependency unavailable')
+  assert.equal(store.s.batches.get(batch.id)?.settled, undefined)
+})
+
+test('reviewed revision is atomic and refuses enabled, unfinished or unfrozen historical work', async () => {
+  const { store, runner, task, root } = await setup({ trigger: { kind: 'cron', expr: '0 * * * *' }, enabled: false })
+  const revised = { ...task, title: 'Revision' }
+  const before = JSON.stringify(store.kernel.db.prepare('SELECT * FROM dsh_task_specs WHERE id=?').get(task.id))
+  await assert.rejects(store.reviseReviewedTask(task,revised,'review-fixture',()=>{ throw new Error('review CAS failed') }), /review CAS failed/)
+  assert.equal(JSON.stringify(store.kernel.db.prepare('SELECT * FROM dsh_task_specs WHERE id=?').get(task.id)), before)
+  assert.equal(store.all().filter(e=>e.t==='task/revised').length, 0)
+  store.kernel.db.prepare('UPDATE dsh_task_specs SET spec_json=? WHERE id=?').run(JSON.stringify({ ...task, title: 'Concurrent definition' }), task.id)
+  await assert.rejects(store.reviseReviewedTask(task,revised,'review-fixture',()=>{}), /数据库中的工作流已变化/)
+  assert.equal(JSON.parse((store.kernel.db.prepare('SELECT spec_json FROM dsh_task_specs WHERE id=?').get(task.id) as any).spec_json).title, 'Concurrent definition')
+  store.kernel.db.prepare('UPDATE dsh_task_specs SET spec_json=? WHERE id=?').run(JSON.stringify(task), task.id)
+  await store.append({t:'task/enabled',at:new Date().toISOString(),taskId:task.id,enabled:true})
+  await assert.rejects(store.reviseReviewedTask(task,revised,'review-fixture',()=>{}), /已变化/)
+  await store.append({t:'task/enabled',at:new Date().toISOString(),taskId:task.id,enabled:false})
+  await store.createBatch(task,{t:'batch/fired',at:new Date().toISOString(),taskId:task.id,batch:{id:'legacy-revision',by:'manual',cards:[]}})
+  await assert.rejects(store.reviseReviewedTask(task,revised,'review-fixture',()=>{}), /未结束/)
+  await store.append({t:'batch/settled',at:new Date().toISOString(),taskId:task.id,batchId:'legacy-revision',outcome:'done'})
+  await assert.rejects(store.reviseReviewedTask(task,revised,'review-fixture',()=>{}), /旧执行缺少冻结定义/)
+  assert.equal(store.tasks.get(task.id)?.title, task.title)
+  assert.equal(store.all().filter(e=>e.t==='task/revised').length, 0)
+})
+
 test('rejected/superseded drafts never execute and review keeps original input secrets private', async () => {
   const { host, store, runner, root } = await setup()
   const creator = new TaskCreator(runner, async () => [{ id: 'a', name: 'a' } as any])

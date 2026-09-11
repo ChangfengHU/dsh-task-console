@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { credentialFromSession, type ToolExecutionLike } from './fleet-onboard-tools.ts'
-import { cardRun, validateTask, type TaskSpec, type TaskTurn } from './tasks.ts'
+import { batchStatus, cardRun, validateTask, type TaskSpec, type TaskTurn } from './tasks.ts'
 import type { TaskRunner } from './runner.ts'
 import type { IntakeAgent } from './task-intake.ts'
 import { workflowDefinition } from './workflow-plan.ts'
@@ -22,7 +22,7 @@ export function userInput(exec: ToolExecutionLike) {
 }
 
 export type TaskProposal = {
-  decision: 'create' | 'reuse'; taskId?: string; reason: string
+  decision: 'create' | 'reuse' | 'revise'; taskId?: string; reason: string
   recipe?: WorkflowRecipe
   title?: string; brief?: string; participants?: TaskSpec['participants']; graphMode?: TaskSpec['graphMode']
   design?: TaskDesign
@@ -42,6 +42,10 @@ export class TaskCreator {
 
   async context() {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
+      revisions: { decision: 'revise', contract: '同一已暂停的 cron Task 可用 taskId、reason、完整 design 及要调整的 title/brief/participants 生成新待审查版本，不创建另一 Task。不能更改时间表、移除证据合同、缩短独立验收或改变通知范围。未结束执行或缺少历史冻结定义时拒绝更新；审查会再次核验原定义与全部角色指纹。批准只更新未来定义，定时仍关闭，不派发 Batch。新增编排能力仍须实际支持，不能仅在自然语言中承诺。' },
+      capabilityLimits: { browserPatrolV2: '固定规划者、browser-manager、独立评估者及可选通知员；尚不支持额外的代理执行支线、跨Task资源锁或网络证据闸门。不能通过多写一个design字段、角色brief或改变evidenceContract绕过。需要新增能力时，先在Creator会话报告具体缺口，不提交可执行成功承诺。',
+        tools: 'Creator持有的工具不会自动授予规划者或执行者。每条角色动作必须核对该角色名册；不能让未持有task_create_status的角色调用它，也不能把提示词约定称为宿主强制闸门。',
+        reusableDefinition: '可复用Task只存目标和方法。本次IP、关联Task/Batch及当前状态放在执行输入，不得固化进长期brief/design，也不能把历史受阻原因当作本轮根因。' },
       scheduling: { trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' }, approval: '批准后创建暂停的时间表；先手动执行，通过业务和通知验收后才能启用定时。每次复用同一Task、新增Batch。', overlap: '上一轮未结束时跳过并留记录', missed: '重启后漏跑合并为最近一次', waiting: 'task_wait(until,reason) 持久化等待，同一Batch/卡新Run继续；等待不消耗返工轮次，但受总时长限制。', permissions: '定时不增加权限；当前角色配置变化会停止派发并要求重新审查。' },
       evidenceContracts: [{ id: 'browser-patrol-v2', purpose: '周期性浏览器登录巡查：dynamic-rounds 的规划者→Gate→浏览器管理员→只读评估者→规划者。规划者每轮用 task_plan_round(summary,items:[{ip,instance,action:verify|provision|resume,reason}]) 冻结真实目标和动作；未知先验证，有未登录证据才允许 provision。MCP 强制逐目标累计修复预算；无删除重建权限。执行者取得本轮操作终态即 task_complete 交给独立评估者，不等待整个Task ready。仅评估者可 task_wait 对修改过的实例分时独立复验，同一卡新Run；其他角色不能等待下游采样。已健康实例只做当前检查。评估者 task_complete 交接通过/返工结论，不等于业务通过；规划者 task_finalize 由真实工具证据把关。', browserPatrol: { scope: 'fleet-existing-authorized', actions: ['provision','resume'], observationMinutes: 20, minSamples: 4 }, notifications: '需要企微时显式设置 design.notifications={channel:"wecom",chatIds:[已确认群ID]}。有独立通知员时加 agentId:"wecom-notifier"，通知员只配企微MCP，三个主角色不变。规划者 task_notify 冻结报告并创建通知支线；通知员经自己的MCP发送，不阻塞修复，记录独立卡/会话/回执。旧计划没有agentId才由规划者直接发送；先用 vyibc-wecom_list_groups 发现现有订阅群；只有一个群时预填其真实chatId交审查，多个群再询问。禁止索要已有密钥或默认广播。' },
         { id: 'browser-patrol-v1', purpose: '旧版单角色巡查兼容；新定时和动态返工目标使用v2，不为兼容改写历史计划。' }],
@@ -114,6 +118,7 @@ export class TaskCreator {
     return { id: row.id, hash: row.hash, state: row.state, createdAt: row.created_at,
       reviewedAt: row.reviewed_at, reviewReason: row.review_reason, sourceSessionId: row.source_session,
       request: p.input.text, definition: workflowDefinition(p.task), decision: p.decision,
+      ...(p.previous ? { previousDefinition: workflowDefinition(p.previous), revisionTaskId: p.previous.id } : {}),
       taskId: row.task_id, batchId: row.batch_id, path: `/#/tc/tasks/plans/${row.id}`,
       note: row.state === 'pending' ? '待审查；尚未创建执行 Task/Batch，未启动任何执行 Agent。' : '审批记录与原始计划保留，修改需生成新计划。' }
   }
@@ -132,9 +137,24 @@ export class TaskCreator {
       }
       const selected = taskAgentIds(p.task).map(id => roster.find(r => r.id === id) ?? null)
       if (digest(selected) !== p.rosterHash) throw new Error('参与 Agent 的能力或配置已变化，需创建并审查新计划')
+      if (p.decision === 'revise') {
+        const definition = workflowDefinition(p.task)
+        const turn: TaskTurn = { objective: `${p.task.brief}\n\n[THIS EXECUTION — USER REQUEST]\n${p.input.text}`, participants: p.task.participants,
+          userRequest: p.input.text, workflow: { id: digest(definition), definition }, ...(p.cwd ? { cwd: p.cwd } : {}), targets: p.targets,
+          origin: { source: 'task-chat', signalId: p.input.requestId, intakeSessionId: p.input.sessionId, decision: 'reuse', reason: p.reason, reviewPlanId: id } }
+        const revised = { ...p.task, enabled: false, origin: { ...p.task.origin, reviewPlanId: id } }
+        await this.runner.store.reviseReviewedTask(p.previous, revised, id, () => {
+          if (db.prepare("UPDATE dsh_task_plans SET state='awaiting_trial',reviewed_at=?,review_reason=?,task_id=? WHERE id=? AND state='pending'")
+            .run(new Date().toISOString(), reason.trim(), p.task.id, id).changes !== 1) throw new Error('审查状态已变化，请重新读取')
+          db.prepare(`INSERT INTO dsh_schedule_bindings VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET plan_id=excluded.plan_id,turn_json=excluded.turn_json,roster_hash=excluded.roster_hash`)
+            .run(p.task.id,id,JSON.stringify(turn),p.rosterHash)
+        })
+        this.runner.schedule.sync(revised, Date.now())
+        return this.plan(id)
+      }
       if (p.decision === 'reuse') {
         const current = this.runner.store.tasks.get(p.task.id)
-        if (!current?.enabled || digest(workflowDefinition(current)) !== digest(workflowDefinition(p.task))) throw new Error('待复用工作流已变化，需重新审查')
+        if (!current || current.archivedAt || (!current.enabled && current.trigger.kind !== 'cron') || digest(workflowDefinition(current)) !== digest(workflowDefinition(p.task))) throw new Error('待复用工作流已变化，需重新审查')
       }
       if (row.state === 'pending') {
         const claimed = db.prepare("UPDATE dsh_task_plans SET state='approved',reviewed_at=?,review_reason=? WHERE id=? AND state='pending'").run(new Date().toISOString(), reason.trim(), id)
@@ -187,7 +207,8 @@ export class TaskCreator {
     const old = db.prepare('SELECT * FROM dsh_task_requests WHERE id = ?').get(input.requestId) as any
     // The first accepted decision for one user message wins, even if the LLM repeats a tool call.
     if (!directWorkflow && old && store.s.batches.has(old.batch_id)) return this.status(old.task_id, old.batch_id)
-    if (!['create', 'reuse'].includes(raw?.decision) || !raw.reason?.trim()) throw new Error('需要 create/reuse 决策及理由')
+    if (!['create', 'reuse', 'revise'].includes(raw?.decision) || !raw.reason?.trim()) throw new Error('需要 create/reuse/revise 决策及理由')
+    if (raw.decision === 'revise' && !stageOnly) throw new Error('更新定义必须先生成独立审查计划')
     const roster = (await this.context()).agents, ids = new Set(roster.map(a => a.id))
     const batchId = old?.batch_id ?? `b-chat-${input.requestId.slice(0, 20)}`
     const leases: { ip: string; password: string; material: Uint8Array }[] = []
@@ -204,12 +225,26 @@ export class TaskCreator {
           throw new Error('预制配方只接受 create、reason、recipe；不能混入另一份角色计划')
         proposal = { ...proposal, ...composeRecipe(proposal.recipe) }
       }
-      let task: TaskSpec
-      if (proposal.decision === 'reuse') {
+      let task: TaskSpec, previous: TaskSpec | undefined
+      if (proposal.decision === 'reuse' || proposal.decision === 'revise') {
         const found = store.tasks.get(proposal.taskId ?? '')
         if (!found || found.archivedAt || (!found.enabled && found.trigger.kind !== 'cron') || found.origin?.source !== 'task-chat') throw new Error('只能复用未归档且允许手动执行的聊天工作流；不能重放巡检 Signal')
         task = found
         if (proposal.trigger && JSON.stringify(proposal.trigger) !== JSON.stringify(task.trigger)) throw new Error('复用不能修改时间表；需创建新的待审查计划')
+        if (proposal.decision === 'revise') {
+          if (found.enabled || found.trigger.kind !== 'cron') throw new Error('只能审查更新已暂停的定时 Task')
+          if ([...store.s.batches.values()].some(b => b.taskId === found.id && !b.settled && !b.archivedAt)) throw new Error('仍有未结束的执行，不能更新任务定义')
+          previous = found
+          const reusable = (text: string) => ips.reduce((s, ip) => s.split(ip).join('{{target}}'), text)
+          task = { ...found, ...validateTask({ ...found, title: reusable(proposal.title ?? found.title), brief: reusable(proposal.brief ?? found.brief),
+            participants: (proposal.participants ?? found.participants).map(p => ({ ...p, ...(p.brief ? { brief: reusable(p.brief) } : {}) })), graphMode: proposal.graphMode ?? found.graphMode }, ids),
+            id: found.id, enabled: false, createdAt: found.createdAt, origin: found.origin }
+          if (found.design?.evidenceContract === 'browser-patrol-v2' && (proposal.design?.evidenceContract !== found.design.evidenceContract ||
+              (proposal.design.browserPatrol?.observationMinutes ?? 0) < found.design.browserPatrol!.observationMinutes ||
+              (proposal.design.browserPatrol?.minSamples ?? 0) < found.design.browserPatrol!.minSamples ||
+              JSON.stringify(proposal.design.notifications) !== JSON.stringify(found.design.notifications)))
+            throw new Error('更新不能移除原巡查证据合同、减弱独立验收或改变已审查通知范围')
+        }
       } else {
         const reusable = (value: string) => ips.reduce((s, ip) => s.split(ip).join('{{target}}'), scrub(value))
         task = validateTask({ id: `T-chat-${input.requestId.slice(0, 20)}`, title: reusable(proposal.title ?? ''), brief: reusable(proposal.brief ?? ''),
@@ -222,7 +257,7 @@ export class TaskCreator {
       if (task.participants.length > 8 || task.participants.some(p => !ids.has(p.agentId))) throw new Error('工作流角色已失效或超出 8 位参与者上限')
       if (proposal.design) {
         if (proposal.decision === 'reuse' && JSON.stringify(validateDesign(proposal.design)) !== JSON.stringify(task.design)) throw new Error('复用不能改写决策设计；请创建新的待审查计划')
-        const reusableDesign = proposal.decision === 'create'
+        const reusableDesign = proposal.decision !== 'reuse'
           ? JSON.parse(ips.reduce((s, ip) => s.split(ip).join('{{target}}'), JSON.stringify(proposal.design)))
           : proposal.design
         task = { ...task, design: validateDesign(reusableDesign) }
@@ -260,6 +295,7 @@ export class TaskCreator {
       if (stageOnly) {
         const planId = `P-chat-${digest([input.requestId, hash]).slice(0, 20)}`, db = this.plansDb()
         const payload = JSON.stringify({ task, input: { ...input, text: scrub(input.text) }, cwd, batchId,
+          ...(previous ? { previous } : {}),
           decision: proposal.decision, reason: proposal.reason, targets: ips.map(ip => ({ kind: 'fleet-node', id: ip })),
           rosterHash: digest(taskAgentIds(task).map(id => roster.find(r => r.id === id))) })
         const oldPlan = db.prepare('SELECT id FROM dsh_task_plans WHERE id=?').get(planId)
@@ -289,7 +325,11 @@ export class TaskCreator {
   status(taskId: string, batchId: string) {
     const store = this.runner.store, batch = store.s.batches.get(batchId)
     if (!batch || batch.taskId !== taskId) throw new Error('没有这个执行记录')
-    return { taskId, batchId, outcome: batch.settled?.outcome ?? 'running', path: `/#/tc/tasks/${taskId}/runs/${batchId}`,
+    const cards = batch.cardIds.map(id => store.s.cards.get(id)!)
+    const state = batchStatus(store.s, batch)
+    const active = cards.some(c => c.status === 'running')
+    const outcome = batch.settled?.outcome ?? (active ? 'running' : state === 'park' ? 'blocked' : cards.some(c => c.wakeAt) ? 'waiting' : ({ run: 'queued', park: 'blocked', review: 'review', done: 'done', bad: 'failed' }[state]))
+    return { taskId, batchId, outcome, active, blockedCards: cards.filter(c => c.status === 'blocked').map(c => ({ id: c.id, agentId: c.agentId, kind: cardRun(store.s,c)?.blockKind ?? null, reason: cardRun(store.s,c)?.question ?? null })), path: `/#/tc/tasks/${taskId}/runs/${batchId}`,
       cards: batch.cardIds.map(id => { const card = store.s.cards.get(id)!; const run = cardRun(store.s, card); return {
         id, agentId: card.agentId, dependsOn: card.deps, status: card.status, sessionId: run?.sessionId ?? null, summary: run?.summary ?? null, error: run?.error ?? null,
       } }), note: '已提交不等于已完成。看板记录真实角色状态、会话、工具调用和交接；复用 Task 会增加执行记录，不增加任务卡片。' }

@@ -672,3 +672,74 @@ No dependency installation or temporary build tree; test-owned fixture directori
 are removed by their test teardown. Tracked lib and installed dependencies remain
 production runtime assets. Unique browser acceptance screenshots are retained;
 no user data, credentials, original receipts or unrelated project files were cleaned.
+
+## 2026-09-11 — 0.30.7: reviewed revisions and honest blocked feedback; proxy goal incomplete
+
+User objective: improve the existing login-patrol Task to coordinate proxy and login
+recovery through visible DSH Agents. The developer must not operate target machines.
+Keep the same Task and history, current role permissions, independent 20-minute /
+four-sample login acceptance and notification receipts. Cron stays paused.
+
+Implementation:
+- Creator can propose `decision=revise` for an existing paused chat-created cron
+  Task. Review checks the previous definition, selected role hashes, paused state
+  and absence of unfinished work. SQLite checks persisted state inside the same
+  transaction as definition/review/schedule-binding update and `task/revised` event.
+- Prior definitions remain inspectable. Historical Batches with missing frozen
+  definitions reject revision. Batch inputs, role Runs, evidence, outcomes and
+  creation time are not rewritten; new approval requires another manual trial.
+- Browser-patrol-v2 cannot be removed, its stability window cannot be shortened,
+  and reviewed notification scope cannot change through revision. Unknown design
+  fields are rejected instead of silently pretending unsupported branches exist.
+- Creator status now distinguishes queued/waiting/blocked from real running cards
+  and includes block kind/reason. Paused cron reuse also works through review.
+- Creator receives explicit capability limits: tool grants do not propagate from
+  Creator to business roles; prose is not an enforced gate; per-execution resource
+  IDs and current failure snapshots do not belong in reusable definitions.
+
+Real Creator attempt, not a business execution:
+- Session `agent-task-create-agent-mtwlf6hg` read the real roster, group directory
+  and existing repair state. It had no shell, approval or business-operation tools.
+- First turn saw `T-intake-19a1242874c28daa / b-intake-75094177868a1642` falsely
+  labelled running despite blocked executor. After deployment its second real
+  `task_create_status` call returned `blocked`, `active=false`, and the retained
+  needs_input/resource-snapshot reason. That historical reason is not a fresh
+  diagnosis of 84's current proxy failure.
+- Creator submitted revision draft `P-chat-d8ad16b93f2514100edf` for original patrol
+  `T-chat-bbb714b2ba8439b69178`. Independent review REJECTED it: network evidence
+  gating was only prose; proxy execution and cross-Task coordination are absent;
+  the planner was instructed to use Creator-only `task_create_status`; and the
+  reusable definition embedded this incident's IP/IDs/current blocked state.
+- Rejection reason and Creator conversation remain visible. No replacement Task,
+  new business Batch, Agent grant, login copy, WeCom message or machine action.
+
+Verification:
+- Existing Node22/tsx environment, 222/222 serial tests in32.58s. Added review/CAS,
+  database drift, atomic rollback, competing-draft rejection, frozen history,
+  idempotent approval, paused reuse, fresh manual-trial and blocked-status coverage.
+  Final targeted revision tests also passed after Creator guidance changes.
+- Build and `git diff --check` pass. Final deployment restarted the linked DSH
+  service only after read-only checks found zero running native Sessions/Task Runs.
+- Public Chrome loaded the real revision in19.62s (not a speed improvement claim).
+  Expanded previous definition worked; approval stayed disabled without review.
+  Desktop1440 and mobile390 had no page errors or horizontal overflow. Viewed
+  screenshots: `/tmp/dsh-0307-revision-desktop.png` and
+  `/tmp/dsh-0307-revision-mobile.png`. These show the draft before its rejection.
+- Original patrol spec row SHA256 remained
+  `f1f3d4caa45e4a78ca996fc2ee66769c0e72b70247167d626dc273597680b93b`;
+  its two original Batch rows remained
+  `63ec95d1eb1f2df64e10e4bec9856e1cf70e2ec53c13bd9aa875e5b7a6308da3`.
+  Patrol enabled=0 and schedule fires=0. Rejection changes the new plan only.
+
+Remaining: actual proxy execution branch under an existing authorized Agent;
+independent expected-exit/TCP/UDP evidence contract and host-enforced login gate;
+read-only cross-Task state linkage and shared resource contention protection.
+Only then should Creator generate a new reviewed revision and a visible business
+execution be considered. Do not bypass browser-patrol-v2, broaden role grants,
+restart full onboarding blindly or count this plugin verification as 84 recovery.
+
+No dependencies installed or downloaded. Reused the existing Playwright and Chrome
+environment; test-owned temporary SQLite/fixture directories are removed by test
+teardown, and the isolated browser was closed. No material user files were deleted.
+Tracked lib remains the production build; unique screenshots stay as acceptance
+evidence, not as a new dependency cache.

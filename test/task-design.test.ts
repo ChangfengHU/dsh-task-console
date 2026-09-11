@@ -15,6 +15,7 @@ test('design requires explicit branches, bounded retry and testable acceptance',
   assert.throws(() => validateDesign({ ...design, branches: [design.branches[0], design.branches[0]] }), /重复/)
   assert.throws(() => validateDesign({ ...design, acceptance: [] }), /acceptance/)
   assert.throws(() => validateDesign({ ...design, failurePolicy: { ...design.failurePolicy, maxAttempts: 999 } }), /failurePolicy/)
+  assert.throws(() => validateDesign({ ...design, proxyRecovery: { agentId: 'invented' } }), /不支持的设计字段/)
 })
 test('execution receives the reviewed decision contract, not only a role list', () => {
   const text = cardMessage({ title: 'Test', brief: 'Inspect', participants: [{ agentId: 'a' }], design } as any,

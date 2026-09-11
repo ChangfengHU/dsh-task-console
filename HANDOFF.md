@@ -84,6 +84,21 @@ Duplicate approval is idempotent; rejection/supersession never executes or erase
 Changed Agent configuration needs a newly generated/reviewed draft. The roster check
 is at approval, not a new version-pinned per-card deployment system.
 
+Paused chat-created cron Tasks support `decision=revise` through the same Creator
+draft/review flow. It updates the same Task, never creates a replacement Task or
+Batch. Review CAS checks the original definition, current roster, paused state and
+absence of unfinished work; historical Batches without frozen definitions prohibit
+revision. A single SQLite transaction updates the definition, reviewed schedule
+binding and review state and appends `task/revised` with the previous definition.
+Original creation time, Batch inputs, role Runs, evidence and outcomes stay intact.
+Cron remains disabled; the latest manual trial must match the new reviewed definition.
+Browser-patrol-v2 revisions cannot remove its evidence contract, shorten observation
+or change the approved notification scope. Unsupported design fields fail closed.
+This update facility does NOT add proxy execution branches, cross-Task resource locks
+or a network evidence gate; Creator must report those missing capabilities explicitly.
+`task_create_status` separates active/queued/waiting/blocked and returns blocked card
+reasons, rather than treating every unsettled Batch as actively running.
+
 The accepted TaskTurn freezes the design and references its reviewPlanId. Existing
 direct @ workflow runs and Fleet TaskIntake remain unchanged; no second scheduler is
 introduced. Conditions are evaluated by the business Agent from tool evidence, not

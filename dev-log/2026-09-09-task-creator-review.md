@@ -912,3 +912,29 @@ b-chat-7d8ffe7f5c933a59ef69. Requested fresh planner evidence before freezing re
 actions, prioritizing84 without weakening full-inventory or20-minute/four-sample
 acceptance. Cron remains disabled; no historical records removed. At this entry
 the new planner is collecting real inventory;84 repair remains unverified.
+
+At10:40:05 UTC the real DSH proxy Agent's repair operation
+dcd1cd35-237d-4905-931e-446a3dbe6489 succeeded on84: Controller replace completed,
+changed=true, all three TCP and two UDP paths independently matched63.124.160.54.
+The other five nodes were verified without changes. However Qwen again emitted
+summary JSON as ordinary text rather than task_complete, despite both bounded
+corrections. Batch b-chat-7d8ffe7f5c933a59ef69 therefore failed protocol_violation;
+network repair succeeded but login work never started. Do not merge those outcomes.
+
+With all Sessions idle, official saveAgent changed only browser-manager and
+fleet-proxy-operator model selection from deepseek-official/qwen-plus-latest to the
+already working codex-local/gpt-5.6-terra. Non-model specs were hash-compared and
+preserved, including every tool grant/persona/effort. This is an explicit operational
+selection, not implemented automatic model fallback or a repository-wide default.
+The new open-source preset remains model-neutral. Creator generated revised plans;
+review rejected incorrect universal task_complete wording and a normal-failure
+task_block rule that would suppress dynamic rework. Approved corrected plan
+P-chat-24bacc49766e558ff0d2 after comparing unchanged acceptance/team/budgets/cron/
+notification scope. New manual Batch b-chat-505cc3698915b4635bb1 runs in the same
+Task; no history removed, cron disabled, no developer machine operations.
+
+Public browser test of the previous Batch's expandable network section correctly
+showed six fresh passing write-gate receipts but0/6 independent reviewer acceptance,
+not a false overall success. Desktop and390px mobile had no overflow or script
+errors. Context closed, no browser profile/download dependency installed. Latest
+Batch is still pending real business acceptance at this entry.

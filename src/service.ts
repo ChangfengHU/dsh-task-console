@@ -25,13 +25,14 @@ import {
   type HostMcp,
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
-import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask } from './tasks.ts'
+import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask, taskForBatch } from './tasks.ts'
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
 import { TaskCreator } from './task-create.ts'
 import { executionHistory } from './execution-history.ts'
 import { browserPatrolEvidence } from './browser-patrol-evidence.ts'
 import { BrowserPatrolWorkflow } from './browser-patrol-workflow.ts'
+import { ProxyWorkflow, proxyRequestId } from './proxy-workflow.ts'
 import { TaskNotifications, type NotificationStage } from './task-notifications.ts'
 import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation, browserOperationOutcome } from './workflow-acceptance.ts'
 import type { Artifact, Card } from './tasks.ts'
@@ -65,6 +66,10 @@ export class TaskConsoleService extends TypertRemoteService {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
       beforeComplete: async input => {
         if (input.card.role === 'notifier') return new TaskNotifications(this.runner.store).complete(input)
+        const proxy = new ProxyWorkflow(this.runner.store)
+        if (proxy.pending(input)) throw new Error('代理后台操作仍在运行，继续查询原操作回执')
+        const proxyReport = proxy.complete(input)
+        if (input.card.role === 'proxy') return proxyReport
         if (await pendingBrowserOperation(input)) throw new Error('浏览器后台操作仍在运行；继续 browser_status，不能提前 task_complete。')
         if (input.task.design?.evidenceContract === 'browser-patrol-v2') {
           const patrol = await this.patrolWorkflow(input)
@@ -81,23 +86,26 @@ export class TaskConsoleService extends TypertRemoteService {
         if (report?.summary && report.metadata) return { summary: report.summary, metadata: report.metadata }
       },
       beforeBlock: async input => {
+        if(new ProxyWorkflow(this.runner.store).pending(input))throw new Error('代理操作仍运行，请查询原回执；不能提前阻塞并遗弃操作')
         const operation = await validateWorkflowBlock(input)
         if (operation) return operation
         const report = await this.patrolEvidence(input)
         if (report?.failure) return { reason: report.failure, kind: 'capability' }
       },
-      pendingOperation: input => pendingBrowserOperation(input),
-      operationOutcome: input => browserOperationOutcome(input),
+      pendingOperation: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? await pendingBrowserOperation(input),
+      operationOutcome: async input => input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input),
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
-      beforePlanRound: async (input, items) => {
+      beforePlanRound: async (input, items, proxyItems) => {
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2') return
         const patrol = await this.patrolWorkflow(input); patrol.snapshot(input)
         new TaskNotifications(this.runner.store).requireStage(input,input.card.round === 1 ? 'started' : 'rework')
-        return patrol.plan(input, items)
+        const browserPlan = patrol.plan(input, items)!
+        const proxyPlan = new ProxyWorkflow(this.runner.store).plan(input,browserPlan.items,proxyItems)
+        return {items:proxyPlan ? {browserItems:browserPlan.items,proxyItems:proxyPlan.items} : browserPlan.items,commit:()=>{browserPlan.commit();proxyPlan?.commit()}}
       },
       patrolStatus: async input => {
         const outbox = new TaskNotifications(this.runner.store)
-        return { ...(input.card.role === 'notifier' ? outbox.job(input) : (await this.patrolWorkflow(input)).snapshot(input)), notifications:outbox.rows(input.batch.id) }
+        return { ...(input.card.role === 'notifier' ? outbox.job(input) : (await this.patrolWorkflow(input)).snapshot(input)), notifications:outbox.rows(input.batch.id), proxy:new ProxyWorkflow(this.runner.store).status(input) }
       },
       notify: async (input, stage, deliver) => {
         const outbox = new TaskNotifications(this.runner.store)
@@ -115,6 +123,28 @@ export class TaskConsoleService extends TypertRemoteService {
       .then(() => this.markExistingTaskSessionsInternal())
       .then(() => this.intake.start())
     void this.ready.catch(err => console.error('[task-console] runner failed to start:', err))
+  }
+
+  /** Called by the filtered MCP wrapper, not a model-facing Console mutation API. */
+  async scopedMcp(raw:string,args:any,exec:any,invoke:(args:any)=>Promise<any>) {
+    const sessionId=exec?.agent?.session?.id
+    if(!sessionId)throw Error('live-agent-session-required')
+    const run=[...this.runner.store.s.runs.values()].find(r=>r.sessionId===sessionId&&r.status==='running')
+    if(!run){
+      if(sessionId.startsWith('task-'))throw Error('active-task-session-required')
+      return invoke(['proxy_verify','proxy_repair'].includes(raw)?{...args,requestId:proxyRequestId(sessionId,args.requestId)}:args)
+    }
+    const card=this.runner.store.s.cards.get(run.cardId)!,batch=this.runner.store.s.batches.get(run.batchId)!,base=this.runner.store.tasks.get(run.taskId)!
+    const task=taskForBatch(base,batch),input={task,batch,card,sessionId,profileId:run.profileId??card.agentId}
+    if(!task.design?.proxy){
+      if(raw.startsWith('proxy_'))throw Error('proxy-task-contract-not-reviewed')
+      return invoke(args)
+    }
+    const proxy=new ProxyWorkflow(this.runner.store)
+    await this.patrolWorkflow(input)
+    if(raw.startsWith('proxy_'))return proxy.invoke(input,raw,args,invoke)
+    proxy.assertBrowser(input,args)
+    return invoke(args)
   }
 
   private async patrolEvidence(input: import('./runner.ts').CompletionCheck) {

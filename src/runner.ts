@@ -58,7 +58,7 @@ export interface RunnerOptions {
   pendingOperation?: (input: CompletionCheck) => Promise<string | undefined>
   operationOutcome?: (input: CompletionCheck) => Promise<string | undefined>
   scheduledTurn?: (task: TaskSpec, occurrenceId: string) => Promise<TaskTurn | undefined>
-  beforePlanRound?: (input: CompletionCheck, items: unknown) => Promise<{ items: unknown; commit: () => void } | undefined>
+  beforePlanRound?: (input: CompletionCheck, items: unknown, proxyItems?: unknown) => Promise<{ items: unknown; commit: () => void } | undefined>
   patrolStatus?: (input: CompletionCheck) => Promise<unknown>
   notify?: (input: CompletionCheck, stage: string, deliver: (args: any) => Promise<any>) => Promise<unknown>
 }
@@ -420,9 +420,9 @@ export class TaskRunner {
             const observed = await this.beforeBlock?.({ task, batch, card, sessionId, profileId })
             flight.terminal = { kind: 'blocked', reason: observed?.reason ?? reason, blockKind: observed?.kind ?? kind }
           },
-          planRound: async (summary, items) => {
+          planRound: async (summary, items, proxyItems) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
-            const plan = await this.beforePlanRound?.({ task, batch, card, sessionId, profileId }, items)
+            const plan = await this.beforePlanRound?.({ task, batch, card, sessionId, profileId }, items, proxyItems)
             if (plan) summary += `\n[FROZEN ROUND ITEMS]\n${JSON.stringify(plan.items)}`
             await this.store.expandRound(task, batch, card, summary, plan?.commit)
             flight.terminal = { kind: 'completed', summary, metadata: { decision: card.round === 1 ? 'planned' : 'rework', round: card.round } }

@@ -16,7 +16,8 @@ It reuses existing managed Clash operations behind a protected node/line policy;
 no policy, Agent grant or startup connection is created on plugin upgrade. No-config
 startup supports discovery but denies every target. Its SQLite/node receipts and
 unknown-outcome locks are separate from Task history and must not be blindly removed.
-MCP availability is not proxy Task integration or proof of repaired machines.
+MCP availability alone is not proof of repaired machines. Reviewed browser-patrol-v2
+designs may opt into `design.proxy` as described below.
 
 Execution-level archival uses the Console-only `setBatchArchived(taskId,batchId,archived)`
 API and an append-only `batch/archived` event, projected to `dsh_batches.archived_at`.
@@ -101,8 +102,18 @@ Original creation time, Batch inputs, role Runs, evidence and outcomes stay inta
 Cron remains disabled; the latest manual trial must match the new reviewed definition.
 Browser-patrol-v2 revisions cannot remove its evidence contract, shorten observation
 or change the approved notification scope. Unsupported design fields fail closed.
-This update facility does NOT add proxy execution branches, cross-Task resource locks
-or a network evidence gate; Creator must report those missing capabilities explicitly.
+The optional `design.proxy={agentId,lineId,maxAttempts}` adds a real per-round proxy
+role before the existing Gate. `task_plan_round` atomically freezes both browser items
+and matching proxyItems. Definite per-node failures may be handed off; the host denies
+login writes for unverified nodes while healthy nodes continue. Running/unknown
+operations cannot be abandoned or retried with another ID. A shared proxy ledger
+namespaces idempotency by actual Session and keeps node reservations and repair budgets
+across Task rounds. This is not a universal mutex against unrelated SSH/legacy tools.
+The dedicated proxy Agent has only proxy MCP grants; main business roles have read-only
+proxy grants. Login copy/provision/resume requires a real network receipt no older than
+15 minutes. Final acceptance also requires independent reviewer receipts; historical
+independent acceptance does not expire during downstream stability waits, but later
+adverse evidence or repair invalidates it. Original browser and notification gates stay.
 `task_create_status` separates active/queued/waiting/blocked and returns blocked card
 reasons, rather than treating every unsettled Batch as actively running.
 

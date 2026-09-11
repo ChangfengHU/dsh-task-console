@@ -19,6 +19,20 @@ export function PatrolEvidence({ events }: { events: GraphEventRow[] }) {
     <header><div><h3>浏览器巡查 · 检查结果</h3><small>数据库回放 · 证据事件 #{snapshot.id} · 北京时间 {date(report.assessedAt ?? new Date(snapshot.created_at * 1000).toISOString())}</small></div><span>{legacy ? '历史验收记录' : '本轮检查快照'}</span></header>
     <p className="dtc-patrol-summary">{items.length || uncovered.length ? summary : report.reason || '等待本轮检查证据'}</p>
     <p className="dtc-patrol-note">{legacy ? '历史执行结果保持不变。旧口径曾将回执过期计为未通过，不代表浏览器已退出登录。' : '本轮有效的独立检查不会因交接耗时失效；后续掉线、未知、账号变化或修复操作仍需重新验收。'}这里的新鲜度是该事件发生时的状态，不是此刻 Fleet 的实时状态。</p>
+    {report.proxy ? <details className="dtc-patrol-original"><summary>代理前置检查 · {report.proxy.lineId} · 独立验收 {report.proxy.items.filter((r:any)=>r.independent).length}/{report.proxy.items.length}</summary>
+      <p className="dtc-patrol-note">新登录写入需要新鲜网络证据；独立验收保留本轮检查事实，新的异常或修复仍使它失效。以下均为该回放位置的数据。</p>
+      <div className="dtc-patrol-rows">{report.proxy.items.map((r:any)=><article className="dtc-patrol-row" key={r.ip}>
+        <div><b>{r.ip}</b><small>{date(r.checkedAt)}</small></div>
+        <div><span className="dtc-patrol-label">本轮独立验收</span><b>{r.independent ? '已通过' : '未通过 / 待检查'}</b></div>
+        <div><span className="dtc-patrol-label">快照时登录写入闸门</span><b>{r.accepted ? '可继续判定登录' : '禁止写入，先取得网络证据'}</b><small>{r.reason}</small></div>
+        <details className="dtc-patrol-detail"><summary>网络证据</summary><dl>
+          <div><dt>期望出口</dt><dd>{r.expectedIp ?? '未记录'}</dd></div>
+          {Object.entries(r.paths ?? {}).map(([path,value])=><div key={path}><dt>{path}</dt><dd>{String(value)}</dd></div>)}
+          <div><dt>操作回执</dt><dd>{r.operationId ?? '未记录'}</dd></div>
+          {r.sessionId ? <div><dt>执行会话</dt><dd><a href={`/?session=${encodeURIComponent(r.sessionId)}`} target="_blank" rel="noreferrer">打开原会话 ↗</a></dd></div> : null}
+        </dl></details>
+      </article>)}</div>
+    </details> : null}
     <nav aria-label="巡查结果筛选"><button className="dtc-btn sm" aria-pressed={!attentionOnly} onClick={() => setAttentionOnly(false)}>全部浏览器 · {counts.total}</button><button className="dtc-btn sm" aria-pressed={attentionOnly} onClick={() => setAttentionOnly(true)}>待关注 · {attention.length}</button><small>待关注包含待刷新，不等于需要修复</small></nav>
     <div className="dtc-patrol-rows">
       {(attentionOnly ? attention : items).map((r: any) => { const view = patrolItemView(r); return <article className="dtc-patrol-row" key={`${snapshot.id}:${r.ip}:${r.instance}`}>

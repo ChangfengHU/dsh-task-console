@@ -129,7 +129,7 @@ export interface Card {
   index: number
   agentId: string
   kind?: 'agent' | 'gate'
-  role?: 'planner' | 'executor' | 'reviewer' | 'gate' | 'notifier'
+  role?: 'planner' | 'executor' | 'reviewer' | 'gate' | 'notifier' | 'proxy'
   round?: number
   brief?: string
   deps: string[]

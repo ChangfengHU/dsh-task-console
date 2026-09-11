@@ -1,5 +1,7 @@
 # 后续优化
 
+- [ ] [TASK-PROXY-WORKFLOW-014] 0.30.9：用户本轮授权代理MCP/Agent权限接入及原Task真实执行；目标改动仍由可见DSH Agent完成。已实现proxy辅助角色、原子轮次计划、逐机器网络写入闸门、Session绑定回执/幂等/不确定锁与跨轮修复预算、独立代理复验和回放证据。239测试及构建通过；公网任务列表第20秒显示，代理角色页30秒显示四项授权，390px无横向溢出。Creator修订计划P-chat-c9d9993d58c982b8e394独立审查通过；原Task T-chat-bbb714b2ba8439b69178两份旧Batch哈希未变，新增真实手动Batch b-chat-2e3320dc3f0735d11e1f正在执行，定时保持关闭。尚不能称84恢复；真实验收进度见既有Creator dev-log末尾。
+
 - [ ] [TASK-PROXY-MCP-013] 0.30.8：已开发可独立启动的vyibc-proxy stdio MCP（inspect/verify/repair/status），SDK真实客户端握手/隔离调用、233全量测试及17远端模拟故障测试通过。复用Controller事务预检/替换/启用/回滚，受限恢复既有Controller；独立五路径出口证据、同机自修拦截、逐节点授权、幂等/持久锁/不确定结果保护、无凭据回显。回执查询失败不能解除旧操作锁，必须精确匹配终态回执。未写生产策略或MCP加载连接、未改Agent权限/Task历史/定时，未SSH目标机，不能称84已修复。待审查工具授权及Task执行支线/网络闸门接入；配置和限制见docs/proxy-mcp.md，证据见既有Creator dev-log最新段。
 
 - [ ] [TASK-PATROL-PROXY-012] 0.30.7：用户要求通过原巡查 Task 尝试协调 Clash 与登录，不直接操作机器。真实 Creator 会话 agent-task-create-agent-mtwlf6hg 已核对名册并指出编排缺口；修正 task_create_status 将受阻执行泛称 running 的反馈，新增原暂停 cron Task 的 revise 待审查/CAS更新、前后定义展示、历史冻结保护和重新手动验收门槛。222测试、构建、公网桌面/手机审查交互通过；草案P-chat-d8ad16b93f2514100edf因未实现网络闸门、规划者无状态查询工具和固化本轮资源/状态而退回，未批准或执行。未增加代理执行支线/跨Task互斥/网络证据闸门，不得将此基础改进当作84恢复。原巡查Task定义与2Batch在部署前后逐行哈希一致，cron仍关闭，无目标机器操作或权限变更。详细证据及后续能力缺口见既有 Creator dev-log 最新段。

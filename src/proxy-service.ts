@@ -98,7 +98,7 @@ export class ProxyService {
     }
     const rows=this.db.prepare('SELECT seq,at,payload_json FROM proxy_events WHERE operation_id=? AND seq>? ORDER BY seq LIMIT 51').all(id,after) as any[]
     const events=rows.slice(0,50).map(r=>({seq:r.seq,at:r.at,...JSON.parse(r.payload_json)}))
-    return {operationId:id,ip:row.ip,action:row.action,state:row.state,startedAt:row.started_at,updatedAt:row.updated_at,
+    return {operationId:id,ip:row.ip,lineId:authorizeProxy(this.policy,row.ip).lineId,action:row.action,state:row.state,startedAt:row.started_at,updatedAt:row.updated_at,
       events,hasMore:rows.length>50,nextAfter:events.at(-1)?.seq??after,result:row.result_json?JSON.parse(row.result_json):null}
   }
   async close(){await Promise.all(this.pending);this.db.close()}

@@ -16,6 +16,7 @@ import { PatrolEvidence } from './PatrolEvidence.tsx'
 const epoch = (value?: number | null) => value ? new Date(value * 1000).toLocaleTimeString('zh-CN', { hour12: false }) : '—'
 const STATUS: Record<string, string> = { todo: '等依赖', ready: '就绪', scheduled: '定时等待', running: '运行中', blocked: '阻塞', review: '待验收', done: '完成', archived: '归档', triage: '需处理' }
 const ROLE: Record<string, { label: string; icon: string }> = {
+  proxy: {label:'代理运维者',icon:'⇄'},
   notifier: { label: '企微通知员', icon: '✉' },
   planner: { label: '规划者', icon: '🦊' }, executor: { label: '执行者', icon: '🐻' }, reviewer: { label: '评估者', icon: '🦉' }, gate: { label: '闸门', icon: '◇' },
 }
@@ -29,6 +30,8 @@ const eventEffect = (event: GraphEventRow, frame: GraphFrame) => {
   const p = event.payload
   const run = event.run_id === null ? undefined : frame.runs.find(row => row.id === event.run_id)
   switch (event.kind) {
+    case 'proxy_round_planned': return {icon:'⇄',title:'代理目标与动作已冻结',copy:'代理处理节点完成真实网络验收后，浏览器闸门才可放行。',facts:[String(p.lineId),`${Array.isArray(p.items)?p.items.length:0} 台机器`]}
+    case 'proxy_operation': return {icon:'⇄',title:'代理操作进度',copy:`${String(p.ip)} · ${String(p.action)} · ${String(p.state)}`,facts:[String(p.operationId??p.requestId),String(p.reason??'仅以真实操作回执判断')]}
     case 'patrol_verification_unavailable': return { icon: '!', title: '后续验证未完成', copy: '记录验证操作的真实拒绝/中断；不是登录失败，也不能继续用旧成功回执充当本次复验。', facts: [String(p.key), String(p.reason), String(p.operationId)] }
     case 'patrol_snapshot': return { icon: '◎', title: '逐浏览器验收证据更新', copy: String(p.summary || p.reason), facts: ['下方证据表同步到本事件', `task_events.id=${event.id}`] }
     case 'patrol_round_planned': return { icon: '◇', title: '本轮精确目标与动作已冻结', copy: '规划者的结构化决策与 Gate 在同一事务落库；MCP 不能执行清单以外的动作。', facts: [`第 ${p.round} 轮`, `${Array.isArray(p.items) ? p.items.length : 0} 个目标动作`] }
@@ -67,16 +70,17 @@ function DbDag({ frame, selected, current, onSelect, nameOf }: { frame: GraphFra
   }
   for (const task of frame.tasks) if (!ordered.includes(task)) ordered.push(task)
   const main = ordered.filter(t=>t.role!=='notifier'), notices = ordered.filter(t=>t.role==='notifier')
-  const roundRows = Math.max(1, Math.ceil(Math.max(0, main.length - 1) / 4))
-  const width = notices.length ? 1440 : main.length > 4 ? 1180 : Math.max(700, main.length * 226 + 50)
+  const columns=main.some(t=>t.role==='proxy')?5:4,noticeX=(columns+1)*226+80
+  const roundRows = Math.max(1, Math.ceil(Math.max(0, main.length - 1) / columns))
+  const width = notices.length ? noticeX+230 : main.length > columns ? (columns+1)*226+50 : Math.max(700, main.length * 226 + 50)
   const height = Math.max(250, roundRows * 150 + 170, notices.length * 150 + 100)
   const positions = new Map(main.map((task, index) => {
     if (index === 0) return [task.id, { x: 28, y: 40 }]
-    const row = Math.floor((index - 1) / 4); const within = (index - 1) % 4 + 1
-    const column = row % 2 === 0 ? within : 4 - within
+    const row = Math.floor((index - 1) / columns); const within = (index - 1) % columns + 1
+    const column = row % 2 === 0 ? within : columns - within
     return [task.id, { x: 28 + column * 226, y: 40 + row * 150 + (task.node_kind === 'gate' ? 16 : 0) }]
   }))
-  notices.forEach((task,index)=>positions.set(task.id,{x:1210,y:40+index*150}))
+  notices.forEach((task,index)=>positions.set(task.id,{x:noticeX,y:40+index*150}))
   return <div className="dtc-dbdag-scroll"><div className="dtc-dbdag-tools"><span>拖动图面查看完整依赖</span><div><button className="dtc-btn sm" aria-label="缩小 DAG" onClick={() => setZoom(value => Math.max(.55, Number((value - .15).toFixed(2))))}>−</button><b>{Math.round(zoom * 100)}%</b><button className="dtc-btn sm" aria-label="放大 DAG" onClick={() => setZoom(value => Math.min(1.75, Number((value + .15).toFixed(2))))}>＋</button><button className="dtc-btn sm" onClick={() => setZoom(1)}>适配</button></div></div><div className="dtc-dbdag-viewport"><div className="dtc-dbdag-scale" style={{ width: width * zoom, height: height * zoom }}><div className="dtc-dbdag" style={{ width, height, transform: `scale(${zoom})` }}>
     {Array.from({ length: roundRows }, (_, row) => <div key={row} className="dtc-dbround" style={{ top: 20 + row * 150 }}><b>{frame.tasks.some(task => task.node_kind === 'gate') ? `ROUND ${String(row + 1).padStart(2, '0')}` : 'WORKFLOW'}</b></div>)}
     <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-label={`${frame.links.length} 条数据库依赖`}>

@@ -122,6 +122,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
               assertToolArguments(rawName, toolRules[rawName], args)
               assertBrowserSession(rawName, args, exec)
               if (rawName.replace(/-/g, '_') === 'vyibc_wecom_send_message' && String((exec as any)?.agent?.session?.id ?? '').startsWith('task-') && !isTaskNotification(exec)) throw new Error('Task notifications must use task_notify with reviewed recipients and durable deduplication')
+              if ((/^fleet-proxy(?:-|$)/.test(stableServerName) && rawName.startsWith('proxy_')) || /^browser_login_(copy|provision|resume)$/.test(rawName)) {
+                const console = (ctx as any).get?.('taskConsole')
+                if (console?.scopedMcp) return console.scopedMcp(rawName, args, exec, (next: unknown) => execute(next,exec))
+                if (String((exec as any)?.agent?.session?.id ?? '').startsWith('task-')) throw new Error('Task MCP scope guard unavailable')
+              }
               return execute(args, exec)
             },
           } as never)

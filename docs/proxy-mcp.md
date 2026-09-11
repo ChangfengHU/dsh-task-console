@@ -136,8 +136,30 @@ remote system/network operations. They never create a production Task or SSH to 
 node. Protocol references: [stdio transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)
 and [tool contract](https://modelcontextprotocol.io/specification/2025-06-18/server/tools).
 
-This MCP implementation is not proof that 84 has been repaired. Existing Task
-proxy-side-card dispatch, live read-only related-Task linkage, and a host-enforced
-network-before-login gate still require reviewed integration. Existing login
-stability/notification gates, Tasks/Batches, Agent permissions and disabled cron
-remain unchanged. A future real repair must be visible in an authorized DSH Session.
+## Optional Task integration (0.30.9)
+
+An independently reviewed browser-patrol-v2 revision may specify
+`proxy: {agentId: "fleet-proxy-operator", lineId: "line-100", maxAttempts: 2}`.
+Install the preset explicitly, with only the four proxy tools. Planner, browser
+manager and independent reviewer receive a separate read-only proxy MCP connection.
+Both connections use the same principal/state directory; their target repair grants
+remain different. Plugin upgrades do not grant these capabilities automatically.
+
+The planner freezes `proxyItems` alongside browser `items` in the same transaction.
+The graph becomes planner → proxy → Gate → browser manager → reviewer → planner.
+Every proxy target needs a definite outcome before handoff. A failed target remains
+denied for login writes without blocking healthy targets. Unknown operations retain
+their reservation; they cannot be bypassed with a different request ID or Session.
+
+Task SQLite stores round items, requests, issues and canonical MCP receipts. Login
+copy/provision/resume checks real approved-line five-path network evidence, at most
+15 minutes old. Independent review is a separate role's real read-only verification,
+not an executor claim. Its historical acceptance does not expire simply while waiting
+for browser stability; a later adverse check, repair or pending operation invalidates
+it. These facts and operation Sessions appear in persisted patrol snapshots/replay.
+
+The mutex covers proxy MCP operations and this Task's ordered branch, not all legacy
+tools or external SSH operations. No related installation Task is invoked implicitly.
+Existing login stability/notification gates and prior execution history are preserved;
+cron remains disabled until explicitly enabled after real acceptance. Tests and tool
+availability are not proof that any production machine has been repaired.

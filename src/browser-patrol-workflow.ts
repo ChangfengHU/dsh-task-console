@@ -2,6 +2,7 @@ import type { CompletionCheck } from './runner.ts'
 import type { EventStore } from './tasks.ts'
 import { collectBrowserEvidence } from './browser-patrol-evidence.ts'
 import { patrolReportSummary } from './patrol-report.ts'
+import { ProxyWorkflow } from './proxy-workflow.ts'
 
 export interface PatrolRoundItem { ip: string; instance: number; action: 'verify' | 'provision' | 'resume'; reason: string }
 
@@ -125,9 +126,12 @@ export class BrowserPatrolWorkflow {
     const canCloseUnresolved = items.every(i => i.accepted || !i.readAuthorized || !inventory.nodes.find((n: any) => n.ip === i.ip)?.reachable || i.independentlyObserved > 0 && (
       (input.card.round ?? 0) > input.task.design!.failurePolicy.maxAttempts || i.attempts >= input.task.design!.failurePolicy.maxAttempts || i.state === 'unknown' && i.independentlyObserved >= 2
     )) && (items.length > 0 || uncovered.length > 0)
+    const proxy=input.task.design?.proxy?new ProxyWorkflow(this.store).status(input):undefined
+    const networkReady=!proxy||proxy.items.length>0&&proxy.items.every(row=>row.independent)
+    const report=patrolReportSummary(items,uncovered)
     return { assessmentMode: 'point-in-time-v1', assessedAt: new Date(now).toISOString(),
-      ready: items.length > 0 && items.every(i => i.accepted) && uncovered.length === 0, canCloseUnresolved, plan,
-      items, uncovered, ...patrolReportSummary(items, uncovered) }
+      ready: items.length > 0 && items.every(i => i.accepted) && uncovered.length === 0&&networkReady, canCloseUnresolved, plan,
+      items, uncovered, ...report,...(proxy?{proxy,summary:report.summary+` 代理独立验收 ${proxy.items.filter(row=>row.independent).length}/${proxy.items.length}。`}:{}) }
   }
 
   complete(input: CompletionCheck) {

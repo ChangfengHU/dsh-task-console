@@ -826,3 +826,46 @@ were removed by their scoped teardown; SDK clients/subprocesses were closed. No
 material user data was deleted. Existing runtime dependencies, local lockfile and
 tracked lib are retained; no new download/build cache was introduced. Freed test
 space was not measured and is not reported as a guessed number.
+
+## 2026-09-11 · 0.30.9 reviewed proxy Task integration / real execution started
+
+Latest authorization explicitly covers this Task's MCP grants, Agent integration and
+real execution. Developer must still not operate target machines directly. Preserved
+the existing patrol Task/history, source-account exclusion, 20-minute/four-sample login
+acceptance and notifier scope; no automatic cron activation or unrelated service work.
+
+Implemented opt-in proxy Task contract and dedicated preset, real proxy card/links
+before Gate, atomic proxy/browser round plans, actual-Session idempotency and status
+ownership, unresolved-operation reservations, per-issue repair budgets, native MCP
+receipt capture, fresh per-node login write guard and independent proxy acceptance.
+Definite failures can be handed off without admitting login writes for those nodes;
+unknown operations cannot be converted into retry permission. Independent historical
+acceptance survives downstream waiting, while later failures/repairs invalidate it.
+This is not a universal lock against external SSH or legacy tools. Replay shows real
+proxy cards/events and expandable per-node network receipts with original Sessions.
+
+Provisioned private read/operator policies under ~/.config/dsh-proxy using references
+to existing Vault token/resolver files, not copied secrets. Policies share one SQLite
+state/principal; all six existing authorized nodes are readable, self-machine repair
+remains denied. Read-only Vault material and known-host checks verified 84/line-100
+without connecting to SSH. Connected two official stdio MCP clients in the web profile;
+created fleet-proxy-operator using existing Qwen selection, granted main three roles
+proxy read tools only, and preserved every original grant/model. Reloaded DSH only
+with no active Sessions/Tasks. All actual node operations belong to the real Agents.
+
+Verification:239 Node tests passed, including six new contract/transaction/receipt/
+unknown/partial-failure/freshness regressions and existing 17 Python mocked proxy cases.
+Build passed with existing dependencies; no dependency download or install. Public
+headless Chrome task list remained Loading plugins at10s, rendered at20s, no pageerror;
+Agent detail rendered at30s, displayed four granted proxy tools,390px no page overflow.
+Cold-start delay is not claimed eliminated. Test browser contexts were closed; only
+test-owned temp directories are removed by scoped teardown, no user data cleanup.
+
+Creator continued in agent-task-create-agent-mtwlf6hg. First new draft was rejected
+for sequencing, overly broad mutex claims and historical-vs-fresh evidence wording.
+Corrected P-chat-c9d9993d58c982b8e394 was independently approved as revise/awaiting_trial.
+Original two Batch rows retained SHA256
+63ec95d1eb1f2df64e10e4bec9856e1cf70e2ec53c13bd9aa875e5b7a6308da3
+before/after revision. Explicit manual request launched the same Task's new Batch
+b-chat-2e3320dc3f0735d11e1f; cron remains disabled. At this entry, execution has started
+but machine repair/login/notification acceptance has not yet been established.

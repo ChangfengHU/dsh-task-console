@@ -8,6 +8,7 @@ export function TaskDesignView({ design }: { design?: TaskDesign }) {
   if (!design) return null
   return <section aria-label="条件与验收设计">
     {design.browserPatrol ? <p>浏览器边界：仅现存且获准实例；允许 {design.browserPatrol.actions.join(' / ') || '只读'}，不含删除重建。修复后独立观察 {design.browserPatrol.observationMinutes} 分钟、至少 {design.browserPatrol.minSamples} 个新时间样本。</p> : null}
+    {design.proxy ? <p>代理前置验收：<a href={`#/tc/agents/${design.proxy.agentId}`}>{design.proxy.agentId} ↗</a> 处理 {design.proxy.lineId}；单次故障最多 {design.proxy.maxAttempts} 次修复。代理阶段取得终态后交接；宿主逐机器阻止未通过目标复制登录，其他目标继续。最终由评估者独立复验。</p> : null}
     {design.notifications ? <p>企微收件群：{design.notifications.chatIds.join('、')}；{design.notifications.agentId ? <>独立通知员 <a href={`#/tc/agents/${design.notifications.agentId}`}>{design.notifications.agentId} ↗</a>，阶段触发通知支线，保留自己的执行卡、会话和发送回执。通知失败不重跑浏览器。</> : '由规划者经 task_notify 发送并保存回执。'}不广播到其他群。</p> : null}
     {design.evidenceContract ? <p>宿主证据闸门：{design.evidenceContract}（依据实际工具事件核对交卷，不接受模型自报统计）</p> : <p className="dtc-workflow-muted">未选择专用宿主证据闸门；结构化计划本身不保证执行结果正确。</p>}
     <h3>目标与范围</h3><p className="dtc-workflow-copy">{design.scope}</p>

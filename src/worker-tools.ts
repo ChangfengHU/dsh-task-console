@@ -14,7 +14,7 @@ export interface WorkerHooks {
   block(reason: string, kind: BlockKind): Promise<void>
   requestReview(summary: string, artifacts: string[], metadata?: Record<string, unknown>, reviewer?: string): Promise<void>
   requestChanges(reason: string): Promise<void>
-  planRound?(summary: string, items?: unknown): Promise<void>
+  planRound?(summary: string, items?: unknown, proxyItems?: unknown): Promise<void>
   patrolStatus?(): Promise<unknown>
   notify?(stage: string, exec: any): Promise<unknown>
   finalize?(summary: string, artifact?: string, disposition?: 'passed' | 'unresolved'): Promise<void>
@@ -113,13 +113,13 @@ export async function registerWorkerTools(agentCtx: any, hooks: WorkerHooks, opt
     disposers.push(agentCtx.tools.register(defineTool({
       name: 'task_plan_round',
       description: '规划者决定继续或返工时调用。系统会在一个 SQLite 事务里创建真实的 Gate、执行者、评估者和下一位规划者 Task，并写入真实 task_links。',
-      parameters: { summary: { type: 'string', required: true, description: '本轮计划；返工时要包含评估意见和可执行改动。' }, items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'browser-patrol-v2 必填：[{ip,instance,action:verify|provision|resume,reason}]。真实清单和证据校验通过后，与 Gate 一起冻结。' } },
+      parameters: { summary: { type: 'string', required: true, description: '本轮计划；返工时要包含评估意见和可执行改动。' }, items: { type: 'array', items: { type: 'object', additionalProperties: true }, description: 'browser-patrol-v2 必填：[{ip,instance,action:verify|provision|resume,reason}]。真实清单和证据校验通过后，与 Gate 一起冻结。' }, proxyItems: { type:'array',items:{type:'object',additionalProperties:true},description:'仅配置 design.proxy 时必填：[{ip,action:verify|repair,reason}]，覆盖本轮所有浏览器所在机器。每项以真实清单为准；代理 Agent 完成新鲜验收后 Gate 才放行。' } },
       output: { schema: OUT, render },
       async execute(args: any) {
         const summary = String(args.summary ?? '').trim()
         if (!summary) return { ok: false, note: 'summary 不能为空' }
         if (!hooks.planRound) return { ok: false, note: '当前任务不支持动态回合' }
-        await hooks.planRound(summary, args.items)
+        await hooks.planRound(summary, args.items, args.proxyItems)
         return { ok: true, note: '下一轮 Task 与 task_links 已写入数据库；规划者交卷后 Gate 才会放行。' }
       },
     })))

@@ -395,7 +395,8 @@ export class EventStore {
         commit?.()
         const atIso = new Date().toISOString(); const at = toEpoch(atIso)
         const rows = [
-          { id: `${batch.id}#g${round}`, agentId: '__gate__', kind: 'gate' as const, role: 'gate' as const, round, deps: [planner.id], brief: `Round ${round} 放行闸门` },
+          ...(execution.design?.proxy ? [{ id: `${batch.id}#x${round}`, agentId: execution.design.proxy.agentId, kind:'agent' as const, role:'proxy' as const, round, deps:[planner.id], brief:'根据本轮冻结的 proxyItems 逐台检查或幂等修复批准线路；必须调用 proxy_status 取得全部操作终态，再 task_complete 交接通过/未通过清单。确定失败不重复修复，继续其他节点；下游宿主逐机器阻止未通过目标登录写入。不确定只查原操作，不换编号重复；仍无法确认 task_block。' }] : []),
+          { id: `${batch.id}#g${round}`, agentId: '__gate__', kind: 'gate' as const, role: 'gate' as const, round, deps: [execution.design?.proxy ? `${batch.id}#x${round}` : planner.id], brief: `Round ${round} ${execution.design?.proxy ? '代理阶段交接；逐机器校验后' : ''}放行闸门` },
           { id: `${batch.id}#e${round}`, agentId: execution.participants[1].agentId, kind: 'agent' as const, role: 'executor' as const, round, deps: [`${batch.id}#g${round}`], brief: execution.participants[1].brief ?? `执行规划者给出的第 ${round} 轮方案。` },
           { id: `${batch.id}#r${round}`, agentId: execution.participants[2].agentId, kind: 'agent' as const, role: 'reviewer' as const, round, deps: [`${batch.id}#e${round}`], brief: execution.participants[2].brief ?? `评估第 ${round} 轮结果，明确给出通过或返工依据。` },
           { id: `${batch.id}#p${round + 1}`, agentId: execution.participants[0].agentId, kind: 'agent' as const, role: 'planner' as const, round: round + 1, deps: [`${batch.id}#r${round}`], brief: execution.participants[0].brief ?? `读取第 ${round} 轮评估，决定结束或创建第 ${round + 1} 轮。` },
@@ -541,11 +542,18 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (task.design?.evidenceContract === 'browser-patrol-v2') lines.push('', '[PATROL ROLE HANDOFF]',
     'task_patrol_status.ready 表示整个 Task 的独立验收，不是当前角色的交接条件。执行者自己的检查不计入评估者独立采样。',
     '本轮有效独立检查的 accepted 与实时 freshness 分开：accepted=true 且 freshness=expired 表示检查时通过、实时证据待刷新，不是登录失败，不得仅因此返工/复制/重建。后续未知、掉线、账号变化或新的修复操作会使旧检查不能继续充当验收；以宿主当前逐项目结论为准。未覆盖节点单独报告，不将其算作其他浏览器未登录。',
-    card.role === 'executor'
+    card.role === 'proxy'
+      ? '你只处理 task_patrol_status.proxy.plan 冻结的机器与动作；不操作浏览器。健康节点只验收复用，repair 受线路及累计预算约束；逐一拿到 proxy_status 的终态才 task_complete。确定失败如实交接，让其他已通过目标继续；宿主仍会禁止未通过目标登录写入。运行中或不确定不能冒充失败或成功交卷。'
+      : card.role === 'executor'
       ? '你只完成本轮冻结 items 的动作，取得后台操作终态后立即 task_complete({summary:"真实结果及下游待验项"}) 交给评估者。不得 task_wait 等待下游采样，也不得为填满独立采样重复 provision。'
       : card.role === 'reviewer'
         ? '只有你负责分时独立复验并可 task_wait。新鲜探针才算新采样；缓存/重复回执不算。优先检查本轮修复目标，等待 observation.nextCheckAt，修复后仍须完整观察窗口；健康目标取得本轮独立检查后不因其回执在交接中到期而重做检查或20分钟观察。明确仍未登录/挑战时交接返工结论，不空等凑稳定样本。得到通过或返工结论后 task_complete 交给规划者。'
         : '先通过 task_notify 留下通知回执；根据真实证据 task_plan_round 或 task_finalize。不要 task_wait 等待尚未执行的下游；通知失败只处理通知，不能重跑已完成浏览器动作。')
+  if (task.design?.proxy) lines.push('', '[PROXY BEFORE LOGIN]',
+    `批准线路 ${task.design.proxy.lineId}；代理处理由独立角色 ${task.design.proxy.agentId} 执行。每轮 task_plan_round 同时提供 proxyItems:[{ip,action:verify|repair,reason}]，覆盖 items 中的机器；只读与修复分开，不固化本轮 IP 到工作流模板。`,
+    'proxy_verify/repair 使用16至96字符 requestId，同会话同请求重复时保持原编号；proxy_status 使用返回 operationId。结果unknown只查原操作，不换编号重复修复。',
+    '网络通过后仍需重新判断登录；unknown 先验证，不作为复制依据。登录复制/续接必须有15分钟内真实代理成功回执，过期用只读 proxy_verify 刷新，不因此 repair。',
+    '独立评估者逐台执行只读 proxy_verify + proxy_status，再做原登录稳定性验收；规划者以 task_patrol_status.proxy 和浏览器证据共同收口。独立历史验收不因后续等待过期；新的异常或修复使其失效，新写入仍需新鲜检查。原20分钟及采样数、通知范围不变。')
   if (task.graphMode === 'dynamic-rounds' && card.role === 'planner') {
     lines.push('', '[DYNAMIC DAG CONTRACT]',
       card.round === 1

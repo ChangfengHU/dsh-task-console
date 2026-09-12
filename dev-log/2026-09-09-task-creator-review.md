@@ -1084,3 +1084,16 @@ An unobserved target is no longer classified as a concrete early-handoff repair
 need.248 full tests and build pass again. This follow-up build is not yet loaded by
 the active host; wait for a genuinely idle/durable-wait boundary before restarting.
 No Task replacement, deleted history, changed role grants or enabled schedule.
+
+Second planner used its own real verify/status to refresh84/b1 signed_out, as
+intended, but proposed one browser repair and six proxy nodes. The exact same-
+round scope guard correctly rejected extra proxy nodes with an opaque error;
+the Agent incorrectly inferred exhausted attempt budget and blocked. No copy ran.
+Added a precise outside-round-browser-items error and matching role instruction:
+proxy IPs exactly equal distinct browser-item IPs; healthy nodes retain prior
+independent acceptance. Regression asserts this is not an attempt-budget error.
+31 focused tests and build pass; all248 passed before this final error-only slice.
+Verified zero native Sessions/Runs/browser/proxy operations, loaded the follow-up
+build, and unblocked the SAME p2 card through the public Console RPC. All prior
+Run evidence, notification jobs and samples are retained. This is a visible
+developer-assisted continuation, not a claim of unattended end-to-end acceptance.

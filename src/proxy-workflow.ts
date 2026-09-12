@@ -40,6 +40,7 @@ export class ProxyWorkflow {
     if(input.card.role!=='planner'||!Array.isArray(candidate)||!candidate.length||candidate.length>128)throw Error('proxy-items-required')
     const nodes=new Set(browsers.map(row=>row.ip)),seen=new Set<string>()
     const items=candidate.map(row=>{
+      if(row?.ip&&!nodes.has(row.ip))throw Error('proxy-node-outside-round-browser-items: proxyItems must contain exactly the distinct IPs in this round items, not all inventory nodes; this is not an attempt-budget error')
       if(!row||Object.keys(row).some(k=>!['ip','action','reason'].includes(k))||!nodes.has(row.ip)||seen.has(row.ip)||!['verify','repair'].includes(row.action)||typeof row.reason!=='string'||!row.reason.trim()||row.reason.length>1000)throw Error('proxy-round-item-invalid')
       seen.add(row.ip);return {ip:row.ip,action:row.action,reason:row.reason.trim()}
     })

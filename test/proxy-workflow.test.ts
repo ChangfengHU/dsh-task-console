@@ -33,7 +33,8 @@ test('reviewed proxy participant is explicit; unsupported fields and missing sco
 })
 test('proxy round and DAG commit atomically with proxy before real gate; legacy graph is unchanged',async t=>{
   const {store,input,workflow}=await setup(t)
-  assert.throws(()=>workflow.plan(input,[{ip}],[{ip:'198.51.100.11',action:'repair',reason:'fixture'}]),/invalid/)
+  assert.throws(()=>workflow.plan(input,[{ip}],[{ip:'198.51.100.11',action:'repair',reason:'fixture'}]),/outside-round-browser-items/)
+  assert.throws(()=>workflow.plan(input,[{ip}],[{ip,action:'verify',reason:'fixture'},{ip:'198.51.100.11',action:'verify',reason:'not in this round'}]),/not an attempt-budget error/)
   const plan=workflow.plan(input,[{ip}],[{ip,action:'repair',reason:'fixture approved source'}])!
   await assert.rejects(store.expandRound(input.task,input.batch,input.card,'fixture',()=>{plan.commit();throw Error('injected')}),/injected/)
   assert.equal(store.kernel.getTask('fixture-batch#x1'),undefined)

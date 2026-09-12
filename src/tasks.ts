@@ -552,6 +552,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
         : '先通过 task_notify 留下通知回执；根据真实证据 task_plan_round 或 task_finalize。不要 task_wait 等待尚未执行的下游；通知失败只处理通知，不能重跑已完成浏览器动作。')
   if (task.design?.proxy) lines.push('', '[PROXY BEFORE LOGIN]',
     `批准线路 ${task.design.proxy.lineId}；代理处理由独立角色 ${task.design.proxy.agentId} 执行。每轮 task_plan_round 同时提供 proxyItems:[{ip,action:verify|repair,reason}]，覆盖 items 中的机器；只读与修复分开，不固化本轮 IP 到工作流模板。`,
+    'proxyItems 的 IP 集合必须恰好等于本轮浏览器 items 的去重 IP：每台一次，不多不少。若只修复一个目标，就只冻结它所在机器的代理动作，不把其余健康 inventory 节点加进去；既有独立验收证据保留。参数/范围拒绝不是修复次数耗尽，纠正清单后重提同一轮，不因此 task_block。',
     'proxy_verify/repair 使用16至96字符 requestId，同会话同请求重复时保持原编号；proxy_status 使用返回 operationId。结果unknown只查原操作，不换编号重复修复。',
     '使用代码批量调用 MCP 时先解析返回包装：value = reply.structuredContent ?? (reply.content ? JSON.parse(reply.content.find(x => x.type === "text").text) : typeof reply === "string" ? JSON.parse(reply) : reply)。检查 isError/ok 和非空 value.operationId，再显式传给 proxy_status({operationId:value.operationId,after:0})。缺字段或明确参数错误立即停止该循环并纠正，不把工具错误当成节点故障，不重复发起已存在操作。',
     '网络通过后仍需重新判断登录；unknown 先验证，不作为复制依据。登录复制/续接必须有15分钟内真实代理成功回执，过期用只读 proxy_verify 刷新，不因此 repair。',

@@ -1097,3 +1097,20 @@ Verified zero native Sessions/Runs/browser/proxy operations, loaded the follow-u
 build, and unblocked the SAME p2 card through the public Console RPC. All prior
 Run evidence, notification jobs and samples are retained. This is a visible
 developer-assisted continuation, not a claim of unattended end-to-end acceptance.
+
+The resumed p2 froze exactly84/b1 provision and its single proxy node. Browser-
+manager called browser_login_candidates then browser_login_provision; native
+operation94efdba302e081d70b678431cacd7ef4 completed09:47:01 UTC with verified login
+and matching selected source. No other browser write occurred in this Batch.
+Findings/rework notifications were sent. Reviewer retained earlier valid samples
+for187/b2 and188/b2 and began84/b1's independent window.
+
+Live durable wakes exposed a further real clock bug: nextCheckAt used max(now+60s,
+sampleDue), so polling an overdue sample moved the due time into the future. The
+Agent correctly obeyed that moving timestamp but never sampled. Anchored due times
+to the first real sample and added checkDue; status/wake cannot advance a deadline
+without a new independent sample. Added delayed-wake regression (including expired
+receipt retention),249 full tests/build pass. Idle guard first refused restart while
+a native Session was ending, then succeeded at a true idle boundary, preserving the
+original pending wake1789206980000 and all existing evidence. Stable acceptance and
+schedule activation remain pending, not waived by any of these software fixes.

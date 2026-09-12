@@ -122,7 +122,9 @@ export class BrowserPatrolWorkflow {
       const accepted = node.readAuthorized === true && node.reachable === true && !!last && stable
       const reference = last ?? proof
       const freshness = !reference || !Number.isFinite(Date.parse(reference.expires_at)) ? 'unknown' : Date.parse(reference.expires_at) > now && now - Date.parse(reference.checked_at) <= 15 * 60_000 ? 'fresh' : 'expired'
-      const nextCheckAt = needsStability && first && !stable ? new Date(Math.max(now + 60_000, Date.parse(first.checked_at) + cfg.observationMinutes * 60_000 * Math.min(relevant.length, cfg.minSamples - 1) / (cfg.minSamples - 1))).toISOString() : null
+      // A due sample stays due after a delayed wake/status poll; moving it relative
+      // to "now" would make every resumed reviewer postpone forever.
+      const nextCheckAt = needsStability && first && !stable ? new Date(Date.parse(first.checked_at) + cfg.observationMinutes * 60_000 * Math.min(relevant.length, cfg.minSamples - 1) / (cfg.minSamples - 1)).toISOString() : null
       items.push({ ip: node.ip, instance: browser.instance, state: proof?.state ?? 'unknown', fingerprint: proof?.fingerprint ?? null,
         checkedAt: proof?.checked_at ?? null, operationId: proof?.operation_id ?? null, accepted: !!accepted,
         freshness, independentCheckedAt: last?.checked_at ?? null, independentExpiresAt: last?.expires_at ?? null,
@@ -131,7 +133,7 @@ export class BrowserPatrolWorkflow {
         verificationFailure: failure && !last ? failure : null,
         readAuthorized: node.readAuthorized, loginAuthorized: browser.loginAuthorized, attempts: issue?.attempts ?? changedThisBatch,
         independentlyObserved: samples.length,
-        observation: needsStability ? { samples: relevant.length, requiredSamples: cfg.minSamples, minutes: cfg.observationMinutes, passed: stable, nextCheckAt } : null,
+        observation: needsStability ? { samples: relevant.length, requiredSamples: cfg.minSamples, minutes: cfg.observationMinutes, passed: stable, nextCheckAt, checkDue: !stable && (!nextCheckAt || Date.parse(nextCheckAt) <= now) } : null,
         reason: !node.readAuthorized ? 'read-not-authorized' : !node.reachable ? 'unreachable' : failure && (!proof || Date.parse(failure.at) >= Date.parse(proof.checked_at)) ? 'verification-operation-incomplete' : proof?.state === 'signed_out' ? 'signed-out' : proof && proof.state !== 'verified' ? 'verification-unknown' : !last ? samples.length ? 'independent-recheck-required' : 'missing-independent-verification' : !stable ? 'observation-window-pending-or-failed' : 'independent-verification-passed' })
     }
     const uncovered = nodes.filter((n: any) => n.reachable !== true && !n.browsers.length).map((n: any) => ({ nodeId: n.nodeId, reason: 'unreachable-no-browser-observation' }))

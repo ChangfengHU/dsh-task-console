@@ -290,6 +290,27 @@ test('a reviewer waits for a healthy repaired target even in an early round with
   assert.doesNotThrow(()=>patrol.complete(reviewer)) // a real logout is not a pending success window
 })
 
+test('a delayed wake cannot move an overdue independent sample into the future',async t=>{
+  const {input,patrol,store}=await setup(t), first=Date.now()-30*60_000
+  store.kernel.db.prepare("INSERT INTO dsh_browser_issues(spec_id,target_key,status,attempts,opened_at) VALUES ('fixture','192.0.2.10:1','open',1,?)").run(new Date(first-60_000).toISOString())
+  const reviewer={...input,card:{...input.card,role:'reviewer'}}
+  assert.equal(patrol.status(reviewer,first).items[0].observation.checkDue,true)
+  patrol.capture(reviewer,proof(reviewer,first))
+  const due=first+20*60_000/3
+  assert.equal(patrol.status(reviewer,due-1).items[0].observation.checkDue,false)
+  for(const now of [due,due+60_000,due+10*60_000]){
+    const observation=patrol.status(reviewer,now).items[0].observation
+    assert.equal(observation.nextCheckAt,new Date(due).toISOString())
+    assert.equal(observation.checkDue,true)
+    assert.equal(observation.samples,1) // waiting and polling never manufacture evidence
+  }
+  patrol.capture(reviewer,proof(reviewer,due+60_000,'verified',20))
+  const after=patrol.status(reviewer,due+60_000).items[0].observation
+  assert.equal(after.samples,2)
+  assert.equal(after.nextCheckAt,new Date(first+2*20*60_000/3).toISOString())
+  assert.equal(after.checkDue,false)
+})
+
 test('legacy report presentation separates expiry from logout without rewriting its decision',()=>{
   const legacy={state:'verified',accepted:false,reason:'not-currently-verified',checkedAt:'2026-09-10T08:51:51Z'}
   const before=JSON.stringify(legacy), view=patrolItemView(legacy)

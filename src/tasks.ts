@@ -541,6 +541,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (card.reviewNote?.trim()) lines.push('', '[REVIEW CHANGES]', card.reviewNote.trim())
   if (task.design?.evidenceContract === 'browser-patrol-v2') lines.push('', '[PATROL ROLE HANDOFF]',
     '每个浏览器操作都要用其真实 id 显式调用 browser_status({ip,operationId:id}) 取得宿主认可的终态回执，包括幂等发起时已返回 complete 的操作；只看启动响应或自己汇总不进入独立证据。重复查询同一回执不是新采样，分时采样必须发起新的只读验证。',
+    '评估者按固定 observation.nextCheckAt 采样：checkDue=true 或时间已到/已过时，立即发起新的只读 verify 并查询终态，不再 task_wait 延后；尚未到期才持久等待。没有首个样本时先验证，不等待一个不存在的采样时间。',
     'task_patrol_status.ready 表示整个 Task 的独立验收，不是当前角色的交接条件。执行者自己的检查不计入评估者独立采样。',
     '本轮有效独立检查的 accepted 与实时 freshness 分开：accepted=true 且 freshness=expired 表示检查时通过、实时证据待刷新，不是登录失败，不得仅因此返工/复制/重建。后续未知、掉线、账号变化或新的修复操作会使旧检查不能继续充当验收；以宿主当前逐项目结论为准。未覆盖节点单独报告，不将其算作其他浏览器未登录。',
     card.role === 'proxy'

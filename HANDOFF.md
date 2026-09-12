@@ -293,6 +293,23 @@ and destructive uninstall/reinstall require their own evidence.
 
 ## Durable scheduled browser patrol (0.29)
 
+Opt-in reviewed patrol extensions (0.30.10): `browserPatrol.excludedNodeIds`
+contains exact user-approved node IDs. Inventory remains intact and replay reports
+exclusions with their observed reachability; excluded nodes cannot enter round actions
+or proxy acceptance. Never hardcode an IP or silently exclude an unauthorized node.
+`actions: [...,"recover"]` permits only a fresh native `cdp-unavailable` observation
+to produce a frozen recovery action. The Browser MCP additionally intersects its exact
+host `recover` instance grant, re-verifies before writing, and preserves profile/other
+instances. This is not retire/purge/reinstall authority. Its mutation counts against
+the same persistent issue budget and requires the unchanged independent stability window.
+`scheduleActivation: "completed-patrol"` separates operational trial acceptance from
+fleet health: an explicitly unresolved manual Batch may activate only when every
+canonical role is done, the native final patrol snapshot permits unresolved closure,
+the reviewed definition/roster still match, and all notification receipts are sent.
+Crashed/blocked/incomplete roles, missing evidence and unknown delivery still fail.
+Absent this opt-in, the original all-passed activation rule below remains unchanged.
+No existing plan/history/schedule is changed by upgrading the plugin.
+
 Keep one reviewed Task and one Batch per cron/manual occurrence. `dsh_schedule_state`
 stores the next due instant and IANA time zone; `dsh_schedule_fires` records durable
 claims, skipped overlaps, coalesced downtime and bounded dispatch failures. Batch

@@ -44,6 +44,7 @@ export class TaskCreator {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
       revisions: { decision: 'revise', contract: '同一已暂停的 cron Task 可用 taskId、reason、完整 design 及要调整的 title/brief/participants 生成新待审查版本，不创建另一 Task。不能更改时间表、移除证据合同、缩短独立验收或改变通知范围。未结束执行或缺少历史冻结定义时拒绝更新；审查会再次核验原定义与全部角色指纹。批准只更新未来定义，定时仍关闭，不派发 Batch。新增编排能力仍须实际支持，不能仅在自然语言中承诺。' },
       capabilityLimits: { browserPatrolV2: '固定规划者、browser-manager、独立评估者及可选通知员。可选 design.proxy={agentId:真实独立代理角色,lineId:批准线路,maxAttempts:1至3}；每轮规划者以 proxyItems:[{ip,action:verify|repair,reason}] 与浏览器items同时冻结本轮动作，生成代理处理→Gate→浏览器→独立评估→规划者。代理全部确定终态后交接；宿主逐机器禁止未通过目标登录写入，其他已通过目标继续。登录复制/续接需15分钟内真实网络证据，最终需评估者自己只读验收；独立历史验收不因后续等待过期，新的异常或修复仍使它失效。互斥限于本MCP操作及本Task串行支线，不能承诺其他工具或直接SSH受约束；角色仍须持有相应权限。',
+        browserRecovery: '新增受限能力：browserPatrol.actions 可显式加入 recover，执行者工具 browser_recover(ip,instance,sessionId,requestId)；需要本轮真实 cdp-unavailable 事件、冻结 recover 动作和精确宿主 recover 权限。仅恢复现有实例，不删除重建、不复制、不重启同机其他浏览器；恢复后重新 verify，必要时下一轮 provision，再由评估者做原20分钟4样本。未知不是一律重启。browserPatrol.excludedNodeIds 可存用户明确排除的节点ID；仍保留观测并展示排除，不伪装健康。browserPatrol.scheduleActivation=completed-patrol 可独立审查允许完整巡查含未解决项后启用：全部角色done、原生可收口证据、全部通知sent；协议失败、缺证据或通知未知仍拒绝。业务未通过仍是failed，不改历史。',
         tools: 'Creator持有的工具不会自动授予规划者或执行者。每条角色动作必须核对该角色名册；不能让未持有task_create_status的角色调用它，也不能把提示词约定称为宿主强制闸门。',
         reusableDefinition: '可复用Task只存目标和方法。本次IP、关联Task/Batch及当前状态放在执行输入，不得固化进长期brief/design，也不能把历史受阻原因当作本轮根因。' },
       scheduling: { trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' }, approval: '批准后创建暂停的时间表；先手动执行，通过业务和通知验收后才能启用定时。每次复用同一Task、新增Batch。', overlap: '上一轮未结束时跳过并留记录', missed: '重启后漏跑合并为最近一次', waiting: 'task_wait(until,reason) 持久化等待，同一Batch/卡新Run继续；等待不消耗返工轮次，但受总时长限制。', permissions: '定时不增加权限；当前角色配置变化会停止派发并要求重新审查。' },
@@ -97,13 +98,25 @@ export class TaskCreator {
     const batches = [...this.runner.store.s.batches.values()].filter(b => b.taskId === task.id)
     if (batches.some(b => !b.settled && !b.archivedAt)) throw new Error('首次手动执行尚未结束，不能启用定时')
     const manual = batches.filter(b => b.by === 'manual').sort((a,b) => b.firedAt.localeCompare(a.firedAt))[0]
-    if (!manual || manual.settled?.outcome !== 'done' || !manual.turn?.workflow || digest(manual.turn.workflow.definition) !== digest(workflowDefinition(task)))
+    const completedPatrol = manual && task.design?.evidenceContract === 'browser-patrol-v2' && task.design.browserPatrol?.scheduleActivation === 'completed-patrol' && manual.settled?.outcome === 'failed' && this.completedPatrolTrial(manual.id)
+    if (!manual || (manual.settled?.outcome !== 'done' && !completedPatrol) || !manual.turn?.workflow || digest(manual.turn.workflow.definition) !== digest(workflowDefinition(task)))
       throw new Error('先对当前已审查计划手动执行并通过业务验收，再启用定时')
     if (task.design?.notifications) {
       const notices = this.plansDb().prepare('SELECT state FROM dsh_task_notifications WHERE batch_id=?').all(manual.id) as any[]
       if (notices.length < task.design.notifications.chatIds.length || notices.some(n => n.state !== 'sent'))
         throw new Error('首次执行的企微通知尚未全部确认送达，不能启用定时；仅处理通知，不重复浏览器修复')
     }
+  }
+
+  /** Operational readiness is separate from fleet health; never forgive a crashed role. */
+  private completedPatrolTrial(batchId: string) {
+    const db = this.plansDb()
+    const cards = db.prepare('SELECT status FROM tasks WHERE tenant=?').all(batchId) as any[]
+    if (!cards.length || cards.some(c => c.status !== 'done')) return false
+    const row = db.prepare("SELECT payload FROM task_events WHERE graph_id=? AND kind='patrol_snapshot' ORDER BY id DESC LIMIT 1").get(batchId) as any
+    if (!row) return false
+    const report = JSON.parse(row.payload)
+    return report.assessmentMode === 'point-in-time-v1' && report.canCloseUnresolved === true && report.ready === false && report.items?.length > 0
   }
 
   scheduleActivated(task: TaskSpec) {
@@ -270,7 +283,7 @@ export class TaskCreator {
           if (!['browser_fleet_inventory','browser_login_verify','browser_status'].every(t => tools.includes(t))) throw new Error(`角色 ${role.id} 缺少真实清单/登录验证/回执 MCP 能力`)
         }
         if (team[1].id !== 'browser-manager') throw new Error('当前巡查执行者必须是已受限的浏览器管理员')
-        for (const role of [team[0],team[2]]) if (Object.values(role.mcpTools).flat().some(t => /^browser_(create|retire|restore|purge|prepare|login_(copy|provision|resume|acceptance))$/.test(t))) throw new Error('规划者和独立评估者只允许浏览器只读能力')
+        for (const role of [team[0],team[2]]) if (Object.values(role.mcpTools).flat().some(t => /^browser_(create|retire|restore|recover|purge|prepare|login_(copy|provision|resume|acceptance))$/.test(t))) throw new Error('规划者和独立评估者只允许浏览器只读能力')
         if(task.design.proxy){
           const proxy=roster.find(r=>r.id===task.design!.proxy!.agentId)
           if(!proxy||team.some(r=>r.id===proxy.id)||proxy.id===task.design.notifications?.agentId)throw Error('代理执行者必须是名册内独立角色')

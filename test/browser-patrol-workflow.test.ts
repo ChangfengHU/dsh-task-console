@@ -71,6 +71,36 @@ test('an unreachable zero-observation node remains uncovered, not an empty succe
   assert.equal(patrol.status(input).ready,false)
   assert.equal(patrol.status(input).uncovered.length,1)
 })
+test('reviewed exclusions stay visible and cannot grant actions or make empty coverage pass',async t=>{
+  const {input,patrol,store}=await setup(t)
+  input.task.design=validateDesign({...design,browserPatrol:{...design.browserPatrol,excludedNodeIds:['unreachable']}})
+  const db=store.kernel.db,inventory=JSON.parse((db.prepare('SELECT inventory_json FROM dsh_patrol_inventory').get() as any).inventory_json)
+  inventory.nodes.push({nodeId:'unreachable',reachable:false,browsers:[]})
+  db.prepare('UPDATE dsh_patrol_inventory SET inventory_json=?').run(JSON.stringify(inventory))
+  const reviewer={...input,card:{...input.card,role:'reviewer'}}
+  patrol.capture(reviewer,proof(reviewer,Date.now()))
+  assert.equal(patrol.status(input).ready,true)
+  assert.equal(patrol.status(input).excluded[0].reachable,false)
+  assert.equal(patrol.status(input).uncovered.length,0)
+  input.task.design.browserPatrol.excludedNodeIds.push('fixture-node')
+  assert.equal(patrol.status(input).ready,false)
+  assert.throws(()=>patrol.plan(input,[{ip:'192.0.2.10',instance:1,action:'verify',reason:'excluded'}]),/真实可读清单/)
+})
+test('recover needs fresh native CDP failure, not generic unknown or a stale failure',async t=>{
+  const {input,patrol,store}=await setup(t)
+  input.task.design=validateDesign({...design,browserPatrol:{...design.browserPatrol,actions:['provision','resume','recover']}})
+  const row={ip:'192.0.2.10',instance:1,action:'recover',reason:'native failure'}
+  patrol.capture(input,proof(input,Date.now(),'unknown'))
+  assert.throws(()=>patrol.plan(input,[row]),/真实 CDP/)
+  const events=proof(input,Date.now(),'unknown',20)
+  const part=events[1].data.message!.content[0].content[0]
+  const value=JSON.parse(part.text);value.result.verification.loginVerification.reason='cdp-unavailable';part.text=JSON.stringify(value)
+  patrol.capture(input,events)
+  assert.equal(patrol.plan(input,[row])!.items[0].action,'recover')
+  patrol.capture(input,proof(input,Date.now()+1,'verified',30))
+  assert.throws(()=>patrol.plan(input,[row]),/真实 CDP/)
+  assert.equal((store.kernel.db.prepare("SELECT COUNT(*) n FROM task_events WHERE kind='patrol_service_unavailable'").get() as any).n,1)
+})
 test('expired independent checks retain their fact but an uncovered node still prevents full acceptance',async t=>{
   const {input,patrol,store}=await setup(t), now=Date.now()
   const inventory=JSON.parse((store.kernel.db.prepare('SELECT inventory_json FROM dsh_patrol_inventory').get() as any).inventory_json)

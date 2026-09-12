@@ -4,7 +4,7 @@ import { collectBrowserEvidence } from './browser-patrol-evidence.ts'
 import { patrolReportSummary } from './patrol-report.ts'
 import { ProxyWorkflow } from './proxy-workflow.ts'
 
-export interface PatrolRoundItem { ip: string; instance: number; action: 'verify' | 'provision' | 'resume'; reason: string }
+export interface PatrolRoundItem { ip: string; instance: number; action: 'verify' | 'provision' | 'resume' | 'recover'; reason: string }
 
 /** Business evidence/authorization adapter. It never operates a browser. */
 export class BrowserPatrolWorkflow {
@@ -34,6 +34,8 @@ export class BrowserPatrolWorkflow {
     for (const { key, row } of proof.verificationHistory) {
       if (!Number.isFinite(Date.parse(row.checkedAt)) || Date.parse(row.checkedAt) < Date.parse(input.batch.firedAt)) continue
       insert.run(input.batch.id, key, input.card.id, input.sessionId, input.card.role ?? '', row.checkedAt, row.expiresAt ?? null, row.gemini, row.account?.fingerprint ?? null, row.operationId ?? null, row.evidenceSeq ?? null)
+      if (row.reason === 'cdp-unavailable' && row.gemini === 'unknown' && !db.prepare("SELECT 1 FROM task_events WHERE task_id=? AND kind='patrol_service_unavailable' AND json_extract(payload,'$.operationId')=?").get(input.card.id,row.operationId))
+        this.store.kernel.recordEvent(input.card.id,'patrol_service_unavailable',{key,operationId:row.operationId,checkedAt:row.checkedAt,expiresAt:row.expiresAt,reason:row.reason})
     }
     for (const failure of proof.verificationFailures) {
       if (Date.parse(failure.at) < Date.parse(input.batch.firedAt)) continue
@@ -48,16 +50,21 @@ export class BrowserPatrolWorkflow {
     if (input.task.graphMode !== 'dynamic-rounds' || input.card.role !== 'planner') throw new Error('巡查v2必须使用动态规划/执行/评估')
     const inventory = this.inventory(input.batch.id)
     if (!inventory) throw new Error('先用真实 browser_fleet_inventory 建立本次目标清单')
-    if (!Array.isArray(candidate) || !candidate.length || candidate.length > 128) throw new Error('巡查每轮需要 items:[{ip,instance,action:verify|provision|resume,reason}]，不能只提交自然语言')
+    if (!Array.isArray(candidate) || !candidate.length || candidate.length > 128) throw new Error('巡查每轮需要 items:[{ip,instance,action:verify|provision|resume|recover,reason}]，不能只提交自然语言')
     const keys = new Set<string>(), items: PatrolRoundItem[] = []
     for (const row of candidate) {
       const key = `${row?.ip}:${row?.instance}`, node = inventory.nodes.find((n: any) => n.ip === row?.ip)
       const browser = node?.browsers.find((b: any) => b.instance === row?.instance)
-      if (keys.has(key) || !browser || !node.readAuthorized || !['verify', 'provision', 'resume'].includes(row.action) || typeof row.reason !== 'string' || !row.reason.trim() || row.reason.length > 1000) throw new Error('轮次目标/动作不在本次真实可读清单，或缺少决策理由')
+      if (keys.has(key) || !browser || !node.readAuthorized || input.task.design.browserPatrol?.excludedNodeIds?.includes(node.nodeId) || !['verify', 'provision', 'resume', 'recover'].includes(row.action) || typeof row.reason !== 'string' || !row.reason.trim() || row.reason.length > 1000) throw new Error('轮次目标/动作不在本次真实可读清单，或缺少决策理由')
       if (row.action !== 'verify' && (!browser.loginAuthorized || !input.task.design.browserPatrol!.actions.includes(row.action))) throw new Error('本计划没有该目标的登录修复授权')
       if (row.action !== 'verify') {
         const latest = db.prepare('SELECT state,checked_at,expires_at FROM dsh_patrol_observations WHERE batch_id=? AND target_key=? ORDER BY checked_at DESC LIMIT 1').get(input.batch.id, key) as any
         const unavailable = db.prepare("SELECT json_extract(payload,'$.at') at FROM task_events WHERE graph_id=? AND kind='patrol_verification_unavailable' AND json_extract(payload,'$.key')=? ORDER BY at DESC LIMIT 1").get(input.batch.id,key) as any
+        if (row.action === 'recover') {
+          const service = db.prepare("SELECT payload FROM task_events WHERE graph_id=? AND kind='patrol_service_unavailable' AND json_extract(payload,'$.key')=? ORDER BY id DESC LIMIT 1").get(input.batch.id,key) as any
+          const evidence = service && JSON.parse(service.payload)
+          if (latest?.state !== 'unknown' || evidence?.checkedAt !== latest.checked_at || !(Date.parse(evidence.expiresAt) > Date.now())) throw Error('恢复需当前真实 CDP 连接失败证据；普通未知或健康实例不能重启')
+        }
         if (row.action === 'provision' && (latest?.state !== 'signed_out' || Date.parse(latest.checked_at) > Date.now() || !(Date.parse(latest.expires_at) > Date.now()) || unavailable && Date.parse(unavailable.at) >= Date.parse(latest.checked_at))) throw new Error('复制前需要本次新鲜真实未登录证据；未知、过期或后续验证失败先复验')
         if (row.action === 'resume' && (latest?.state === 'verified' || !db.prepare('SELECT 1 FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id WHERE i.spec_id=? AND i.target_key=? AND i.status=\'open\'').get(input.task.id,key))) throw new Error('正常续接仅用于已有授权复制尚未通过的目标，不改动健康登录')
       }
@@ -82,7 +89,9 @@ export class BrowserPatrolWorkflow {
     const items: any[] = []
     const failures = (db.prepare("SELECT payload FROM task_events WHERE graph_id=? AND kind='patrol_verification_unavailable'").all(input.batch.id) as any[])
       .map(r => JSON.parse(r.payload)).filter(r => Date.parse(r.at) >= Date.parse(input.batch.firedAt) && Date.parse(r.at) <= now)
-    for (const node of inventory.nodes) for (const browser of node.browsers) {
+    const excluded = inventory.nodes.filter((n: any) => input.task.design?.browserPatrol?.excludedNodeIds?.includes(n.nodeId)).map((n: any) => ({ nodeId:n.nodeId, ip:n.ip, reachable:n.reachable, reason:'reviewed-scope-exclusion' }))
+    const nodes = inventory.nodes.filter((n: any) => !excluded.some((e: any) => e.nodeId === n.nodeId))
+    for (const node of nodes) for (const browser of node.browsers) {
       const key = `${node.ip}:${browser.instance}`
       const history = (db.prepare('SELECT * FROM dsh_patrol_observations WHERE batch_id=? AND target_key=? ORDER BY checked_at,card_id').all(input.batch.id, key) as any[])
         .filter(s => Date.parse(s.checked_at) >= Date.parse(input.batch.firedAt) && Date.parse(s.checked_at) <= now)
@@ -121,7 +130,7 @@ export class BrowserPatrolWorkflow {
         observation: needsStability ? { samples: relevant.length, requiredSamples: cfg.minSamples, minutes: cfg.observationMinutes, passed: stable, nextCheckAt } : null,
         reason: !node.readAuthorized ? 'read-not-authorized' : !node.reachable ? 'unreachable' : failure && (!proof || Date.parse(failure.at) >= Date.parse(proof.checked_at)) ? 'verification-operation-incomplete' : proof?.state === 'signed_out' ? 'signed-out' : proof && proof.state !== 'verified' ? 'verification-unknown' : !last ? samples.length ? 'independent-recheck-required' : 'missing-independent-verification' : !stable ? 'observation-window-pending-or-failed' : 'independent-verification-passed' })
     }
-    const uncovered = inventory.nodes.filter((n: any) => n.reachable !== true && !n.browsers.length).map((n: any) => ({ nodeId: n.nodeId, reason: 'unreachable-no-browser-observation' }))
+    const uncovered = nodes.filter((n: any) => n.reachable !== true && !n.browsers.length).map((n: any) => ({ nodeId: n.nodeId, reason: 'unreachable-no-browser-observation' }))
     const plan = db.prepare('SELECT target_key,action,reason FROM dsh_patrol_round_items WHERE batch_id=? AND round=?').all(input.batch.id, input.card.round ?? 0)
     const canCloseUnresolved = items.every(i => i.accepted || !i.readAuthorized || !inventory.nodes.find((n: any) => n.ip === i.ip)?.reachable || i.independentlyObserved > 0 && (
       (input.card.round ?? 0) > input.task.design!.failurePolicy.maxAttempts || i.attempts >= input.task.design!.failurePolicy.maxAttempts || i.state === 'unknown' && i.independentlyObserved >= 2
@@ -131,7 +140,7 @@ export class BrowserPatrolWorkflow {
     const report=patrolReportSummary(items,uncovered)
     return { assessmentMode: 'point-in-time-v1', assessedAt: new Date(now).toISOString(),
       ready: items.length > 0 && items.every(i => i.accepted) && uncovered.length === 0&&networkReady, canCloseUnresolved, plan,
-      items, uncovered, ...report,...(proxy?{proxy,summary:report.summary+` 代理独立验收 ${proxy.items.filter(row=>row.independent).length}/${proxy.items.length}。`}:{}) }
+      items, uncovered, excluded, ...report,...(proxy?{proxy,summary:report.summary+` 代理独立验收 ${proxy.items.filter(row=>row.independent).length}/${proxy.items.length}。`}:{}) }
   }
 
   complete(input: CompletionCheck) {

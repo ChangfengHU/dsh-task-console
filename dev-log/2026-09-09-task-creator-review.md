@@ -980,3 +980,43 @@ all test browser contexts closed and test-owned temporary directories cleaned by
 their existing teardown. Production policies/state/presets and tracked builds remain.
 This verifies84's repair through DSH Agents; it is not full fleet acceptance or
 automatic cron activation. Remaining187/206 coverage is separate unresolved work.
+
+## 2026-09-12 · 0.30.10 scoped recovery, reviewed exclusions and operational scheduling
+
+User explicitly excludes unreachable206 from this acceptance while retaining its
+real observation/history. Target writes must remain inside the original DSH Task;
+no developer SSH, deletion, rebuild or profile/token changes. Read-only diagnostic
+Session agent-browser-manager-mty0qfi0 established187/b2 active with HTTP CDP=true,
+but actual login-verifier CDP connection failed. This is not evidence of a stopped
+browser; the transport-level cause remains unproven until a fresh recovery trial.
+
+Added opt-in reviewed browserPatrol recover, excludedNodeIds and completed-patrol
+scheduleActivation fields. Native fresh cdp-unavailable is necessary to freeze
+recover; healthy/ordinary unknown/stale observations cannot authorize a restart.
+The separate browser MCP enforces exact host grants and preserves all profiles and
+other instances. Repair reservations still consume the existing persistent budget;
+20-minute/four-independent-sample acceptance is unchanged. Excluded observations
+remain visible, cannot become action targets, and an empty scope cannot pass.
+
+Operational schedule activation may accept a truthfully unresolved patrol only
+under the explicit reviewed policy: every role done, native canCloseUnresolved,
+matching frozen definition/roster and all notifications sent. Protocol failures,
+missing proof or uncertain notification still refuse activation. Historical failed
+Batches remain failed. Picker/list labels distinguish ended-but-failed from active.
+
+244 Node22 tests and build passed. Reused existing dependencies. Public browser
+test reached the new Batch in21.31s (cold HARNESS remains out of scope); desktop1440
+and mobile390 showed no script errors/overflow, honest206 exclusion and retained
+five failed histories with ended labels. An initial test used a nonexistent CSS
+selector and timed out; rerun waited for the real accessible execution-picker button.
+
+With all previous roles/operations idle, deployed0.30.10, added only recover:[2]
+to the187 host policy and browser_recover to the existing browser-manager grant.
+Creator reused agent-task-create-agent-mtwlf6hg and produced reviewed revision
+P-chat-b44a2477ac7d83039a88, fingerprint b94701adf382. Independently compared unchanged
+three business roles, auxiliary proxy/notification contracts and hourly trigger.
+Approved revision of T-chat-bbb714b2ba8439b69178; no new Task or removed history.
+Manual Batch b-chat-843489163446c3f00418 started06:59:31 UTC. Planner itself obtained
+native187/b2 cdp-unavailable at07:00:24 UTC and froze6 proxy checks/11 browser actions,
+only187/b2 recover. At this entry execution is ongoing, cron remains disabled and
+business/stability acceptance has NOT been claimed. See subsequent entry for outcome.

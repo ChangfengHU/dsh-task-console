@@ -1,7 +1,7 @@
 /** An explicit, reviewable Agent decision contract; not executable JavaScript. */
 export interface TaskDesign {
   evidenceContract?: 'browser-patrol-v1' | 'browser-patrol-v2'
-  browserPatrol?: { scope: 'fleet-existing-authorized'; actions: ('provision' | 'resume')[]; observationMinutes: number; minSamples: number }
+  browserPatrol?: { scope: 'fleet-existing-authorized'; actions: ('provision' | 'resume' | 'recover')[]; observationMinutes: number; minSamples: number; excludedNodeIds?: string[]; scheduleActivation?: 'completed-patrol' }
   notifications?: { channel: 'wecom'; chatIds: string[]; agentId?: string }
   proxy?: { agentId: string; lineId: string; maxAttempts: number }
   scope: string
@@ -43,10 +43,18 @@ export function validateDesign(value: unknown): TaskDesign {
   }
   if (d.evidenceContract === 'browser-patrol-v2') {
     const p = d.browserPatrol
-    if (!p || p.scope !== 'fleet-existing-authorized' || !Array.isArray(p.actions) || p.actions.some(a => !['provision', 'resume'].includes(a)) ||
+    if (!p || Object.keys(p).some(k => !['scope','actions','observationMinutes','minSamples','excludedNodeIds','scheduleActivation'].includes(k)) || p.scope !== 'fleet-existing-authorized' || !Array.isArray(p.actions) || p.actions.some(a => !['provision', 'resume', 'recover'].includes(a)) ||
         !Number.isInteger(p.observationMinutes) || p.observationMinutes < 20 || p.observationMinutes > 60 || !Number.isInteger(p.minSamples) || p.minSamples < 4 || p.minSamples > 12)
-      throw new Error('browser-patrol-v2 需要现存授权范围、provision/resume 动作、20至60分钟且至少4次独立采样；不授权删除重建')
+      throw new Error('browser-patrol-v2 需要现存授权范围、provision/resume/recover 动作、20至60分钟且至少4次独立采样；不授权删除重建')
     browserPatrol = { scope: p.scope, actions: [...new Set(p.actions)], observationMinutes: p.observationMinutes, minSamples: p.minSamples }
+    if (p.excludedNodeIds !== undefined) {
+      if (!Array.isArray(p.excludedNodeIds) || p.excludedNodeIds.length > 32 || p.excludedNodeIds.some(id => typeof id !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}$/.test(id))) throw Error('排除范围必须是明确的节点 ID 列表')
+      browserPatrol.excludedNodeIds = [...new Set(p.excludedNodeIds)]
+    }
+    if (p.scheduleActivation !== undefined) {
+      if (p.scheduleActivation !== 'completed-patrol') throw Error('未知定时启用验收策略')
+      browserPatrol.scheduleActivation = p.scheduleActivation
+    }
   }
   const branches = d.branches.map(b => {
     if (!/^[a-z][a-z0-9-]{0,47}$/.test(b?.id)) throw new Error('分支 id 需使用短英文编码')

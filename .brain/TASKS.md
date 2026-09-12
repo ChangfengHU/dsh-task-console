@@ -1,5 +1,7 @@
 # 后续优化
 
+- [ ] [TASK-PATROL-RECOVERY-015] 0.30.10：加入独立审查的recover、排除节点和completed-patrol定时启用策略；仅新鲜原生CDP失败允许冻结受限恢复，保留20分钟4独立样本/持久预算/通知送达，206真实不可达单独保留；执行UI区分已结束未通过与未结束。244测试/构建、公网1440/390px通过。原Creator修订P-chat-b44a2477ac7d83039a88已审查，仍复用原巡查Task，新Batch b-chat-843489163446c3f00418正在运行；宿主只增187/b2 recover权限，无开发者目标机器操作，定时仍关闭，不能称恢复或验收完成。见既有Creator dev-log末尾。
+
 - [ ] [TASK-PROXY-WORKFLOW-014] 0.30.9：代理MCP已接入原巡查Task；241测试/构建、公网桌面/390px验收通过，冷启动未优化。真实DSH Agent已修复84 line-100，五路径63.124.160.54；两浏览器由browser-manager各复制一次不同授权账号，独立4样本分别跨22m02s/21m46s通过，末次只读代理复验亦通过。原Task Batch b-chat-505cc3698915b4635bb1已收口：17卡完成、6通知sent，业务unresolved/failed（10/11浏览器通过，187/b2 cdp-unavailable、206未覆盖），不是执行协议失败。原Task与所有失败历史保留；两业务角色仅切至已验证Codex模型，其余配置哈希不变，经Creator新计划独立审查；定时仍关闭、无活跃操作。不宣称全机群已达标；187/206是剩余覆盖问题。完整回执、采样与浏览器证据见既有Creator dev-log末尾。
 
 - [ ] [TASK-PROXY-MCP-013] 0.30.8：已开发可独立启动的vyibc-proxy stdio MCP（inspect/verify/repair/status），SDK真实客户端握手/隔离调用、233全量测试及17远端模拟故障测试通过。复用Controller事务预检/替换/启用/回滚，受限恢复既有Controller；独立五路径出口证据、同机自修拦截、逐节点授权、幂等/持久锁/不确定结果保护、无凭据回显。回执查询失败不能解除旧操作锁，必须精确匹配终态回执。未写生产策略或MCP加载连接、未改Agent权限/Task历史/定时，未SSH目标机，不能称84已修复。待审查工具授权及Task执行支线/网络闸门接入；配置和限制见docs/proxy-mcp.md，证据见既有Creator dev-log最新段。

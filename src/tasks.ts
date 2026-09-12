@@ -554,6 +554,10 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
     'proxy_verify/repair 使用16至96字符 requestId，同会话同请求重复时保持原编号；proxy_status 使用返回 operationId。结果unknown只查原操作，不换编号重复修复。',
     '网络通过后仍需重新判断登录；unknown 先验证，不作为复制依据。登录复制/续接必须有15分钟内真实代理成功回执，过期用只读 proxy_verify 刷新，不因此 repair。',
     '独立评估者逐台执行只读 proxy_verify + proxy_status，再做原登录稳定性验收；规划者以 task_patrol_status.proxy 和浏览器证据共同收口。独立历史验收不因后续等待过期；新的异常或修复使其失效，新写入仍需新鲜检查。原20分钟及采样数、通知范围不变。')
+  if (task.design?.browserPatrol?.actions.includes('recover')) lines.push('', '[SCOPED BROWSER RECOVERY]',
+    '仅本轮真实 cdp-unavailable 且新鲜的验证回执允许规划 recover；普通 unknown/页面加载/账号挑战不允许重启。执行者调用 browser_recover(ip,instance,sessionId,requestId)，等待终态后 login_verify。工具只重启明确授权的故障实例，保留资料和其他进程；它不能删除重建或复制。恢复后未登录需要下一轮冻结 provision，不把 recover 当作登录授权。独立评估者对恢复目标执行原稳定窗口，不能只有一次成功。')
+  if (task.design?.browserPatrol?.excludedNodeIds?.length) lines.push('', '[REVIEWED SCOPE EXCLUSIONS]',
+    `排除节点 ${task.design.browserPatrol.excludedNodeIds.join(', ')}：不安排动作，不阻止本轮验收，但保留排除及真实观测记录。其余目标必须正常处理，不能自行增加排除。`)
   if (task.graphMode === 'dynamic-rounds' && card.role === 'planner') {
     lines.push('', '[DYNAMIC DAG CONTRACT]',
       card.round === 1

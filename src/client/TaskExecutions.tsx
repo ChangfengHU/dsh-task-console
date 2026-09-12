@@ -4,7 +4,7 @@ import { executionCode, executionTime } from '../execution-label.ts'
 import { go } from './Console.tsx'
 import type { TasksApi } from './TasksView.tsx'
 
-const STATUS: Record<string, string> = { done: '已完成', failed: '未通过', cancelled: '已取消', running: '执行中', blocked: '已阻塞', waiting: '等待复验', review: '待评审' }
+const STATUS: Record<string, string> = { done: '已结束 · 已通过', failed: '已结束 · 未通过', cancelled: '已取消', running: '执行中', blocked: '已阻塞', waiting: '等待复验', review: '待评审' }
 const BY: Record<string, string> = { manual: '手动', cron: '定时', retry: '重试' }
 
 export function TaskExecutions({ api, query }: { api: TasksApi; query: URLSearchParams }) {

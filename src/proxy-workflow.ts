@@ -74,7 +74,7 @@ export class ProxyWorkflow {
     if(!input.task.design?.proxy)return undefined
     const db=this.db(), planned=db.prepare('SELECT ip,action,reason FROM dsh_proxy_round_items WHERE batch_id=? AND round=? ORDER BY ip').all(input.batch.id,input.card.round??0)
     const inventory=db.prepare('SELECT inventory_json FROM dsh_patrol_inventory WHERE batch_id=?').get(input.batch.id) as any
-    const ips=inventory?JSON.parse(inventory.inventory_json).nodes.filter((n:any)=>n.readAuthorized&&n.browsers?.length).map((n:any)=>n.ip):[]
+    const ips=inventory?JSON.parse(inventory.inventory_json).nodes.filter((n:any)=>n.readAuthorized&&n.browsers?.length&&!input.task.design?.browserPatrol?.excludedNodeIds?.includes(n.nodeId)).map((n:any)=>n.ip):[]
     const operations=db.prepare('SELECT operation_id,ip,action,state,created_at,updated_at,session_id FROM dsh_proxy_calls WHERE batch_id=? ORDER BY created_at').all(input.batch.id)
     return {lineId:input.task.design.proxy.lineId,plan:planned,items:ips.map(ip=>{
       const proof=this.proof(input,ip),independent=this.proof(input,ip,Date.now(),true)
@@ -102,7 +102,7 @@ export class ProxyWorkflow {
     const policy=input.task.design!.proxy!,db=this.db(),now=new Date().toISOString()
     if(raw==='proxy_inspect') {
       const inventory=db.prepare("SELECT inventory_json FROM dsh_patrol_inventory WHERE batch_id=?").get(input.batch.id) as any
-      if(!inventory||!JSON.parse(inventory.inventory_json).nodes.some((n:any)=>n.ip===args.ip&&n.readAuthorized))throw Error('proxy-target-not-in-inventory')
+      if(!inventory||!JSON.parse(inventory.inventory_json).nodes.some((n:any)=>n.ip===args.ip&&n.readAuthorized&&!input.task.design?.browserPatrol?.excludedNodeIds?.includes(n.nodeId)))throw Error('proxy-target-not-in-inventory')
       return invoke(args)
     }
     if(raw==='proxy_status'){
@@ -114,7 +114,7 @@ export class ProxyWorkflow {
     const action=raw==='proxy_repair'?'repair':'verify',requestId=proxyRequestId(input.sessionId,args.requestId)
     const item=db.prepare('SELECT * FROM dsh_proxy_round_items WHERE batch_id=? AND round=? AND ip=?').get(input.batch.id,input.card.round??0,args.ip) as any
     const inventory=db.prepare("SELECT inventory_json FROM dsh_patrol_inventory WHERE batch_id=?").get(input.batch.id) as any
-    if(!inventory||!JSON.parse(inventory.inventory_json).nodes.some((n:any)=>n.ip===args.ip&&n.readAuthorized))throw Error('proxy-target-not-in-inventory')
+    if(!inventory||!JSON.parse(inventory.inventory_json).nodes.some((n:any)=>n.ip===args.ip&&n.readAuthorized&&!input.task.design?.browserPatrol?.excludedNodeIds?.includes(n.nodeId)))throw Error('proxy-target-not-in-inventory')
     if(action==='repair'&&(input.card.role!=='proxy'||input.profileId!==policy.agentId||item?.action!=='repair'))throw Error('proxy-repair-not-in-frozen-plan')
     if(input.card.role==='proxy'&&!item)throw Error('proxy-target-not-in-frozen-plan')
     let row=db.prepare('SELECT * FROM dsh_proxy_calls WHERE request_id=?').get(requestId) as any

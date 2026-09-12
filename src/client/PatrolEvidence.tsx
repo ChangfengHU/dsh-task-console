@@ -57,6 +57,7 @@ export function PatrolEvidence({ events }: { events: GraphEventRow[] }) {
       {attentionOnly && !attention.length ? <p className="dtc-muted">这个回放位置没有待关注的浏览器。</p> : null}
     </div>
     {uncovered.map((r: any) => <p className="dtc-patrol-note dtc-warn" key={r.nodeId}>{r.nodeId}：节点未覆盖，无法确认其浏览器情况；单独阻止全量验收，不等于其他浏览器未登录。</p>)}
+    {(report.excluded ?? []).map((r: any) => <p className="dtc-patrol-note" key={`excluded-${r.nodeId}`}>{r.nodeId}：按已审查范围排除，不阻止本轮验收；观测状态仍为{r.reachable ? '可达' : '不可达'}，不是验收通过。</p>)}
     <details className="dtc-patrol-original"><summary>原始快照结论（保留历史）</summary><p>{report.summary || report.reason}</p></details>
     {queued.map(e=><p key={e.id}>✉ {String(e.payload.stage)} · 通知员待发送 · {e.task_id}</p>)}
     {events.filter(e=>e.kind==='notification_blocked').map(e=><p key={e.id}>✉ 通知未完成：{String(e.payload.reason)}</p>)}

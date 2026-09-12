@@ -4,7 +4,7 @@ import type { Batch } from '../wire.ts'
 import { executionCode, executionLabel, executionTime } from '../execution-label.ts'
 import { go } from './Console.tsx'
 
-const outcome = (batch: Batch) => batch.settled ? ({ done: '已完成', failed: '未通过', cancelled: '已取消' }[batch.settled.outcome] ?? batch.settled.outcome) : '未结束'
+const outcome = (batch: Batch) => batch.settled ? ({ done: '已结束 · 已通过', failed: '已结束 · 未通过', cancelled: '已取消' }[batch.settled.outcome] ?? batch.settled.outcome) : '未结束'
 
 export function ExecutionPicker({ batches, value, onChange, onArchive }: { batches: Batch[]; value: string; onChange: (id: string) => void; onArchive?: (id: string, archived: boolean) => Promise<void> }) {
   const [showArchived, setShowArchived] = useState(false)

@@ -287,6 +287,25 @@ test('Creator recurring approval only schedules; frozen turn is checked again at
   } finally { runner.stop(); store.kernel.db.close(); await (await import('node:fs/promises')).rm(root, { recursive: true, force: true }) }
 })
 
+test('operational patrol trial requires native unresolved evidence and every role ended normally',async()=>{
+  const {runner,store,root}=await setup()
+  try {
+    const creator=new TaskCreator(runner,async()=>[]),db=store.kernel.db
+    assert.equal((creator as any).completedPatrolTrial('fixture'),false)
+    db.prepare("INSERT INTO tasks(id,title,status,priority,created_by,created_at,tenant) VALUES ('fixture#p','Fixture','done',0,'test',0,'fixture')").run()
+    assert.equal((creator as any).completedPatrolTrial('fixture'),false)
+    store.kernel.recordEvent('fixture#p','patrol_snapshot',{assessmentMode:'point-in-time-v1',ready:false,canCloseUnresolved:true,items:[{accepted:false}]})
+    assert.equal((creator as any).completedPatrolTrial('fixture'),true)
+    for(const status of ['running','blocked','triage','ready']){
+      db.prepare('UPDATE tasks SET status=?').run(status)
+      assert.equal((creator as any).completedPatrolTrial('fixture'),false)
+    }
+    db.prepare("UPDATE tasks SET status='done'").run()
+    store.kernel.recordEvent('fixture#p','patrol_snapshot',{assessmentMode:'point-in-time-v1',ready:false,canCloseUnresolved:false,items:[{accepted:false}]})
+    assert.equal((creator as any).completedPatrolTrial('fixture'),false)
+  }finally{runner.stop();store.kernel.db.close();await(await import('node:fs/promises')).rm(root,{recursive:true,force:true})}
+})
+
 test('paused cron remains manually reusable through @ without changing schedule or bypassing review', async () => {
   const {host,runner,store,root}=await setup()
   let profileHash='v1'

@@ -1020,3 +1020,16 @@ Manual Batch b-chat-843489163446c3f00418 started06:59:31 UTC. Planner itself obt
 native187/b2 cdp-unavailable at07:00:24 UTC and froze6 proxy checks/11 browser actions,
 only187/b2 recover. At this entry execution is ongoing, cron remains disabled and
 business/stability acceptance has NOT been claimed. See subsequent entry for outcome.
+
+Trial follow-up: first reviewer independently accepted6/6 proxies and9/11 browsers;
+187/b2 and188/b2 were signed_out. Planner dynamically froze round2 provision for
+those two only.187/b2 copied successfully;188/b2 import was unconfirmed. New
+independent evidence also observed84/b1 signed_out; earlier healthy observations
+are not presented as current success. Fixed MCP failure diagnostics in owning repo.
+
+Reviewer round2 incorrectly waited for187 stability despite other clear rework
+items. Clarified role instructions: hand off concrete rework immediately; retain
+valid same-Batch independent samples across rounds, never waive final20-minute
+acceptance.61 focused runner/patrol tests and build passed. Deployed only during
+the durable wait with no running roles/Sessions/browser operations, preserving its
+due time and original execution. No target operation, new Task or history removal.

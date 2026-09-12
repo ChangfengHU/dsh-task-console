@@ -256,6 +256,8 @@ test('patrol role instructions distinguish freshness from acceptance and retain 
   const message=cardMessage({...input.task,title:'Fixture',brief:'Read-only fixture',participants:[{agentId:'reviewer'}]}, {...input.card,role:'reviewer',index:0}, 'batch',[])
   assert.match(message,/accepted=true 且 freshness=expired/)
   assert.match(message,/修复后仍须完整观察窗口/)
+  assert.match(message,/任一目标明确需要返工时，立即 task_complete/)
+  assert.match(message,/有效独立样本跨轮保留/)
   assert.doesNotMatch(message,/观察结束时刷新其他已过期目标/)
 })
 

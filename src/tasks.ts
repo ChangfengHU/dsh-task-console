@@ -547,7 +547,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
       : card.role === 'executor'
       ? '你只完成本轮冻结 items 的动作，取得后台操作终态后立即 task_complete({summary:"真实结果及下游待验项"}) 交给评估者。不得 task_wait 等待下游采样，也不得为填满独立采样重复 provision。'
       : card.role === 'reviewer'
-        ? '只有你负责分时独立复验并可 task_wait。新鲜探针才算新采样；缓存/重复回执不算。优先检查本轮修复目标，等待 observation.nextCheckAt，修复后仍须完整观察窗口；健康目标取得本轮独立检查后不因其回执在交接中到期而重做检查或20分钟观察。明确仍未登录/挑战时交接返工结论，不空等凑稳定样本。得到通过或返工结论后 task_complete 交给规划者。'
+        ? '只有你负责分时独立复验并可 task_wait。新鲜探针才算新采样；缓存/重复回执不算。优先检查本轮修复目标，等待 observation.nextCheckAt，修复后仍须完整观察窗口；健康目标取得本轮独立检查后不因其回执在交接中到期而重做检查或20分钟观察。任一目标明确需要返工时，立即 task_complete 交接失败结论，不为其他目标尚未结束的稳定窗口继续 task_wait；同一 Batch 的有效独立样本跨轮保留，只有实际修复/后续不良证据会使对应目标重新计时，不降低最终20分钟验收。明确仍未登录/挑战时交接返工结论，不空等凑稳定样本。得到通过或返工结论后 task_complete 交给规划者。'
         : '先通过 task_notify 留下通知回执；根据真实证据 task_plan_round 或 task_finalize。不要 task_wait 等待尚未执行的下游；通知失败只处理通知，不能重跑已完成浏览器动作。')
   if (task.design?.proxy) lines.push('', '[PROXY BEFORE LOGIN]',
     `批准线路 ${task.design.proxy.lineId}；代理处理由独立角色 ${task.design.proxy.agentId} 执行。每轮 task_plan_round 同时提供 proxyItems:[{ip,action:verify|repair,reason}]，覆盖 items 中的机器；只读与修复分开，不固化本轮 IP 到工作流模板。`,

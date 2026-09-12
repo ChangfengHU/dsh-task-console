@@ -540,6 +540,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   for (const u of upstream) lines.push('', `[UPSTREAM HANDOFF from ${u.agentName}]`, u.summary.trim() || '(上游没有留下交接单)')
   if (card.reviewNote?.trim()) lines.push('', '[REVIEW CHANGES]', card.reviewNote.trim())
   if (task.design?.evidenceContract === 'browser-patrol-v2') lines.push('', '[PATROL ROLE HANDOFF]',
+    '每个浏览器操作都要用其真实 id 显式调用 browser_status({ip,operationId:id}) 取得宿主认可的终态回执，包括幂等发起时已返回 complete 的操作；只看启动响应或自己汇总不进入独立证据。重复查询同一回执不是新采样，分时采样必须发起新的只读验证。',
     'task_patrol_status.ready 表示整个 Task 的独立验收，不是当前角色的交接条件。执行者自己的检查不计入评估者独立采样。',
     '本轮有效独立检查的 accepted 与实时 freshness 分开：accepted=true 且 freshness=expired 表示检查时通过、实时证据待刷新，不是登录失败，不得仅因此返工/复制/重建。后续未知、掉线、账号变化或新的修复操作会使旧检查不能继续充当验收；以宿主当前逐项目结论为准。未覆盖节点单独报告，不将其算作其他浏览器未登录。',
     card.role === 'proxy'
@@ -552,6 +553,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (task.design?.proxy) lines.push('', '[PROXY BEFORE LOGIN]',
     `批准线路 ${task.design.proxy.lineId}；代理处理由独立角色 ${task.design.proxy.agentId} 执行。每轮 task_plan_round 同时提供 proxyItems:[{ip,action:verify|repair,reason}]，覆盖 items 中的机器；只读与修复分开，不固化本轮 IP 到工作流模板。`,
     'proxy_verify/repair 使用16至96字符 requestId，同会话同请求重复时保持原编号；proxy_status 使用返回 operationId。结果unknown只查原操作，不换编号重复修复。',
+    '使用代码批量调用 MCP 时先解析返回包装：value = reply.structuredContent ?? (reply.content ? JSON.parse(reply.content.find(x => x.type === "text").text) : typeof reply === "string" ? JSON.parse(reply) : reply)。检查 isError/ok 和非空 value.operationId，再显式传给 proxy_status({operationId:value.operationId,after:0})。缺字段或明确参数错误立即停止该循环并纠正，不把工具错误当成节点故障，不重复发起已存在操作。',
     '网络通过后仍需重新判断登录；unknown 先验证，不作为复制依据。登录复制/续接必须有15分钟内真实代理成功回执，过期用只读 proxy_verify 刷新，不因此 repair。',
     '独立评估者逐台执行只读 proxy_verify + proxy_status，再做原登录稳定性验收；规划者以 task_patrol_status.proxy 和浏览器证据共同收口。独立历史验收不因后续等待过期；新的异常或修复使其失效，新写入仍需新鲜检查。原20分钟及采样数、通知范围不变。')
   if (task.design?.browserPatrol?.actions.includes('recover')) lines.push('', '[SCOPED BROWSER RECOVERY]',

@@ -71,7 +71,7 @@ export class BrowserPatrolWorkflow {
       keys.add(key); items.push({ ip: row.ip, instance: row.instance, action: row.action, reason: row.reason.trim() })
     }
     if (input.card.round! > 1 && items.every(row => row.action === 'verify') && input.task.design.browserPatrol!.actions.includes('provision')) {
-      const repairable = this.status(input).items.filter(row => !row.accepted && row.state === 'signed_out' && row.loginAuthorized && row.attempts < input.task.design!.failurePolicy.maxAttempts)
+      const repairable = this.status(input).items.filter(row => !row.accepted && row.readAuthorized && inventory.nodes.some((n: any) => n.ip === row.ip && n.reachable) && row.state === 'signed_out' && row.loginAuthorized && row.attempts < input.task.design!.failurePolicy.maxAttempts)
       if (repairable.length) throw new Error('仍有已知未登录且有剩余修复预算的目标，不能把仅刷新回执冻结为整轮返工。规划者先 browser_login_verify + browser_status 刷新这些目标，再根据新鲜证据安排授权修复；来源或权限受阻须明确报告，不得盲目复制或绕过授权。')
     }
     // Runner invokes commit inside the SAME transaction as the real Gate and links.
@@ -137,7 +137,7 @@ export class BrowserPatrolWorkflow {
     const uncovered = nodes.filter((n: any) => n.reachable !== true && !n.browsers.length).map((n: any) => ({ nodeId: n.nodeId, reason: 'unreachable-no-browser-observation' }))
     const plan = db.prepare('SELECT target_key,action,reason FROM dsh_patrol_round_items WHERE batch_id=? AND round=?').all(input.batch.id, input.card.round ?? 0)
     const pendingStability = items.filter(i => !i.accepted && i.readAuthorized && inventory.nodes.find((n: any) => n.ip === i.ip)?.reachable && i.state === 'verified' && !i.verificationFailure && i.observation && !i.observation.passed)
-    const canHandoffForRework = (input.card.round ?? 0) < input.task.design!.failurePolicy.maxAttempts && items.some(i => !i.accepted && i.readAuthorized && i.loginAuthorized && i.attempts < input.task.design!.failurePolicy.maxAttempts && (i.state !== 'verified' || i.verificationFailure))
+    const canHandoffForRework = (input.card.round ?? 0) < input.task.design!.failurePolicy.maxAttempts && items.some(i => !i.accepted && i.readAuthorized && inventory.nodes.some((n: any) => n.ip === i.ip && n.reachable) && i.loginAuthorized && i.attempts < input.task.design!.failurePolicy.maxAttempts && (i.checkedAt && i.state !== 'verified' || i.verificationFailure))
     const canCloseUnresolved = items.every(i => i.accepted || !i.readAuthorized || !inventory.nodes.find((n: any) => n.ip === i.ip)?.reachable || i.independentlyObserved > 0 && (
       (input.card.round ?? 0) > input.task.design!.failurePolicy.maxAttempts || i.attempts >= input.task.design!.failurePolicy.maxAttempts || i.state === 'unknown' && i.independentlyObserved >= 2
     )) && pendingStability.length === 0 && (items.length > 0 || uncovered.length > 0)

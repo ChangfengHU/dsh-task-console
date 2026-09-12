@@ -1063,3 +1063,24 @@ No new dependencies or temporary build trees; tracked lib remains a runtime asse
 Original Task and reviewed definition are unchanged, cron is still disabled.
 Real manual acceptance and public browser verification follow; tests/deployment
 alone do not demonstrate repaired logins or authorize enabling the schedule.
+
+Manual trial b-chat-4c400a667d4b4abcbac7 began09:26:53 UTC under the original
+reviewed Task. Public Chrome reached the actual Batch in23.09s, no page errors
+or horizontal overflow at1440/390px. Screenshots are retained as small acceptance
+evidence in /tmp/patrol-03011-20260912-{1440,390}.png, browser contexts closed.
+
+The proxy Agent's code initially read the MCP wrapper as a plain business object,
+omitting operationId from repeated status requests. No target permission was
+bypassed. Sent one visible corrective message to that native Session containing
+the six existing receipt IDs, explicitly forbidding another operation submission.
+All six real proxy verifications passed; the first browser role found84/b1 still
+signed_out and187/b2,188/b2 currently verified. Independent review is ongoing.
+
+Follow-up regression guards distinguish missing operationId from a foreign-session
+receipt and explain parsing MCP text/content before code polling. Role instructions
+also require explicit browser_status even when an idempotent start returns complete;
+that preserves the established native evidence contract, not model self-reports.
+An unobserved target is no longer classified as a concrete early-handoff repair
+need.248 full tests and build pass again. This follow-up build is not yet loaded by
+the active host; wait for a genuinely idle/durable-wait boundary before restarting.
+No Task replacement, deleted history, changed role grants or enabled schedule.

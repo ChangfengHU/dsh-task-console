@@ -50,6 +50,9 @@ test('proxy receipts gate login and require actual independent reviewer rather t
   const plan=workflow.plan(input,[{ip}],[{ip,action:'repair',reason:'fixture'}])!;await store.expandRound(input.task,input.batch,input.card,'fixture',plan.commit)
   const proxy={...input,card:store.s.cards.get('fixture-batch#x1'),sessionId:'task-fixture-proxy',profileId:'proxy-operator'}
   const id=randomUUID(),args={ip,requestId:'fixture-request-0001'}
+  let invalidDispatched=false
+  await assert.rejects(workflow.invoke(proxy,'proxy_status',{after:0},async()=>{invalidDispatched=true}),/operation-id-required/)
+  assert.equal(invalidDispatched,false)
   assert.throws(()=>workflow.assertBrowser(input,{ip}),/proxy-gate/)
   let complete:any
   await workflow.invoke(proxy,'proxy_repair',args,async forwarded=>{assert.notEqual(forwarded.requestId,args.requestId);complete=proof(id,'repair');return wrap({...complete,state:'running',result:null})})

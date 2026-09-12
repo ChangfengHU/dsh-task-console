@@ -260,6 +260,7 @@ test('last reviewer cannot abandon a pending window even when another target is 
   const reviewer={...input,card:{id:'batch#r2',role:'reviewer',round:2},profileId:'fleet-ops-reviewer',sessionId:'task-fixture-reviewer'}
   db.prepare("INSERT INTO tasks(id,title,status,priority,created_by,created_at,tenant) VALUES (?,?, 'running',0,'test',?,'batch')").run(reviewer.card.id,'Reviewer fixture',Date.now()/1000)
   patrol.capture(reviewer,proof(reviewer,now))
+  assert.equal(patrol.status(reviewer).canHandoffForRework,false) // unobserved is not a proven repair need
   const signedOut=proof(reviewer,now,'signed_out',20), part=signedOut[1].data.message!.content[0].content[0]
   const value=JSON.parse(part.text);value.args.instance=2;value.result.verification.instance=2;part.text=JSON.stringify(value)
   patrol.capture(reviewer,signedOut)
@@ -324,6 +325,7 @@ test('patrol role instructions distinguish freshness from acceptance and retain 
   const message=cardMessage({...input.task,title:'Fixture',brief:'Read-only fixture',participants:[{agentId:'reviewer'}]}, {...input.card,role:'reviewer',index:0}, 'batch',[])
   assert.match(message,/accepted=true 且 freshness=expired/)
   assert.match(message,/修复后仍须完整观察窗口/)
+  assert.match(message,/包括幂等发起时已返回 complete/)
   assert.match(message,/canHandoffForRework=true 时，立即 task_complete/)
   assert.match(message,/最后一轮.*pendingStability/)
   assert.match(message,/有效独立样本跨轮保留/)

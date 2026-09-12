@@ -106,6 +106,7 @@ export class ProxyWorkflow {
       return invoke(args)
     }
     if(raw==='proxy_status'){
+      if(typeof args.operationId!=='string'||!args.operationId.trim())throw Error('proxy-status-operation-id-required: parse the original MCP text/content result and pass its operationId; do not repeat a verify/repair or poll without an ID')
       const row=db.prepare('SELECT * FROM dsh_proxy_calls WHERE operation_id=? AND spec_id=? AND card_id=?').get(args.operationId,input.task.id,input.card.id) as any
       if(!row)throw Error('proxy-operation-not-owned-by-session')
       const value=await invoke(args);this.observe(input,row,decoded(value));return value

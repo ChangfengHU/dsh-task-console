@@ -31,6 +31,20 @@ never executes. Actions confer no tools or host grants; the original Agent/MCP/T
 policies still apply. See `docs/agent-actions.md` for APIs, starter pack installation,
 limits, uncertain-send behavior and the opt-in tool-free public UI smoke test.
 
+Action parameters also support configurable Enter-default acceptance, static
+choices, integer/minimum limits, registered metadata sources and simple earlier-
+parameter conditions/dependencies. Conditional slots are skipped, not submitted as
+unfilled markers; changing their parent invalidates the old selection. The browser
+starter defaults count to 1 and login to the existing allocation policy. Specified
+accounts display email/source IP/browser and remain intent, not login evidence.
+Candidate reads use the configured browser MCP's existing read/policy modules;
+they must never call discovery refresh, SSH, verification or copy while editing.
+Keep its optional adapter layout and read-tool visibility checks; do not replace
+it with arbitrary config-provided tool/URL execution. Late replies cannot cross
+roles. See the schema, stale-identity semantics and candidate browser tests in
+`docs/agent-actions.md`. Merge starter updates through sidecar CAS only after
+checking for user edits, never by rewriting AgentSpec or its Task review hash.
+
 The version-fenced history patch also shields DeepSeek-compatible model requests from
 previously rejected malformed tool-argument JSON. Raw session/Trace records and tool
 execution stay unchanged; only request serialization carries the invalid input as

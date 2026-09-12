@@ -7,6 +7,20 @@
 const STYLE_ID = 'dsh-task-console-styles'
 
 const CSS = `
+.dtc-action-options { position:fixed; z-index:110; border:1px solid var(--dtc-line); border-radius:10px; box-shadow:0 8px 26px #0003; overflow:auto; background:var(--dtc-surface)!important; font-size:13px }
+.dtc-action-options-heading { padding:10px 12px; color:var(--dtc-muted); border-bottom:1px solid var(--dtc-line-soft); font-size:12px }
+.dtc-action-options-list { max-height:190px; overflow:auto }
+.dtc-action-options-list button { display:flex; flex-direction:column; width:100%; text-align:left; padding:8px 12px; gap:3px; overflow-wrap:anywhere }
+.dtc-action-options-list button[aria-selected=true],.dtc-action-options-list button:hover:enabled { background:var(--dtc-surface-2) }
+.dtc-action-options-list button:disabled { opacity:.5; cursor:not-allowed }
+.dtc-action-options-list small,.dtc-action-options-note { color:var(--dtc-muted); font-size:11px }
+.dtc-action-options-note { display:block; padding:8px 12px; border-top:1px solid var(--dtc-line-soft) }
+.dtc-action-options-list p { margin:12px }
+.dtc-action-options-nav { padding:6px 12px; font-size:12px; display:flex; gap:10px }
+.dtc-action-param-settings { grid-column:1/-1; padding:8px; background:var(--dtc-surface-2); border-radius:6px }
+.dtc-action-param-options { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:8px }
+.dtc-action-param-settings summary { grid-column:1/-1; cursor:pointer; font-size:12px; color:var(--dtc-muted) }
+@media(max-width:720px) { .dtc-action-param-options { grid-template-columns:repeat(2,minmax(0,1fr)) } }
 .dtc-action-toolbar,.dtc-action-list { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:12px 0 }
 .dtc-action-fields { border:0; padding:0; margin:0; min-width:0 }
 .dtc-action-param { display:grid; grid-template-columns:repeat(4,minmax(80px,1fr)) auto auto; gap:8px; align-items:end; margin-bottom:8px }

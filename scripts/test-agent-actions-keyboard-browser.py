@@ -32,7 +32,7 @@ with sync_playwright() as p:
     page.on('request', lambda r: writes.append(r.url) if any(s in r.url for s in ['/startAgentSession', '/session.prompt', '/launchWorkflow', '/saveAgent']) else None)
     composer = page.locator('textarea[data-phase]').first
     try:
-        page.goto(BASE + '/?v=0.30.15&session=' + SESSION, wait_until='domcontentloaded')
+        page.goto(BASE + '/?v=0.30.16&session=' + SESSION, wait_until='domcontentloaded')
         expect(composer).to_be_visible(timeout=60000)
         composer.fill('@')
         names = ['新增浏览器', '删除浏览器', '自动登录', '检查登录', '恢复浏览器']
@@ -49,7 +49,7 @@ with sync_playwright() as p:
         # Enter selects the Action; it must not send it or choose a file.
         composer.press('Enter')
         expect(composer).to_have_value('@新增浏览器 ' + next(a['template'] for a in catalog['actions'] if a['id'] == 'create-browser')
-                                       .replace('{{ip}}', '【机器 IP】').replace('{{count}}', '【新增数量】').replace('{{login}}', '【自动分配 Gemini 登录】'))
+                                       .replace('{{ip}}', '【机器 IP】').replace('{{count}}', '【新增数量】').replace('{{login_mode}}', '【登录方式】').replace('{{account}}', '无需指定'))
 
         def selected(value):
             page.wait_for_function('(value) => {const e=document.querySelector("textarea[data-phase]");return e.value.slice(e.selectionStart,e.selectionEnd)===value}', arg=value)
@@ -60,20 +60,20 @@ with sync_playwright() as p:
         composer.press_sequentially('192.0.2.1')  # Documentation-only address, never submitted.
         composer.press('Enter'); selected('【新增数量】')
         expect(page.get_by_text('2/3 · 新增数量', exact=False)).to_be_visible()
-        composer.press_sequentially('2'); composer.press('Enter'); selected('【自动分配 Gemini 登录】')
+        composer.press_sequentially('2'); composer.press('Enter'); selected('【登录方式】')
         composer.press('Shift+Tab'); selected('2')
-        composer.press('Tab'); selected('【自动分配 Gemini 登录】')
+        composer.press('Tab'); selected('【登录方式】')
         composer.press('Enter')
-        assert '新增 2 个浏览器' in composer.input_value() and '自动分配 Gemini 登录：是' in composer.input_value()
+        assert '新增 2 个浏览器' in composer.input_value() and '登录方式：按账号分配策略' in composer.input_value()
         assert '【' not in composer.input_value(), 'Default was not accepted into the native draft'
         assert read('sessionTurns', {'sessionId': SESSION})['totals'] == before, 'Final-field Enter sent a prompt'
         # Reopen and accept the numeric default too; both remain visible until accepted.
         composer.fill('@新增浏览器'); expect(first).to_be_visible(timeout=30000); composer.press('Enter'); selected('【机器 IP】')
         composer.press_sequentially('192.0.2.1'); composer.press('Enter'); selected('【新增数量】')
-        composer.press('Enter'); selected('【自动分配 Gemini 登录】')
+        composer.press('Enter'); selected('【登录方式】')
         assert '新增 1 个浏览器' in composer.input_value()
-        composer.press_sequentially('否'); composer.press('Enter')
-        assert '自动分配 Gemini 登录：否' in composer.input_value()
+        composer.press_sequentially('不自动登录'); composer.press('Enter')
+        assert '登录方式：不自动登录' in composer.input_value()
         composer.fill('@'); expect(first).to_be_visible(timeout=30000); expect(first).to_have_attribute('aria-selected', 'true')
         # Files still participate in the same keyboard order; do not delete their source.
         options = page.get_by_role('option')
@@ -91,7 +91,7 @@ with sync_playwright() as p:
         page.screenshot(path='/tmp/dtc-action-keyboard-fields-390.png')
         assert composer.bounding_box()['width'] > 220
         assert not errors and not writes, (errors, writes)
-        print('PASS: public @ initial focus, five Actions by arrows/Enter, Files retained, three visible parameters, forward/back, numeric/boolean defaults and edits, no final-field send, 1440/390px')
+        print('PASS: public @ initial focus, five Actions by arrows/Enter, Files retained, three applicable parameters, forward/back, numeric/choice defaults and edits, no final-field send, 1440/390px')
     finally:
         if composer.count() and composer.is_visible():
             composer.fill('')

@@ -239,3 +239,101 @@ unique acceptance evidence is preserved. Playwright closes its isolated temporar
 profiles. Tracked lib/ remains production runtime; no cache/dependency cleanup or
 user data deletion was needed. Exact recovery commands/contracts are in the
 existing docs/agent-actions.md and HANDOFF.md, not a second handoff file.
+
+## 0.30.16 — configurable defaults, read-only candidates and conditional intent
+
+User approved configurable Enter-default behavior, machine IP suggestions,
+count=1, default account allocation policy and optional explicit account sources.
+These are Action parameter capabilities, not browser-specific logic embedded in
+the generic composer. Invocation remains inline; no form/modal, new task, role
+grant or machine operation is introduced.
+
+Implementation:
+
+- Sidecar schema validates Enter-default acceptance, fixed text choices,
+  integer/minimum limits, registered source IDs and simple earlier-parameter
+  equality/dependencies. Cycles, invalid defaults, duplicate labels and ambiguous
+  repeated/reordered dependency fields fail. The Actions editor exposes these
+  settings in per-parameter disclosures and preserves unsaved tab drafts.
+- A small native-composer candidate popup supports search, keyboard/click choices,
+  20-row pages, loading/empty/error/retry and responsive light/dark styling.
+  Machine candidates do not silently select the first result; new IPs can still
+  be entered. Revisiting a filled choice shows all alternatives, not only its
+  current value. Last-field Enter remains a finish-filling step, never auto-send.
+- The optional host Fleet adapter locates the existing browser MCP modules from
+  its trusted composition entry and reuses its inventory and account ranker/policy.
+  Only GET metadata is read, with coalescing/five-second memory cache; no discovery
+  refresh POST, SSH, verification, export/import, source allocation or copy. The
+  native RPC checks Action revision, actual role, configured source and existing
+  read-tool visibility. Agent rights and MCP readiness have different errors.
+- Live read-only integration returned machine suggestions and email/source-IP/
+  browser account records. Existing discovery records can be expired: these are
+  labelled pending execution-time verification, not current login proof. Only
+  authorized discovered identities may express intent; excluded/ungranted accounts
+  are omitted, other unavailable sources disabled. The MCP's actual mutation
+  boundary and Agent must independently reverify account/source/target grants.
+- Browser-manager creation defaults to one instance and the existing allocation
+  policy. Specified-account mode reveals its dependent marker; changing IP or mode
+  clears that choice. Automatic/no-login modes skip it without hidden placeholders.
+  Only the five Actions were CAS-upgraded after an exact normalized comparison
+  against the previous starter; no user-customized sidecar was overwritten.
+
+Public testing caught an additional real failure absent from fast local tests:
+editing a completed draft after refresh while the Action catalog was in flight
+could invalidate persisted coordinates, lose its conditional relationship, and
+leave Enter unable to advance. The lightweight watcher now tracks coordinates
+and edited field indices during that wait, without storing values. After the
+current catalog arrives, dependent selections are invalidated before use. Known
+range-end edits must be attributed to that earlier field, not the static separator.
+Unknown legacy dependency coordinates fail closed with the original text retained.
+Focus also waits for the matching DOM revision with bounded/cancellable animation
+frames; it cannot select over subsequent typing. Deterministic tests cover both
+render lag and editing a fully filled Action during a deferred catalog read.
+
+Verification:
+
+- Full supported-host regression: **278/278 passed, zero skipped**, 37.124s,
+  `/usr/bin/node`, `DSH_INSTALL_ROOT` set to the actual installed DSH. Build and
+  `git diff --check` pass; native input patch check reports changed=false/needed=false.
+- Public `test-agent-actions-keyboard-browser.py`: five Actions and retained Files
+  keyboard order; typed/default numbers and login modes; forward/back navigation;
+  no final-field send; desktop/390px; saved catalog and native turn totals unchanged.
+- Public `test-agent-actions-recovery-browser.py`: partial refresh, exact edited
+  ranges, missing-field Send guard, role switch/back, reused blank role isolation,
+  explicit Agent choice, legacy draft recovery; one final same-session dispatch
+  intercepted before HTTP delivery. No model/Agent/Task/target operation.
+- Public `test-agent-action-options-browser.py`: real machine search and authorized
+  account metadata; positive integer enforcement; conditional selection; IP/mode
+  invalidation; refresh; deliberately held catalog while editing a completed draft;
+  separate simulated failure/pagination/late-source replies; old-role replies stay
+  hidden. 1440/390px bounds and both theme palettes pass. Every business write was
+  intercepted; all tests leave actual turn totals and saved Actions unchanged.
+- Public Actions-tab regression: default identity remains first and Actions lazy;
+  per-field controls, unsaved default-acceptance toggle across tabs, routes/history,
+  session/task tabs and desktop/mobile layouts pass without saving a preset.
+  Screenshots were visually inspected, including the mobile expanded controls.
+
+Deployment: the existing live symlink serves 0.30.16. Host restarts occurred only
+after fresh zero checks for native `session.list.running`, SQLite running Task
+Runs, running/unknown proxy calls and running/queued browser receipts. No cron
+pause, history deletion or Agent execution was used to deploy. The two preserved
+Task hashes and browser-manager executable spec hash match the 0.30.15 baseline
+above; both Tasks remain enabled, the patrol trigger stays hourly (`0 * * * *`,
+Asia/Shanghai). Action sidecar revision is
+5a6cbedb6ec07c22dcb9453eb1e3788ed67caef66499051ba782fa8a05d07099.
+The light entry is 34,360 bytes (previous 24,239); no Fleet query runs just because
+an ordinary page opens. Candidates are fetched only on applicable field use.
+
+No dependency or download cache was installed. Unit-test temporary roots and
+Playwright temporary profiles are removed by their existing scoped teardown.
+Tracked lib/ and original native patch backups remain production/rollback assets.
+Five new local screenshots are retained for this UI's user acceptance (about
+0.9 MiB; editor images are updated by the final run):
+`/tmp/dtc-action-options-machines-1440.png`,
+`/tmp/dtc-action-options-accounts-1440.png`,
+`/tmp/dtc-action-options-machines-390.png`,
+`/tmp/dtc-action-options-editor-1440.png`,
+`/tmp/dtc-action-options-editor-390.png`.
+These are regenerated by the options and tabs scripts; do not upload private
+session screenshots as public artifacts. Earlier unique evidence is retained.
+No source, user data, browser profile or runtime dependency was cleaned/deleted.

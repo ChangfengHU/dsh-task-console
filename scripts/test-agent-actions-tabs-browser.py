@@ -33,7 +33,7 @@ with sync_playwright() as p:
     page.on('request', lambda r: action_reads.append(r.url) if '/api/taskConsole/agentActions' in r.url else None)
     page.on('request', lambda r: mutations.append(r.url) if any(s in r.url for s in ['/saveAgent', '/startAgentSession', '/launchWorkflow', '/session.prompt']) else None)
     try:
-        url = BASE + '/?v=0.30.13#/tc/agents/' + ROLE
+        url = BASE + '/?v=0.30.16#/tc/agents/' + ROLE
         page.goto(url, wait_until='domcontentloaded')
         identity = page.get_by_label('名字', exact=True)
         expect(identity).to_be_visible(timeout=60000)
@@ -66,9 +66,22 @@ with sync_playwright() as p:
         expect(action_name).to_have_value(original_action, timeout=60000)
         expect(page.get_by_role('tab', name='Actions', exact=True)).to_have_attribute('aria-selected', 'true')
         page.screenshot(path='/tmp/dtc-action-tabs-actions-1440.png')
+        settings = editor.locator('.dtc-action-param').nth(1).locator('details')
+        settings.locator('summary').click()
+        expect(settings.get_by_label('最小值', exact=True)).to_have_value('1')
+        expect(settings.get_by_label('仅允许整数', exact=True)).to_be_checked()
+        toggle = settings.get_by_label('允许 Enter / Tab 接受默认值', exact=True)
+        expect(toggle).to_be_checked(); toggle.uncheck()
+        page.get_by_role('tab', name='配置', exact=True).click()
+        page.get_by_role('tab', name='Actions', exact=True).click()
+        expect(toggle).not_to_be_checked()
+        settings.scroll_into_view_if_needed()
+        page.screenshot(path='/tmp/dtc-action-options-editor-1440.png')
         page.set_viewport_size({'width': 390, 'height': 844})
         page.screenshot(path='/tmp/dtc-action-tabs-actions-390.png')
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Mobile page overflow'
+        settings.scroll_into_view_if_needed()
+        page.screenshot(path='/tmp/dtc-action-options-editor-390.png')
         page.get_by_role('tab', name='配置', exact=True).click()
         expect(identity).to_have_value(original_name)
         expect(editor).not_to_be_visible()

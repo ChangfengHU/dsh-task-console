@@ -31,14 +31,94 @@ MCP fence and host policy.
   check the native session before submitting again.
 
 Parameters support text, finite numbers and booleans, required fields and optional
-defaults. `{{key}}` substitution is one pass, never JavaScript, shell or recursive
+defaults. Numeric fields can require integers and a minimum. `{{key}}` substitution is one pass, never JavaScript, shell or recursive
 template evaluation. Store reusable intent here, **not credentials**. Secrets in
 user-entered prompts retain the ordinary DSH transcript/Trace privacy boundary.
-All parameters, including defaulted ones, appear as visible `【label】` fields. The
+All applicable parameters, including defaulted ones, appear as visible `【label】` fields. The
 hint shows `index/total` and the configured default. Enter/Tab accepts an unchanged
 default before advancing; typed numbers/booleans override it. Final-field Enter
-only finishes filling. Native Send can accept configured defaults but cannot skip
-a required value that has no default.
+only finishes filling. `acceptDefaultOnEnter: false` requires explicit typing or
+choice instead of accepting an untouched default; native Send cannot bypass this.
+Omission retains the earlier default-acceptance behavior.
+
+## Configurable candidates and conditional parameters
+
+Each parameter's **输入行为** disclosure in the Actions editor configures these
+behaviors without an invocation form. The native draft remains the only input:
+
+- `choices`: 1–30 fixed text choices. Select with ↑↓ then Enter, or click; a typed
+  value must match a configured choice. Initial focus shows all alternatives,
+  including when revisiting a filled field. Typing filters the list.
+- `source`: a registered read-only adapter (`fleet.nodes` or
+  `fleet.gemini-accounts`). Candidate pages contain at most 20 items with search,
+  loading/error/empty states and retry. No default first-machine selection.
+  A new IP may be typed even if it is not in the known-machine suggestions.
+- `dependsOn`: earlier parameter keys. Editing their effective values invalidates
+  the dependent selection, including after draft refresh. For the current account
+  adapter, the first dependency is the target IP parameter; this is not a target
+  browser number and never invents a browser instance for source ranking.
+- `visibleWhen: {key, equals}`: one equality check against an earlier parameter,
+  not an expression language. When false, `inactiveValue` (default `无需指定`)
+  replaces the marker in the prompt, and navigation skips it. Changing back
+  restores an empty marker, never a stale account. The parent/child fields must
+  occur once and in dependency order in the template; labels are unique.
+- `integer`, `min`: numeric validation. Defaults must obey the same type, choices
+  and numeric limits as typed values.
+
+The browser-manager starter uses count=1; login mode defaults to
+`按账号分配策略`, with `指定账号` and (for creation) `不自动登录` alternatives.
+Only the specified-account mode asks for an account source. Its popup displays
+full email, source IP and browser number, without hardcoded machine/account data.
+For example, its account parameter is configured as:
+
+```json
+{
+  "key": "account", "label": "指定账号来源", "type": "text", "required": true,
+  "source": "fleet.gemini-accounts", "dependsOn": ["ip", "login_mode"],
+  "visibleWhen": {"key": "login_mode", "equals": "指定账号"},
+  "inactiveValue": "无需指定"
+}
+```
+
+The optional Fleet adapter resolves the **host-owned** `fleet-browser` MCP entry's
+absolute `server.mjs` path and reuses its adjacent `transport`, `runtime.policy`,
+`inventory.browserInventory` and `login.rankLoginSources` exports. Those modules
+belong to the browser-manager deployment; no workstation path, service origin,
+token or account policy is baked into Action JSON or the generic input controller.
+Other deployments without this adapter layout show an unavailable-source message.
+Adding another provider requires registering and reviewing a host read-only
+adapter, not accepting arbitrary URLs, JavaScript, module paths or MCP tool names
+from Action configuration.
+
+Only GET `/api/fleet` and paginated GET `/api/fleet/login-accounts?view=discovered`
+are used. No SSH, refresh POST, verification, cookie export/import or MCP mutation
+is invoked by selection. Concurrent reads coalesce and metadata is cached for five
+seconds; policy and freshness ranking are reapplied. Nodes require existing read
+grants. The current Agent must already have the corresponding registered tool:
+`browser_fleet_inventory` or `browser_login_candidates`. Missing permission and
+MCP-not-ready are reported separately; this feature does not create grants.
+
+Account exclusions and source admission come from the MCP's own policy/ranker.
+Explicitly excluded/ungranted accounts are omitted; busy/unknown-identity/limit
+failures cannot be selected. A stale discovered identity may be selected as
+**intent**, labelled `待执行前复验`, never as verified-current login. Submission
+re-reads candidate metadata/admission and rejects a disappeared or newly denied
+source. Actual execution must independently verify the account, source and each
+target's transfer grant. Automatic policy mode sends no prechosen account and
+does not query account candidates. Neither choice nor preview reserves an account
+or claims that any browser has logged in.
+
+Popup replies are discarded on draft/role/session changes; Escape closes it and
+IME composition never accepts a candidate. Restored conditional ranges keep the
+same position-only persistence contract. If legacy metadata is missing, recovery
+does not guess filled parent values or silently erase a visible dependent field;
+an applicable dependency whose coordinates cannot be recovered requires reselecting
+the Action and keeps the original text. While its catalog is still loading, the
+light entry tracks native range changes and edited field indices (no values).
+Once the current catalog arrives, dependent selections are invalidated before the
+claim becomes usable. This also covers edits to an already-completed draft after
+refresh. Focus waits for a matching native DOM revision with bounded frame retries;
+new typing or a later selection cancels that focus request.
 
 ## Storage and API
 
@@ -76,6 +156,12 @@ Authenticated native `taskConsole` RPCs (standard string JSON argument/result):
 - `prepareAgentAction({agentId,sessionId?,actionId,values,revision})` validates the
   current configuration and actual role and renders the message. It does **not**
   create a session, send a prompt, call tools or create a Task.
+- `agentActionOptions({agentId,sessionId?,actionId,revision,parameter,values,search?,page?})`
+  reads an existing parameter's registered metadata source. Role, revision,
+  parameter, conditional applicability and read-tool visibility are validated;
+  only configured dependency values reach the adapter. Returns
+  `{items:[{value,label,detail?,disabled?}],page,pages,total,notice?}`. It is not a
+  general-purpose tool execution API and cannot create a Task or Session.
 
 The browser then uses native `SessionFace.prompt(..., 'queue')` for an existing
 session or `startAgentSession` for a new one. The Action name/id and rendered prompt
@@ -139,6 +225,7 @@ DSH_ACTION_SMOKE=1 python3 scripts/test-agent-actions-browser.py
 python3 scripts/test-agent-actions-tabs-browser.py
 python3 scripts/test-agent-actions-keyboard-browser.py
 python3 scripts/test-agent-actions-recovery-browser.py
+python3 scripts/test-agent-action-options-browser.py
 ```
 
 The opt-in public smoke test requires the installed Playwright/Chrome environment.
@@ -155,6 +242,14 @@ Recovery covers refresh midway through typed fields, Send with missing values,
 session switch/back, reused blank roles, explicit Agent choice, old drafts without
 metadata, and an explicitly requested final dispatch intercepted before delivery.
 That last check proves routing, not execution of any browser operation.
+The options script reads real machine/account metadata and tests search, default
+count, positive integers, conditional account selection, parent invalidation and
+refresh. It separately labels simulated pagination, failure and delayed-response
+tests; a forced catalog delay also edits a completed draft before configuration
+recovery and checks pending range tracking plus dependent-field invalidation.
+Those fixtures never reach Fleet. All business-send requests are blocked
+before delivery. Desktop/mobile screenshots are local acceptance evidence, not
+public artifacts containing private session history.
 
 Restart the production host only at a freshly verified zero-active-session,
 zero-active-Task-Run/browser-operation/proxy-operation boundary. Scheduled business

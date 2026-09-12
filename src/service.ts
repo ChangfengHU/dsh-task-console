@@ -15,7 +15,9 @@ import { randomUUID, createHash } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { readActions, saveActions } from './agent-action-store.ts'
-import { renderAction, type ActionCatalog } from './agent-actions.ts'
+import { renderAction, parameterVisible, type ActionCatalog } from './agent-actions.ts'
+import { optionPage, sourceTool, type ActionOptionQuery } from './action-options.ts'
+import { fleetActionOptions } from './fleet-action-options.ts'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { applyAgentPermission } from './agent-session.ts'
 import { agentHistory, firstAgentUse, historyQuery, type AgentSessionHeader } from './agent-history.ts'
@@ -348,6 +350,38 @@ export class TaskConsoleService extends TypertRemoteService {
     if (!catalog.agentId || !catalog.writable) throw new Error('这个 Agent 的 Actions 不可写')
     await saveActions(resolve(userPresetRoot(), catalog.agentId), query.actions, query.revision)
     return this.agentActions(JSON.stringify({ agentId: catalog.agentId }))
+  }
+
+  /** Host-registered metadata providers only; not a general MCP invocation API. */
+  async agentActionOptions(payload: string): Promise<string> {
+    const query: ActionOptionQuery = JSON.parse(payload)
+    const catalog: ActionCatalog = JSON.parse(await this.agentActions(payload))
+    if (!catalog.agentId || catalog.revision !== query.revision) throw Error('Action 已更新，请重新选择')
+    const action = catalog.actions.find(a => a.id === query.actionId)
+    const parameter = action?.parameters.find(p => p.key === query.parameter)
+    if (!parameter?.source) throw Error('参数没有已注册候选来源')
+    optionPage([], query.search, query.page)
+    const raw = query.values
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw Error('参数依赖无效')
+    const values = Object.fromEntries((parameter.dependsOn ?? []).map(k => [k, typeof raw[k] === 'string' ? raw[k].slice(0, 4000) : '']))
+    if (!parameterVisible(parameter, raw)) throw Error('此参数当前不适用')
+    const tool = sourceTool(parameter)
+    const host = this.hostMcp().find(h => h.serverName === 'fleet-browser' && h.live && h.tools.includes(tool))
+    const preset = (await (this.ctx as any).get('agentPresets').list()).find((p: any) => p.id === catalog.agentId)
+    const spec = preset && await readSpec(dirname(String(preset.path)))
+    const allowed = spec?.mcpTools?.['fleet-browser'] ?? []
+    if (!allowed.some(t => t === '*' || t === tool)) throw Error('当前角色没有此只读候选能力；未扩大工具权限')
+    if (!host) throw Error('候选 MCP 尚未就绪，请稍后重试；没有执行任何目标操作')
+    try {
+      const result = await fleetActionOptions(host.config, parameter, values)
+      const latest: ActionCatalog = JSON.parse(await this.agentActions(payload))
+      if (latest.revision !== catalog.revision) throw Error('Action 已更新，请重新选择')
+      return JSON.stringify(optionPage(result.items, query.search, query.page, result.notice))
+    } catch (e) {
+      // Known UI messages only, never propagate credentials, paths or raw bodies.
+      const message = e instanceof Error ? e.message : ''
+      throw Error(/^(此部署尚未|请先填写|目标尚无|账号发现记录暂)/.test(message) ? message : '只读候选查询失败，请稍后重试；没有执行任何目标操作')
+    }
   }
 
   /** Validates a fresh revision and actual session role; never sends or creates anything. */

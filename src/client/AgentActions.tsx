@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { validateActions, type ActionCatalog, type ActionParameter, type AgentAction } from '../agent-actions.ts'
 import { ACTION_CHANGED } from './action-dispatch.ts'
 import type { Api } from './Console.tsx'
+import { ACTION_SOURCES } from '../action-options.ts'
 
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e)
 
@@ -45,10 +46,22 @@ export function ActionEditor({ api, agentId }: { api: Api; agentId: string }) {
       <h4>参数</h4>{active.parameters.map((p, i) => <div className="dtc-action-param" key={i}>
         <label>key<input value={p.key} onChange={e => parameter(i, { key: e.target.value })} /></label>
         <label>名称<input value={p.label} onChange={e => parameter(i, { label: e.target.value })} /></label>
-        <label>类型<select value={p.type} onChange={e => parameter(i, { type: e.target.value as ActionParameter['type'], default: undefined })}><option value="text">文本</option><option value="number">数字</option><option value="boolean">是 / 否</option></select></label>
+        <label>类型<select value={p.type} onChange={e => parameter(i, { type: e.target.value as ActionParameter['type'], default: undefined, choices: undefined, source: undefined, min: undefined, integer: undefined })}><option value="text">文本</option><option value="number">数字</option><option value="boolean">是 / 否</option></select></label>
         <label>默认值{p.type === 'boolean' ? <select value={p.default === undefined ? '' : String(p.default)} onChange={e => parameter(i, { default: e.target.value === '' ? undefined : e.target.value === 'true' })}><option value="">未设置</option><option value="true">是</option><option value="false">否</option></select> : <input type={p.type === 'number' ? 'number' : 'text'} value={String(p.default ?? '')} onChange={e => parameter(i, { default: e.target.value === '' ? undefined : p.type === 'number' ? Number(e.target.value) : e.target.value })} />}</label>
         <label className="dtc-action-check"><input type="checkbox" checked={p.required} onChange={e => parameter(i, { required: e.target.checked })} />必填</label>
         <button className="dtc-btn sm" aria-label={`移除参数 ${p.key}`} onClick={() => update({ parameters: active.parameters.filter((_, j) => j !== i) })}>移除</button>
+        <details className="dtc-action-param-settings"><summary>输入行为 · 默认值 / 候选 / 联动</summary><div className="dtc-action-param-options">
+          <label className="dtc-action-check"><input type="checkbox" checked={p.acceptDefaultOnEnter !== false} onChange={e => parameter(i, { acceptDefaultOnEnter: e.target.checked })} />允许 Enter / Tab 接受默认值</label>
+          {p.type === 'number' ? <><label>最小值<input type="number" value={p.min ?? ''} onChange={e => parameter(i, { min: e.target.value === '' ? undefined : Number(e.target.value) })} /></label><label className="dtc-action-check"><input type="checkbox" checked={p.integer === true} onChange={e => parameter(i, { integer: e.target.checked })} />仅允许整数</label></> : null}
+          {p.type === 'text' ? <><label>候选来源<select value={p.source ?? ''} onChange={e => parameter(i, { source: (e.target.value || undefined) as ActionParameter['source'], choices: undefined })}><option value="">手填 / 固定选项</option>{ACTION_SOURCES.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}</select></label>
+            {!p.source ? <label>固定选项 · 用 | 分隔<input value={p.choices?.join(' | ') ?? ''} onChange={e => parameter(i, { choices: e.target.value.trim() ? e.target.value.split('|').map(s => s.trim()) : undefined })} /></label> : null}</> : null}
+          <label>依赖参数 · 逗号分隔<input value={p.dependsOn?.join(',') ?? ''} placeholder={active.parameters.slice(0, i).map(p => p.key).join(',')} onChange={e => parameter(i, { dependsOn: e.target.value.trim() ? e.target.value.split(',').map(s => s.trim()) : undefined })} /></label>
+          <label>显示条件<select value={p.visibleWhen?.key ?? ''} onChange={e => parameter(i, { visibleWhen: e.target.value ? { key: e.target.value, equals: '' } : undefined })}><option value="">始终显示</option>{active.parameters.slice(0, i).map(parent => <option key={parent.key} value={parent.key}>{parent.label} 等于…</option>)}</select></label>
+          {p.visibleWhen ? <><label>条件值<input value={String(p.visibleWhen.equals)} onChange={e => {
+            const parent = active.parameters.find(v => v.key === p.visibleWhen!.key)
+            parameter(i, { visibleWhen: { key: p.visibleWhen!.key, equals: parent?.type === 'number' ? Number(e.target.value) : parent?.type === 'boolean' ? ['是', 'true'].includes(e.target.value) : e.target.value } })
+          }} /></label><label>不适用时填入<input value={p.inactiveValue ?? '无需指定'} onChange={e => parameter(i, { inactiveValue: e.target.value })} /></label></> : null}
+        </div></details>
       </div>)}
       <div className="dtc-action-toolbar"><button className="dtc-btn sm" disabled={active.parameters.length >= 12} onClick={() => update({ parameters: [...active.parameters, { key: `param_${active.parameters.length + 1}`, label: '新参数', type: 'text', required: true }] })}>＋ 参数</button><button className="dtc-btn sm" disabled={actions.length >= 20} onClick={() => add(active)}>复制 Action</button><button className="dtc-btn sm danger" onClick={() => { if (confirm(`删除快捷指令「${active.name}」？不会删除会话、任务或浏览器。保存后生效。`)) { setActions(actions.filter((_, i) => i !== selected)); setSelected(0) } }}>删除 Action</button></div>
       </fieldset> : null}</>}

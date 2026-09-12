@@ -1,7 +1,7 @@
 import type { AgentRow } from '../wire.ts'
 import type { ActionCatalog, AgentAction } from '../agent-actions.ts'
 import { actionCandidates } from '../agent-actions.ts'
-import { confirmedActionRole, makeActionSnippet, resolveSnippetDefaults } from '../action-snippet.ts'
+import { confirmedActionRole, makeActionSnippet, resolveSnippetDefaults, trackPendingSnippet } from '../action-snippet.ts'
 import { agentCandidates, AGENT_EXPAND, AGENT_COLLAPSE } from '../agent-order.ts'
 import { ACTION_CHANGED, sendCurrentAction } from './action-dispatch.ts'
 import { installActionSnippet } from './action-snippet.ts'
@@ -65,6 +65,7 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
           if (newSession && !canChooseAgent(sessionId)) throw Error('当前会话已有角色，请重新选择该角色的 Action')
           const message = snippets.get(sessionId)?.error()
           if (message) throw Error(message)
+          await snippets.get(sessionId)?.validate()
           text = resolveSnippetDefaults(action, text)
           const placeholders = makeActionSnippet(action).slots
           if (!text.trim() || placeholders.some(s => text.includes(s.marker)) || /\{\{[^{}]+\}\}/.test(text)) throw Error('请填写剩余占位符后再发送')
@@ -88,6 +89,8 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
     snippets.get(id)?.dispose()
     snippets.set(id, installActionSnippet(ctx, id, action, prefix, input, {
       restored, saved: restored ? saved?.progress : undefined,
+      isCurrentRole: () => newSession ? canChooseAgent(id) : role(id) === catalog.agentId,
+      candidates: async (parameter, values, search, page) => (await api()).agentActionOptions({ agentId: catalog.agentId!, ...(newSession ? {} : { sessionId: id }), actionId: action.id, revision: catalog.revision, parameter, values, search, page }),
       save: progress => writeActionDraft(id, progress ? { agentId: catalog.agentId!, actionId: action.id, revision: catalog.revision, prefix, newSession, progress } : undefined),
     }))
   }
@@ -146,13 +149,18 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
     const input = inputFor(id)
     if (!input) return
     if (!watches.has(id)) {
-      let revision = -1
+      let revision = -1, previousDraft: string | undefined
       const check = () => {
         const state = input.state.getSnapshot()
         if (!selected(id) || state.draftRev === revision) return
         revision = state.draftRev
         const saved = readActionDraft(id)
         if (saved && state.draftRev > 0 && !state.draft.startsWith(saved.prefix)) writeActionDraft(id)
+        else if (saved && state.phase === 'plain' && !snippets.get(id)?.active() && previousDraft !== undefined && previousDraft !== state.draft) {
+          const progress = trackPendingSnippet(previousDraft, state.draft, saved.progress)
+          if (progress) writeActionDraft(id, { ...saved, progress })
+        }
+        previousDraft = state.draft
         if (state.phase === 'plain') queueMicrotask(() => { void restoreDraft(id) })
       }
       watches.set(id, input.state.subscribe(check)); check()

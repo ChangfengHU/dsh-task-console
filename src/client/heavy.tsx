@@ -21,6 +21,7 @@ export function activate(ctx: any): Promise<Api> {
     }
     return {
       agentActions: query => call('agentActions', query),
+      agentActionOptions: query => call('agentActionOptions', query),
       saveAgentActions: (agentId, actions, revision) => call('saveAgentActions', { agentId, actions, revision }),
       prepareAgentAction: query => call('prepareAgentAction', query),
       executionHistory: query => call('executionHistory', query),

@@ -56,7 +56,7 @@ with sync_playwright() as p:
         page.wait_for_timeout(500)
 
     try:
-        page.goto(BASE + '/?v=0.30.15&session=' + SESSION, wait_until='domcontentloaded')
+        page.goto(BASE + '/?v=0.30.16&session=' + SESSION, wait_until='domcontentloaded')
         expect(c).to_be_visible(timeout=60000)
         pick(); c.press_sequentially('192.0.2.1'); c.press('Enter'); selected('【新增数量】')
         c.press_sequentially('2')
@@ -64,10 +64,10 @@ with sync_playwright() as p:
         metadata = page.evaluate('(sid)=>sessionStorage.getItem("dtc:action-draft:"+sid)', SESSION)
         assert metadata and '192.0.2.1' not in metadata, 'UI metadata must not duplicate parameter values'
         reload(); expect(c).to_have_value(draft); selected('2')
-        c.press('Enter'); selected('【自动分配 Gemini 登录】')
-        c.press('Shift+Tab'); selected('2'); c.press('Tab'); selected('【自动分配 Gemini 登录】')
-        c.press_sequentially('否'); c.press('Enter')
-        assert '自动分配 Gemini 登录：否' in c.input_value() and not blocked
+        c.press('Enter'); selected('【登录方式】')
+        c.press('Shift+Tab'); selected('2'); c.press('Tab'); selected('【登录方式】')
+        c.press_sequentially('不自动登录'); c.press('Enter')
+        assert '登录方式：不自动登录' in c.input_value() and not blocked
         print('PASS: refreshed partial draft, exact edited ranges, Enter/Tab/back, last field no send', flush=True)
 
         # Missing-parameter Send after refresh must stay in editing, never fall through.
@@ -88,7 +88,7 @@ with sync_playwright() as p:
         create.click(timeout=30000); selected('【机器 IP】')
         assert c.input_value().startswith('@浏览器管理员/新增浏览器 ')
         c.press_sequentially('192.0.2.1'); reload(); selected('192.0.2.1')
-        c.press('Enter'); selected('【新增数量】'); c.press('Enter'); selected('【自动分配 Gemini 登录】')
+        c.press('Enter'); selected('【新增数量】'); c.press('Enter'); selected('【登录方式】')
         c.press('Enter'); assert not blocked
         c.fill('@'); page.wait_for_timeout(2000); expect(create).to_have_count(0)
         page.screenshot(path='/tmp/dtc-action-recovery-role-1440.png')
@@ -97,7 +97,7 @@ with sync_playwright() as p:
         # A prior-version draft without metadata must still recover real markers.
         page.evaluate('(sid)=>sessionStorage.removeItem("dtc:action-draft:"+sid)', SESSION)
         reload(); selected('【新增数量】')
-        c.press('Enter'); selected('【自动分配 Gemini 登录】'); c.press('Enter')
+        c.press('Enter'); selected('【登录方式】'); c.press('Enter')
         assert not expected_prompts and not blocked
         # One extra explicit Enter reaches the same native session, intercepted
         # before HTTP delivery. This tests dispatch, not business execution.

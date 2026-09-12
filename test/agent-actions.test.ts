@@ -94,6 +94,24 @@ test('current Action dispatch uses native session prompt once, no new session; s
   await assert.rejects(sendCurrentAction(ctx, 'session-1', 'not sent'), /已切换会话/)
   assert.equal(calls.length, 1)
 })
+test('candidate RPC rejects role, revision, unregistered fields and missing read capability before any provider runs', async t => {
+  const { dir } = await fixture(t)
+  const withSource = validateActions([{ ...action, parameters: action.parameters.map(p => p.key === 'target' ? { ...p, source: 'fleet.nodes' } : p) }])[0]
+  const saved = await saveActions(dir, [withSource], (await readActions(dir)).revision)
+  const service = Object.create(TaskConsoleService.prototype)
+  const services: any = {
+    agentPresets: { list: async () => [{id:'worker',path:join(dir,'agent.cordis.yml'),trust:'user'}] },
+    sessionPersistence: { list: async () => [{id:'actual',agentPreset:'worker'}] }, sessions: {list:()=>[]},
+  }
+  Object.defineProperty(service,'ctx',{value:{get:(key:string)=>services[key]}})
+  service.hostMcp=()=>[{serverName:'fleet-browser',live:true,tools:['browser_fleet_inventory'],config:{args:['/must-not-load/server.mjs']}}]
+  const query={agentId:'worker',sessionId:'actual',actionId:'hello',revision:saved.revision,parameter:'target',values:{},page:1}
+  await assert.rejects(service.agentActionOptions(JSON.stringify({...query,agentId:'forged'})),/不匹配/)
+  await assert.rejects(service.agentActionOptions(JSON.stringify({...query,revision:'stale'})),/已更新/)
+  await assert.rejects(service.agentActionOptions(JSON.stringify({...query,parameter:'count'})),/没有已注册/)
+  await assert.rejects(service.agentActionOptions(JSON.stringify({...query,page:-1})),/查询参数/)
+  await assert.rejects(service.agentActionOptions(JSON.stringify(query)),/没有此只读候选能力/)
+})
 test('current role search only yields its actions; packaged browser examples validate without a fixed host/account', async () => {
   const catalog = { agentId: 'worker', name: '角色', revision: 'r', actions: [action], writable: true }
   assert.equal(actionCandidates(catalog, 'hello')[0].section, 'Actions · 角色')

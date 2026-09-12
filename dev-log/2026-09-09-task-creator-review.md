@@ -1172,3 +1172,57 @@ no reset of issue/write budgets and no removal of prior history. Initial real
 planner inventory confirms187/b1 still signed_out, but freezes native read-only
 verification first, not a copy based on cached inventory. Hourly activation remains
 pending a genuinely accepted final Batch; developer does not operate target hosts.
+
+### 0.30.11 original patrol accepted; original hourly schedule enabled
+
+The same-Task manual execution b-chat-ff196b85560e7b00bc15 ran from
+2026-09-12 10:26:59 to11:04:12 UTC and actually settled done. All14 kernel cards
+are done;11/11 browsers and6/6 proxies independently accepted. Three genuine
+notification stages (started/rework/restored) are sent. This execution received no
+developer coaching prompt, unblock, restart or direct target-host action after
+launch. The previous developer-assisted failed Batch remains intact.
+
+The real planner first verified187/b1 signed_out, independently refreshed its
+evidence, then froze only that browser plus its matching proxy IP for round2.
+Browser-manager performed one actual login-provision operation
+d5f665be8dc8fa462b06d8e7de2404ff. The MCP selected84/b1 fingerprint0c1e90d8 with
+zero other same-node holders and one current holder; excluded-account rules remain
+in effect. Import and matching target identity passed at10:41:00.367 UTC. No
+additional copy, recover, browser recreation or proxy repair was performed.
+
+Reviewer samples for187/b1 were distinct actual operations, not cached receipts:
+- 10:42:00.753Z —21c1213f0c2c4e78760fbfdf51910c54
+- 10:49:52.485Z —0369ac9a5b3750fa009e5e2eaff8e6a3
+- 10:56:51.056Z —7cfe7220656ffd1a7e44dffafd9f05ce
+- 11:02:49.984Z —7af574d436ce42763a212acb79e0e73f
+
+The four samples span20m49.231s. Durable waits automatically resumed the same
+reviewer card in native continuation Sessions12-t2/t3/t4; a due nextCheckAt stayed
+due and caused verification, not another postponement. Planner p3 finalized after
+ready=true and the restored notification; no redundant third round was created.
+All19 proxy operations in this Batch were successful read-only verify operations.
+
+After asserting settled done, ready=true, all independent acceptance and every
+notification sent, called setTaskEnabled on the ORIGINAL Task. Schedule readback:
+enabled=1, hourly Asia/Shanghai, next_at1789214400000 (2026-09-12 20:00 Beijing).
+The first enabled cron trigger has NOT occurred yet; do not claim scheduled-run
+acceptance or permanent future login/proxy health.206 remains truthfully excluded
+and unreachable, not repaired or silently declared healthy.
+
+Public Chrome1440/390px verified the actual final Batch,11/11 summary and187/b1
+4/4 evidence; no page errors or horizontal overflow. Screenshots retained as unique
+acceptance evidence: /tmp/patrol-03011-accepted-20260912-{1440,390}.png.
+The list shows14/14,8 retained executions, Close-schedule control and next20:00.
+Trace shows MCP/tools; Open original Session navigates to the exact top-level
+session query and has no Failed-to-load-history error. A first automation attempt
+had a Python keyword-argument mistake; the corrected real click test passed.
+Fleet public DOM and a separate API read both showed all11 Gemini accounts signed
+in, including source84/b1 and repaired187/b1; healthy excluded-source account
+holders were preserved. Historical expired observation receipts remain labeled
+as awaiting refresh, not incorrectly relabeled as failed login.
+
+Additional offline MCP login/runtime/task-session tests45/45 pass using existing
+Node22/dependencies. No new dependencies or download/build cache was installed;
+test fixtures self-clean. Production lib remains required. Small window/final
+screenshots are retained for acceptance evidence; unrelated behavior-collector
+worktree changes were not touched. No new browser-health Task or authority grants.

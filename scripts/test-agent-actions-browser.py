@@ -44,13 +44,17 @@ with sync_playwright() as p:
     try:
         started = time.time()
         page.goto(BASE + '/#/tc/agents/' + agent_id, wait_until='domcontentloaded')
+        expect(page.get_by_label('名字', exact=True)).to_be_visible(timeout=60000)
+        expect(page.locator('.dtc-actions-editor')).not_to_be_visible()
+        page.get_by_role('tab', name='Actions', exact=True).click()
         editor = page.locator('.dtc-actions-editor')
         editor.get_by_role('button', name='＋ 新增 Action').wait_for(timeout=60000)
         print('public_agent_ready_seconds', round(time.time() - started, 2), flush=True)
         editor.get_by_role('button', name='＋ 新增 Action').click()
         editor.get_by_label('Action 名称', exact=True).fill('安全回声')
         editor.get_by_label('Action id', exact=True).fill('echo')
-        editor.get_by_label('提示词模板', exact=False).fill('这是 UI 验收，不使用任何工具、不操作机器。请只回复 {{target}}。')
+        editor.get_by_role('button', name='＋ 参数', exact=True).click()
+        editor.get_by_label('提示词模板', exact=False).fill('这是 UI 验收，不使用任何工具、不操作机器。请只回复 {{target}}_{{param_2}}。')
         editor.get_by_role('button', name='保存 Actions', exact=True).click()
         expect(editor.get_by_role('status')).to_contain_text('已保存')
         editor.get_by_role('button', name='复制 Action', exact=True).click()
@@ -71,48 +75,87 @@ with sync_playwright() as p:
         page.set_viewport_size({'width': 1440, 'height': 1000})
         page.get_by_role('button', name='关闭工作台', exact=True).click()
         page.get_by_role('button', name='New session', exact=True).first.click()
-        composer = page.locator('textarea').first
+        composer = page.locator('textarea[data-phase]').first
+        composer.fill('@')
+        page.wait_for_timeout(1500)
+        expect(page.get_by_role('option').filter(has=page.get_by_text('安全回声', exact=True))).to_have_count(0)
         composer.fill('@' + agent_id)
-        page.get_by_text('Action 界面验收', exact=True).last.click(timeout=30000)
-        popup = page.get_by_role('dialog', name='Agent Action')
-        expect(popup).to_be_visible()
-        popup.get_by_label('选择 Action', exact=True).select_option('echo')
-        expect(popup.get_by_role('button', name='创建会话并发送', exact=True)).to_be_disabled()
-        popup.get_by_label('目标', exact=False).fill('ACTION_NEW_SESSION_OK')
-        expect(popup.locator('.dtc-action-preview')).to_contain_text('ACTION_NEW_SESSION_OK')
+        page.get_by_role('option').filter(has=page.get_by_text('Action 界面验收', exact=True)).click(timeout=30000)
+        expect(composer).to_have_value('@' + agent_id + '/')
+        page.get_by_role('option').filter(has=page.get_by_text('安全回声', exact=True)).click(timeout=30000)
+        expect(page.get_by_role('dialog')).to_have_count(0)
+        expect(composer).to_have_value('@Action 界面验收/安全回声 这是 UI 验收，不使用任何工具、不操作机器。请只回复 【目标】_【新参数】。')
+        selected = lambda: composer.evaluate('(e)=>e.value.slice(e.selectionStart,e.selectionEnd)')
+        page.wait_for_timeout(200)
+        assert selected() == '【目标】'
+        composer.dispatch_event('keydown', {'key': 'Enter', 'code': 'Enter', 'keyCode': 229, 'isComposing': True})
+        assert selected() == '【目标】', 'IME confirmation advanced a placeholder'
         before = session_ids()
-        popup.get_by_role('button', name='取消', exact=True).click()
-        assert session_ids() == before, 'Cancel created a session'
-        # Re-open without losing the original draft; only explicit send starts the role.
+        composer.press('Enter')
+        assert selected() == '【目标】', 'An empty required field was skipped'
+        page.get_by_role('button', name='Send message', exact=True).click()
+        page.wait_for_timeout(300)
+        assert '【目标】' in composer.input_value(), 'Send bypassed the placeholder guard'
+        assert session_ids() == before, 'Picking an Action or empty Enter created a session'
+        # Clearing the draft cancels without a modal or execution.
         composer.fill('')
+        assert session_ids() == before
         composer.fill('@' + agent_id)
-        page.get_by_text('Action 界面验收', exact=True).last.click(timeout=30000)
-        popup.get_by_label('选择 Action', exact=True).select_option('echo')
-        popup.get_by_label('目标', exact=False).fill('ACTION_NEW_SESSION_OK')
-        popup.get_by_role('button', name='创建会话并发送', exact=True).click()
-        expect(popup).not_to_be_visible(timeout=45000)
+        page.get_by_role('option').filter(has=page.get_by_text('Action 界面验收', exact=True)).click(timeout=30000)
+        page.get_by_role('option').filter(has=page.get_by_text('安全回声', exact=True)).click(timeout=30000)
+        page.wait_for_timeout(200)
+        composer.press_sequentially('ACTION_NEW')
+        typed = composer.input_value()
+        composer.press('Control+z')
+        assert composer.input_value() != typed, 'Native undo was bypassed'
+        composer.press('Control+Shift+z')
+        expect(composer).to_have_value(typed)
+        composer.press('Enter')
+        assert selected() == '【新参数】', 'Enter did not move to the next placeholder'
+        composer.press('Shift+Tab')
+        assert selected() == 'ACTION_NEW', 'Shift+Tab did not revisit the edited field'
+        composer.press('Tab')
+        assert selected() == '【新参数】'
+        composer.press_sequentially('SESSION_OK')
+        composer.press('Enter')
+        assert session_ids() == before, 'Finishing the last placeholder sent prematurely'
+        assert 'ACTION_NEW_SESSION_OK' in composer.input_value()
+        composer.press('Enter')
         page.wait_for_url('**/*session=agent-' + agent_id + '-*', timeout=45000)
         sid = parse_qs(urlparse(page.url).query)['session'][0]
         assert session_ids() - before == {sid}, 'New Action did not create exactly one role session'
         assert rpc('agentActions', {'sessionId': sid})['agentId'] == agent_id
         print('new_session', sid, flush=True)
-        composer = page.locator('textarea').first
+        expect(page.get_by_text('ACTION_NEW_SESSION_OK', exact=True).last).to_be_visible(timeout=60000)
+        composer = page.locator('textarea[data-phase]').first
         composer.fill('@')
-        page.get_by_text('安全回声', exact=True).last.click(timeout=30000)
-        expect(popup).to_be_visible()
-        popup.get_by_label('目标', exact=False).fill('ACTION_CURRENT_SESSION_OK')
+        page.get_by_role('option').filter(has=page.get_by_text('安全回声', exact=True)).wait_for(timeout=30000)
+        expect(page.get_by_role('option').filter(has=page.get_by_text('删除浏览器', exact=True))).to_have_count(0)
+        page.get_by_role('option').filter(has=page.get_by_text('安全回声', exact=True)).click()
+        page.wait_for_timeout(200)
+        composer.press_sequentially('ACTION_CURRENT')
+        composer.press('Enter')
+        assert selected() == '【新参数】'
+        composer.press_sequentially('SESSION_OK')
+        composer.press('Enter')
         page.screenshot(path='/tmp/dtc-actions-current-1440.png')
         page.set_viewport_size({'width': 390, 'height': 844})
+        page.wait_for_timeout(300)  # Wait for DSH's resize-driven auto-collapse before deciding to toggle.
+        collapse = page.get_by_role('button', name='Collapse sidebar', exact=True)
+        if collapse.count():
+            collapse.click()
+        page.mouse.move(385, 500)  # Native sidebar re-expands while the pointer hovers its rail.
+        expect(page.get_by_role('button', name='Open sidebar', exact=True)).to_be_visible(timeout=30000)
         page.screenshot(path='/tmp/dtc-actions-current-390.png')
-        box = popup.bounding_box()
-        assert box['x'] >= 0 and box['x'] + box['width'] <= 391, 'Dialog overflows mobile viewport'
+        box = composer.bounding_box()
+        assert box['x'] >= 0 and box['width'] > 220 and box['x'] + box['width'] <= 391, 'Native input unusable on mobile'
         page.set_viewport_size({'width': 1440, 'height': 1000})
         before_current = session_ids()
-        popup.get_by_role('button', name='确认发送到当前会话', exact=True).click()
-        expect(popup).not_to_be_visible(timeout=45000)
+        composer.press('Enter')
         assert parse_qs(urlparse(page.url).query)['session'][0] == sid
         assert session_ids() == before_current, 'Current Action created another session'
         expect(page.get_by_text('ACTION_CURRENT_SESSION_OK', exact=True).last).to_be_visible(timeout=60000)
+        assert session_ids() == before_current, 'Current Action created another session after acknowledgement'
         print('current_session_preserved', sid, flush=True)
         print('page_errors', errors, flush=True)
         assert not errors

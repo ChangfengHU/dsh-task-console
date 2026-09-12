@@ -55,6 +55,8 @@ export function AgentsPage({ api, catalog, agents, id, onSaved, toast }: { api: 
 
 function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; catalog: Catalog; agents: AgentRow[]; id: string | null; onSaved: () => Promise<void>; toast: (m: string) => void }) {
   const [tab, setTab] = useState(agentTab)
+  const [actionsOpened, setActionsOpened] = useState(() => agentTab() === 'actions')
+  useEffect(() => { if (tab === 'actions') setActionsOpened(true) }, [tab])
   const [page, setPage] = useState(agentPage)
   const [counts, setCounts] = useState<{ sessions: number; tasks: number } | null>(null)
   useEffect(() => { const on = () => { setTab(agentTab()); setPage(agentPage()) }; window.addEventListener('hashchange', on); return () => window.removeEventListener('hashchange', on) }, [])
@@ -142,16 +144,17 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
           {row ? <button className="dtc-btn" onClick={tryRun} disabled={run === 'running'}>{run === 'running' ? <><span className="dtc-spin" /> 试跑中</> : '试跑'}</button> : null}
           <button className="dtc-btn" onClick={copy}>复制</button>
           {row && !readOnly ? <button className="dtc-btn danger" onClick={del} disabled={busy === 'del'}>删除</button> : null}
-          {!readOnly ? <button className={`dtc-btn ${row ? '' : 'pri'}`} onClick={save} disabled={busy === 'save'}>{busy === 'save' ? '写入中…' : '保存 → 写 preset'}</button> : null}
+          {!readOnly && (!row || tab === 'config') ? <button className={`dtc-btn ${row ? '' : 'pri'}`} onClick={save} disabled={busy === 'save'}>{busy === 'save' ? '写入中…' : '保存 → 写 preset'}</button> : null}
         </div>
       </div>
       {err ? <div className="dtc-err">{err}</div> : null}
       {row ? <>
-        <div className="dtc-agent-tabs" role="tablist" aria-label="Agent 详情">{(['config', 'sessions', 'tasks'] as const).map(t => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => go(`agents/${encodeURIComponent(row.id)}?tab=${t}&page=1`)}>{t === 'config' ? '配置' : `${t === 'sessions' ? '会话' : '任务'}${counts ? `（${counts[t]}）` : ''}`}</button>)}</div>
+        <div className="dtc-agent-tabs" role="tablist" aria-label="Agent 详情">{(['config', 'actions', 'sessions', 'tasks'] as const).map(t => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => go(`agents/${encodeURIComponent(row.id)}?tab=${t}&page=1`)}>{t === 'config' ? '配置' : t === 'actions' ? 'Actions' : `${t === 'sessions' ? '会话' : '任务'}${counts ? `（${counts[t]}）` : ''}`}</button>)}</div>
         <AgentHistory api={api} id={row.id} tab={tab} page={page} onCounts={setCounts} />
+        {actionsOpened || tab === 'actions' ? <div hidden={tab !== 'actions'}><ActionEditor api={api} agentId={row.id} /></div> : null}
       </> : null}
       <div hidden={!!row && tab !== 'config'}>
-      {row ? <ActionEditor api={api} agentId={row.id} /> : <div className="dtc-note">先保存 Agent，即可配置可复用的 Actions 快捷指令。</div>}
+      {!row ? <div className="dtc-note">先保存 Agent，即可在 Actions 标签配置可复用的快捷指令。</div> : null}
       {readOnly ? <div className="dtc-warn">出厂 preset 由部署提供,任务台不改它。点「复制」得到一份可编辑的副本。</div> : null}
       {claude ? <div className="dtc-warn">claude-local 上 dsh 的工具都是延迟工具:这个 agent 用不了 MCP、问不了人、也交不了卷,<b>不能参与任务</b>。要参与任务请选 codex-local 或 API 型模型。</div> : cli ? <div className="dtc-note">codex-local 自带 shell:dsh 的工具围栏管不到它自己的 bash,只管 MCP / skill / 交卷。</div> : null}
 

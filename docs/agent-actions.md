@@ -6,15 +6,26 @@ MCP fence and host policy.
 
 ## Use
 
-- In an Agent session, type `@`. Its Actions appear first. Select one, fill the
-  fields, review the exact message and confirm. This queues a normal user turn in
-  **the same session**. A session switch prevents sending to the old target.
+- In an Agent session, type `@`. Only that session's confirmed Agent contributes
+  Actions. Select one to fill its prompt **directly in the native composer**;
+  there is no Action modal or parameter form. The first `【parameter label】` is
+  selected for typing. Enter/Tab advances; Shift+Tab goes back; Shift+Enter retains
+  native newline behavior. IME confirmation does not advance a field.
+- Enter on the final field only finishes filling. Another Enter or native Send
+  submits the editable prompt as a normal user turn in **the same session**.
+  Unfilled markers prevent sending, including by the Send button.
 - In a new-session composer, type `@`, select an Agent with Actions, then choose
   an Action or an ordinary message. Only explicit send creates the role session.
-- Agent → configuration → Actions supports create, edit, copy, delete and a
+  A blank composer may inherit DSH's selected preset; an explicit Agent selection
+  may choose another role before the conversation starts. An existing different
+  role's session does not expose that other role's Actions.
+- Agent → **Actions tab** supports create, edit, copy, delete and a
   separate **Save Actions** button. Saving the Agent's normal configuration does
   not replace its Actions. Templates must reference every configured parameter.
-- Cancel/preview never executes. An uncertain send is not automatically retried;
+  The default Configuration tab keeps identity and tool/skill settings first.
+  Actions mount only when opened; switching tabs preserves both editors' unsaved
+  drafts. `#/tc/agents/<id>?tab=actions` is a reloadable/shareable direct link.
+- Selecting/editing/clearing a draft never executes. An uncertain send is not automatically retried;
   check the native session before submitting again.
 
 Parameters support text, finite numbers and booleans, required fields and optional
@@ -62,7 +73,15 @@ Authenticated native `taskConsole` RPCs (standard string JSON argument/result):
 The browser then uses native `SessionFace.prompt(..., 'queue')` for an existing
 session or `startAgentSession` for a new one. The Action name/id and rendered prompt
 are visible in the normal conversation; parameters are not stored in the sidecar.
-The popup uses the existing theme and loads with the heavy client only on demand.
+Action selection uses native command claims and the session-owned input facade,
+including draft persistence/undo. DOM access only selects text; it never writes
+the textarea value. Async candidate responses are discarded after a session/role
+switch, and role plus sidecar revision are rechecked before dispatch. An Action
+is a prompt convenience, not a substitute for the Agent's tool authorization.
+Placeholder ranges track edits inside the selected field before falling back to
+a whole-draft diff: a typed delimiter identical to the following template text
+must not be attributed to the next field. Regression coverage includes typing,
+undo/redo, required-field Send blocking and Chinese IME confirmation.
 
 ## Verification
 
@@ -70,10 +89,12 @@ The popup uses the existing theme and loads with the heavy client only on demand
 NODE_ENV=test /usr/bin/node --import tsx --test --test-concurrency=1 test/*.test.ts
 /usr/bin/node scripts/build.mjs
 DSH_ACTION_SMOKE=1 python3 scripts/test-agent-actions-browser.py
+python3 scripts/test-agent-actions-tabs-browser.py
 ```
 
 The opt-in public smoke test requires the installed Playwright/Chrome environment.
-It creates a uniquely named **tool-free** Agent, exercises config CRUD, cancel,
+It creates a uniquely named **tool-free** Agent, exercises config CRUD, clearing,
+role isolation, inline placeholders, keyboard navigation, premature-send blocking,
 new/current-session dispatch and desktop/mobile views, then removes only that
 preset. Its two-message native session remains as evidence. It does not operate
 Fleet hosts or modify business Agents/Tasks. `DSH_ACTION_BASE` and `DSH_ACTION_RPC`

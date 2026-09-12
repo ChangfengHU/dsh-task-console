@@ -5,7 +5,6 @@ import { Console, type Api } from './Console.tsx'
 import { CONSOLE_REMOTE, unwrap } from './remote.ts'
 import { installStyles } from './styles.ts'
 import { SessionLedgerTab } from './TurnLedger.tsx'
-import { ActionDialog } from './AgentActions.tsx'
 
 let activation: Promise<Api> | undefined
 
@@ -66,5 +65,5 @@ async function openWhenListed(ctx: any, sessionId: string): Promise<void> {
   throw new Error('会话已建好,但列表还没刷出来;在左侧找一下')
 }
 
-export { Console, SessionLedgerTab, ActionDialog }
+export { Console, SessionLedgerTab }
 export type { Api }

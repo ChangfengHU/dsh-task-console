@@ -6,7 +6,14 @@
 merge it into AgentSpec, generated tool composition or Task roster review hashes.
 User-preset saves preserve it under the same in-process write lock. Action edits
 use revision-CAS and an atomic file rename. No defaults are re-created after deletion.
-The `@` entry reads the actual session's header role. Existing-role Actions queue
+Manage shortcuts in the separate Actions tab; Configuration remains the default
+identity/capability editor. Tab changes preserve unsaved drafts. Invocation has no
+Action modal: fill the native composer, select inline placeholders, Enter/Tab to
+advance (Shift+Tab back), then a separate Enter/Send to submit. Unfilled markers
+block both keyboard and button sends; IME confirmation must not advance a field.
+The `@` entry checks the currently selected session and its actual header role,
+discards stale async candidates and closes stale menus when that role changes.
+Existing-role Actions queue
 a native user turn in that same Session; Agent → Action before starting uses the
 normal preset session creator only after explicit confirmation. Preview/selection
 never executes. Actions confer no tools or host grants; the original Agent/MCP/Task

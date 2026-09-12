@@ -13,9 +13,6 @@ const CSS = `
 .dtc-action-param label { font-size:12px; min-width:0 }
 .dtc-root .dtc-action-check { display:flex; align-items:center; align-self:center; gap:4px }
 .dtc-root .dtc-action-check input { width:auto }
-.dtc-root.dtc-action-dialog { border:0; padding:0; background:transparent; max-width:96vw; overflow:visible }
-.dtc-action-dialog::backdrop { background:rgba(10,14,18,.55) }
-.dtc-action-preview { white-space:pre-wrap; overflow-wrap:anywhere; background:var(--dtc-surface-2); padding:12px; border:1px solid var(--dtc-line); border-radius:6px; max-height:220px; overflow:auto; font:inherit }
 @media(max-width:720px) { .dtc-action-param { grid-template-columns:repeat(2,minmax(0,1fr)); padding-bottom:12px; border-bottom:1px solid var(--dtc-line) } }
 .dtc-root {
   --dtc-ground:#f3f5f6; --dtc-surface:#fff; --dtc-surface-2:#eaeef0; --dtc-line:#d9dfe3; --dtc-line-soft:#e6ebee;
@@ -320,8 +317,8 @@ body[data-ds-dark-theme] .dtc-node .q { color:#a794e0 }
 .dtc-aitem .perm { width:8px; height:8px; border-radius:50% }
 .perm.ro { background:var(--dtc-ok) } .perm.lw { background:var(--dtc-warn) } .perm.w { background:var(--dtc-bad) } .perm.sys { background:var(--dtc-faint) } .perm.bad { background:var(--dtc-bad); outline:2px solid var(--dtc-bad-bg) }
 .dtc-adetail { overflow:auto; padding:24px 30px 60px; min-height:0 }
-.dtc-agent-tabs { display:flex; gap:20px; border-bottom:1px solid var(--dtc-line); margin:18px 0 }
-.dtc-agent-tabs button { color:var(--dtc-muted); padding:10px 2px; border-bottom:2px solid transparent; background:none }
+.dtc-agent-tabs { display:flex; gap:20px; border-bottom:1px solid var(--dtc-line); margin:18px 0; overflow-x:auto }
+.dtc-agent-tabs button { color:var(--dtc-muted); padding:10px 2px; border-bottom:2px solid transparent; background:none; flex-shrink:0; white-space:nowrap }
 .dtc-agent-tabs button.on { color:var(--dtc-ink); border-bottom-color:var(--dtc-accent); font-weight:600 }
 .dtc-history-tools,.dtc-history-pager { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:14px 0; font-size:12px }
 .dtc-history-pager > div { display:flex; gap:12px; align-items:center }

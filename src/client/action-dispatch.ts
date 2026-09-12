@@ -1,14 +1,3 @@
-export interface ActionRequest {
-  agentId: string
-  name: string
-  actionId?: string
-  /** Present only for an Action chosen from the current role. */
-  targetSessionId?: string
-  originSessionId: string
-  span?: { start: number; end: number; draftRev: number }
-  cwd?: string
-}
-export const ACTION_OPEN = 'dtc:action-open'
 export const ACTION_CHANGED = 'dtc:actions-changed'
 
 /** Native prompt path preserves transcript, tools and role; no separate Task execution. */

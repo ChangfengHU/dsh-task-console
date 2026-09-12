@@ -3,10 +3,10 @@ import type { AgentHistoryPage } from '../wire.ts'
 import { executionCode, executionTime } from '../execution-label.ts'
 import { go, readRouteQuery, type Api } from './Console.tsx'
 
-export type AgentTab = 'config' | 'sessions' | 'tasks'
+export type AgentTab = 'config' | 'actions' | 'sessions' | 'tasks'
 export function agentTab(): AgentTab {
   const tab = readRouteQuery().get('tab')
-  return tab === 'sessions' || tab === 'tasks' ? tab : 'config'
+  return tab === 'actions' || tab === 'sessions' || tab === 'tasks' ? tab : 'config'
 }
 export function agentPage(): number {
   const page = Number(readRouteQuery().get('page') ?? 1)
@@ -21,15 +21,16 @@ export function AgentHistory({ api, id, tab, page, onCounts }: { api: Api; id: s
   const [error, setError] = useState('')
   const [refresh, setRefresh] = useState(0)
   const [opening, setOpening] = useState('')
+  const summaryOnly = tab === 'config' || tab === 'actions'
   useEffect(() => {
     let stop = false
     setData(null); setError('')
-    api.agentHistory({ agentId: id, kind: tab === 'tasks' ? 'tasks' : 'sessions', page: tab === 'config' ? 1 : page, pageSize: tab === 'config' ? 1 : 10 })
+    api.agentHistory({ agentId: id, kind: tab === 'tasks' ? 'tasks' : 'sessions', page: summaryOnly ? 1 : page, pageSize: summaryOnly ? 1 : 10 })
       .then(result => { if (!stop) { setData(result); onCounts(result.counts) } })
       .catch(e => { if (!stop) setError(String(e.message ?? e)) })
     return () => { stop = true }
   }, [api, id, tab, page, refresh, onCounts])
-  if (tab === 'config') return error ? <div className="dtc-err" role="alert">关联记录读取失败：{error} <button className="dtc-btn sm" onClick={() => setRefresh(n => n + 1)}>重试</button></div> : null
+  if (summaryOnly) return error ? <div className="dtc-err" role="alert">关联记录读取失败：{error} <button className="dtc-btn sm" onClick={() => setRefresh(n => n + 1)}>重试</button></div> : null
   const navigate = (p: number) => go(`agents/${encodeURIComponent(id)}?tab=${tab}&page=${p}`)
   const open = async (sessionId: string) => {
     setOpening(sessionId); setError('')

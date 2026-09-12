@@ -1162,3 +1162,13 @@ guards;250 tests/build pass. A further manual execution of the SAME Task is need
 to handle the new187/b1 issue under the existing reviewed permissions/budgets.
 The original hourly schedule remains disabled until genuine acceptance; no new
 browser-health Task, expanded host grants, direct target operations or token edits.
+
+Deployed the final guards at a verified zero-active boundary at10:23 UTC. Commit
+12be12b is pushed. Started another manual execution on the SAME Task via the public
+workflow launch RPC: b-chat-ff196b85560e7b00bc15, request
+patrol-03011-manual-20260912-b. The request only asks the already-reviewed workflow
+to inspect, conditionally repair and independently report; no new role or Task,
+no reset of issue/write budgets and no removal of prior history. Initial real
+planner inventory confirms187/b1 still signed_out, but freezes native read-only
+verification first, not a copy based on cached inventory. Hourly activation remains
+pending a genuinely accepted final Batch; developer does not operate target hosts.

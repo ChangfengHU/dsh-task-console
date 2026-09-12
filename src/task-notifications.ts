@@ -24,6 +24,7 @@ export class TaskNotifications {
   }
 
   async request(input: CompletionCheck, stage: NotificationStage, report: any) {
+    if (stage === 'rework' && report.ready) throw new Error('本次已独立验收通过，不能发送返工通知；使用 restored 并收口')
     if (input.card.role !== 'planner' || !Object.hasOwn(labels,stage)) throw new Error('只有规划者可交接通知')
     if (stage === 'rework' && input.task.design && (input.card.round ?? 0) > input.task.design.failurePolicy.maxAttempts)
       throw new Error('已达审查计划的累计回合上限，不能通知继续返工；请交接真实未解决结果')

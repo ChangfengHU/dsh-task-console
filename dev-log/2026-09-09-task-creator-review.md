@@ -1131,3 +1131,20 @@ including84/b1 with the non-excluded selected account and a different account on
 84/b2. A prior10:00 page read temporarily omitted188's browser rows; a fresh API and
 browser read restored all three. No Fleet code was changed here. This live display
 is separate from the still-pending Task stability acceptance.
+
+At10:10 UTC the fourth84/b1 independent sample passed (first09:49:03.369,
+fourth10:09:53.436), with11/11 browsers and6/6 proxies independently accepted.
+Public Task Chrome confirmed the11/11 summary,6/6 proxy section, actual84/b1
+4/4-over20-minute evidence and retained206 exclusion;1440/390px had no errors or
+overflow. Screenshots /tmp/patrol-03011-final-20260912-{1440,390}.png retain that
+point-in-time evidence, not a claim that the Batch had already settled.
+
+Planner p3 nevertheless froze another all-read round from stale inventory fields
+despite native ready=true. Preserved and allowed that already-created read-only
+round to finish; no further login write was authorized. Added host refusal of new
+rounds/rework notices after completed independent acceptance, unless later actual
+native evidence invalidates it. Also preserve inherited issue stability evidence
+after resolving it in the current Batch (without carrying that observation debt
+into future executions), so completed windows are not relabeled as unnecessary.
+250 full tests and build pass. These last guards await an idle deployment boundary;
+the original Batch's extra read-only round and final notification remain in flight.

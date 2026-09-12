@@ -50,6 +50,7 @@ export class BrowserPatrolWorkflow {
     if (input.task.graphMode !== 'dynamic-rounds' || input.card.role !== 'planner') throw new Error('巡查v2必须使用动态规划/执行/评估')
     const inventory = this.inventory(input.batch.id)
     if (!inventory) throw new Error('先用真实 browser_fleet_inventory 建立本次目标清单')
+    if (this.status(input).ready) throw new Error('本次已完成独立验收，不能因 inventory 缓存未知或回执过期再冻结返工。调用 task_notify(restored) 与 task_finalize 收口；新的真实异常须先取得原生证据，下一次巡查使用同 Task 的新执行记录。')
     if (!Array.isArray(candidate) || !candidate.length || candidate.length > 128) throw new Error('巡查每轮需要 items:[{ip,instance,action:verify|provision|resume|recover,reason}]，不能只提交自然语言')
     const keys = new Set<string>(), items: PatrolRoundItem[] = []
     for (const row of candidate) {
@@ -101,7 +102,7 @@ export class BrowserPatrolWorkflow {
         .filter(s => Date.parse(s.checked_at) >= Date.parse(input.batch.firedAt) && Date.parse(s.checked_at) <= now)
       const proof = history.at(-1)
       const samples = history.filter(s => s.role === 'reviewer')
-      const issue = db.prepare("SELECT * FROM dsh_browser_issues WHERE spec_id=? AND target_key=? AND status='open'").get(input.task.id, key) as any
+      const issue = db.prepare("SELECT * FROM dsh_browser_issues WHERE spec_id=? AND target_key=? AND (status='open' OR resolved_at>=?) ORDER BY (status='open') DESC,id DESC LIMIT 1").get(input.task.id, key, input.batch.firedAt) as any
       const changedThisBatch = (db.prepare('SELECT COUNT(*) n FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id WHERE o.batch_id=? AND i.target_key=?').get(input.batch.id,key) as any).n
       const needsStability = !!issue || changedThisBatch > 0
       // Closing an issue must not discard this Batch's repair/observation requirement.

@@ -184,6 +184,21 @@ test('a repaired target retains its complete stability requirement even after is
   assert.equal(after.items[0].reason,'observation-window-pending-or-failed')
 })
 
+test('closing an inherited repair issue preserves this Batch stability evidence, not another repair round',async t=>{
+  const {input,patrol,store}=await setup(t), now=Date.now()-60_000, db=store.kernel.db
+  db.prepare("INSERT INTO dsh_browser_issues(spec_id,target_key,status,attempts,opened_at) VALUES ('fixture','192.0.2.10:1','open',1,?)").run(new Date(now-30*60_000).toISOString())
+  db.prepare("INSERT INTO dsh_browser_operations VALUES ('previous-operation',1,'previous-batch','old-card','login-provision',?)").run(new Date(now-30*60_000).toISOString())
+  const reviewer={...input,card:{...input.card,role:'reviewer'}}
+  for(const [i,minute] of [-21,-14,-7,0].entries())patrol.capture(reviewer,proof(reviewer,now+minute*60_000,'verified',10+i))
+  patrol.complete(reviewer)
+  assert.equal(patrol.status(input).items[0].observation.samples,4)
+  assert.equal(patrol.status(input).items[0].observation.passed,true)
+  assert.throws(()=>patrol.plan(input,[{ip:'192.0.2.10',instance:1,action:'verify',reason:'expired cache'}]),/已完成独立验收/)
+  // A real newer adverse observation permits a new evidence-based rework plan.
+  patrol.capture(input,proof(input,Date.now()-10,'signed_out',30))
+  assert.doesNotThrow(()=>patrol.plan(input,[{ip:'192.0.2.10',instance:1,action:'provision',reason:'new native logout'}]))
+})
+
 test('expired-at-observation and future receipts cannot become valid point-in-time evidence',async t=>{
   const {input,patrol}=await setup(t), now=Date.now()
   const reviewer={...input,card:{id:'batch#r1',role:'reviewer',round:1},profileId:'fleet-ops-reviewer',sessionId:'task-fixture-reviewer'}
@@ -378,6 +393,8 @@ test('a round past the reviewed budget cannot queue a misleading rework notifica
   input.task={...input.task,design:{...design,notifications:{channel:'wecom',agentId:'wecom-notifier',chatIds:['fixture-group']}}}
   let created=0
   store.createNotification=async()=>{created++;return 'fixture-notice'}
+  await assert.rejects(outbox.request(input,'rework',{ready:true}),/已独立验收通过/)
+  assert.equal(created,0)
   await assert.rejects(outbox.request(input,'rework',{ready:false}),/回合上限/)
   assert.equal(created,0)
   await outbox.request(input,'unresolved',{ready:false})

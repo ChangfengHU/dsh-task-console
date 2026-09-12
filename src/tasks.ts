@@ -547,7 +547,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
       : card.role === 'executor'
       ? '你只完成本轮冻结 items 的动作，取得后台操作终态后立即 task_complete({summary:"真实结果及下游待验项"}) 交给评估者。不得 task_wait 等待下游采样，也不得为填满独立采样重复 provision。'
       : card.role === 'reviewer'
-        ? '只有你负责分时独立复验并可 task_wait。新鲜探针才算新采样；缓存/重复回执不算。优先检查本轮修复目标，等待 observation.nextCheckAt，修复后仍须完整观察窗口；健康目标取得本轮独立检查后不因其回执在交接中到期而重做检查或20分钟观察。任一目标明确需要返工时，立即 task_complete 交接失败结论，不为其他目标尚未结束的稳定窗口继续 task_wait；同一 Batch 的有效独立样本跨轮保留，只有实际修复/后续不良证据会使对应目标重新计时，不降低最终20分钟验收。明确仍未登录/挑战时交接返工结论，不空等凑稳定样本。得到通过或返工结论后 task_complete 交给规划者。'
+        ? '只有你负责分时独立复验并可 task_wait。新鲜探针才算新采样；缓存/重复回执不算。优先检查本轮修复目标，等待 observation.nextCheckAt，修复后仍须完整观察窗口；健康目标取得本轮独立检查后不因其回执在交接中到期而重做检查或20分钟观察。任一目标明确需要返工且 task_patrol_status.canHandoffForRework=true 时，立即 task_complete 交接失败结论；同一 Batch 的有效独立样本跨轮保留，只有实际修复/后续不良证据会使对应目标重新计时，不降低最终20分钟验收。最后一轮或没有可继续修复项时，pendingStability 中的已登录目标必须在当前评估卡完成观察，使用 task_wait，不得提前交接或以预算耗尽免除采样。明确仍未登录/挑战的目标如实记录，不空等凑稳定样本。得到通过或返工结论后 task_complete 交给规划者。'
         : '先通过 task_notify 留下通知回执；根据真实证据 task_plan_round 或 task_finalize。不要 task_wait 等待尚未执行的下游；通知失败只处理通知，不能重跑已完成浏览器动作。')
   if (task.design?.proxy) lines.push('', '[PROXY BEFORE LOGIN]',
     `批准线路 ${task.design.proxy.lineId}；代理处理由独立角色 ${task.design.proxy.agentId} 执行。每轮 task_plan_round 同时提供 proxyItems:[{ip,action:verify|repair,reason}]，覆盖 items 中的机器；只读与修复分开，不固化本轮 IP 到工作流模板。`,
@@ -559,6 +559,8 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (task.design?.browserPatrol?.excludedNodeIds?.length) lines.push('', '[REVIEWED SCOPE EXCLUSIONS]',
     `排除节点 ${task.design.browserPatrol.excludedNodeIds.join(', ')}：不安排动作，不阻止本轮验收，但保留排除及真实观测记录。其余目标必须正常处理，不能自行增加排除。`)
   if (task.graphMode === 'dynamic-rounds' && card.role === 'planner') {
+    if (task.design?.evidenceContract === 'browser-patrol-v2') lines.push('', '[REFRESH BEFORE FREEZING]',
+      '已有明确返工项但其回执过期时，先用你自己的 browser_login_verify + browser_status 取得该目标的新鲜终态，再决定本轮 provision/recover/verify。只读刷新不需要新建 Gate 或消耗完整返工轮次。不得从过期证据授权写入，也不要仅为刷新少数旧回执把全量只读检查冻结成另一整轮；健康独立证据保留，实际副作用预算和最终验收要求不变。')
     lines.push('', '[DYNAMIC DAG CONTRACT]',
       card.round === 1
         ? '你是初始规划者。完成方案后必须调用 task_plan_round(summary)；系统随后才会创建真实 Gate、执行者、评估者和下一位规划者记录。'

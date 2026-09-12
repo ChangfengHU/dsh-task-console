@@ -221,6 +221,74 @@ test('stale signed-out evidence never authorizes a login copy; healthy expiry do
   assert.throws(()=>patrol.plan(input,[row]),/新鲜真实未登录证据/)
 })
 
+test('rework refresh uses the planner session without spending a DAG round',async t=>{
+  const {input,patrol,store}=await setup(t), now=Date.now()
+  input.card.round=2
+  patrol.capture(input,proof(input,now-10*60_000,'signed_out',10,{ttlMs:180_000}))
+  const verify={ip:'192.0.2.10',instance:1,action:'verify',reason:'refresh old receipt'}
+  assert.throws(()=>patrol.plan(input,[verify]),/仅刷新回执/)
+  assert.equal((store.kernel.db.prepare('SELECT COUNT(*) n FROM dsh_patrol_round_items').get() as any).n,0)
+  patrol.capture(input,proof(input,now-1_000,'signed_out',20))
+  assert.equal(patrol.plan(input,[{...verify,action:'provision'}])!.items[0].action,'provision')
+  // A fresh healthy result removes the need to copy; unknown never grants a write.
+  patrol.capture(input,proof(input,now-500,'verified',30))
+  assert.equal(patrol.plan(input,[verify])!.items[0].action,'verify')
+  patrol.capture(input,proof(input,now-100,'unknown',40))
+  assert.equal(patrol.plan(input,[verify])!.items[0].action,'verify')
+  assert.throws(()=>patrol.plan(input,[{...verify,action:'provision'}]),/未登录证据/)
+})
+
+test('read-only plans remain allowed without write authorization or remaining issue budget',async t=>{
+  const {input,patrol,store}=await setup(t), db=store.kernel.db
+  input.card.round=2
+  patrol.capture(input,proof(input,Date.now()-1_000,'signed_out'))
+  const verify={ip:'192.0.2.10',instance:1,action:'verify',reason:'read-only evidence'}
+  db.prepare("INSERT INTO dsh_browser_issues(spec_id,target_key,status,attempts,opened_at) VALUES ('fixture','192.0.2.10:1','open',3,?)").run(new Date().toISOString())
+  assert.doesNotThrow(()=>patrol.plan(input,[verify]))
+  db.prepare('UPDATE dsh_browser_issues SET attempts=0').run()
+  db.prepare("UPDATE dsh_patrol_inventory SET inventory_json=json_set(inventory_json,'$.nodes[0].browsers[0].loginAuthorized',json('false'))").run()
+  assert.doesNotThrow(()=>patrol.plan(input,[verify]))
+  assert.throws(()=>patrol.plan(input,[{...verify,action:'provision'}]),/登录修复授权/)
+})
+
+test('last reviewer cannot abandon a pending window even when another target is signed out',async t=>{
+  const {input,patrol,store}=await setup(t), now=Date.now()-60_000, db=store.kernel.db
+  const inventory=JSON.parse((db.prepare('SELECT inventory_json FROM dsh_patrol_inventory').get() as any).inventory_json)
+  inventory.nodes[0].browsers.push({instance:2,loginAuthorized:true})
+  db.prepare('UPDATE dsh_patrol_inventory SET inventory_json=?').run(JSON.stringify(inventory))
+  db.prepare("INSERT INTO dsh_browser_issues(spec_id,target_key,status,attempts,opened_at) VALUES ('fixture','192.0.2.10:1','open',3,?)").run(new Date(now-30*60_000).toISOString())
+  const reviewer={...input,card:{id:'batch#r2',role:'reviewer',round:2},profileId:'fleet-ops-reviewer',sessionId:'task-fixture-reviewer'}
+  db.prepare("INSERT INTO tasks(id,title,status,priority,created_by,created_at,tenant) VALUES (?,?, 'running',0,'test',?,'batch')").run(reviewer.card.id,'Reviewer fixture',Date.now()/1000)
+  patrol.capture(reviewer,proof(reviewer,now))
+  const signedOut=proof(reviewer,now,'signed_out',20), part=signedOut[1].data.message!.content[0].content[0]
+  const value=JSON.parse(part.text);value.args.instance=2;value.result.verification.instance=2;part.text=JSON.stringify(value)
+  patrol.capture(reviewer,signedOut)
+  assert.equal(patrol.status(reviewer).canHandoffForRework,true)
+  assert.doesNotThrow(()=>patrol.complete(reviewer)) // repair the other target while samples survive
+  reviewer.card.round=3
+  assert.equal(patrol.status(reviewer).canHandoffForRework,false)
+  assert.throws(()=>patrol.complete(reviewer),/不能提前交接/)
+  const finalPlanner={...input,card:{...input.card,round:4},metadata:{patrolDisposition:'unresolved'}}
+  assert.equal(patrol.status(finalPlanner).canCloseUnresolved,false)
+  assert.throws(()=>patrol.complete(finalPlanner),/不能收口/)
+  // Four distinct independent samples over 21 minutes permit an honest mixed result.
+  for(const [i,minute] of [-21,-14,-7].entries())patrol.capture(reviewer,proof(reviewer,now+minute*60_000,'verified',30+i))
+  assert.deepEqual(patrol.status(reviewer).pendingStability,[])
+  assert.doesNotThrow(()=>patrol.complete(reviewer))
+  assert.equal(patrol.complete(finalPlanner).metadata.workflowOutcome,'unresolved')
+})
+
+test('a reviewer waits for a healthy repaired target even in an early round without another repair',async t=>{
+  const {input,patrol,store}=await setup(t)
+  store.kernel.db.prepare("INSERT INTO dsh_browser_issues(spec_id,target_key,status,attempts,opened_at) VALUES ('fixture','192.0.2.10:1','open',1,?)").run(new Date(Date.now()-60_000).toISOString())
+  const reviewer={...input,card:{...input.card,role:'reviewer'}}
+  patrol.capture(reviewer,proof(reviewer,Date.now()-1_000))
+  assert.equal(patrol.status(reviewer).canHandoffForRework,false)
+  assert.throws(()=>patrol.complete(reviewer),/不能提前交接/)
+  patrol.capture(reviewer,proof(reviewer,Date.now()-100,'signed_out',20))
+  assert.doesNotThrow(()=>patrol.complete(reviewer)) // a real logout is not a pending success window
+})
+
 test('legacy report presentation separates expiry from logout without rewriting its decision',()=>{
   const legacy={state:'verified',accepted:false,reason:'not-currently-verified',checkedAt:'2026-09-10T08:51:51Z'}
   const before=JSON.stringify(legacy), view=patrolItemView(legacy)
@@ -256,9 +324,13 @@ test('patrol role instructions distinguish freshness from acceptance and retain 
   const message=cardMessage({...input.task,title:'Fixture',brief:'Read-only fixture',participants:[{agentId:'reviewer'}]}, {...input.card,role:'reviewer',index:0}, 'batch',[])
   assert.match(message,/accepted=true 且 freshness=expired/)
   assert.match(message,/修复后仍须完整观察窗口/)
-  assert.match(message,/任一目标明确需要返工时，立即 task_complete/)
+  assert.match(message,/canHandoffForRework=true 时，立即 task_complete/)
+  assert.match(message,/最后一轮.*pendingStability/)
   assert.match(message,/有效独立样本跨轮保留/)
   assert.doesNotMatch(message,/观察结束时刷新其他已过期目标/)
+  const planner=cardMessage({...input.task,title:'Fixture',brief:'Fixture',participants:[{agentId:'planner'}]}, {...input.card,role:'planner',index:0}, 'batch',[])
+  assert.match(planner,/REFRESH BEFORE FREEZING/)
+  assert.match(planner,/不得从过期证据授权写入/)
 })
 
 test('new notifications describe receipt expiry without claiming logout or sending externally',async t=>{

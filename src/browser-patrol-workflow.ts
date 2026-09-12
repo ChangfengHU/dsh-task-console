@@ -70,6 +70,10 @@ export class BrowserPatrolWorkflow {
       }
       keys.add(key); items.push({ ip: row.ip, instance: row.instance, action: row.action, reason: row.reason.trim() })
     }
+    if (input.card.round! > 1 && items.every(row => row.action === 'verify') && input.task.design.browserPatrol!.actions.includes('provision')) {
+      const repairable = this.status(input).items.filter(row => !row.accepted && row.state === 'signed_out' && row.loginAuthorized && row.attempts < input.task.design!.failurePolicy.maxAttempts)
+      if (repairable.length) throw new Error('仍有已知未登录且有剩余修复预算的目标，不能把仅刷新回执冻结为整轮返工。规划者先 browser_login_verify + browser_status 刷新这些目标，再根据新鲜证据安排授权修复；来源或权限受阻须明确报告，不得盲目复制或绕过授权。')
+    }
     // Runner invokes commit inside the SAME transaction as the real Gate and links.
     return { items, commit: () => {
       if (db.prepare('SELECT 1 FROM dsh_patrol_round_items WHERE batch_id=? AND round=?').get(input.batch.id, input.card.round!)) throw new Error('本轮计划已冻结，不能原地改写')
@@ -132,20 +136,25 @@ export class BrowserPatrolWorkflow {
     }
     const uncovered = nodes.filter((n: any) => n.reachable !== true && !n.browsers.length).map((n: any) => ({ nodeId: n.nodeId, reason: 'unreachable-no-browser-observation' }))
     const plan = db.prepare('SELECT target_key,action,reason FROM dsh_patrol_round_items WHERE batch_id=? AND round=?').all(input.batch.id, input.card.round ?? 0)
+    const pendingStability = items.filter(i => !i.accepted && i.readAuthorized && inventory.nodes.find((n: any) => n.ip === i.ip)?.reachable && i.state === 'verified' && !i.verificationFailure && i.observation && !i.observation.passed)
+    const canHandoffForRework = (input.card.round ?? 0) < input.task.design!.failurePolicy.maxAttempts && items.some(i => !i.accepted && i.readAuthorized && i.loginAuthorized && i.attempts < input.task.design!.failurePolicy.maxAttempts && (i.state !== 'verified' || i.verificationFailure))
     const canCloseUnresolved = items.every(i => i.accepted || !i.readAuthorized || !inventory.nodes.find((n: any) => n.ip === i.ip)?.reachable || i.independentlyObserved > 0 && (
       (input.card.round ?? 0) > input.task.design!.failurePolicy.maxAttempts || i.attempts >= input.task.design!.failurePolicy.maxAttempts || i.state === 'unknown' && i.independentlyObserved >= 2
-    )) && (items.length > 0 || uncovered.length > 0)
+    )) && pendingStability.length === 0 && (items.length > 0 || uncovered.length > 0)
     const proxy=input.task.design?.proxy?new ProxyWorkflow(this.store).status(input):undefined
     const networkReady=!proxy||proxy.items.length>0&&proxy.items.every(row=>row.independent)
     const report=patrolReportSummary(items,uncovered)
     return { assessmentMode: 'point-in-time-v1', assessedAt: new Date(now).toISOString(),
       ready: items.length > 0 && items.every(i => i.accepted) && uncovered.length === 0&&networkReady, canCloseUnresolved, plan,
+      pendingStability: pendingStability.map(i => `${i.ip}:${i.instance}`), canHandoffForRework,
       items, uncovered, excluded, ...report,...(proxy?{proxy,summary:report.summary+` 代理独立验收 ${proxy.items.filter(row=>row.independent).length}/${proxy.items.length}。`}:{}) }
   }
 
   complete(input: CompletionCheck) {
     const report = this.snapshot(input)
     const unresolved = input.metadata?.patrolDisposition === 'unresolved'
+    if (input.card.role === 'reviewer' && report.pendingStability?.length && !report.canHandoffForRework)
+      throw new Error(`不能提前交接：${report.pendingStability.join(', ')} 仍缺完整稳定性采样，且没有可提前交接的下一轮修复。继续独立复验，按 observation.nextCheckAt 使用 task_wait；最后一轮及修复次数耗尽不能免除已登录目标的观察窗口。真实掉线或挑战应如实记录，不空等成功。`)
     // Resolve only independently accepted targets, even if another node is unreachable.
     if (input.card.role === 'reviewer' || input.card.role === 'planner') for (const row of report.items.filter(i => i.accepted))
       this.db().prepare("UPDATE dsh_browser_issues SET status='resolved',resolved_at=? WHERE spec_id=? AND target_key=? AND status='open'").run(new Date().toISOString(), input.task.id, `${row.ip}:${row.instance}`)

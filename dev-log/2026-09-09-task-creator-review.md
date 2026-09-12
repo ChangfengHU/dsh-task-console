@@ -1033,3 +1033,33 @@ valid same-Batch independent samples across rounds, never waive final20-minute
 acceptance.61 focused runner/patrol tests and build passed. Deployed only during
 the durable wait with no running roles/Sessions/browser operations, preserving its
 due time and original execution. No target operation, new Task or history removal.
+
+## 2026-09-12 · 0.30.11 preserve repair rounds and finish independent observation
+
+The preceding Batch settled failed at07:37:30 UTC, not accepted. Native evidence
+showed84/b1 signed_out without a copy attempt,188/b2 still signed_out in its last
+review, and187/b2 only2/4 independent samples. Round3 was spent on an all-read
+refresh of stale receipts. The last reviewer then handed off before the remaining
+window; the round ceiling incorrectly allowed unresolved closure of pending
+verified targets. Later Fleet login observations are not proof this Task repaired them.
+
+Planner instructions now refresh stale failure receipts in their own visible
+Session before freezing a new round. The v2 plan guard rejects an all-verify rework
+while a known authorized signed-out target still has repair budget. Fresh native
+signed-out evidence remains mandatory for provision; unknown, stale evidence,
+healthy targets, absent permission and spent issue budgets grant no extra writes.
+
+Status exposes pendingStability and canHandoffForRework. Reviewers may hand off
+early only to a remaining repair round; otherwise repaired verified targets must
+finish their independent observation in the same card via durable task_wait.
+Neither the final round nor spent write budget can waive the20-minute/four-sample
+window. A genuine logout/challenge remains a failed observation, not an infinite
+wait for success. Existing samples, persistent issue budgets and all history remain.
+
+248 Node22 tests and build pass, including new refresh/no-write/last-round/mixed-
+result regressions. Deployed through the linked plugin after verifying zero active
+Task Runs, native Sessions and browser operations; the DSH user service is active.
+No new dependencies or temporary build trees; tracked lib remains a runtime asset.
+Original Task and reviewed definition are unchanged, cron is still disabled.
+Real manual acceptance and public browser verification follow; tests/deployment
+alone do not demonstrate repaired logins or authorize enabling the schedule.

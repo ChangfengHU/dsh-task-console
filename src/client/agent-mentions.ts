@@ -1,16 +1,19 @@
 import type { AgentRow } from '../wire.ts'
 import type { ActionCatalog, AgentAction } from '../agent-actions.ts'
 import { actionCandidates } from '../agent-actions.ts'
-import { confirmedActionRole, makeActionSnippet } from '../action-snippet.ts'
+import { confirmedActionRole, makeActionSnippet, resolveSnippetDefaults } from '../action-snippet.ts'
 import { agentCandidates, AGENT_EXPAND, AGENT_COLLAPSE } from '../agent-order.ts'
 import { ACTION_CHANGED, sendCurrentAction } from './action-dispatch.ts'
 import { installActionSnippet } from './action-snippet.ts'
+import { readActionDraft, writeActionDraft } from './action-draft.ts'
 import type { Api } from './Console.tsx'
 
 export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path: string) => void) {
   const expanded = new Set<string>(), snippets = new Map<string, ReturnType<typeof installActionSnippet>>()
   let roster: AgentRow[] = [], workflows: any[] = [], refreshedAt = 0
   const catalogs = new Map<string, ActionCatalog>()
+  const watches = new Map<string, () => void>(), restoring = new Map<string, Promise<void>>()
+  let live = true
   const snapshot = () => ctx.sessions.list.getSnapshot()
   const role = (id: string) => confirmedActionRole(snapshot(), id)
   const selected = (id: string) => snapshot().current === id
@@ -25,10 +28,11 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
       if (id === previous && nextRole === previousRole) return
       dismiss(previous); if (id !== previous) dismiss(id)
       previous = id; previousRole = nextRole
+      if (id) queueMicrotask(() => watchDraft(id))
     })
     const clear = () => { refreshedAt = 0; catalogs.clear(); dismiss(snapshot().current) }
     window.addEventListener(ACTION_CHANGED, clear)
-    return () => { stop(); window.removeEventListener(ACTION_CHANGED, clear); for (const s of snippets.values()) s.dispose(); snippets.clear() }
+    return () => { live = false; stop(); window.removeEventListener(ACTION_CHANGED, clear); for (const off of watches.values()) off(); for (const s of snippets.values()) s.dispose(); snippets.clear() }
   }, 'task-console: action input lifecycle')
   const refresh = async () => {
     if (Date.now() - refreshedAt < 1500) return
@@ -61,6 +65,7 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
           if (newSession && !canChooseAgent(sessionId)) throw Error('当前会话已有角色，请重新选择该角色的 Action')
           const message = snippets.get(sessionId)?.error()
           if (message) throw Error(message)
+          text = resolveSnippetDefaults(action, text)
           const placeholders = makeActionSnippet(action).slots
           if (!text.trim() || placeholders.some(s => text.includes(s.marker)) || /\{\{[^{}]+\}\}/.test(text)) throw Error('请填写剩余占位符后再发送')
           const latest = await catalogFor(catalog.agentId!, newSession ? undefined : sessionId)
@@ -77,8 +82,85 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
       },
     }
   }
+  const attachSnippet = (id: string, catalog: ActionCatalog, action: AgentAction, newSession: boolean, input: any, restored = false) => {
+    const prefix = newSession ? `@${catalog.name}/${action.name} ` : `@${action.name} `
+    const saved = readActionDraft(id)
+    snippets.get(id)?.dispose()
+    snippets.set(id, installActionSnippet(ctx, id, action, prefix, input, {
+      restored, saved: restored ? saved?.progress : undefined,
+      save: progress => writeActionDraft(id, progress ? { agentId: catalog.agentId!, actionId: action.id, revision: catalog.revision, prefix, newSession, progress } : undefined),
+    }))
+  }
+  const resolveDraft = async (id: string, text: string) => {
+    const saved = readActionDraft(id)
+    if (saved && text.startsWith(saved.prefix)) {
+      if (saved.newSession ? !canChooseAgent(id) : role(id) !== saved.agentId) throw Error('草稿所属角色尚未确认或已变化，请重新选择 Agent / Action；原文保留')
+      const catalog = await catalogFor(saved.agentId, saved.newSession ? undefined : id)
+      const action = catalog.actions.find(a => a.id === saved.actionId)
+      if (!action || catalog.revision !== saved.revision) throw Error('Action 已更改或删除，请重新选择；原文保留')
+      return { catalog, action, newSession: saved.newSession, prefix: saved.prefix }
+    }
+    const currentRole = role(id)
+    if (currentRole) {
+      const catalog = await catalogFor(currentRole, id)
+      const action = catalog.actions.find(a => text.startsWith(`@${a.name} `))
+      if (action) return { catalog, action, newSession: false, prefix: `@${action.name} ` }
+    }
+    if (canChooseAgent(id)) {
+      await refresh()
+      const agent = roster.find(a => text.startsWith(`@${a.name}/`))
+      if (agent) {
+        const catalog = await catalogFor(agent.id)
+        const action = catalog.actions.find(a => text.startsWith(`@${catalog.name}/${a.name} `))
+        if (action) return { catalog, action, newSession: true, prefix: `@${catalog.name}/${action.name} ` }
+      }
+    }
+    if (/^@\S+\s[\s\S]*【[^】]+】/.test(text)) throw Error('请先明确选择 Agent 和 Action；未填写的草稿不会作为普通消息发送')
+    return null
+  }
+  const restoreDraft = (id: string, forced = false) => {
+    if (restoring.has(id)) return restoring.get(id)!
+    const input = inputFor(id), before = input?.state.getSnapshot()
+    if (!live || !selected(id) || !before || before.phase !== 'plain' || !before.draft.startsWith('@')) return Promise.resolve()
+    const saved = readActionDraft(id)
+    if (!forced && !saved && !/^@\S+\s[\s\S]*【[^】]+】/.test(before.draft)) return Promise.resolve()
+    const job = (async () => {
+      const expected = snapshot().byId?.[id]?.agentPreset
+      try {
+        const found = await resolveDraft(id, before.draft)
+        if (!found || !live || !selected(id) || snapshot().byId?.[id]?.agentPreset !== expected || input.state.getSnapshot().draftRev !== before.draftRev) return
+        const scope = ctx.sessions.scope(id)
+        const applied = scope.bail(scope, 'slash/input-begin-command', { claim: actionClaim(id, found.catalog, found.action, found.newSession), span: { start: 0, end: found.prefix.length, draftRev: before.draftRev } })
+        if (applied) attachSnippet(id, found.catalog, found.action, found.newSession, input, true)
+      } catch (e: any) { if (live && selected(id) && input.state.getSnapshot().draftRev === before.draftRev) input.notify('error', e.message) }
+    })().finally(() => {
+      restoring.delete(id)
+      // Native draft hydration/typing may supersede an in-flight lookup. Its
+      // stale result must be discarded AND the newest revision reconsidered.
+      if (live && selected(id) && input.state.getSnapshot().draftRev !== before.draftRev) queueMicrotask(() => { void restoreDraft(id, forced) })
+    })
+    restoring.set(id, job); return job
+  }
+  const watchDraft = (id: string) => {
+    if (!live || !selected(id)) return
+    const input = inputFor(id)
+    if (!input) return
+    if (!watches.has(id)) {
+      let revision = -1
+      const check = () => {
+        const state = input.state.getSnapshot()
+        if (!selected(id) || state.draftRev === revision) return
+        revision = state.draftRev
+        const saved = readActionDraft(id)
+        if (saved && state.draftRev > 0 && !state.draft.startsWith(saved.prefix)) writeActionDraft(id)
+        if (state.phase === 'plain') queueMicrotask(() => { void restoreDraft(id) })
+      }
+      watches.set(id, input.state.subscribe(check)); check()
+    }
+    void restoreDraft(id)
+  }
   return {
-    trigger: '@' as const, name: 'Agent', order: -10, warm: () => undefined,
+    trigger: '@' as const, name: 'Agent', order: -10, warm: (session: { sessionId: string }) => { queueMicrotask(() => watchDraft(session.sessionId)) },
     candidates: async (session: { sessionId: string }, request: { query: string; signal?: AbortSignal; position?: string }) => {
       const id = session.sessionId, expectedRole = role(id)
       if (!selected(id)) return []
@@ -110,8 +192,7 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
         if (applied !== true) { input.notify('error', '草稿已改变，请重新选择 Action'); return 'handled' as const }
         const tail = before.draft.slice(pick.span.end)
         input.setDraft(makeActionSnippet(action, claim.token).text + (tail.trim() ? `\n${tail}` : ''))
-        snippets.get(id)?.dispose()
-        snippets.set(id, installActionSnippet(ctx, id, action, claim.token, input))
+        attachSnippet(id, catalog, action, isNew, input)
         return 'handled' as const
       }
       const task = workflows.find(t => `task:${t.id}` === value)
@@ -124,17 +205,13 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
       if (!selected(session.sessionId)) return undefined
       await refresh()
       const id = session.sessionId, currentRole = role(id), input = line.trimStart()
-      if (currentRole) {
-        const catalog = await catalogFor(currentRole, id).catch(() => null)
-        const action = catalog?.actions.find(a => input.startsWith(`@${a.name} `))
-        if (catalog && action) return { claim: actionClaim(id, catalog, action, false) }
-      }
-      if (canChooseAgent(id)) {
-        const agent = roster.find(a => input.startsWith(`@${a.name}/`))
-        if (agent) {
-          const c = await catalogFor(agent.id), a = c.actions.find(a => input.startsWith(`@${c.name}/${a.name} `))
-          if (a) return { claim: actionClaim(id, c, a, true) }
-        }
+      const found = await resolveDraft(id, input)
+      if (!selected(id) || role(id) !== currentRole) throw Error('会话或角色已变化；草稿保留')
+      if (found) {
+        // A restored @ draft is plain until re-claimed. This first Enter/Send
+        // restores editing, never falls through to the ordinary prompt sink.
+        requestAnimationFrame(() => { void restoreDraft(id, true) })
+        return 'handled' as const
       }
       const task = workflows.find(t => input === `@${t.title}` || input.startsWith(`@${t.title} `) || input.startsWith(`@${t.id} `))
       if (task) return claimTask(task)

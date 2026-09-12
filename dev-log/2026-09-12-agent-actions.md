@@ -158,3 +158,84 @@ the six original `dtc-actions-` names listed above (editor/current overwritten b
 this version), `dtc-actions-browser-inline-1440.png`, and the four
 `dtc-action-tabs-{config,actions}-{1440,390}.png` files. They remain until UI
 acceptance; no new dependencies, build caches or downloaded assets need cleanup.
+
+## 0.30.15 — keyboard, reload recovery and explicit blank-session ownership
+
+The earlier "fixed" report was too broad. Read-only public reproduction confirmed:
+native text/draft persistence survived reload but the Action claim and snippet
+controller did not. The supported native input machine only re-adjudicated `/`,
+so Enter on a restored `@Action` attempted the ordinary `session.prompt` path with
+unfilled markers. The diagnostic browser intercepted that request before delivery.
+New Session also reused a blank browser-manager session and exposed its Actions
+without a fresh Agent choice. Chromium typing/paste/IME in an already-claimed
+nonblank session worked; that narrower test did not cover either failure.
+
+The user's subsequent "继续修改" authorized this correction. Earlier uncommitted
+0.30.14 menu focus/default-field changes are retained in this 0.30.15 work; no
+separate 0.30.14 GitHub publication is claimed.
+
+Implementation remains in the same plugin:
+
+- Bare `@` in a blank/default-inherited session offers Agents, workflows and Files,
+  never default-role Actions. Explicit @ Agent selection exposes its own submenu;
+  clearing the selection hides it again. Nonblank sessions retain actual-role
+  isolation, async cancellation and submit-time owner checks.
+- Every parameter now has a visible marker, including defaults, plus an index/total
+  hint. Enter/Tab accepts unchanged defaults or advances edited values; last-field
+  Enter only finishes filling. No Action modal or alternate editor was reintroduced.
+- Native draft recovery revalidates Action identity/revision/owner and draft CAS,
+  restores a native claim and resumes range tracking. Tab-local sessionStorage
+  holds only identity/ranges/progress and a non-security checksum, not another
+  prompt copy. Older drafts recover only real remaining markers. Empty, cancelled,
+  changed-role or obsolete-action data cannot silently grant a new Action owner.
+- A real additional timing failure appeared during repeated acceptance: hydration
+  or typing could supersede a pending lookup, discard its old result, then leave
+  the latest revision unprocessed. Empty shells no longer look up configuration;
+  superseded lookups re-check the latest revision. A deterministic async unit test
+  exercises hydration, changed draft revision and exactly one current claim.
+- `scripts/patch-input-menu.mjs` is version-fenced to DSH 0.1.1-rc.2. Native menu
+  focus follows visible source order until the user deliberately moves; late
+  source results cannot steal that highlight. Native conversation Enter/Send now
+  re-adjudicates leading @ while this plugin's marker is mounted, rather than
+  bypassing guards after reload. Unmounted-plugin behavior and Files are retained.
+  Unknown/partial anchors are rejected; the installer validates both files before
+  writing and is wired into the existing host installer.
+
+Verification (supported Node /usr/bin/node, actual installed host path in
+DSH_INSTALL_ROOT): all **270/270 tests pass**, no skips, 39.114s. This includes the
+actual native menu reducer/input machine, metadata corruption/staleness, inherited
+blank isolation and the deterministic recovery race. Build and `git diff --check`
+pass; native patch `--check` returns changed=false, needed=false.
+
+Public keyboard acceptance passes on 1440/390px: five Actions selected by arrows,
+Enter pick, Files ordering, three visible fields, forward/back, edited and default
+numbers/booleans, and no final-field send. Public recovery acceptance passes:
+mid-field refresh retaining typed `2`, missing-field Send, session switch/back,
+reused blank hiding Actions, explicit Agent selection with another refresh,
+clearing, and legacy draft recovery without metadata. A separate final Enter was
+intercepted before HTTP delivery and checked for exactly one native same-session
+prompt with the Action label and rendered values, no placeholders. This proves
+dispatch routing only, not a browser operation or model execution. Real native
+turn totals remain unchanged; no Agent/preset/session was created for these tests.
+Recovery UI screenshots were visually inspected, not only measured.
+
+Deployment uses the existing live repo symlink; no service restart or business
+pause. Executable browser-manager spec SHA256 remains
+dfb0ec793c57884386ea6da21891f659264a81bb679170a032175c11e1cfe6d6.
+Both original Task definition hashes remain respectively
+0be6047f328727afab0526080b4f4c1e5d0162f00415a7840ae7ad63b7fda9cd and
+c5da82ac3c1b78f3f19189e951668019b5a76c9a3a2591edec487f6b74f36b06;
+enabled=1, original hourly schedule/permissions/reviews/history unchanged.
+No Fleet SSH/browser/login/proxy operation or new dependency installation.
+
+Runtime backup files are retained beside the two native client.js files:
+`.dtc-menu-focus-backup` (36,837 bytes) and `.dtc-action-submit-backup` (448,468
+bytes); these are production rollback sources, not disposable caches. Four new
+temporary acceptance screenshots are retained in /tmp until user acceptance:
+dtc-action-keyboard-menu-1440.png, dtc-action-keyboard-fields-1440.png,
+dtc-action-keyboard-fields-390.png, dtc-action-recovery-role-1440.png (about 694 KiB
+combined). They can be regenerated by the two read-only browser scripts; earlier
+unique acceptance evidence is preserved. Playwright closes its isolated temporary
+profiles. Tracked lib/ remains production runtime; no cache/dependency cleanup or
+user data deletion was needed. Exact recovery commands/contracts are in the
+existing docs/agent-actions.md and HANDOFF.md, not a second handoff file.

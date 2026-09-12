@@ -13,6 +13,17 @@ advance (Shift+Tab back), then a separate Enter/Send to submit. Unfilled markers
 block both keyboard and button sends; IME confirmation must not advance a field.
 The `@` entry checks the currently selected session and its actual header role,
 discards stale async candidates and closes stale menus when that role changes.
+An inherited/reused blank session's preset is not explicit role selection: bare
+`@` must not expose its Actions. The new-session `@` Agent choice is explicit.
+Visible default parameters remain placeholders until accepted/edited. Refresh
+reclaims the native Action before sending; tab-local metadata retains only range
+coordinates/Action identity, never a second prompt copy. Missing metadata recovers
+literal remaining markers. Both Enter and Send must block unresolved drafts.
+The supported-host `scripts/patch-input-menu.mjs` now patches native menu async
+focus and plugin-scoped `@` submit adjudication (DSH otherwise only re-adjudicates
+`/`). Reapply/check after a supported reinstall; preserve its exact-file backups.
+Unknown host versions/anchors fail closed. See `docs/agent-actions.md` for these
+receiving contracts and the no-business-write keyboard/recovery browser tests.
 Existing-role Actions queue
 a native user turn in that same Session; Agent → Action before starting uses the
 normal preset session creator only after explicit confirmation. Preview/selection

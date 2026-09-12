@@ -7,6 +7,16 @@
 const STYLE_ID = 'dsh-task-console-styles'
 
 const CSS = `
+.dtc-action-toolbar,.dtc-action-list { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:12px 0 }
+.dtc-action-fields { border:0; padding:0; margin:0; min-width:0 }
+.dtc-action-param { display:grid; grid-template-columns:repeat(4,minmax(80px,1fr)) auto auto; gap:8px; align-items:end; margin-bottom:8px }
+.dtc-action-param label { font-size:12px; min-width:0 }
+.dtc-root .dtc-action-check { display:flex; align-items:center; align-self:center; gap:4px }
+.dtc-root .dtc-action-check input { width:auto }
+.dtc-root.dtc-action-dialog { border:0; padding:0; background:transparent; max-width:96vw; overflow:visible }
+.dtc-action-dialog::backdrop { background:rgba(10,14,18,.55) }
+.dtc-action-preview { white-space:pre-wrap; overflow-wrap:anywhere; background:var(--dtc-surface-2); padding:12px; border:1px solid var(--dtc-line); border-radius:6px; max-height:220px; overflow:auto; font:inherit }
+@media(max-width:720px) { .dtc-action-param { grid-template-columns:repeat(2,minmax(0,1fr)); padding-bottom:12px; border-bottom:1px solid var(--dtc-line) } }
 .dtc-root {
   --dtc-ground:#f3f5f6; --dtc-surface:#fff; --dtc-surface-2:#eaeef0; --dtc-line:#d9dfe3; --dtc-line-soft:#e6ebee;
   --dtc-ink:#161b1e; --dtc-muted:#5f6b73; --dtc-faint:#8e99a1;

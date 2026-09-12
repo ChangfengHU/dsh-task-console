@@ -1,5 +1,18 @@
 # Task Console runtime contracts
 
+## Agent Actions
+
+`actions.json` is an optional preset sidecar for parameterized user prompts; never
+merge it into AgentSpec, generated tool composition or Task roster review hashes.
+User-preset saves preserve it under the same in-process write lock. Action edits
+use revision-CAS and an atomic file rename. No defaults are re-created after deletion.
+The `@` entry reads the actual session's header role. Existing-role Actions queue
+a native user turn in that same Session; Agent → Action before starting uses the
+normal preset session creator only after explicit confirmation. Preview/selection
+never executes. Actions confer no tools or host grants; the original Agent/MCP/Task
+policies still apply. See `docs/agent-actions.md` for APIs, starter pack installation,
+limits, uncertain-send behavior and the opt-in tool-free public UI smoke test.
+
 The version-fenced history patch also shields DeepSeek-compatible model requests from
 previously rejected malformed tool-argument JSON. Raw session/Trace records and tool
 execution stay unchanged; only request serialization carries the invalid input as

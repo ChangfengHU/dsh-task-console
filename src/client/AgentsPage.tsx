@@ -9,6 +9,7 @@ import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wir
 import { closeConsole, go, type Api } from './Console.tsx'
 import { AgentHistory, agentTab, agentPage } from './AgentHistory.tsx'
 import { executionTime } from '../execution-label.ts'
+import { ActionEditor } from './AgentActions.tsx'
 
 const EMPTY: AgentSpec = { id: '', name: '', description: '', persona: '', model: '', effort: 'medium', permissionPreset: 'workspace-write', tools: ['ask-user'], mcpTools: {}, mcpPolicy: {}, skills: [] }
 const PERM: Record<Preview['permission'], { label: string; cls: string; dot: string }> = {
@@ -150,6 +151,7 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
         <AgentHistory api={api} id={row.id} tab={tab} page={page} onCounts={setCounts} />
       </> : null}
       <div hidden={!!row && tab !== 'config'}>
+      {row ? <ActionEditor api={api} agentId={row.id} /> : <div className="dtc-note">先保存 Agent，即可配置可复用的 Actions 快捷指令。</div>}
       {readOnly ? <div className="dtc-warn">出厂 preset 由部署提供,任务台不改它。点「复制」得到一份可编辑的副本。</div> : null}
       {claude ? <div className="dtc-warn">claude-local 上 dsh 的工具都是延迟工具:这个 agent 用不了 MCP、问不了人、也交不了卷,<b>不能参与任务</b>。要参与任务请选 codex-local 或 API 型模型。</div> : cli ? <div className="dtc-note">codex-local 自带 shell:dsh 的工具围栏管不到它自己的 bash,只管 MCP / skill / 交卷。</div> : null}
 

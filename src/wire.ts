@@ -45,6 +45,7 @@ function descriptor(method: string, argc: 0 | 1) {
 export const METHODS = [
   ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
   ['startAgentSession', 1], ['sessionTurns', 1], ['agentHistory', 1],
+  ['agentActions', 1], ['saveAgentActions', 1], ['prepareAgentAction', 1],
   ['workflowCatalog', 0], ['launchWorkflow', 1],
   ['taskPlans', 1], ['taskPlan', 1], ['reviewTaskPlan', 1],
   ['taskSchedule', 1], ['executionHistory', 1],
@@ -131,6 +132,7 @@ export interface McpToolPolicy {
 
 /** One roster row, enriched with our spec when we authored it. */
 export interface AgentRow {
+  actionCount?: number
   id: string
   name: string
   description: string

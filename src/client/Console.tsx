@@ -9,6 +9,9 @@ import { TaskPlanReview } from './TaskPlanReview.tsx'
 import { TaskExecutions } from './TaskExecutions.tsx'
 
 export interface Api extends TasksApi {
+  agentActions: (query: { agentId?: string; sessionId?: string }) => Promise<import('../agent-actions.ts').ActionCatalog>
+  saveAgentActions: (agentId: string, actions: import('../agent-actions.ts').AgentAction[], revision: string) => Promise<import('../agent-actions.ts').ActionCatalog>
+  prepareAgentAction: (query: { agentId: string; sessionId?: string; actionId: string; revision: string; values: Record<string, unknown> }) => Promise<{ text: string; agentId: string }>
   taskPlans: (page: number) => Promise<any>
   taskPlan: (id: string) => Promise<any>
   reviewTaskPlan: (id: string, hash: string, decision: 'approve' | 'reject', reason: string) => Promise<any>

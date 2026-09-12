@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "actions": [
+    {
+      "id": "create-browser",
+      "name": "新增浏览器",
+      "description": "检查现有实例和授权后新增，保留其他浏览器与资料。",
+      "parameters": [
+        { "key": "ip", "label": "机器 IP", "type": "text", "required": true },
+        { "key": "count", "label": "新增数量", "type": "number", "required": true, "default": 1 },
+        { "key": "login", "label": "自动分配 Gemini 登录", "type": "boolean", "required": true, "default": true }
+      ],
+      "template": "请在 {{ip}} 新增 {{count}} 个浏览器；自动分配 Gemini 登录：{{login}}。先确认 IP、数量为正整数、现有实例、资源与宿主实例授权，健康实例及资料保留。通过现有 MCP 创建，缺少工具或实例授权时明确说明，不试探写入或自行扩大权限。若选择自动登录，依照当前账号候选与排除策略合理分配，优先不同的可用账号，不覆盖健康登录。按已有 skill 完成独立登录验证与验收；未验证不得报成功。给出新增实例编号、CDP/VNC 入口、登录验收和遗留问题。"
+    },
+    {
+      "id": "delete-browser",
+      "name": "删除浏览器",
+      "description": "永久删除明确指定的实例与资料，不影响其他实例。",
+      "parameters": [
+        { "key": "ip", "label": "机器 IP", "type": "text", "required": true },
+        { "key": "instances", "label": "实例编号（如 1,2）", "type": "text", "required": true }
+      ],
+      "template": "我确认永久删除 {{ip}} 上的浏览器实例 {{instances}} 及其专属资料、缓存和磁盘占用，不需要备份。先只读核对实例、进程、归属和授权，再使用既有 MCP 的下线、精确清理计划与删除流程。不得删除共享目录、系统组件或影响任何未指定实例；存在归属不明、活动业务或缺少权限时停止并说明。结束后报告删除的精确实例、回收空间、保留实例健康情况及 Fleet 列表验证。"
+    },
+    {
+      "id": "auto-login",
+      "name": "自动登录",
+      "description": "保留健康登录，为未登录实例选择授权账号并独立验证。",
+      "parameters": [
+        { "key": "ip", "label": "机器 IP", "type": "text", "required": true },
+        { "key": "instances", "label": "实例编号或 all", "type": "text", "required": true, "default": "all" }
+      ],
+      "template": "请检查 {{ip}} 的浏览器 {{instances}}，为未登录 Gemini 的实例自动选择合适的授权账号并复制登录。通过既有 MCP 查询新鲜证据、候选来源及当前排除策略，保留健康登录，尽量分散使用可用账号，不固定复制某个账号。复制后执行独立验证和已有稳定性验收，不能用复制接口成功代替真实登录。失败时在既有恢复权限和重试预算内修复；本指令不授权永久删除资料，若需重建先说明。报告每个实例账号、验证时间、实际动作和未解决原因，不回显凭据。"
+    },
+    {
+      "id": "inspect-login",
+      "name": "检查登录",
+      "description": "只读刷新登录验证，列出已验证、未登录、无法确认。",
+      "parameters": [{ "key": "ip", "label": "机器 IP 或 fleet", "type": "text", "required": true }],
+      "template": "请对 {{ip}} 的浏览器进行只读检查，使用既有 MCP 获取实例清单和新鲜的独立 Gemini 登录验证。区分未安装、未登录、验证过期、页面未就绪与已验证；说明每个实例的账号、验证时间和失败原因。不要复制登录、重启、删除实例或修改代理与令牌。"
+    },
+    {
+      "id": "recover-browser",
+      "name": "恢复浏览器",
+      "description": "定位并在授权范围内恢复异常实例，保留资料。",
+      "parameters": [
+        { "key": "ip", "label": "机器 IP", "type": "text", "required": true },
+        { "key": "instance", "label": "实例编号", "type": "number", "required": true }
+      ],
+      "template": "请检查并恢复 {{ip}} 的 browser-{{instance}}。先查询新鲜的健康、CDP 和登录证据，健康组件复用。在已有 MCP 与宿主授权范围内修复真实异常并独立复验，保留本实例资料，不影响其他实例。不得扩大权限、修改令牌、直接清空资料；若必须永久重建，先说明并等待明确授权。报告故障原因、实际动作、恢复证据及未解决项。"
+    }
+  ]
+}

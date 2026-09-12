@@ -13,7 +13,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID, createHash } from 'node:crypto'
 import { homedir } from 'node:os'
-import { dirname } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { readActions, saveActions } from './agent-action-store.ts'
+import { renderAction, type ActionCatalog } from './agent-actions.ts'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { applyAgentPermission } from './agent-session.ts'
 import { agentHistory, firstAgentUse, historyQuery, type AgentSessionHeader } from './agent-history.ts'
@@ -282,7 +284,8 @@ export class TaskConsoleService extends TypertRemoteService {
           name = unq(n) ?? name; description = unq(d) ?? description
         } catch { /* no metadata */ }
       }
-      rows.push({ id: p.id, name, description, trust: p.trust, broken: p.broken, path: dir, spec, createdAt: await readAgentCreatedAt(dir), firstUsedAt: firstUsed.get(p.id) ?? null })
+      const actionCount = await readActions(dir).then(c => c.actions.length).catch(() => 0)
+      rows.push({ id: p.id, name, description, trust: p.trust, broken: p.broken, path: dir, spec, actionCount, createdAt: await readAgentCreatedAt(dir), firstUsedAt: firstUsed.get(p.id) ?? null })
     }
     return JSON.stringify(sortAgents(rows))
   }
@@ -320,6 +323,42 @@ export class TaskConsoleService extends TypertRemoteService {
   }
 
   // ── authoring ──────────────────────────────────────────────────────────
+
+  async agentActions(payload: string): Promise<string> {
+    const query = JSON.parse(payload)
+    let agentId = query.agentId
+    if (query.sessionId) {
+      const header = (await this.sessionHeaders()).find(h => h.id === query.sessionId)
+      agentId = header?.agentPreset
+      if (query.agentId && query.agentId !== agentId) throw new Error('当前会话角色不匹配，请重新选择 Action')
+    }
+    if (!agentId) return JSON.stringify({ agentId: null, name: '', revision: '', actions: [], writable: false } satisfies ActionCatalog)
+    const presets = (this.ctx as any).get('agentPresets')
+    const preset = (await presets?.list() ?? []).find((p: any) => p.id === agentId && !p.broken)
+    if (!preset) throw new Error('Agent 不存在或不可用')
+    const dir = dirname(String(preset.path))
+    const catalog = await readActions(dir)
+    const spec = await readSpec(dir)
+    return JSON.stringify({ ...catalog, agentId, name: spec?.name ?? preset.name ?? agentId, writable: preset.trust === 'user' && presets.authorable !== false && resolve(dir) === resolve(userPresetRoot(), agentId) } satisfies ActionCatalog)
+  }
+
+  async saveAgentActions(payload: string): Promise<string> {
+    const query = JSON.parse(payload)
+    const catalog: ActionCatalog = JSON.parse(await this.agentActions(JSON.stringify({ agentId: query.agentId })))
+    if (!catalog.agentId || !catalog.writable) throw new Error('这个 Agent 的 Actions 不可写')
+    await saveActions(resolve(userPresetRoot(), catalog.agentId), query.actions, query.revision)
+    return this.agentActions(JSON.stringify({ agentId: catalog.agentId }))
+  }
+
+  /** Validates a fresh revision and actual session role; never sends or creates anything. */
+  async prepareAgentAction(payload: string): Promise<string> {
+    const query = JSON.parse(payload)
+    const catalog: ActionCatalog = JSON.parse(await this.agentActions(payload))
+    if (catalog.revision !== query.revision) throw new Error('Action 已更新，请关闭并重新选择')
+    const action = catalog.actions.find(a => a.id === query.actionId)
+    if (!action) throw new Error('Action 不存在或已删除')
+    return JSON.stringify({ text: renderAction(action, query.values), agentId: catalog.agentId })
+  }
 
   async previewAgent(payload: string): Promise<string> {
     const spec = validateSpec(JSON.parse(payload))

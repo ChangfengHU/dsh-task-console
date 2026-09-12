@@ -21,6 +21,8 @@ import { basename, join, resolve } from 'node:path'
 import { stringify as toYaml } from 'yaml'
 import { publicToolName } from './filtered-mcp-client.ts'
 import { WORKER_TOOL_NAMES } from './worker-tools.ts'
+import { withPresetLock } from './preset-lock.ts'
+import { ACTION_FILE } from './agent-action-store.ts'
 import type { AgentSpec, NativeTool, Preview, SkillEntry } from './wire.ts'
 
 /** Preset ids become directory names, so containment is a property of the id. */
@@ -441,6 +443,9 @@ export function validateSpec(raw: unknown): AgentSpec {
 
 /** Write (or rewrite) one preset directory from a spec. Returns its path. */
 export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root = userPresetRoot(), inheritedTools: string[] = []): Promise<{ path: string; preview: Preview }> {
+  return withPresetLock(resolve(root, spec.id), () => writePresetLocked(spec, hostMcp, library, root, inheritedTools))
+}
+async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root: string, inheritedTools: string[]): Promise<{ path: string; preview: Preview }> {
   const dir = resolve(root, spec.id)
   if (!dir.startsWith(resolve(root) + '/')) throw new Error('非法 id')
   // Fail before changing any authored files if a selected source vanished.
@@ -461,6 +466,11 @@ export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: 
     await writeFile(join(staged, SPEC_FILE), JSON.stringify(spec, null, 2) + '\n', { mode: 0o600 })
     await writeFile(join(staged, 'agent-meta.json'), JSON.stringify({ createdAt }) + '\n', { mode: 0o600 })
     await syncPresetSkills(spec, library, staged)
+    // UI shortcuts are not part of AgentSpec or its Task review hash.
+    if (existed) {
+      try { await writeFile(join(staged, ACTION_FILE), await readFile(join(dir, ACTION_FILE)), { mode: 0o600 }) }
+      catch (error: any) { if (error.code !== 'ENOENT') throw error }
+    }
     if (existed) { await rename(dir, backup); backedUp = true }
     try {
       await rename(staged, dir)
@@ -495,5 +505,5 @@ export async function removePreset(id: string, root = userPresetRoot()): Promise
   if (!ID_RE.test(id)) throw new Error('非法 id')
   const dir = resolve(root, id)
   if (!dir.startsWith(resolve(root) + '/')) throw new Error('非法 id')
-  await rm(dir, { recursive: true, force: true })
+  await withPresetLock(dir, () => rm(dir, { recursive: true, force: true }))
 }

@@ -193,6 +193,7 @@ test('closing an inherited repair issue preserves this Batch stability evidence,
   patrol.complete(reviewer)
   assert.equal(patrol.status(input).items[0].observation.samples,4)
   assert.equal(patrol.status(input).items[0].observation.passed,true)
+  assert.equal(patrol.status(input).canCloseUnresolved,false) // passed and unresolved are mutually exclusive
   assert.throws(()=>patrol.plan(input,[{ip:'192.0.2.10',instance:1,action:'verify',reason:'expired cache'}]),/已完成独立验收/)
   // A real newer adverse observation permits a new evidence-based rework plan.
   patrol.capture(input,proof(input,Date.now()-10,'signed_out',30))

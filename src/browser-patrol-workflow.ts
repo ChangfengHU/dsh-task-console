@@ -147,8 +147,9 @@ export class BrowserPatrolWorkflow {
     const proxy=input.task.design?.proxy?new ProxyWorkflow(this.store).status(input):undefined
     const networkReady=!proxy||proxy.items.length>0&&proxy.items.every(row=>row.independent)
     const report=patrolReportSummary(items,uncovered)
+    const ready=items.length > 0 && items.every(i => i.accepted) && uncovered.length === 0&&networkReady
     return { assessmentMode: 'point-in-time-v1', assessedAt: new Date(now).toISOString(),
-      ready: items.length > 0 && items.every(i => i.accepted) && uncovered.length === 0&&networkReady, canCloseUnresolved, plan,
+      ready, canCloseUnresolved: !ready && canCloseUnresolved, plan,
       pendingStability: pendingStability.map(i => `${i.ip}:${i.instance}`), canHandoffForRework,
       items, uncovered, excluded, ...report,...(proxy?{proxy,summary:report.summary+` 代理独立验收 ${proxy.items.filter(row=>row.independent).length}/${proxy.items.length}。`}:{}) }
   }

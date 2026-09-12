@@ -1133,7 +1133,7 @@ browser read restored all three. No Fleet code was changed here. This live displ
 is separate from the still-pending Task stability acceptance.
 
 At10:10 UTC the fourth84/b1 independent sample passed (first09:49:03.369,
-fourth10:09:53.436), with11/11 browsers and6/6 proxies independently accepted.
+fourth10:09:53.577), with11/11 browsers and6/6 proxies independently accepted.
 Public Task Chrome confirmed the11/11 summary,6/6 proxy section, actual84/b1
 4/4-over20-minute evidence and retained206 exclusion;1440/390px had no errors or
 overflow. Screenshots /tmp/patrol-03011-final-20260912-{1440,390}.png retain that
@@ -1148,3 +1148,17 @@ after resolving it in the current Batch (without carrying that observation debt
 into future executions), so completed windows are not relabeled as unnecessary.
 250 full tests and build pass. These last guards await an idle deployment boundary;
 the original Batch's extra read-only round and final notification remain in flight.
+
+Final outcome supersedes the intermediate11/11 snapshot: r3 independently observed
+187/b1 signed_out, and p4's own new verify/status confirmed it. That browser was
+the selected source for84/b1's successful copy; sequence alone does not establish
+causation.84/b1 remained independently verified. With the original three-round
+budget spent, the Batch correctly settled failed/unresolved at10:22:00 UTC with
+10/11 browsers accepted,6/6 proxy acceptance and five notifications sent. All real
+rows/history are retained. Do not quote10:10's interim11/11 as the final outcome.
+
+Made passed/unresolved status flags mutually exclusive as part of the finalization
+guards;250 tests/build pass. A further manual execution of the SAME Task is needed
+to handle the new187/b1 issue under the existing reviewed permissions/budgets.
+The original hourly schedule remains disabled until genuine acceptance; no new
+browser-health Task, expanded host grants, direct target operations or token edits.

@@ -540,6 +540,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   for (const u of upstream) lines.push('', `[UPSTREAM HANDOFF from ${u.agentName}]`, u.summary.trim() || '(上游没有留下交接单)')
   if (card.reviewNote?.trim()) lines.push('', '[REVIEW CHANGES]', card.reviewNote.trim())
   if (task.design?.evidenceContract === 'browser-patrol-v2') lines.push('', '[PATROL ROLE HANDOFF]',
+    '若通过 functions.exec 等代码执行器调用工具，必须显式输出返回值，例如 text(await tools.task_patrol_status({}))；只 await 不 text 时，执行器界面可能没有输出，并不表示 MCP 返回为空。遇到空展示先显式输出一次安全工具结果再解析，不把展示遗漏判成 capability 缺失或 task_block；已有操作继续查原编号，不重新发起写入。',
     '每个浏览器操作都要用其真实 id 显式调用 browser_status({ip,operationId:id}) 取得宿主认可的终态回执，包括幂等发起时已返回 complete 的操作；只看启动响应或自己汇总不进入独立证据。重复查询同一回执不是新采样，分时采样必须发起新的只读验证。',
     '评估者按固定 observation.nextCheckAt 采样：checkDue=true 或时间已到/已过时，立即发起新的只读 verify 并查询终态，不再 task_wait 延后；尚未到期才持久等待。没有首个样本时先验证，不等待一个不存在的采样时间。',
     'task_patrol_status.ready 表示整个 Task 的独立验收，不是当前角色的交接条件。执行者自己的检查不计入评估者独立采样。',

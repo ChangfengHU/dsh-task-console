@@ -347,6 +347,8 @@ test('patrol role instructions distinguish freshness from acceptance and retain 
   assert.match(message,/accepted=true 且 freshness=expired/)
   assert.match(message,/修复后仍须完整观察窗口/)
   assert.match(message,/包括幂等发起时已返回 complete/)
+  assert.match(message,/text\(await tools.task_patrol_status/)
+  assert.match(message,/不把展示遗漏判成 capability/)
   assert.match(message,/canHandoffForRework=true 时，立即 task_complete/)
   assert.match(message,/最后一轮.*pendingStability/)
   assert.match(message,/有效独立样本跨轮保留/)

@@ -1114,3 +1114,20 @@ receipt retention),249 full tests/build pass. Idle guard first refused restart w
 a native Session was ending, then succeeded at a true idle boundary, preserving the
 original pending wake1789206980000 and all existing evidence. Stable acceptance and
 schedule activation remain pending, not waived by any of these software fixes.
+
+After the clock fix, the reviewer actually sampled:187/b2 and188/b2 reached4
+verified samples spanning20minutes and passed;84/b1 had2 samples with due times
+anchored to its09:49:03 UTC first sample. Another wake's Agent incorrectly reported
+empty tool output and blocked. Native paired tool records prove login_verify
+returned166 bytes with a running operation ID and task_patrol_status returned16,586
+bytes of valid evidence. This is not an empty MCP response. Added explicit code-
+executor guidance to text(await tools...) and inspect/parse the safe result before
+claiming unavailable capability.25 focused tests/build pass, loaded only after idle
+checks and resumed the same reviewer card via Console RPC. The unconsumed verifier
+receipt was not invented into a sample; fresh independent sampling remains required.
+
+Public Fleet browser readback at10:02 UTC showed all11 Gemini instances signed in,
+including84/b1 with the non-excluded selected account and a different account on
+84/b2. A prior10:00 page read temporarily omitted188's browser rows; a fresh API and
+browser read restored all three. No Fleet code was changed here. This live display
+is separate from the still-pending Task stability acceptance.

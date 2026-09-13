@@ -1287,3 +1287,29 @@ small `/tmp/patrol-recovery-*.png` and test logs are temporarily retained as
 acceptance evidence. Do not delete production operation receipts or existing
 browser data.187 node deployment evidence also belongs to linux-clash's existing
 browser-node-create log; unrelated behavior-collector changes remain untouched.
+
+### Live rework handoff and187 login recovery,12:40Z
+
+Without developer messages to any task-role Session, p2 consumed queued findings
+and rework handoffs, finished normally and released round2. Both notifier cards
+completed with sent receipts (one attempt each), in addition to the genuine started
+notification. This is a live exercise of the repaired reverse-dependency boundary;
+the planner did not spin another81 Sessions or wait on its downstream notifier.
+
+The original Task's browser-manager then performed one approved import each for
+84/b1 and187/b1.187 operation`d4601bd71dc262f84167b899d50414e5` completed at
+12:39:38Z with loginVerified=true and matchesSource=true, using a different account
+from the healthy b2. The earlier detector-only prepare had restarted no browser;
+this later explicitly authorized login import is a separate Task operation and
+may restart its target browser. No claim is made that the original b1 PID survives
+an import; b2 was not a write target. No developer directly copied credentials.
+
+Public Chrome at12:40Z independently showed both187 Gemini accounts and two
+verified indicators, with b1 background checkedAt12:40:44Z and b2 at12:39:53Z;
+no page errors. The small `/tmp/patrol-recovery-187-final.png` capture is retained
+acceptance evidence. Other legacy nodes intermittently returned
+retained-browser-identity-changed: this guard also covers a lost CDP response, not
+proof of an actual restart, and is not bypassed. The full Batch is still running
+and must finish independent stability observation and final notifications. The
+unchanged hourly schedule is enabled; a new automatic hourly occurrence since
+deployment has not yet been exercised. Both original Task hashes still match.

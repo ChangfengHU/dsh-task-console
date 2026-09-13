@@ -1,5 +1,7 @@
 # 后续优化
 
+- [ ] [TASK-PATROL-LIVENESS-022 · 真实返工进展] 原 Batch b-mtzs8atbjxv 已自主完成首轮评估、p2交接及第二轮闸门放行，started/findings/rework 三条通知均真实 sent，无开发者代替角色交卷。browser-manager 已一次授权复制并验证84/b1、187/b1；187操作 d4601bd71dc262f84167b899d50414e5 于12:39:38Z complete/loginVerified=true。12:40Z公网Chrome确认187两个不同账号均已验证、检测时间继续推进。下一步仍是同一Batch的后续独立20分钟稳定性复验与最终通知，尚未通过整项Task；每小时仍启用，部署后的自动整点触发尚未实测。此行更新下方022的早期b1未登录快照，不改写日志历史。
+
 - [ ] [TASK-PATROL-LIVENESS-022] 0.30.18：修复规划者反向等待其下游通知员 sent 导致的死锁，以及无未完成父依赖时反复新建 Session；超原预算的 cron 巡查在无活跃/待验操作、无人工输入等待时如实失败结算，保留全部历史和每小时定时。284项测试零跳过、构建和公网1440/390px检查通过，零活跃边界部署。旧 b-cron-c482a34302e27458d6e5e819 已真实失败结算；同原 Task 新手动执行 b-mtzs8atbjxv 已启动，started 通知 sent，最终业务验收仍在进行。187检测服务由可见浏览器管理员仅更新两文件并恢复后台刷新；b1明确 signed_out，b2 verified，浏览器PID/资料/共享服务不变。AgentSpec与两Task定义哈希不变；不能宣称全机群登录或本次Task已通过。见既有Creator dev-log最新段。
 
 - [x] [TASK-AGENT-ACTIONS-021] 0.30.17：修复原生 hero 显式选定角色后空白会话不显示 Actions，以及接受默认数量后登录方式候选未自动挂载。原生角色确认按 Session 保存 UI 标识，刷新保留、New Session/角色变化清除；默认继承仍不算选择，执行保持当前 Session。候选与焦点等待同一 DOM 修订，保留取消/迟到回复隔离。修复前两项公网回归均失败，修复后原生菜单、回车默认值、三选项、1440/390px、刷新/新会话、账号联动/失败/分页及防误发通过；281 项测试零跳过。静态客户端部署无 DSH 重启，AgentSpec/Actions/两业务 Task 与每小时定时哈希不变，未执行 Agent/目标操作。详见既有 Actions dev-log 的 0.30.17 段落。

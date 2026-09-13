@@ -127,6 +127,17 @@ make overall acceptance unresolved without cancelling repair descendants. No sec
 queue service or scheduler is introduced. Older designs without agentId keep the
 planner-direct path; their historical receipts are not rewritten.
 
+Planner handoff must not wait for its own downstream notifier's `sent` receipt.
+Delegated `task_notify` returns `nextAction`; queueing is enough to call the planner's
+`task_plan_round` or `task_finalize`, not enough to declare the Batch successful.
+The actual notifier still runs afterward and failed delivery keeps the Batch unresolved.
+`completed-patrol` checks sent receipts only at schedule activation, not planner handoff.
+A dependency block without an unfinished parent parks instead of immediately re-claiming.
+For hourly browser-patrol-v2 Batches, a blocked card beyond its original time budget
+ends failed when no active/scheduled work, user-input wait or uncertain operation remains.
+This preserves old Runs/receipts, does not replay missed hours, change cron or reset
+repair budgets; the next due occurrence independently checks current state.
+
 WeCom connection recovery belongs to the independent Fleet MCP service, not a DSH
 Agent activation prerequisite. Keep hourly schedules disabled until an actual manual
 Batch passes both business evidence and notification receipts. Creating the Agent,

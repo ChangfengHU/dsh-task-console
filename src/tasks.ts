@@ -551,7 +551,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
       ? '你只完成本轮冻结 items 的动作，取得后台操作终态后立即 task_complete({summary:"真实结果及下游待验项"}) 交给评估者。不得 task_wait 等待下游采样，也不得为填满独立采样重复 provision。'
       : card.role === 'reviewer'
         ? '只有你负责分时独立复验并可 task_wait。新鲜探针才算新采样；缓存/重复回执不算。优先检查本轮修复目标，等待 observation.nextCheckAt，修复后仍须完整观察窗口；健康目标取得本轮独立检查后不因其回执在交接中到期而重做检查或20分钟观察。任一目标明确需要返工且 task_patrol_status.canHandoffForRework=true 时，立即 task_complete 交接失败结论；同一 Batch 的有效独立样本跨轮保留，只有实际修复/后续不良证据会使对应目标重新计时，不降低最终20分钟验收。最后一轮或没有可继续修复项时，pendingStability 中的已登录目标必须在当前评估卡完成观察，使用 task_wait，不得提前交接或以预算耗尽免除采样。明确仍未登录/挑战的目标如实记录，不空等凑稳定样本。得到通过或返工结论后 task_complete 交给规划者。'
-        : '先通过 task_notify 留下通知回执；根据真实证据 task_plan_round 或 task_finalize。不要 task_wait 等待尚未执行的下游；通知失败只处理通知，不能重跑已完成浏览器动作。')
+        : '先通过 task_notify 交接通知，再根据真实证据 task_plan_round 或 task_finalize。若有独立通知员，queued 就表示本角色已交接：通知员依赖你结束后才执行，不能 task_block/task_wait 等待其 sent。task_finalize 只结束规划者，不提前结束通知员或将整次执行判成功；整次执行仍等待真实通知回执。completed-patrol 的 sent 要求是结束后定时启用的门槛，不是规划者交接的前置条件。不要重新调用 Creator 专属 task_create_context；当前是已审查任务的执行角色。通知失败只处理通知，不能重跑已完成浏览器动作。')
   if (task.design?.proxy) lines.push('', '[PROXY BEFORE LOGIN]',
     `批准线路 ${task.design.proxy.lineId}；代理处理由独立角色 ${task.design.proxy.agentId} 执行。每轮 task_plan_round 同时提供 proxyItems:[{ip,action:verify|repair,reason}]，覆盖 items 中的机器；只读与修复分开，不固化本轮 IP 到工作流模板。`,
     'proxyItems 的 IP 集合必须恰好等于本轮浏览器 items 的去重 IP：每台一次，不多不少。若只修复一个目标，就只冻结它所在机器的代理动作，不把其余健康 inventory 节点加进去；既有独立验收证据保留。参数/范围拒绝不是修复次数耗尽，纠正清单后重提同一轮，不因此 task_block。',

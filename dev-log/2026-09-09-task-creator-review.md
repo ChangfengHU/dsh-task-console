@@ -1226,3 +1226,64 @@ Node22/dependencies. No new dependencies or download/build cache was installed;
 test fixtures self-clean. Production lib remains required. Small window/final
 screenshots are retained for acceptance evidence; unrelated behavior-collector
 worktree changes were not touched. No new browser-health Task or authority grants.
+
+## 2026-09-13 · 0.30.18 login observer and patrol handoff liveness
+
+Owner requested optimization after187 appeared unknown and its hourly patrol did
+not recover it. Machine operations remain owned by visible DSH Agents via MCP;
+no developer SSH, browser rebuild, permission expansion, blind login import,
+Task definition/review change or history deletion is authorized by this repair.
+
+The original cron Batch `b-cron-c482a34302e27458d6e5e819` was parked at planner p2:
+its downstream restored notifier depended on p2, while p2 waited for sent before
+handoff. Dependency blocks with already-satisfied parents repeatedly became ready
+(81 p2 Runs); the final capability block then suppressed subsequent hourly fires.
+This was not proof of an independent WeCom service outage. Execution-role prompts
+now distinguish queued handoff, actual delivery and post-Batch schedule activation;
+task_notify returns nextAction and the host rejects this reverse dependency wait.
+Unfinished real-parent waits retain their existing dependency behavior; otherwise
+dependency blocking parks rather than generating repeated new Sessions.
+
+The original card time budget now bounds blocked browser-patrol-v2 cron Batches.
+Only with no active/scheduled cards, user-input waits, running/unknown proxy calls,
+missing/nonterminal protected browser receipts or unresolved host operations can
+the expired card give up and the Batch settle failed. No false business success,
+missed-hour catch-up, budget reset, new scheduler or overlap-fence removal.
+
+Verification:284/284 tests, zero skips, using supported Node22 and the real DSH
+install for native-client tests; build/diff checks pass. Regressions exercise
+queued planner closeout through real notifier completion, one parked dependency
+Session, timeout settlement, unknown-operation and needs_input preservation.
+At deployment native running Sessions, running task_runs, nonterminal browser
+jobs and running/unknown proxy calls were all empty. Built tracked lib is the
+production symlink runtime, not a disposable build cache; user service restarted.
+Old cron Batch truly settled failed at2026-09-13T12:20:19Z with all81 p2 Runs kept.
+Original hourly schedule remains enabled; next due13:00Z. Original installation
+and patrol Task definition SHAs remain respectively
+`0be6047f328727afab0526080b4f4c1e5d0162f00415a7840ae7ad63b7fda9cd` and
+`c5da82ac3c1b78f3f19189e951668019b5a76c9a3a2591edec487f6b74f36b06`.
+All six participating/Creator AgentSpecs were untouched.
+
+Visible Session `agent-browser-manager-mtzrr0zl` independently diagnosed187:
+browser2 verified, browser1 control verification timed out. The installed verifier
+was older code with unbounded cleanup awaits. Agent prepare
+`7da8601d76b71799cad1e446084ced8f` changed only control/service.mjs and
+control/login-verification.mjs to existing current sources. Only the control
+service restarted; browser PIDs2322246/2125207 and shared desktop services stayed
+unchanged. Independent browser1 receipt`372518e0cf3c72dd5255617dd38698c9`
+reported actual signed_out; browser2 receipt`c346e62dcaa8038cacf8a099f94df58c`
+reported verified. Later Fleet reads show automatic timestamp progression without
+opening Gemini or another manual probe. This repair does not itself restore b1 login.
+
+Public Chrome desktop Fleet6.59s and DSH Task30.56s checks had no page errors;
+390px Fleet had no horizontal overflow and displayed b1 unsigned/b2 verified with
+fresh timestamps. DSH cold loading is still slow and not fixed by this host-only
+patch. New manual Batch`b-mtzs8atbjxv` reuses the original reviewed Task; planner
+released the initial round and started notification is genuinely sent. Its final
+login/notification acceptance is still in progress, not claimed complete.
+
+No dependencies were installed. Test fixtures and browser profiles self-clean;
+small `/tmp/patrol-recovery-*.png` and test logs are temporarily retained as
+acceptance evidence. Do not delete production operation receipts or existing
+browser data.187 node deployment evidence also belongs to linux-clash's existing
+browser-node-create log; unrelated behavior-collector changes remain untouched.

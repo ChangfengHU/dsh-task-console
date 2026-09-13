@@ -30,7 +30,9 @@ export class TaskNotifications {
       throw new Error('已达审查计划的累计回合上限，不能通知继续返工；请交接真实未解决结果')
     if (stage === 'restored' && !report.ready || stage === 'unresolved' && report.ready) throw new Error('通知阶段与真实验收结果不一致')
     const cardId = await this.store.createNotification(input.task,input.batch,input.card,stage,report)
-    return { state:'queued', cardId, agentId:input.task.design?.notifications?.agentId, notice:'通知员将在规划者交接后独立执行；尚未发送，不阻塞浏览器主流程。' }
+    return { state:'queued', cardId, agentId:input.task.design?.notifications?.agentId,
+      nextAction: ['restored','unresolved'].includes(stage) ? 'task_finalize' : 'task_plan_round',
+      notice:'通知员依赖当前规划者先交接。queued 是本角色已完成通知交接，不是发送成功；现在调用 nextAction，不能 task_block 等待 sent，否则下游永远不能启动。整次执行仍等待通知员真实发送回执；completed-patrol 的 sent 要求在执行结束后的定时启用检查，不是规划者交接的前置条件。' }
   }
 
   complete(input: CompletionCheck) {

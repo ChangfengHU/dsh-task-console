@@ -164,6 +164,64 @@ test('a failed notification branch does not cancel browser work', async()=>{
   assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
 })
 
+test('planner closeout releases notifier without waiting for its downstream sent receipt', async () => {
+  let outbox: TaskNotifications
+  const design:any={evidenceContract:'browser-patrol-v2',failurePolicy:{maxAttempts:3},notifications:{agentId:'notifier',chatIds:['fixture']}}
+  const {host,runner,store}=await setup({graphMode:'dynamic-rounds',design},{
+    notify:async(input,stage)=>input.card.role==='planner'
+      ? outbox.request(input,stage as any,{ready:true,summary:'independent fixture',items:[]})
+      : outbox.send(input,stage as any,{ready:true},async()=>({sent:1})),
+    beforeComplete:input=>input.card.role==='notifier'?outbox.complete(input):(outbox.requireStage(input,'restored'),undefined),
+  })
+  outbox=new TaskNotifications(store)
+  const batch=await runner.fire('T','manual'), session=[...host.sessions.keys()].at(-1)!
+  host.consumeFirst(session)
+  const receipt=await host.callTool(session,'task_notify',{stage:'restored'})
+  assert.equal(receipt.nextAction,'task_finalize')
+  await assert.rejects(host.callTool(session,'task_block',{kind:'dependency',reason:'waiting for notification sent'}),/不能反向等待/)
+  await host.callTool(session,'task_finalize',{summary:'hand off accepted evidence'})
+  host.endTurn(session);await tick()
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  const notifier=[...store.s.runs.values()].find(r=>r.cardId===receipt.cardId)!.sessionId
+  host.consumeFirst(notifier)
+  await host.callTool(notifier,'task_notify',{stage:'restored'})
+  await host.callTool(notifier,'task_complete',{summary:'actual sent'})
+  host.endTurn(notifier);await tick()
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'done')
+})
+
+test('dependency blocking without an unfinished parent parks instead of spinning new sessions', async () => {
+  const {host,runner,store}=await setup({participants:[{agentId:'a'}]})
+  const batch=await runner.fire('T','manual'), session=[...host.sessions.keys()][0]
+  host.consumeFirst(session)
+  await host.callTool(session,'task_block',{kind:'dependency',reason:'external dependency'})
+  host.endTurn(session);await tick()
+  for(let i=0;i<4;i++)await runner.tick()
+  assert.equal(host.sessions.size,1)
+  assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'blocked')
+})
+
+test('expired blocked cron patrol closes failed but unknown operations and manual input stay parked', async () => {
+  let now=Date.now(), pending:string|undefined='unreconciled operation'
+  const {host,runner,store}=await setup({participants:[{agentId:'a'}],design:{evidenceContract:'browser-patrol-v2'} as any},
+    {now:()=>now,pendingOperation:async()=>pending})
+  const batch=await runner.fire('T','cron'), session=[...host.sessions.keys()][0]
+  host.consumeFirst(session)
+  await host.callTool(session,'task_block',{kind:'capability',reason:'fixture missing tool'})
+  host.endTurn(session);await tick()
+  now+=61_000;await runner.tick()
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  pending=undefined;await runner.tick()
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'failed')
+  assert.equal(store.kernel.listRuns(batch.cardIds[0]).length,1)
+  const next=await runner.fire('T','cron'), nextSession=[...host.sessions.keys()].at(-1)!
+  host.consumeFirst(nextSession)
+  await host.callTool(nextSession,'task_block',{kind:'needs_input',reason:'explicit user choice'})
+  host.endTurn(nextSession);await tick();now+=61_000;await runner.tick()
+  assert.equal(store.s.batches.get(next.id)?.settled,undefined)
+  await runner.cancelBatch(next.id)
+})
+
 test('Creator reviews auxiliary notifier permissions and pins its profile for hourly execution',async()=>{
   const {runner,root}=await setup()
   const design:any={evidenceContract:'browser-patrol-v2',scope:'Existing authorized fleet browsers',branches:[{id:'verify',when:'unknown',action:'read only verify',evidence:'fresh result'}],coordination:'three roles and notifier side branch',failurePolicy:{isolateItems:true,maxAttempts:3,stopConditions:['no permission']},acceptance:['independent login evidence and sent receipts'],browserPatrol:{scope:'fleet-existing-authorized',actions:['provision','resume'],observationMinutes:20,minSamples:4},notifications:{channel:'wecom',agentId:'notifier',chatIds:['fixture-group']}}

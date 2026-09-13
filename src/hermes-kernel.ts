@@ -665,7 +665,10 @@ export class HermesKernel {
       const kind = options.kind ?? null
       const priorSame = task.block_kind === kind && kind !== null
       const recurrences = priorSame ? task.block_recurrences + 1 : (kind ? 1 : task.block_recurrences)
-      const status: KernelTaskStatus = kind === 'dependency' ? (this.parentsSatisfied(taskId) ? 'ready' : 'todo') : recurrences >= BLOCK_RECURRENCE_LIMIT ? 'triage' : 'blocked'
+      // Only a real unfinished parent can wake a dependency wait. Re-queuing a
+      // card whose parents are already done immediately repeats the same turn.
+      const status: KernelTaskStatus = kind === 'dependency' && !this.parentsSatisfied(taskId)
+        ? 'todo' : recurrences >= BLOCK_RECURRENCE_LIMIT ? 'triage' : 'blocked'
       this.db.prepare(`UPDATE tasks SET status = ?, block_kind = ?, block_recurrences = ?,
         claim_lock = NULL, claim_expires = NULL, worker_pid = NULL WHERE id = ?`).run(status, kind, recurrences, taskId)
       const runId = task.current_run_id

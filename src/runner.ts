@@ -23,6 +23,7 @@ import { taskAgentIds } from './task-design.ts'
 import { ScheduleLedger, type ScheduleClaim } from './scheduler.ts'
 import { publicToolName } from './filtered-mcp-client.ts'
 import { dispatchNotification } from './notification-dispatch.ts'
+import { readBrowserAcceptance } from './workflow-acceptance.ts'
 
 interface Flight {
   runId: string
@@ -157,10 +158,51 @@ export class TaskRunner {
     if (this.ticking || this.dispatchSuspended > 0) return
     this.ticking = true
     try {
+      await this.expireBlockedPatrols()
       await this.wakeDueCards()
       await this.fireDueCron()
       await this.dispatch()
     } finally { this.ticking = false }
+  }
+
+  /** A parked hourly patrol cannot suppress every future occurrence forever. */
+  private async expireBlockedPatrols(): Promise<void> {
+    for (const batch of this.store.s.batches.values()) {
+      const template = this.store.tasks.get(batch.taskId)
+      if (!template || template.archivedAt || batch.by !== 'cron' || batch.settled || batch.archivedAt) continue
+      const task = taskForBatch(template, batch)
+      if (task.design?.evidenceContract !== 'browser-patrol-v2') continue
+      const cards = batch.cardIds.map(id => this.store.s.cards.get(id)!).filter(Boolean)
+      if (cards.some(c => ['running','scheduled'].includes(c.status) || this.store.kernel.getTask(c.id)?.block_kind === 'needs_input')) continue
+      const expired = cards.filter(c => c.status === 'blocked' && c.startedAt && this.clock() >= Date.parse(c.startedAt) + task.timeoutSec * 1000)
+      if (!expired.length) continue
+      const db = this.store.kernel.db
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_proxy_calls'").get() &&
+        db.prepare("SELECT 1 FROM dsh_proxy_calls WHERE batch_id=? AND state IN ('running','unknown') LIMIT 1").get(batch.id)) continue
+      let pending = false
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_browser_operations'").get()) {
+        const operations = db.prepare('SELECT operation_id FROM dsh_browser_operations WHERE batch_id=?').all(batch.id) as { operation_id:string }[]
+        for (const row of operations) {
+          try {
+            const receipt = await readBrowserAcceptance(row.operation_id)
+            if (!['complete','blocked'].includes(receipt.phase)) pending = true
+          } catch { pending = true }
+        }
+      }
+      for (const card of cards) {
+        const run = this.store.s.runs.get(card.runIds.at(-1) ?? '')
+        if (!run) continue
+        try {
+          if (await this.pendingOperation?.({ task, batch, card, sessionId: run.sessionId, profileId: run.profileId ?? card.agentId })) pending = true
+        } catch { pending = true } // Missing/ambiguous receipts never release the overlap fence.
+      }
+      if (pending) continue
+      for (const card of expired) await this.store.transition(
+        () => this.store.kernel.giveUpTask(card.id, '定时巡查阻塞超过本卡总时间预算；本次未通过，保留历史与修复预算，下次整点重新检查'),
+        ok => ok ? { t:'card/gave_up', at:this.now(), taskId:task.id, cardId:card.id, error:'定时巡查阻塞超时，非业务成功' } : undefined,
+      )
+      await this.settleBatches()
+    }
   }
 
   private async wakeDueCards(): Promise<void> {
@@ -412,6 +454,11 @@ export class TaskRunner {
           },
           block: async (reason, kind) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            if (kind === 'dependency' && card.role === 'planner' && task.design?.notifications?.agentId) {
+              const notice = this.store.kernel.db.prepare(`SELECT t.id FROM tasks t JOIN task_links l ON l.child_id=t.id
+                WHERE l.parent_id=? AND t.role='notifier' AND t.status='todo' LIMIT 1`).get(card.id)
+              if (notice) throw new Error('通知员依赖当前规划者先交接，不能反向等待 sent。已排队后根据真实证据 task_plan_round 或 task_finalize；宿主仍等待通知员结束才结算整次执行。')
+            }
             if (card.role === 'notifier') {
               this.store.kernel.recordEvent(card.id,'notification_blocked',{reason,kind},flight.coreRunId)
               flight.terminal = {kind:'completed',summary:`通知未完成：${reason}`,metadata:{workflowOutcome:'unresolved',notificationBlocked:true}}

@@ -15,7 +15,10 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
   const watches = new Map<string, () => void>(), restoring = new Map<string, Promise<void>>()
   let live = true
   const snapshot = () => ctx.sessions.list.getSnapshot()
-  const role = (id: string) => confirmedActionRole(snapshot(), id)
+  // UI intent only; the current native header and backend still enforce ownership.
+  const explicitRole = (id: string) => { try { return sessionStorage.getItem(`dtc:action-role:${id}`) } catch { return null } }
+  const rememberRole = (id: string, agentId?: string) => { try { agentId ? sessionStorage.setItem(`dtc:action-role:${id}`, agentId) : sessionStorage.removeItem(`dtc:action-role:${id}`) } catch { /* storage unavailable */ } }
+  const role = (id: string) => confirmedActionRole(snapshot(), id, explicitRole(id))
   const selected = (id: string) => snapshot().current === id
   const canChooseAgent = (id: string) => !role(id) || snapshot().byId?.[id]?.blank === true
   const inputFor = (id: string) => ctx.get('conversation')?.input.for(ctx.sessions.scope(id))
@@ -24,15 +27,26 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
     const dismiss = (id?: string) => { if (id) { try { ctx.inputTriggers.sessionOf(ctx.sessions.scope(id)).dismiss() } catch { /* input not mounted */ } } }
     let previous = snapshot().current, previousRole = previous ? role(previous) : null
     const stop = ctx.sessions.list.subscribe(() => {
-      const id = snapshot().current, nextRole = id ? role(id) : null
+      const id = snapshot().current
+      // New Session may reuse the same blank record; it is a new choice context.
+      if (!id && previous) rememberRole(previous)
+      if (id && explicitRole(id) && explicitRole(id) !== snapshot().byId?.[id]?.agentPreset) rememberRole(id)
+      const nextRole = id ? role(id) : null
       if (id === previous && nextRole === previousRole) return
       dismiss(previous); if (id !== previous) dismiss(id)
       previous = id; previousRole = nextRole
       if (id) queueMicrotask(() => watchDraft(id))
     })
     const clear = () => { refreshedAt = 0; catalogs.clear(); dismiss(snapshot().current) }
+    const confirm = (event: Event) => {
+      const { sessionId, agentPreset } = (event as CustomEvent).detail ?? {}
+      if (typeof sessionId !== 'string' || typeof agentPreset !== 'string' || !selected(sessionId) || snapshot().byId?.[sessionId]?.agentPreset !== agentPreset) return
+      rememberRole(sessionId, agentPreset); previousRole = role(sessionId)
+      dismiss(sessionId); queueMicrotask(() => watchDraft(sessionId))
+    }
     window.addEventListener(ACTION_CHANGED, clear)
-    return () => { live = false; stop(); window.removeEventListener(ACTION_CHANGED, clear); for (const off of watches.values()) off(); for (const s of snippets.values()) s.dispose(); snippets.clear() }
+    window.addEventListener('dsh:agent-preset-confirmed', confirm)
+    return () => { live = false; stop(); window.removeEventListener(ACTION_CHANGED, clear); window.removeEventListener('dsh:agent-preset-confirmed', confirm); for (const off of watches.values()) off(); for (const s of snippets.values()) s.dispose(); snippets.clear() }
   }, 'task-console: action input lifecycle')
   const refresh = async () => {
     if (Date.now() - refreshedAt < 1500) return

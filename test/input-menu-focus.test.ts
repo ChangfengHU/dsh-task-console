@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { runInNewContext } from 'node:vm'
 import test from 'node:test'
-import { patchActionSubmit, patchInputMenu } from '../scripts/patch-input-menu.mjs'
+import { patchActionSubmit, patchInputMenu, patchActionRole } from '../scripts/patch-input-menu.mjs'
 
 test('menu focus patch rejects unknown/partial hosts and is idempotent', () => {
   assert.throws(() => patchInputMenu('unknown'), /Unsupported/)
@@ -24,6 +24,31 @@ test('Action submit patch is version anchored and idempotent', () => {
   assert.throws(() => patchActionSubmit('dtcActionAdjudication'), /Incomplete/)
   const patched = patchActionSubmit('if (trimmed.startsWith("/")) {')
   assert.equal(patchActionSubmit(patched), patched)
+})
+
+test('native preset choices confirm matching blank sessions, not inheritance, rejection or running sessions', { skip: !process.env.DSH_INSTALL_ROOT }, async () => {
+  const file = join(process.env.DSH_INSTALL_ROOT!, 'node_modules/@deepseek-ai/dsh-client-ui-agent-preset/lib/client.js')
+  assert.throws(() => patchActionRole('unknown'), /Unsupported/)
+  assert.throws(() => patchActionRole('dtcExplicitActionRole'), /Incomplete/)
+  const source = patchActionRole(await readFile(file, 'utf8'))
+  assert.equal(patchActionRole(source), source)
+  const start = source.indexOf('//#region lib/types/client/seat-store.js'), end = source.indexOf('//#endregion', start)
+  const events: any[] = [], calls: any[] = []
+  let session: any = { id: 's', blank: true, agentPreset: 'browser' }, ok = true, active = true
+  const { AgentPresetSeatController } = runInNewContext(source.slice(start, end) + '\n({AgentPresetSeatController})', {
+    _deepseek_ai_dsh_client_runtime_client: { createSnapshotStore: (s: any) => ({ getSnapshot: () => s, set: (v: any) => { s = v } }) },
+    window: { dispatchEvent: (e: any) => events.push(e.detail) }, document: { documentElement: { hasAttribute: () => active } },
+    CustomEvent: class { detail: any; constructor(_: any, { detail }: any) { this.detail = detail } },
+  })
+  const seat = new AgentPresetSeatController({ agentPresets: { select: async (q: any) => { calls.push(q); return { result: ok ? { ok, value: { agentPreset: q.agentPreset } } : { ok, error: { message: 'denied' } } } } } }, () => session, (_id: string, role: string) => { session.agentPreset = role })
+  await seat.apply(); assert.equal(events.length, 0, 'Default inheritance is not selection')
+  await seat.select('browser'); assert.equal(events.length, 1); assert.equal(calls.length, 0, 'Same role needs no write')
+  await seat.select('other'); assert.equal(events.at(-1).agentPreset, 'other'); assert.equal(calls.length, 1)
+  ok = false; await seat.select('browser'); assert.equal(events.length, 2, 'Rejected selection must not confirm')
+  session.blank = false; await seat.select('browser'); assert.equal(events.length, 2)
+  session = undefined; await seat.select('browser'); assert.equal(events.length, 2)
+  session = { id: 'new', blank: true, agentPreset: 'browser' }; await seat.apply(); assert.equal(events.at(-1).sessionId, 'new')
+  active = false; await seat.select('browser'); assert.equal(events.length, 3, 'No UI event without plugin')
 })
 
 test('native input machine adjudicates restored @ for keyboard AND Send, only with plugin active', { skip: !process.env.DSH_INSTALL_ROOT }, async () => {

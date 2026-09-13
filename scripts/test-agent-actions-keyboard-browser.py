@@ -32,7 +32,7 @@ with sync_playwright() as p:
     page.on('request', lambda r: writes.append(r.url) if any(s in r.url for s in ['/startAgentSession', '/session.prompt', '/launchWorkflow', '/saveAgent']) else None)
     composer = page.locator('textarea[data-phase]').first
     try:
-        page.goto(BASE + '/?v=0.30.16&session=' + SESSION, wait_until='domcontentloaded')
+        page.goto(BASE + '/?v=0.30.17&session=' + SESSION, wait_until='domcontentloaded')
         expect(composer).to_be_visible(timeout=60000)
         composer.fill('@')
         names = ['新增浏览器', '删除浏览器', '自动登录', '检查登录', '恢复浏览器']
@@ -72,6 +72,12 @@ with sync_playwright() as p:
         composer.press_sequentially('192.0.2.1'); composer.press('Enter'); selected('【新增数量】')
         composer.press('Enter'); selected('【登录方式】')
         assert '新增 1 个浏览器' in composer.input_value()
+        # Accepting a default changes native draft/DOM in different frames. The
+        # choices must open without pointerup, further typing or a second Enter.
+        popup = page.get_by_role('region', name='Action 参数候选', exact=True)
+        expect(popup.get_by_role('option')).to_have_count(3)
+        expect(popup.get_by_role('option', name='指定账号', exact=True)).to_be_visible()
+        page.screenshot(path='/tmp/dtc-action-login-mode-1440.png')
         composer.press_sequentially('不自动登录'); composer.press('Enter')
         assert '登录方式：不自动登录' in composer.input_value()
         composer.fill('@'); expect(first).to_be_visible(timeout=30000); expect(first).to_have_attribute('aria-selected', 'true')
@@ -90,6 +96,11 @@ with sync_playwright() as p:
         expect(page.get_by_role('button', name='Open sidebar', exact=True)).to_be_visible()
         page.screenshot(path='/tmp/dtc-action-keyboard-fields-390.png')
         assert composer.bounding_box()['width'] > 220
+        composer.press_sequentially('192.0.2.1'); composer.press('Enter'); selected('【新增数量】')
+        composer.press('Enter'); selected('【登录方式】')
+        expect(popup.get_by_role('option')).to_have_count(3)
+        expect(popup.get_by_role('option', name='不自动登录', exact=True)).to_be_visible()
+        page.screenshot(path='/tmp/dtc-action-login-mode-390.png')
         assert not errors and not writes, (errors, writes)
         print('PASS: public @ initial focus, five Actions by arrows/Enter, Files retained, three applicable parameters, forward/back, numeric/choice defaults and edits, no final-field send, 1440/390px')
     finally:

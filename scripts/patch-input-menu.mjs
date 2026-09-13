@@ -33,6 +33,26 @@ export function patchActionSubmit(source) {
   return source.replace(before, after)
 }
 
+/** Report an explicit native chip choice only once it matches a blank session. */
+export function patchActionRole(source) {
+  const same = 'if (!session.blank || session.agentPreset === staged) {\n\t\t\t\t\tthis.staged = void 0;'
+  const applied = 'this.onApplied?.(session.id, response.result.value.agentPreset);'
+  const emit = (id, role) => `if (typeof window !== "undefined" && document.documentElement.hasAttribute("data-dsh-task-entry")) window.dispatchEvent(new CustomEvent("dsh:agent-preset-confirmed", { detail: { sessionId: ${id}, agentPreset: ${role} } }));`
+  const changes = [
+    [same, same + '\n\t\t\t\t\tif (session.blank && session.agentPreset === staged) { ' + emit('session.id', 'staged') + ' } // dtcExplicitActionRole'],
+    [applied, applied + '\n\t\t\t\t\t' + emit('session.id', 'response.result.value.agentPreset')],
+  ]
+  if (source.includes('dtcExplicitActionRole')) {
+    if (!changes.every(([, after]) => source.split(after).length === 2)) throw Error('Incomplete native Action role patch')
+    return source
+  }
+  for (const [before, after] of changes) {
+    if (source.split(before).length !== 2) throw Error('Unsupported native Action role implementation')
+    source = source.replace(before, after)
+  }
+  return source
+}
+
 export async function installInputMenuPatch(dshRoot, check = false) {
   const { version } = JSON.parse(await readFile(join(dshRoot, 'package.json'), 'utf8'))
   if (version !== '0.1.1-rc.2') throw Error('Unsupported DSH version for menu focus patch: ' + version)
@@ -40,12 +60,13 @@ export async function installInputMenuPatch(dshRoot, check = false) {
   for (const [module, patch, backup] of [
     ['dsh-client-ui-input-trigger', patchInputMenu, '.dtc-menu-focus-backup'],
     ['dsh-client-ui-conversation', patchActionSubmit, '.dtc-action-submit-backup'],
+    ['dsh-client-ui-agent-preset', patchActionRole, '.dtc-action-role-backup'],
   ]) {
     const file = join(dshRoot, `node_modules/@deepseek-ai/${module}/lib/client.js`)
     const before = await readFile(file, 'utf8'), after = patch(before)
     if (before !== after) patches.push({ file, before, after, backup })
   }
-  // Validate every anchor before changing either supported native module.
+  // Validate every anchor before changing any supported native module.
   if (check) return { changed: false, needed: !!patches.length }
   for (const { file, before, after, backup } of patches) {
     try { await writeFile(file + backup, before, { flag: 'wx' }) } catch (e) { if (e.code !== 'EEXIST') throw e }

@@ -33,7 +33,7 @@ with sync_playwright() as p:
     page.on('request', lambda r: action_reads.append(r.url) if '/api/taskConsole/agentActions' in r.url else None)
     page.on('request', lambda r: mutations.append(r.url) if any(s in r.url for s in ['/saveAgent', '/startAgentSession', '/launchWorkflow', '/session.prompt']) else None)
     try:
-        url = BASE + '/?v=0.30.16#/tc/agents/' + ROLE
+        url = BASE + '/?v=0.30.17#/tc/agents/' + ROLE
         page.goto(url, wait_until='domcontentloaded')
         identity = page.get_by_label('名字', exact=True)
         expect(identity).to_be_visible(timeout=60000)
@@ -62,6 +62,7 @@ with sync_playwright() as p:
         page.go_forward()
         expect(identity).to_be_visible()
         page.get_by_role('tab', name='Actions', exact=True).click()
+        expect(page).to_have_url(__import__('re').compile(r'.*tab=actions'))
         page.reload(wait_until='domcontentloaded')
         expect(action_name).to_have_value(original_action, timeout=60000)
         expect(page.get_by_role('tab', name='Actions', exact=True)).to_have_attribute('aria-selected', 'true')
@@ -95,5 +96,8 @@ with sync_playwright() as p:
         assert not mutations, mutations
         assert persisted_hash() == before, 'Layout test changed persisted data'
         print('PASS: default identity, lazy Actions tab, hidden panels, drafts, reload/deep-link, history navigation, 1440/390px, sessions/tasks; no mutations or page errors')
+    except Exception:
+        print('Tab acceptance diagnostics:', page.url, errors, page.get_by_role('tab', selected=True).all_text_contents(), flush=True)
+        raise
     finally:
         browser.close()

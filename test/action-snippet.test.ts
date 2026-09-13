@@ -49,6 +49,10 @@ test('inactive session, unknown role and an old current pointer cannot provide a
   assert.equal(confirmedActionRole({ ...s, current: undefined }, 's1'), null)
   assert.equal(confirmedActionRole({ ...s, current: 's1' }, 's1'), 'browser')
   assert.equal(confirmedActionRole({ current: 'blank', byId: { blank: { blank: true, agentPreset: 'browser' } } }, 'blank'), null)
+  const blank = { current: 'blank', byId: { blank: { blank: true, agentPreset: 'browser' } } }
+  assert.equal(confirmedActionRole(blank, 'blank', 'browser'), 'browser')
+  assert.equal(confirmedActionRole(blank, 'blank', 'other'), null)
+  assert.equal(confirmedActionRole({ ...blank, current: undefined }, 'blank', 'browser'), null)
 })
 test('typing the same delimiter as the template does not merge adjacent placeholders', () => {
   const a = validateActions([{ id: 'echo', name: '回声', description: '', template: '{{first}}_{{second}}', parameters: [
@@ -96,6 +100,31 @@ test('candidate isolation covers roleless/other sessions, explicit new-role sele
   await new Promise(resolve => setTimeout(resolve, 0))
   state.current = 'other-session'; release!()
   assert.deepEqual(await pending, [])
+})
+
+test('native chip confirmation exposes same-session Actions and survives refresh, but not New Session reuse', async t => {
+  const globals = new Map(['window', 'sessionStorage'].map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]))
+  const cleanups: (() => void)[] = [], listeners = new Set<() => void>(), storage = new Map<string, string>()
+  Object.defineProperty(globalThis, 'window', { configurable: true, writable: true, value: new EventTarget() })
+  Object.defineProperty(globalThis, 'sessionStorage', { configurable: true, writable: true, value: { getItem: (k: string) => storage.get(k) ?? null, setItem: (k: string, v: string) => storage.set(k, v), removeItem: (k: string) => storage.delete(k) } })
+  t.after(() => { cleanups.forEach(f => f()); for (const [k, d] of globals) { if (d) Object.defineProperty(globalThis, k, d); else delete (globalThis as any)[k] } })
+  const state: any = { current: 's', byId: { s: { blank: true, agentPreset: 'browser' }, other: { blank: true, agentPreset: 'other' } } }
+  const ctx: any = { get: () => undefined, sessions: { list: { getSnapshot: () => state, subscribe: (f: () => void) => { listeners.add(f); return () => listeners.delete(f) } } }, effect: (fn: () => () => void) => cleanups.push(fn()) }
+  const api: any = { agents: async () => [], workflowCatalog: async () => [], agentActions: async ({ agentId, sessionId }: any) => { assert.equal(sessionId, 's'); return { agentId, name: agentId, revision: 'r', actions: [action] } } }
+  let source = agentMentionSource(ctx, async () => api, () => {})
+  const actions = async () => (await source.candidates({ sessionId: state.current }, { query: '' })).filter(c => c.value.startsWith('action:'))
+  assert.equal((await actions()).length, 0)
+  const confirm = (sessionId: string, agentPreset: string) => window.dispatchEvent(Object.assign(new Event('dsh:agent-preset-confirmed'), { detail: { sessionId, agentPreset } }))
+  confirm('other', 'other'); confirm('s', 'other'); assert.equal((await actions()).length, 0)
+  confirm('s', 'browser'); assert.equal((await actions())[0].value, 'action:browser:create:current')
+  cleanups.splice(0).forEach(f => f()); source = agentMentionSource(ctx, async () => api, () => {})
+  assert.equal((await actions()).length, 1, 'Refresh should retain confirmed role intent')
+  state.current = undefined; listeners.forEach(f => f())
+  state.current = 's'; listeners.forEach(f => f())
+  assert.equal((await actions()).length, 0, 'A reused blank after New Session needs a fresh choice')
+  confirm('s', 'browser'); state.byId.s.agentPreset = 'other'; listeners.forEach(f => f())
+  state.byId.s.agentPreset = 'browser'; listeners.forEach(f => f())
+  assert.equal((await actions()).length, 0, 'Changing the native owner invalidates old confirmation')
 })
 
 test('reload restores exact edited ranges and progress without storing parameter data', () => {

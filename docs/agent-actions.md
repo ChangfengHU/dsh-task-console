@@ -18,8 +18,12 @@ MCP fence and host policy.
   an Action or an ordinary message. Only explicit send creates the role session.
   A blank composer may inherit DSH's selected preset, but inheritance/reusing a
   blank session is **not explicit selection**: bare `@` shows Agents/Tasks/Files,
-  not that preset's Actions. Pick the Agent in `@` first; its `@agent-id/` submenu
-  then shows only its Actions. Clearing that choice hides Actions again. Existing
+  not that preset's Actions. Explicitly choosing the native hero's Agent chip also
+  confirms that blank session's role: bare `@` then directly shows its Actions,
+  invoked in the same Session. Re-selecting the already displayed role counts,
+  without a redundant host write. Alternatively pick the Agent in `@`; its
+  `@agent-id/` submenu shows only its Actions. Clearing that submenu choice hides
+  its Actions again. Existing
   nonblank sessions use their actual role; other-role Actions remain hidden.
 - Agent → **Actions tab** supports create, edit, copy, delete and a
   separate **Save Actions** button. Saving the Agent's normal configuration does
@@ -49,6 +53,9 @@ behaviors without an invocation form. The native draft remains the only input:
 - `choices`: 1–30 fixed text choices. Select with ↑↓ then Enter, or click; a typed
   value must match a configured choice. Initial focus shows all alternatives,
   including when revisiting a filled field. Typing filters the list.
+  Keyboard navigation waits for the native textarea's matching draft revision
+  before mounting choices, so Enter accepting a default opens the next field's
+  list automatically without a mouse click.
 - `source`: a registered read-only adapter (`fleet.nodes` or
   `fleet.gemini-accounts`). Candidate pages contain at most 20 items with search,
   loading/error/empty states and retry. No default first-machine selection.
@@ -202,7 +209,7 @@ No refresh automatically sends, creates a Task or operates an Agent.
 The same installer corrects native menu default focus: late async results choose
 the first visible group until the user explicitly moves; late results cannot
 steal a deliberate highlight. Files retain their native keyboard ordering.
-Both patches reject unknown/partial source anchors, are idempotent, and are wired
+These patches reject unknown/partial source anchors, are idempotent, and are wired
 into the existing host patch script. On a verified supported host installation:
 
 ```sh
@@ -216,6 +223,17 @@ The exact native `lib/client.js` files receive exclusive original backups:
 rollback sources. A host upgrade needs source/version revalidation, not a blind
 reapply. Neither patch changes backend permissions, stored Sessions or Tasks.
 
+The same version-fenced installer also bridges the native Agent chip's **applied**
+choice to Actions (`dsh-client-ui-agent-preset` → `.dtc-action-role-backup`). This
+reports only a matching blank role or a successful host selection, including a
+staged choice when its blank session appears. Loading the inherited default,
+failed selection and attempting to switch a running session do not confirm a role.
+`dtc:action-role:<sessionId>` in tab-local sessionStorage stores only the chosen
+Agent ID. Refresh retains it; a new-session entry or native owner change clears
+it. It is UI intent, not authority: current selection, real header and backend
+role checks still apply. Old blank sessions without this UI evidence need one
+explicit chip choice after upgrading, never a guessed confirmation from the label.
+
 ## Verification
 
 ```sh
@@ -226,6 +244,7 @@ python3 scripts/test-agent-actions-tabs-browser.py
 python3 scripts/test-agent-actions-keyboard-browser.py
 python3 scripts/test-agent-actions-recovery-browser.py
 python3 scripts/test-agent-action-options-browser.py
+python3 scripts/test-agent-actions-native-role-browser.py
 ```
 
 The opt-in public smoke test requires the installed Playwright/Chrome environment.
@@ -247,6 +266,13 @@ count, positive integers, conditional account selection, parent invalidation and
 refresh. It separately labels simulated pagination, failure and delayed-response
 tests; a forced catalog delay also edits a completed draft before configuration
 recovery and checks pending range tracking plus dependent-field invalidation.
+The native-role script reuses a blank acceptance session, selects the displayed
+role through the real hero menu and checks direct same-session Actions, refresh
+and New Session isolation. It blocks host role writes and all business sends;
+different-role successful/rejected responses and staged selection are exercised
+against the actual supported native controller in unit tests. The keyboard script
+explicitly accepts the numeric default, then asserts all next-field options are
+visible without pointer interaction; a typed count alone does not cover this race.
 Those fixtures never reach Fleet. All business-send requests are blocked
 before delivery. Desktop/mobile screenshots are local acceptance evidence, not
 public artifacts containing private session history.

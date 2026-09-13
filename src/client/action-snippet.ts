@@ -53,12 +53,18 @@ export function installActionSnippet(ctx: any, sessionId: string, action: AgentA
     const slot = slots[index]
     if (!slot || slot.removed || slot.inactive) return
     current = index; filling = true; save()
+    cancelCandidates()
     const epoch = ++focusEpoch
     cancelAnimationFrame(focusFrame)
     const focus = (attempt = 0) => {
       if (epoch !== focusEpoch || !active() || !filling || current !== index) return
       const el = field()
-      if (el) { el.focus(); el.setSelectionRange(slots[index].start, slots[index].end) }
+      if (el) {
+        el.focus(); el.setSelectionRange(slots[index].start, slots[index].end)
+        // Choices must mount against the same native revision as the selection.
+        // In particular, accepting a default changes the draft before React paints.
+        void showCandidates()
+      }
       else if (attempt < 30) focusFrame = requestAnimationFrame(() => focus(attempt + 1))
     }
     // Native setDraft may commit after the next frame, particularly following a
@@ -68,7 +74,6 @@ export function installActionSnippet(ctx: any, sessionId: string, action: AgentA
     const value = snippetDefault(slot.parameter)
     const visible = slots.filter(s => !s.removed && !s.inactive)
     input.notify('info', `${visible.indexOf(slot) + 1}/${visible.length} · ${slot.label}${value === undefined ? '' : `（默认：${value}${slot.parameter.acceptDefaultOnEnter === false ? '，需明确填写' : ''}）`} · Enter / Tab ${value === undefined || slot.parameter.acceptDefaultOnEnter === false ? '' : '接受默认并'}下一项，Shift+Tab 上一项；填完后再确认发送`)
-    void showCandidates()
   }
   const error = () => {
     const text = input.state.getSnapshot().draft

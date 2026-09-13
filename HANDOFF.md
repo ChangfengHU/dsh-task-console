@@ -14,7 +14,14 @@ block both keyboard and button sends; IME confirmation must not advance a field.
 The `@` entry checks the currently selected session and its actual header role,
 discards stale async candidates and closes stale menus when that role changes.
 An inherited/reused blank session's preset is not explicit role selection: bare
-`@` must not expose its Actions. The new-session `@` Agent choice is explicit.
+`@` must not expose its Actions. Both the new-session `@` Agent choice and a
+successfully applied native hero chip choice are explicit. The latter exposes
+same-session Actions directly, including reselecting the displayed blank role.
+The supported-host patch bridges that native event, with original backup
+`.dtc-action-role-backup`. Tab-local `dtc:action-role:<sessionId>` stores only the
+Agent ID; refresh preserves it, New Session or owner change clears it. This is
+not a permission grant; native/backend role checks remain. Keyboard candidate
+mounting must wait for the matching native input revision, like text selection.
 Visible default parameters remain placeholders until accepted/edited. Refresh
 reclaims the native Action before sending; tab-local metadata retains only range
 coordinates/Action identity, never a second prompt copy. Missing metadata recovers

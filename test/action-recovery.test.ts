@@ -5,6 +5,39 @@ import { makeActionSnippet, snippetProgress } from '../src/action-snippet.ts'
 import { validateActions } from '../src/agent-actions.ts'
 import { installActionSnippet } from '../src/client/action-snippet.ts'
 
+test('Enter accepting a default mounts choices automatically after the native DOM catches up', t => {
+  const names = ['window','document','requestAnimationFrame','cancelAnimationFrame'] as const
+  const globals = new Map(names.map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]))
+  const handlers = new Map<string, Function>(), frames = new Map<number, FrameRequestCallback>(); let sequence = 0
+  const frame = () => { const fs = [...frames.values()]; frames.clear(); fs.forEach(f => f(0)) }
+  const nodes: any[] = []
+  const element = (): any => ({ style: {}, children: [], setAttribute() {}, append(n: any) { this.children.push(n) }, replaceChildren() { this.children = [] }, addEventListener() {}, querySelector: () => null, remove() { nodes.splice(nodes.indexOf(this), 1) } })
+  const doc: any = { addEventListener: (k: string, f: Function) => handlers.set(k, f), removeEventListener: (k: string) => handlers.delete(k), createElement: element, body: { append: (n: any) => nodes.push(n) } }
+  const action = validateActions([{ id: 'create', name: 'Create', template: '{{count}} {{mode}}', parameters: [
+    { key: 'count', label: '数量', type: 'number', required: true, default: 1 },
+    { key: 'mode', label: '登录方式', type: 'text', required: true, default: '按账号分配策略', choices: ['按账号分配策略', '指定账号', '不自动登录'] },
+  ] }])[0]
+  let state = { draft: makeActionSnippet(action, '@Create ').text }
+  const el: any = { disabled: false, value: state.draft, getClientRects: () => [{}], getBoundingClientRect: () => ({ left: 20, top: 400 }), focus() {}, setSelectionRange(start: number, end: number) { this.selectionStart = start; this.selectionEnd = end } }
+  doc.querySelectorAll = () => [el]
+  const install = (k: string, value: any) => Object.defineProperty(globalThis, k, { configurable: true, writable: true, value })
+  install('document', doc); install('window', Object.assign(new EventTarget(), { innerWidth: 1440, innerHeight: 1000 }))
+  install('requestAnimationFrame', (f: FrameRequestCallback) => { frames.set(++sequence, f); return sequence }); install('cancelAnimationFrame', (id: number) => frames.delete(id))
+  const listeners = new Set<() => void>()
+  const input = { state: { getSnapshot: () => state, subscribe: (f: () => void) => { listeners.add(f); return () => listeners.delete(f) } }, notify() {}, setDraft(draft: string) { state = { draft }; listeners.forEach(f => f()) } }
+  const controller = installActionSnippet({ sessions: { list: { getSnapshot: () => ({ current: 's' }), subscribe: () => () => {} } } }, 's', action, '@Create ', input)
+  t.after(() => { controller.dispose(); for (const [k, d] of globals) { if (d) Object.defineProperty(globalThis, k, d); else delete (globalThis as any)[k] } })
+  frame(); frame(); frame()
+  handlers.get('keydown')!({ key: 'Enter', target: el, preventDefault() {}, stopImmediatePropagation() {} })
+  assert.match(state.draft, /1 【登录方式】/)
+  frame(); frame(); assert.equal(nodes.length, 0, 'Must not mount against the stale textarea')
+  el.value = state.draft; frame()
+  assert.equal(el.value.slice(el.selectionStart, el.selectionEnd), '【登录方式】')
+  assert.equal(nodes.length, 1, 'No click or extra typing should be needed')
+  assert.match(nodes[0].children[0].textContent, /登录方式/)
+  assert.deepEqual(nodes[0].children[1].children.map((n: any) => n.children[0].textContent), ['按账号分配策略', '指定账号', '不自动登录'])
+})
+
 test('draft hydration and edits supersede pending recovery without dropping the latest revision', async t => {
   const names = ['window', 'document', 'sessionStorage', 'requestAnimationFrame', 'cancelAnimationFrame'] as const
   const globals = new Map(names.map(k => [k, Object.getOwnPropertyDescriptor(globalThis, k)]))

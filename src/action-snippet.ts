@@ -10,10 +10,10 @@ export function resolveSnippetDefaults(action: AgentAction, text: string): strin
   return text.replace(new RegExp(escaped.join('|'), 'g'), marker => defaults.get(marker)!)
 }
 /** Only the visible selected session establishes an existing role; no sticky fallback. */
-export function confirmedActionRole(snapshot: any, sessionId: string): string | null {
+export function confirmedActionRole(snapshot: any, sessionId: string, explicitRole?: string | null): string | null {
   const session = snapshot?.byId?.[sessionId]
   // A reused blank session carries the deployment default, not a user's choice.
-  return snapshot?.current === sessionId && session?.blank !== true && typeof session?.agentPreset === 'string' ? session.agentPreset : null
+  return snapshot?.current === sessionId && typeof session?.agentPreset === 'string' && (session.blank !== true || explicitRole === session.agentPreset) ? session.agentPreset : null
 }
 
 export interface SnippetProgress {

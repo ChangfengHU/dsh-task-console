@@ -2,7 +2,7 @@ import type { ActionParameter } from './agent-actions.ts'
 
 export interface ActionOption { value: string; label: string; detail?: string; disabled?: boolean }
 export interface ActionOptionPage { items: ActionOption[]; page: number; pages: number; total: number; notice?: string }
-export interface ActionOptionQuery { agentId: string; sessionId?: string; actionId: string; revision: string; parameter: string; values: Record<string, unknown>; search?: string; page?: number }
+export interface ActionOptionQuery { agentId?: string; taskId?: string; sessionId?: string; actionId: string; revision: string; parameter: string; values: Record<string, unknown>; search?: string; page?: number }
 export function optionPage(items: ActionOption[], search = '', page = 1, notice?: string): ActionOptionPage {
   if (typeof search !== 'string' || search.length > 500 || !Number.isInteger(page) || page < 1 || page > 10000) throw Error('候选查询参数无效')
   const q = search.trim().toLowerCase()

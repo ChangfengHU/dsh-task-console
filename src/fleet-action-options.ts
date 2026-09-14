@@ -18,7 +18,7 @@ function cachedRead(key: string, read: () => Promise<any>) {
  * Only host-owned composition paths are used. Action JSON cannot supply modules,
  * URLs, headers or tool names. No SSH, discovery refresh, verification or copy.
  */
-export async function fleetActionOptions(config: Record<string, unknown>, p: ActionParameter, values: Record<string, unknown>, load?: (name: string) => Promise<any>): Promise<{ items: ActionOption[]; notice: string }> {
+export async function fleetActionOptions(config: Record<string, unknown>, p: ActionParameter, values: Record<string, unknown>, load?: (name: string) => Promise<any>, intakeOnly = false): Promise<{ items: ActionOption[]; notice: string }> {
   const entry = (Array.isArray(config.args) ? config.args : []).find(v => typeof v === 'string' && isAbsolute(v) && basename(v) === 'server.mjs')
   if (!entry) throw Error('此部署尚未配置 Fleet 只读候选适配器；仍可手填机器 IP')
   const module = load ?? ((name: string) => import(pathToFileURL(join(dirname(entry), name + '.mjs')).href))
@@ -33,7 +33,7 @@ export async function fleetActionOptions(config: Record<string, unknown>, p: Act
   if (p.source !== 'fleet.gemini-accounts') throw Error('未注册的候选来源')
   const ip = String(values[p.dependsOn?.[0] ?? ''] ?? '')
   if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip) || ip.split('.').some(v => Number(v) > 255)) throw Error('请先填写具体目标机器 IP')
-  if (grants.nodes?.[ip]?.read !== true) throw Error(grants.scope === 'registered-fleet' ? '目标未在启用的 Fleet 名册中；请确认机器已注册并启用' : '目标尚无浏览器只读授权；请保留自动分配方式，由 Agent 检查授权')
+  if (grants.nodes?.[ip]?.read !== true && !intakeOnly) throw Error(grants.scope === 'registered-fleet' ? '目标未在启用的 Fleet 名册中；请确认机器已注册并启用' : '目标尚无浏览器只读授权；请保留自动分配方式，由 Agent 检查授权')
   const { rankLoginSources } = await module('login')
   // Reuse account exclusions/admission from the MCP. No invented target instance:
   // this is intent authoring, not a recommendation/authorization for a transfer.
@@ -46,6 +46,7 @@ export async function fleetActionOptions(config: Record<string, unknown>, p: Act
     pages = data.pages; accounts.push(...data.rows)
   }
   const ranked = rankLoginSources(accounts, grants, { ip })
+  if (intakeOnly && !vaultEnabled) throw Error('此部署尚未启用金库账号库存；新节点不能依赖在线浏览器复制')
   if (vaultEnabled) {
     const seen = new Set<string>()
     return {

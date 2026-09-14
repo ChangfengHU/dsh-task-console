@@ -7,6 +7,8 @@ export interface ActionDraft {
   prefix: string
   newSession: boolean
   progress?: SnippetProgress
+  taskId?: string
+  requestId?: string
 }
 const key = (sessionId: string) => `dtc:action-draft:${sessionId}`
 /** Tab/session-scoped UI metadata; the native input remains the only prompt store. */

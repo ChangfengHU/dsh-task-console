@@ -93,6 +93,13 @@ Do not silently repair and execute malformed arguments. Reapply through the exis
 `scripts/patch-history-ids.mjs` host patch after a supported host reinstall.
 
 Package remains `dsh-task-console`; Agent and Board are modules of the same plugin.
+Task-owned Actions use the same native composer, with configuration at
+`#/tc/tasks/:id/actions`. Keep their SQLite catalog separate from TaskSpec/reviewed
+workflow hashes and cron bindings. Submission is `launchTaskAction`, not a normal
+session prompt; preserve its stable request ID, safe frozen `turn.action` and
+private credential mechanism. Creator-generated Actions are independently reviewed;
+never seed over a nonempty catalog or bypass the existing Fleet login acceptance.
+See `docs/agent-actions.md` for APIs, bindings, recovery and browser test boundaries.
 Use the installed DSH service's actual executable/configuration to identify the host,
 not an adjacent source checkout. Its generated `lib/` plugin assets are tracked.
 

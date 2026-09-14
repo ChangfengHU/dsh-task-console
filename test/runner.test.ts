@@ -64,6 +64,72 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
 
+test('Task Actions use CAS independent storage and frozen fresh inputs; real scheduler creates only a Batch and its role sessions', async () => {
+  const { store, runner, host, root } = await setup({ origin: { source: 'task-chat', signalId: 'fixture' } as any })
+  const creator = new TaskCreator(runner, async () => ['a','b','c'].map(id => ({ id, name: id } as any)))
+  const before = JSON.stringify(store.tasks.get('T'))
+  const starter = JSON.parse(await readFile(new URL('../presets/fleet-task-actions.json', import.meta.url), 'utf8'))
+  const catalog = creator.actions.save('T', starter, '0')
+  assert.equal(JSON.stringify(store.tasks.get('T')), before)
+  assert.equal(store.s.batches.size, 0)
+  assert.throws(() => creator.actions.save('T', [], '0'), /已被修改/)
+  const query = { taskId: 'T', actionId: starter[0].id, revision: catalog.revision, requestId: 'task-action-fixture-0001', cwd: root,
+    values: { ip: '192.0.2.30', ssh_mode: '提供首次凭据', username: 'root', password: 'fixture-only-credential', login_mode: '指定账号', account: 'fixture@example.test · accountId=gemini_12345678 · #12345678' } }
+  const first = await creator.launchAction(query)
+  const turn = store.s.batches.get(first.batchId)!.turn!
+  assert.deepEqual(turn.targets, [{kind:'fleet-node',id:'192.0.2.30'}])
+  assert.equal(turn.action?.values.password, '[credential supplied privately]')
+  assert.equal(turn.action?.revision, catalog.revision)
+  assert.doesNotMatch(JSON.stringify(store.all()), /fixture-only-credential/)
+  const secret = JSON.parse(await readFile(join(store.root, 'private-inputs', `${first.batchId}.json`), 'utf8'))
+  assert.equal(secret.credentials[0].password, query.values.password)
+  assert.equal(secret.credentials[0].username, 'root')
+  assert.equal(secret.credentials[0].ip, query.values.ip)
+  assert.ok([...host.sessions.keys()].every(id => id.startsWith('task-')), 'only task-owned role sessions, no ordinary conversation')
+  assert.equal(turn.origin?.intakeSessionId, undefined)
+  creator.actions.save('T', [], catalog.revision)
+  assert.equal((await creator.launchAction(query)).batchId, first.batchId, 'accepted retry survives catalog edits')
+  await assert.rejects(creator.launchAction({ ...query, values: { ...query.values, ip: '192.0.2.31' } }), /同一提交/)
+  await assert.rejects(creator.launchAction({ ...query, requestId: 'task-action-fixture-0002' }), /已更新/)
+  assert.equal(store.s.batches.size, 1)
+  assert.equal(JSON.stringify(store.tasks.get('T')), before)
+})
+
+test('Task Action invalid values create neither Batch nor credential files and ignore historical target inputs', async () => {
+  const { store, runner } = await setup({ origin: { source: 'task-chat', signalId: 'fixture' } as any })
+  const creator = new TaskCreator(runner, async () => ['a','b','c'].map(id => ({ id } as any)))
+  const catalog = creator.actions.save('T', [{ id: 'inspect', name: 'Inspect', template: 'Inspect {{ip}}, note {{note}}', parameters: [
+    { key: 'ip', label: 'IP', type: 'text', required: true, binding: 'target-ip' }, { key: 'note', label: 'Note', type: 'text', required: false }
+  ] }], '0')
+  const query = { taskId: 'T', actionId: 'inspect', revision: catalog.revision, requestId: 'task-action-invalid-01', values: { ip: '999.0.0.1', note: '' } }
+  await assert.rejects(creator.launchAction(query), /IPv4/)
+  await assert.rejects(creator.launchAction({ ...query, values: { note: '192.0.2.40' } }), /请填写/)
+  assert.equal(store.s.batches.size, 0)
+  const result = await creator.launchAction({ ...query, values: { ip: '192.0.2.41', note: 'Source 192.0.2.42, not a target' } })
+  assert.deepEqual(store.s.batches.get(result.batchId)!.turn!.targets, [{kind:'fleet-node',id:'192.0.2.41'}])
+})
+
+test('Creator freezes Actions for independent review, installs only after approval without altering workflow definition', async () => {
+  const { store, runner, root, host } = await setup()
+  const creator = new TaskCreator(runner, async () => [{id:'a',name:'A'} as any])
+  const actions = [{ id:'inspect',name:'Inspect',template:'Inspect {{target}}',parameters:[{key:'target',label:'Target',type:'text' as const,required:true}] }]
+  const proposal = { decision:'create' as const, reason:'reusable fixture', title:'Action review',brief:'Inspect input only',participants:[{agentId:'a'}],actions,
+    design:{scope:'read fixture',branches:[{id:'inspect',when:'authorized',action:'inspect',evidence:'receipt'}],coordination:'serial',failurePolicy:{isolateItems:true,maxAttempts:1,stopConditions:['no permission']},acceptance:['report']} }
+  const exec = {agent:{session:{id:'creator-actions-fixture',deriveMessages:()=>[{id:'input',role:'user',content:'Read fixture only'}]}}}
+  const count = store.tasks.size
+  const plan: any = await creator.prepare(proposal,exec,root)
+  assert.deepEqual(plan.actions, actions.map(a => ({...a,description:''})))
+  assert.equal(store.tasks.size,count); assert.equal(host.sessions.size,0)
+  assert.equal('actions' in plan.definition,false)
+  await assert.rejects(creator.review(plan.id,'wrong-hash','approve','wrong'),/指纹/)
+  const approved: any = await creator.review(plan.id,plan.hash,'approve','Fixture independently reviewed')
+  assert.equal(creator.actions.read(approved.taskId).actions.length,1)
+  assert.equal(store.tasks.size,count+1)
+  const revision=creator.actions.read(approved.taskId).revision
+  await creator.review(plan.id,plan.hash,'approve','duplicate')
+  assert.equal(creator.actions.read(approved.taskId).revision,revision)
+})
+
 test('archived tasks cannot fire or resume waiting cards; restore never enables cron', async () => {
   const { runner, store, task, host } = await setup({ trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' } })
   await store.createBatch(task, { t: 'batch/fired', at: new Date().toISOString(), taskId: task.id, batch: { id: 'archive-fixture', by: 'manual', cards: [{ id: 'archive-fixture#0', agentId: 'a', deps: [] }] } })

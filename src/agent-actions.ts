@@ -13,6 +13,7 @@ export interface ActionParameter {
   inactiveValue?: string
   min?: number
   integer?: boolean
+  binding?: 'target-ip' | 'ssh-user' | 'ssh-password' | 'gemini-account'
 }
 export interface AgentAction {
   id: string
@@ -20,6 +21,8 @@ export interface AgentAction {
   description: string
   template: string
   parameters: ActionParameter[]
+  enabled?: boolean
+  isDefault?: boolean
 }
 export interface ActionCatalog {
   agentId: string | null
@@ -27,6 +30,7 @@ export interface ActionCatalog {
   revision: string
   actions: AgentAction[]
   writable: boolean
+  taskId?: string
 }
 const ID = /^[a-z][a-z0-9-]{0,63}$/
 const KEY = /^[a-z][a-z0-9_]{0,39}$/
@@ -47,6 +51,11 @@ export function validateActions(raw: unknown): AgentAction[] {
       keys.add(p.key)
       if (!['text', 'number', 'boolean'].includes(p.type) || typeof p.required !== 'boolean') throw new Error('参数类型或必填设置无效')
       const field: ActionParameter = { key: p.key, label: text(p.label, '参数名称', 80), type: p.type, required: p.required }
+      if (p.binding !== undefined) {
+        if (p.type !== 'text' || !['target-ip', 'ssh-user', 'ssh-password', 'gemini-account'].includes(p.binding)) throw Error('参数用途无效')
+        if (p.binding === 'ssh-password' && (p.default !== undefined || p.source || p.choices)) throw Error('密码只能本次输入，不允许保存默认值或候选')
+        field.binding = p.binding
+      }
       for (const flag of ['acceptDefaultOnEnter', 'integer'] as const) if (p[flag] !== undefined) {
         if (typeof p[flag] !== 'boolean' || flag === 'integer' && p.type !== 'number') throw new Error('参数开关无效')
         field[flag] = p[flag]
@@ -87,7 +96,9 @@ export function validateActions(raw: unknown): AgentAction[] {
       if (parents.some(k => used.indexOf(k) >= used.indexOf(p.key))) throw new Error('模板中依赖参数必须出现在联动参数之前')
       if (parents.length && [p.key, ...parents].some(k => used.filter(v => v === k).length !== 1)) throw new Error('联动参数及其依赖在模板中只能出现一次')
     }
-    return { id: a.id, name: text(a.name, 'Action 名称', 80), description: text(a.description ?? '', '说明', 300, true), template, parameters }
+    for (const flag of ['enabled', 'isDefault']) if (a[flag] !== undefined && typeof a[flag] !== 'boolean') throw Error('Action 开关无效')
+    return { id: a.id, name: text(a.name, 'Action 名称', 80), description: text(a.description ?? '', '说明', 300, true), template, parameters,
+      ...(a.enabled !== undefined ? { enabled: a.enabled } : {}), ...(a.isDefault !== undefined ? { isDefault: a.isDefault } : {}) }
   })
 }
 export function validateValue(p: ActionParameter, v: unknown): void {
@@ -121,5 +132,5 @@ export function renderAction(action: AgentAction, raw: unknown): string {
 }
 export function actionCandidates(catalog: ActionCatalog | null, query: string) {
   const q = query.trim().toLowerCase()
-  return (catalog?.actions ?? []).filter(a => !q || `${a.name} ${a.id} ${a.description}`.toLowerCase().includes(q)).map(a => ({ name: a.name, description: a.description, hint: '填写参数 · 当前会话', value: `action:${a.id}`, section: `Actions · ${catalog!.name}` }))
+  return (catalog?.actions ?? []).filter(a => a.enabled !== false && (!q || `${a.name} ${a.id} ${a.description}`.toLowerCase().includes(q))).sort((a,b) => Number(b.isDefault === true) - Number(a.isDefault === true)).map(a => ({ name: a.name, description: a.description, hint: '填写参数 · 当前会话', value: `action:${a.id}`, section: `Actions · ${catalog!.name}` }))
 }

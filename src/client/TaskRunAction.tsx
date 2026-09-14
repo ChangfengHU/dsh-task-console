@@ -1,6 +1,6 @@
 import type { TaskSpec } from '../wire.ts'
 import type { TasksApi } from './TasksView.tsx'
-import { go } from './Console.tsx'
+import { closeConsole, go } from './Console.tsx'
 
 /** Each invocation supplies fresh inputs; never silently replay an old target/credential. */
 export function TaskRunAction({ task, api, toast }: { task: TaskSpec; api: TasksApi; toast: (text: string) => void }) {
@@ -11,6 +11,11 @@ export function TaskRunAction({ task, api, toast }: { task: TaskSpec; api: Tasks
   return <button className="dtc-btn pri" disabled={external || (!task.enabled && !scheduled)} title={external ? '从来源系统重新提交，由 Task Agent 核对目标与角色' : '复用工作流，新增独立执行记录'} onClick={async event => {
     event.stopPropagation()
     try {
+      if (chat && (await api.taskActions(task.id)).actions.some(a => a.enabled !== false)) {
+        closeConsole()
+        window.dispatchEvent(new CustomEvent('dtc:compose-task', { detail: { taskId: task.id } }))
+        return
+      }
       if (chat && !scheduled) {
         const text = window.prompt(`为「${task.title}」输入本次任务参数。不会复用上次的 IP 或登录凭据。`)
         if (!text?.trim()) return

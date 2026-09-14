@@ -33,6 +33,8 @@ import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, valid
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
 import { TaskCreator } from './task-create.ts'
+import { assertTaskActionLogin } from './task-actions.ts'
+import { readBrowserAcceptance } from './workflow-acceptance.ts'
 import { executionHistory } from './execution-history.ts'
 import { browserPatrolEvidence } from './browser-patrol-evidence.ts'
 import { BrowserPatrolWorkflow } from './browser-patrol-workflow.ts'
@@ -140,6 +142,10 @@ export class TaskConsoleService extends TypertRemoteService {
     }
     const card=this.runner.store.s.cards.get(run.cardId)!,batch=this.runner.store.s.batches.get(run.batchId)!,base=this.runner.store.tasks.get(run.taskId)!
     const task=taskForBatch(base,batch),input={task,batch,card,sessionId,profileId:run.profileId??card.agentId}
+    if (/^browser_login_(copy|provision|resume)$/.test(raw) && batch.turn?.action) {
+      const resumed = raw === 'browser_login_resume' ? await readBrowserAcceptance(args.operationId) : undefined
+      assertTaskActionLogin(batch.turn.action, raw, args, resumed)
+    }
     if(!task.design?.proxy){
       if(raw.startsWith('proxy_'))throw Error('proxy-task-contract-not-reviewed')
       return invoke(args)
@@ -355,9 +361,10 @@ export class TaskConsoleService extends TypertRemoteService {
   /** Host-registered metadata providers only; not a general MCP invocation API. */
   async agentActionOptions(payload: string): Promise<string> {
     const query: ActionOptionQuery = JSON.parse(payload)
-    const catalog: ActionCatalog = JSON.parse(await this.agentActions(payload))
-    if (!catalog.agentId || catalog.revision !== query.revision) throw Error('Action 已更新，请重新选择')
-    const action = catalog.actions.find(a => a.id === query.actionId)
+    await this.ready
+    const catalog: ActionCatalog = query.taskId ? this.creator.actions.read(query.taskId) : JSON.parse(await this.agentActions(payload))
+    if ((!catalog.agentId && !catalog.taskId) || catalog.revision !== query.revision) throw Error('Action 已更新，请重新选择')
+    const action = catalog.actions.find(a => a.id === query.actionId && a.enabled !== false)
     const parameter = action?.parameters.find(p => p.key === query.parameter)
     if (!parameter?.source) throw Error('参数没有已注册候选来源')
     optionPage([], query.search, query.page)
@@ -367,14 +374,14 @@ export class TaskConsoleService extends TypertRemoteService {
     if (!parameterVisible(parameter, raw)) throw Error('此参数当前不适用')
     const tool = sourceTool(parameter)
     const host = this.hostMcp().find(h => h.serverName === 'fleet-browser' && h.live && h.tools.includes(tool))
-    const preset = (await (this.ctx as any).get('agentPresets').list()).find((p: any) => p.id === catalog.agentId)
-    const spec = preset && await readSpec(dirname(String(preset.path)))
-    const allowed = spec?.mcpTools?.['fleet-browser'] ?? []
-    if (!allowed.some(t => t === '*' || t === tool)) throw Error('当前角色没有此只读候选能力；未扩大工具权限')
+    const participantIds = catalog.taskId ? this.creator.actions.task(catalog.taskId).participants.map(p => p.agentId) : [catalog.agentId]
+    const presets = (await (this.ctx as any).get('agentPresets').list()).filter((p: any) => participantIds.includes(p.id))
+    const specs = await Promise.all(presets.map((p: any) => readSpec(dirname(String(p.path)))))
+    if (!specs.some(spec => (spec?.mcpTools?.['fleet-browser'] ?? []).some((t: string) => t === '*' || t === tool))) throw Error('当前角色没有此只读候选能力；未扩大工具权限')
     if (!host) throw Error('候选 MCP 尚未就绪，请稍后重试；没有执行任何目标操作')
     try {
-      const result = await fleetActionOptions(host.config, parameter, values)
-      const latest: ActionCatalog = JSON.parse(await this.agentActions(payload))
+      const result = await fleetActionOptions(host.config, parameter, values, undefined, Boolean(catalog.taskId && this.creator.actions.task(catalog.taskId).workflowRecipe?.id === 'fleet-base-v2'))
+      const latest: ActionCatalog = catalog.taskId ? this.creator.actions.read(catalog.taskId) : JSON.parse(await this.agentActions(payload))
       if (latest.revision !== catalog.revision) throw Error('Action 已更新，请重新选择')
       return JSON.stringify(optionPage(result.items, query.search, query.page, result.notice))
     } catch (e) {
@@ -583,6 +590,20 @@ export class TaskConsoleService extends TypertRemoteService {
     await this.ready
     const { taskId, text, requestId, cwd } = JSON.parse(payload)
     return JSON.stringify(await this.creator.launch(taskId, text, requestId, cwd))
+  }
+
+  async taskActions(payload: string): Promise<string> {
+    await this.ready
+    return JSON.stringify(this.creator.actions.read(JSON.parse(payload).taskId))
+  }
+  async saveTaskActions(payload: string): Promise<string> {
+    await this.ready
+    const { taskId, actions, revision } = JSON.parse(payload)
+    return JSON.stringify(this.creator.actions.save(taskId, actions, revision))
+  }
+  async launchTaskAction(payload: string): Promise<string> {
+    await this.ready
+    return JSON.stringify(await this.creator.launchAction(JSON.parse(payload)))
   }
 
   /** Submit one generic, credential-free Signal; the Task Agent routes it asynchronously. */

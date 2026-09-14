@@ -48,6 +48,7 @@ export interface TaskOrigin {
  * accidentally inherited from the first incident that created the Task.
  */
 export interface TaskTurn {
+  action?: import('./task-actions.ts').TaskActionSnapshot
   objective: string
   participants: Participant[]
   /** Redacted accepted input, separate from the reusable workflow instructions. */

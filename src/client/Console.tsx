@@ -7,8 +7,12 @@ import { TaskReplay } from './TaskReplay.tsx'
 import { NewTask, TaskBoard, type TasksApi } from './TasksView.tsx'
 import { TaskPlanReview } from './TaskPlanReview.tsx'
 import { TaskExecutions } from './TaskExecutions.tsx'
+import { ActionEditor } from './AgentActions.tsx'
 
 export interface Api extends TasksApi {
+  taskActions: (taskId: string) => Promise<import('../agent-actions.ts').ActionCatalog>
+  saveTaskActions: (taskId: string, actions: import('../agent-actions.ts').AgentAction[], revision: string) => Promise<import('../agent-actions.ts').ActionCatalog>
+  launchTaskAction: (query: import('../task-actions.ts').TaskActionInput) => Promise<{ taskId: string; batchId: string; path: string }>
   agentActions: (query: { agentId?: string; sessionId?: string }) => Promise<import('../agent-actions.ts').ActionCatalog>
   agentActionOptions: (query: import('../action-options.ts').ActionOptionQuery) => Promise<import('../action-options.ts').ActionOptionPage>
   saveAgentActions: (agentId: string, actions: import('../agent-actions.ts').AgentAction[], revision: string) => Promise<import('../agent-actions.ts').ActionCatalog>
@@ -101,7 +105,7 @@ export function Console({ api }: { api: Api }) {
   else if (route[1] === 'new') page = !agents || !catalog ? loading : <div className="dtc-body"><NewTask api={api} agents={agents} toast={showToast} workspaces={catalog.workspaces} /></div>
   else if (route[1] === 'plans') page = <div className="dtc-body"><TaskPlanReview api={api} id={route[2]} /></div>
   else if (route[1] === 'executions') page = <div className="dtc-body"><TaskExecutions api={api} query={query} /></div>
-  else if (route[1]) page = <div className="dtc-body"><TaskReplay api={api} agents={agents ?? []} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} sessionId={query.get('session') ?? undefined} toast={showToast} /></div>
+  else if (route[1]) page = <div className="dtc-body"><nav className="dtc-action-toolbar" aria-label="Task 导航"><button className={`dtc-btn sm ${route[2] !== 'actions' ? 'pri' : ''}`} aria-pressed={route[2] !== 'actions'} onClick={() => go(`tasks/${route[1]}`)}>执行记录</button><button className={`dtc-btn sm ${route[2] === 'actions' ? 'pri' : ''}`} aria-pressed={route[2] === 'actions'} onClick={() => go(`tasks/${route[1]}/actions`)}>Actions</button></nav>{route[2] === 'actions' ? <ActionEditor key={route[1]} api={api} taskId={route[1]} /> : <TaskReplay api={api} agents={agents ?? []} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} sessionId={query.get('session') ?? undefined} toast={showToast} />}</div>
   else page = <div className="dtc-body"><TaskBoard api={api} agents={agents ?? []} toast={showToast} /></div>
 
   return (

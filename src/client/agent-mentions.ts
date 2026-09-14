@@ -1,6 +1,6 @@
 import type { AgentRow } from '../wire.ts'
 import type { ActionCatalog, AgentAction } from '../agent-actions.ts'
-import { actionCandidates } from '../agent-actions.ts'
+import { actionCandidates, renderAction } from '../agent-actions.ts'
 import { confirmedActionRole, makeActionSnippet, resolveSnippetDefaults, trackPendingSnippet } from '../action-snippet.ts'
 import { agentCandidates, AGENT_EXPAND, AGENT_COLLAPSE } from '../agent-order.ts'
 import { ACTION_CHANGED, sendCurrentAction } from './action-dispatch.ts'
@@ -46,7 +46,15 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
     }
     window.addEventListener(ACTION_CHANGED, clear)
     window.addEventListener('dsh:agent-preset-confirmed', confirm)
-    return () => { live = false; stop(); window.removeEventListener(ACTION_CHANGED, clear); window.removeEventListener('dsh:agent-preset-confirmed', confirm); for (const off of watches.values()) off(); for (const s of snippets.values()) s.dispose(); snippets.clear() }
+    const composeTask = (event: Event) => {
+      const taskId = (event as CustomEvent).detail?.taskId, id = snapshot().current, input = id && inputFor(id)
+      if (!input || typeof taskId !== 'string') { go(`tasks/${taskId}/actions`); return }
+      if (input.state.getSnapshot().draft.trim()) { input.notify('info', '当前草稿保留；请先处理草稿，再在开头 @ 选择任务'); return }
+      input.setDraft(`@${taskId}/`)
+      requestAnimationFrame(() => (document.querySelector('textarea[data-phase]') as HTMLTextAreaElement | null)?.focus())
+    }
+    window.addEventListener('dtc:compose-task', composeTask)
+    return () => { live = false; stop(); window.removeEventListener(ACTION_CHANGED, clear); window.removeEventListener('dsh:agent-preset-confirmed', confirm); window.removeEventListener('dtc:compose-task', composeTask); for (const off of watches.values()) off(); for (const s of snippets.values()) s.dispose(); snippets.clear() }
   }, 'task-console: action input lifecycle')
   const refresh = async () => {
     if (Date.now() - refreshedAt < 1500) return
@@ -57,6 +65,7 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
     const c = await (await api()).agentActions({ agentId, ...(sessionId ? { sessionId } : {}) })
     catalogs.set(agentId, c); return c
   }
+  const taskCatalogFor = async (taskId: string) => { const c = await (await api()).taskActions(taskId); catalogs.set(`task:${taskId}`, c); return c }
   const claimAgent = (agent: AgentRow) => ({ claim: { token: `@${agent.name} `, hint: `要 ${agent.name} 做什么 · 新会话`, images: false,
     submit: async (text: string, actx: any) => { try { const service = await api(), out = await service.startAgentSession(agent.id, text, cwd(actx.session?.id ?? actx.sessionId)); await service.openSession(out.sessionId); return { kind: 'success' as const } } catch (e: any) { return { kind: 'error' as const, text: e.message } } },
   } })
@@ -67,7 +76,10 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
     } }
   }
   const actionClaim = (sessionId: string, catalog: ActionCatalog, action: AgentAction, newSession: boolean) => {
-    const prefix = newSession ? `@${catalog.name}/${action.name} ` : `@${action.name} `
+    const prefix = catalog.taskId || newSession ? `@${catalog.name}/${action.name} ` : `@${action.name} `
+    const previous = readActionDraft(sessionId)
+    const requestId = previous?.taskId === catalog.taskId && previous?.actionId === action.id && previous?.revision === catalog.revision && previous.requestId ? previous.requestId : crypto.randomUUID()
+    if (catalog.taskId) writeActionDraft(sessionId, { agentId: '', taskId: catalog.taskId, actionId: action.id, revision: catalog.revision, prefix, newSession: false, requestId, ...(previous?.requestId === requestId ? { progress: previous.progress } : {}) })
     let uncertain = false
     return { token: prefix, hint: `${catalog.name} · ${action.name} · 填写占位符后发送`, images: false,
       submit: async (text: string) => {
@@ -75,6 +87,21 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
         try {
           if (uncertain) throw Error('上次发送结果未确认，请先检查会话记录，勿重复发送')
           if (!selected(sessionId)) throw Error('已切换会话，请回到原会话再发送')
+          if (catalog.taskId) {
+            const snippet = snippets.get(sessionId)
+            if (!snippet || snippet.error()) throw Error(snippet?.error() ?? '请重新选择 Task Action，恢复参数位置')
+            await snippet.validate()
+            const raw = snippet.values(), values = Object.fromEntries(Object.entries(raw).map(([k,v]) => {
+              const p = action.parameters.find(p => p.key === k)!
+              return [k, p.type === 'number' && v !== '' ? Number(v) : p.type === 'boolean' ? v === 'true' : v]
+            }))
+            const expected = renderAction(action, values).split('\n').slice(1).join('\n').trim()
+            if (resolveSnippetDefaults(action, text).trim() !== expected) throw Error('Task Action 请只填写参数；修改模板请到任务的 Actions 页，当前草稿保留')
+            const out = await (await api()).launchTaskAction({ taskId: catalog.taskId, actionId: action.id, revision: catalog.revision, values, requestId, cwd: cwd(sessionId) })
+            writeActionDraft(sessionId)
+            go(`tasks/${out.taskId}/runs/${out.batchId}`)
+            return { kind: 'success' as const }
+          }
           if (!newSession && role(sessionId) !== catalog.agentId) throw Error('当前角色已变化，请重新选择 Action')
           if (newSession && !canChooseAgent(sessionId)) throw Error('当前会话已有角色，请重新选择该角色的 Action')
           const message = snippets.get(sessionId)?.error()
@@ -98,24 +125,31 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
     }
   }
   const attachSnippet = (id: string, catalog: ActionCatalog, action: AgentAction, newSession: boolean, input: any, restored = false) => {
-    const prefix = newSession ? `@${catalog.name}/${action.name} ` : `@${action.name} `
+    const prefix = catalog.taskId || newSession ? `@${catalog.name}/${action.name} ` : `@${action.name} `
     const saved = readActionDraft(id)
     snippets.get(id)?.dispose()
     snippets.set(id, installActionSnippet(ctx, id, action, prefix, input, {
       restored, saved: restored ? saved?.progress : undefined,
-      isCurrentRole: () => newSession ? canChooseAgent(id) : role(id) === catalog.agentId,
-      candidates: async (parameter, values, search, page) => (await api()).agentActionOptions({ agentId: catalog.agentId!, ...(newSession ? {} : { sessionId: id }), actionId: action.id, revision: catalog.revision, parameter, values, search, page }),
-      save: progress => writeActionDraft(id, progress ? { agentId: catalog.agentId!, actionId: action.id, revision: catalog.revision, prefix, newSession, progress } : undefined),
+      isCurrentRole: () => catalog.taskId ? selected(id) : newSession ? canChooseAgent(id) : role(id) === catalog.agentId,
+      candidates: async (parameter, values, search, page) => (await api()).agentActionOptions({ ...(catalog.taskId ? { taskId: catalog.taskId } : { agentId: catalog.agentId!, ...(newSession ? {} : { sessionId: id }) }), actionId: action.id, revision: catalog.revision, parameter, values, search, page }),
+      save: progress => writeActionDraft(id, progress ? { agentId: catalog.agentId ?? '', ...(catalog.taskId ? { taskId: catalog.taskId, requestId: saved?.requestId } : {}), actionId: action.id, revision: catalog.revision, prefix, newSession, progress } : undefined),
     }))
   }
   const resolveDraft = async (id: string, text: string) => {
     const saved = readActionDraft(id)
     if (saved && text.startsWith(saved.prefix)) {
-      if (saved.newSession ? !canChooseAgent(id) : role(id) !== saved.agentId) throw Error('草稿所属角色尚未确认或已变化，请重新选择 Agent / Action；原文保留')
-      const catalog = await catalogFor(saved.agentId, saved.newSession ? undefined : id)
-      const action = catalog.actions.find(a => a.id === saved.actionId)
+      if (!saved.taskId && (saved.newSession ? !canChooseAgent(id) : role(id) !== saved.agentId)) throw Error('草稿所属角色尚未确认或已变化，请重新选择 Agent / Action；原文保留')
+      const catalog = saved.taskId ? await taskCatalogFor(saved.taskId) : await catalogFor(saved.agentId, saved.newSession ? undefined : id)
+      const action = catalog.actions.find(a => a.id === saved.actionId && a.enabled !== false)
       if (!action || catalog.revision !== saved.revision) throw Error('Action 已更改或删除，请重新选择；原文保留')
       return { catalog, action, newSession: saved.newSession, prefix: saved.prefix }
+    }
+    await refresh()
+    const task = workflows.find(t => text.startsWith(`@${t.title}/`))
+    if (task) {
+      const catalog = await taskCatalogFor(task.id), action = catalog.actions.find(a => a.enabled !== false && text.startsWith(`@${catalog.name}/${a.name} `))
+      if (!action) throw Error('Task Action 已修改或删除，请重新选择；草稿保留')
+      return { catalog, action, newSession: false, prefix: `@${catalog.name}/${action.name} ` }
     }
     const currentRole = role(id)
     if (currentRole) {
@@ -188,6 +222,12 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
       if (!selected(id)) return []
       await refresh()
       const query = request.query ?? '', q = query.toLowerCase()
+      const choosingTask = workflows.find(t => q.startsWith(`${t.id.toLowerCase()}/`))
+      if (choosingTask && request.position !== 'inline') {
+        const c = await taskCatalogFor(choosingTask.id)
+        if (request.signal?.aborted || !selected(id)) return []
+        return [...actionCandidates(c, query.slice(choosingTask.id.length + 1)).map(a => ({ ...a, hint: '填写本次参数 · 新执行记录', value: `task-action:${c.taskId}:${a.value.slice(7)}` })), { name: '配置 Actions', value: `task-config:${c.taskId}`, section: 'Task' }, { name: '返回', value: 'action:back', section: 'Task' }]
+      }
       // Explicit Agent selection before a conversation starts, represented in the draft.
       const choosing = canChooseAgent(id) ? roster.find(a => q.startsWith(`${a.id}/`)) : undefined
       let c: ActionCatalog | null = null
@@ -203,6 +243,19 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
       if (!selected(id)) return 'handled' as const
       if (value === AGENT_EXPAND || value === AGENT_COLLAPSE) { value === AGENT_EXPAND ? expanded.add(id) : expanded.delete(id); return { text: '@', continue: true } }
       if (value === 'action:back') return { text: '@', continue: true }
+      if (value.startsWith('task-config:')) { go(`tasks/${value.slice(12)}/actions`); return 'handled' as const }
+      if (value.startsWith('task-action:')) {
+        const [,taskId,actionId] = value.split(':'), catalog = catalogs.get(`task:${taskId}`), action = catalog?.actions.find(a => a.id === actionId && a.enabled !== false), input = inputFor(id)
+        if (!catalog || !action || !input) return 'handled' as const
+        const before = input.state.getSnapshot()
+        if (before.draft.slice(0, pick.span.start).trim()) { input.notify('error', '请在输入框开头选择 Task Action'); return 'handled' as const }
+        writeActionDraft(id) // Explicit new selection is a new invocation, not a retry.
+        const claim = actionClaim(id, catalog, action, false), scope = ctx.sessions.scope(id)
+        if (scope.bail(scope, 'slash/input-begin-command', { claim, span: pick.span }) !== true) return 'handled' as const
+        input.setDraft(makeActionSnippet(action, claim.token).text)
+        attachSnippet(id, catalog, action, false, input)
+        return 'handled' as const
+      }
       if (value.startsWith('action:')) {
         const [, agentId, actionId, mode] = value.split(':'), catalog = catalogs.get(agentId), action = catalog?.actions.find(a => a.id === actionId), isNew = mode === 'new'
         const input = inputFor(id)
@@ -218,7 +271,7 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
         return 'handled' as const
       }
       const task = workflows.find(t => `task:${t.id}` === value)
-      if (task) return claimTask(task)
+      if (task) return task.actionCount ? { text: `@${task.id}/`, continue: true } : claimTask(task)
       const agent = roster.find(a => a.id === value || `ordinary:${a.id}` === value)
       if (!agent) return undefined
       return !value.startsWith('ordinary:') && agent.actionCount && canChooseAgent(id) ? { text: `@${agent.id}/`, continue: true } : claimAgent(agent)
@@ -236,7 +289,10 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
         return 'handled' as const
       }
       const task = workflows.find(t => input === `@${t.title}` || input.startsWith(`@${t.title} `) || input.startsWith(`@${t.id} `))
-      if (task) return claimTask(task)
+      if (task) {
+        if (task.actionCount && (input === `@${task.title}` || input === `@${task.id}`)) { inputFor(id)?.setDraft(`@${task.id}/`); return 'handled' as const }
+        return claimTask(task)
+      }
       const agent = roster.find(a => input === `@${a.name}` || input.startsWith(`@${a.name} `) || input.startsWith(`@${a.id} `))
       return agent ? claimAgent(agent) : undefined
     },

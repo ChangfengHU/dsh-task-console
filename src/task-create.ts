@@ -9,6 +9,9 @@ import type { IntakeAgent } from './task-intake.ts'
 import { workflowDefinition } from './workflow-plan.ts'
 import { composeRecipe, workflowRecipes, type WorkflowRecipe } from './workflow-recipes.ts'
 import { validateDesign, taskAgentIds, type TaskDesign } from './task-design.ts'
+import { TaskActions, validateTaskActions, type TaskActionInput } from './task-actions.ts'
+import type { AgentAction } from './agent-actions.ts'
+import fleetTaskActions from '../presets/fleet-task-actions.json' with { type: 'json' }
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export function userInput(exec: ToolExecutionLike) {
@@ -27,21 +30,25 @@ export type TaskProposal = {
   title?: string; brief?: string; participants?: TaskSpec['participants']; graphMode?: TaskSpec['graphMode']
   design?: TaskDesign
   trigger?: TaskSpec['trigger']
+  actions?: AgentAction[]
 }
 
 export class TaskCreator {
   private queue: Promise<unknown> = Promise.resolve()
   constructor(readonly runner: TaskRunner, readonly agents: () => Promise<IntakeAgent[]>) {}
+  get actions() { return new TaskActions(this.runner) }
 
   catalog() {
     return [...this.runner.store.tasks.values()].filter(t => !t.archivedAt && (t.enabled || t.trigger.kind === 'cron') && t.origin?.source === 'task-chat')
       .map(({ id, title, brief, participants, graphMode, workflowRecipe, design, trigger }) => ({ id, title, brief, participants, trigger,
+        actionCount: this.actions.read(id).actions.filter(a => a.enabled !== false).length,
         scheduleEnabled: trigger.kind === 'cron' ? this.runner.store.tasks.get(id)!.enabled : null,
         ...(graphMode ? { graphMode } : {}), ...(workflowRecipe ? { workflowRecipe } : {}), ...(design ? { design } : {}) }))
   }
 
   async context() {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
+      actions: { fleetBaseExample: fleetTaskActions, contract: '新建可复用 Task 时同时提交 actions 数组，独立审查显示快捷入口。每项 {id,name,description,template,parameters,enabled?,isDefault?}。模板用 {{key}}；参数 {key,label,type:text|number|boolean,required,default?,choices?,source?,dependsOn?,visibleWhen?,binding?}。binding 可用 target-ip、ssh-user、ssh-password、gemini-account；密码不能保存默认值。账号来源 fleet.gemini-accounts 依赖目标 IP，账号必须保存明确 accountId 意图；机器候选 fleet.nodes 可手填新 IP。Task Actions 仅提供本次参数，不改变角色、工具、验收、定时；执行同 Task 新 Batch，绝不复制历史 IP/密码。复用和 revise 不覆盖现有 Actions；用户在 Task Actions 页单独编辑。' },
       revisions: { decision: 'revise', contract: '同一已暂停的 cron Task 可用 taskId、reason、完整 design 及要调整的 title/brief/participants 生成新待审查版本，不创建另一 Task。不能更改时间表、移除证据合同、缩短独立验收或改变通知范围。未结束执行或缺少历史冻结定义时拒绝更新；审查会再次核验原定义与全部角色指纹。批准只更新未来定义，定时仍关闭，不派发 Batch。新增编排能力仍须实际支持，不能仅在自然语言中承诺。' },
       capabilityLimits: { browserPatrolV2: '固定规划者、browser-manager、独立评估者及可选通知员。可选 design.proxy={agentId:真实独立代理角色,lineId:批准线路,maxAttempts:1至3}；每轮规划者以 proxyItems:[{ip,action:verify|repair,reason}] 与浏览器items同时冻结本轮动作，生成代理处理→Gate→浏览器→独立评估→规划者。代理全部确定终态后交接；宿主逐机器禁止未通过目标登录写入，其他已通过目标继续。登录复制/续接需15分钟内真实网络证据，最终需评估者自己只读验收；独立历史验收不因后续等待过期，新的异常或修复仍使它失效。互斥限于本MCP操作及本Task串行支线，不能承诺其他工具或直接SSH受约束；角色仍须持有相应权限。',
         browserRecovery: '新增受限能力：browserPatrol.actions 可显式加入 recover，执行者工具 browser_recover(ip,instance,sessionId,requestId)；需要本轮真实 cdp-unavailable 事件、冻结 recover 动作和精确宿主 recover 权限。仅恢复现有实例，不删除重建、不复制、不重启同机其他浏览器；恢复后重新 verify，必要时下一轮 provision，再由评估者做原20分钟4样本。未知不是一律重启。browserPatrol.excludedNodeIds 可存用户明确排除的节点ID；仍保留观测并展示排除，不伪装健康。browserPatrol.scheduleActivation=completed-patrol 可独立审查允许完整巡查含未解决项后启用：全部角色done、原生可收口证据、全部通知sent；协议失败、缺证据或通知未知仍拒绝。业务未通过仍是failed，不改历史。',
@@ -131,6 +138,7 @@ export class TaskCreator {
     return { id: row.id, hash: row.hash, state: row.state, createdAt: row.created_at,
       reviewedAt: row.reviewed_at, reviewReason: row.review_reason, sourceSessionId: row.source_session,
       request: p.input.text, definition: workflowDefinition(p.task), decision: p.decision,
+      actions: p.actions ?? [],
       ...(p.previous ? { previousDefinition: workflowDefinition(p.previous), revisionTaskId: p.previous.id } : {}),
       taskId: row.task_id, batchId: row.batch_id, path: `/#/tc/tasks/plans/${row.id}`,
       note: row.state === 'pending' ? '待审查；尚未创建执行 Task/Batch，未启动任何执行 Agent。' : '审批记录与原始计划保留，修改需生成新计划。' }
@@ -175,6 +183,7 @@ export class TaskCreator {
       }
       const store = this.runner.store
       if (!store.tasks.has(p.task.id)) await store.append({ t: 'task/created', at: new Date().toISOString(), taskId: p.task.id, task: { ...p.task, ...(p.task.trigger.kind === 'cron' ? { enabled: false } : {}), origin: { ...p.task.origin, reviewPlanId: id } } })
+      if (p.actions?.length && this.actions.read(p.task.id).revision === '0') this.actions.save(p.task.id, p.actions, '0')
       const definition = workflowDefinition(p.task)
       const turn: TaskTurn = { objective: `${p.task.brief}\n\n[THIS EXECUTION — USER REQUEST]\n${p.input.text}`, participants: p.task.participants,
         userRequest: p.input.text, workflow: { id: digest(definition), definition }, ...(p.cwd ? { cwd: p.cwd } : {}), targets: p.targets,
@@ -210,7 +219,25 @@ export class TaskCreator {
     return pending
   }
 
-  private async dispatch(raw: TaskProposal, input: ReturnType<typeof userInput>, exec: ToolExecutionLike, cwd?: string, directWorkflow = false, stageOnly = false) {
+  async launchAction(query: TaskActionInput) {
+    if (!/^[a-zA-Z0-9-]{16,80}$/.test(query.requestId)) throw Error('需要稳定的提交 ID')
+    const pending = this.queue.then(async () => {
+      const db = this.runner.store.kernel.db
+      db.exec('CREATE TABLE IF NOT EXISTS dsh_task_action_requests(id TEXT PRIMARY KEY,hash TEXT NOT NULL,task_id TEXT NOT NULL,batch_id TEXT NOT NULL)')
+      const hash = digest([query.taskId, query.actionId, query.revision, query.values, query.cwd]), requestId = digest(['task-action', query.requestId]), batchId = `b-chat-${requestId.slice(0,20)}`
+      const old = db.prepare('SELECT * FROM dsh_task_action_requests WHERE id=?').get(requestId) as any
+      if (old && old.hash !== hash) throw Error('同一提交不能替换参数，请新建一次明确的执行')
+      if (old && this.runner.store.s.batches.has(old.batch_id)) return this.status(old.task_id, old.batch_id)
+      const resolved = this.actions.resolve(query)
+      if (!old) db.prepare('INSERT INTO dsh_task_action_requests VALUES (?,?,?,?)').run(requestId, hash, query.taskId, batchId)
+      const input = { text: resolved.text, requestId, sessionId: `workflow-${query.requestId}` }
+      return this.dispatch({ decision: 'reuse', taskId: query.taskId, reason: '用户通过 Task Action 提交本次参数' }, input, {}, query.cwd, true, false, resolved)
+    })
+    this.queue = pending.catch(() => undefined)
+    return pending
+  }
+
+  private async dispatch(raw: TaskProposal, input: ReturnType<typeof userInput>, exec: ToolExecutionLike, cwd?: string, directWorkflow = false, stageOnly = false, actionInput?: ReturnType<TaskActions['resolve']>) {
     if (input.text.length > 32_000 || JSON.stringify(raw).length > 32_000) throw new Error('任务输入或计划过长')
     const store = this.runner.store, db = store.kernel.db
     db.exec(`CREATE TABLE IF NOT EXISTS dsh_task_requests (
@@ -225,14 +252,18 @@ export class TaskCreator {
     const roster = (await this.context()).agents, ids = new Set(roster.map(a => a.id))
     const batchId = old?.batch_id ?? `b-chat-${input.requestId.slice(0, 20)}`
     const leases: { ip: string; password: string; material: Uint8Array }[] = []
-    const ips = [...new Set((input.text.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) ?? []).filter(ip => ip.split('.').every(n => +n <= 255)))]
+    const ips = actionInput ? actionInput.ips : [...new Set((input.text.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) ?? []).filter(ip => ip.split('.').every(n => +n <= 255)))]
+    if (actionInput?.credential) leases.push({ ip: actionInput.credential.ip, password: actionInput.credential.password, material: Buffer.from(JSON.stringify(actionInput.credential)) })
     for (const ip of ips) {
+      if (actionInput) break
       const lease = credentialFromSession(ip, exec)
       if (lease.material) { const material = JSON.parse(Buffer.from(lease.material).toString()); leases.push({ ip, password: material.password, material: lease.material }) }
     }
     const scrub = (value: string) => leases.reduce((s, l) => s.split(l.password).join('[credential supplied privately]'), value)
     try {
       let proposal: TaskProposal = JSON.parse(scrub(JSON.stringify(raw)))
+      const actions = proposal.actions === undefined ? undefined : validateTaskActions(proposal.actions)
+      if (actions && proposal.decision !== 'create') throw Error('复用或更新工作流不覆盖 Actions，请在 Task Actions 页单独配置')
       if (proposal.recipe) {
         if (proposal.decision !== 'create' || proposal.title || proposal.brief || proposal.participants || proposal.graphMode)
           throw new Error('预制配方只接受 create、reason、recipe；不能混入另一份角色计划')
@@ -301,7 +332,7 @@ export class TaskCreator {
           if (!tools.includes('vyibc_wecom_send_message') || tools.some(t=>!['vyibc_wecom_send_message','vyibc_wecom_list_groups','vyibc_wecom_status','vyibc_wecom_list_messages'].includes(t)) || notifier.tools.length || notifier.skills.length) throw new Error('通知员仅允许企微 MCP，不得包含浏览器、SSH、金库或其他业务工具/技能')
         } else if (task.design.notifications && !Object.values(team[0].mcpTools).flat().some(t => t.replace(/-/g, '_') === 'vyibc_wecom_send_message')) throw new Error('规划者没有配置企业微信发送 MCP，不能承诺通知')
       }
-      const hash = digest({ proposal, text: scrub(input.text), cwd })
+      const hash = digest({ proposal, text: scrub(input.text), cwd, ...(actionInput ? { action: actionInput.snapshot } : {}) })
       if (old && old.payload_hash !== hash) throw new Error('同一提交已被接受；不能替换尚未派发的计划')
       if (old && store.s.batches.has(old.batch_id)) return this.status(old.task_id, old.batch_id)
       // Pausing cron does not disable manual use. The same reviewed definition and
@@ -318,6 +349,7 @@ export class TaskCreator {
         const planId = `P-chat-${digest([input.requestId, hash]).slice(0, 20)}`, db = this.plansDb()
         const payload = JSON.stringify({ task, input: { ...input, text: scrub(input.text) }, cwd, batchId,
           ...(previous ? { previous } : {}),
+          ...(actions ? { actions } : {}),
           decision: proposal.decision, reason: proposal.reason, targets: ips.map(ip => ({ kind: 'fleet-node', id: ip })),
           rosterHash: digest(taskAgentIds(task).map(id => roster.find(r => r.id === id))) })
         const oldPlan = db.prepare('SELECT id FROM dsh_task_plans WHERE id=?').get(planId)
@@ -334,9 +366,11 @@ export class TaskCreator {
       }
       if (!old) db.prepare('INSERT INTO dsh_task_requests VALUES (?, ?, ?, ?, ?, ?)').run(input.requestId, hash, task.id, batchId, input.sessionId, new Date().toISOString())
       if (!store.tasks.has(task.id)) await store.append({ t: 'task/created', at: new Date().toISOString(), taskId: task.id, task })
+      if (actions?.length && this.actions.read(task.id).revision === '0') this.actions.save(task.id, actions, '0')
       const definition = workflowDefinition(task)
       const turn: TaskTurn = { objective: `${reviewedTurn?.objective ?? task.brief}\n\n[THIS EXECUTION — USER REQUEST]\n${scrub(input.text)}`, participants: task.participants,
         userRequest: scrub(input.text), workflow: { id: digest(definition), definition },
+        ...(actionInput ? { action: actionInput.snapshot } : {}),
         ...(cwd ? { cwd } : {}), targets: ips.map(ip => ({ kind: 'fleet-node', id: ip })),
         origin: { ...(reviewedTurn?.origin?.reviewPlanId ? { reviewPlanId: reviewedTurn.origin.reviewPlanId } : {}), source: 'task-chat', signalId: input.requestId, ...(!directWorkflow ? { intakeSessionId: input.sessionId } : {}), decision: proposal.decision, reason: scrub(proposal.reason) } }
       await this.runner.fire(task.id, 'manual', { batchId, turn })

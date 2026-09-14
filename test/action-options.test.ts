@@ -107,4 +107,8 @@ test('Vault account Actions deduplicate by stored ID and work without a live sou
   assert.match(result.items[0].value,/accountId=gemini_aaaaaaaa/)
   assert.match(result.items[0].detail!,/金库 v7/);assert.match(result.items[0].detail!,/无在线来源/)
   assert.ok(calls.every(c=>c[1]===null&&!c[0].includes('refresh')))
+  await assert.rejects(fleetActionOptions({args:['/trusted/browser-manager/server.mjs']},action.parameters[3],{ip:'192.0.2.55'},async n=>modules[n]), /尚无/)
+  const intake = await fleetActionOptions({args:['/trusted/browser-manager/server.mjs']},action.parameters[3],{ip:'192.0.2.55'},async n=>modules[n],true)
+  assert.equal(intake.items[0].value, result.items[0].value, 'new-node workflow may select Vault intent without granting node access')
+  assert.equal(modules.runtime.policy && (await modules.runtime.policy()).nodes['192.0.2.55'], undefined)
 })

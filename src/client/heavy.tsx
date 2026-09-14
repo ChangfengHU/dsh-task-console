@@ -20,6 +20,9 @@ export function activate(ctx: any): Promise<Api> {
       return JSON.parse(unwrap<string>(result, method)) as T
     }
     return {
+      taskActions: taskId => call('taskActions', { taskId }),
+      saveTaskActions: (taskId, actions, revision) => call('saveTaskActions', { taskId, actions, revision }),
+      launchTaskAction: query => call('launchTaskAction', query),
       agentActions: query => call('agentActions', query),
       agentActionOptions: query => call('agentActionOptions', query),
       saveAgentActions: (agentId, actions, revision) => call('saveAgentActions', { agentId, actions, revision }),

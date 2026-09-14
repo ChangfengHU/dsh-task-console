@@ -170,5 +170,5 @@ export function installActionSnippet(ctx: any, sessionId: string, action: AgentA
   }
   save()
   const frame = requestAnimationFrame(() => requestAnimationFrame(() => { if (filling) select(current); else if (active()) input.notify('info', '提示词已填入，可修改后发送。') }))
-  return { error, active, validate, dispose: () => { live = false; off(); stopRole(); cancelCandidates(); cancelAnimationFrame(frame); cancelAnimationFrame(focusFrame); window.removeEventListener('resize', popup.position); document.removeEventListener('pointerup', clicked, true); document.removeEventListener('keydown', key, true); document.removeEventListener('compositionstart', compositionStart, true); document.removeEventListener('compositionend', compositionEnd, true) } }
+  return { error, active, validate, values: () => snippetValues(slots, input.state.getSnapshot().draft), dispose: () => { live = false; off(); stopRole(); cancelCandidates(); cancelAnimationFrame(frame); cancelAnimationFrame(focusFrame); window.removeEventListener('resize', popup.position); document.removeEventListener('pointerup', clicked, true); document.removeEventListener('keydown', key, true); document.removeEventListener('compositionstart', compositionStart, true); document.removeEventListener('compositionend', compositionEnd, true) } }
 }

@@ -135,6 +135,67 @@ new typing or a later selection cancels that focus request.
 
 ## Storage and API
 
+### Task-owned Actions (0.30.22)
+
+Chat-created reusable Tasks have a separate `#/tc/tasks/:id/actions` editor.
+`@Task` first opens that Task's Actions; selecting one fills the same native
+composer and placeholders as Agent Actions. Defaults, conditional fields and
+candidate providers are reused. Task fields are typed inputs: changing static
+template text is rejected on send; edit the Task's Actions configuration instead.
+The final placeholder Enter only finishes editing; a subsequent Send submits.
+Default Action means first in the list, never automatic execution.
+
+Submission uses `launchTaskAction({taskId,actionId,revision,values,requestId,cwd?})`,
+not `session.prompt` or `startAgentSession`. The existing TaskCreator and runner
+create one Batch on the same Task and only its internal role Sessions, then the UI
+navigates to `#/tc/tasks/:taskId/runs/:batchId`. No normal conversation is created.
+The tab-local request ID survives refresh and failed delivery. An accepted retry
+returns the same Batch even if the Action has since changed; changing inputs with
+that ID is rejected. Selecting the Action again is an explicit new invocation.
+Existing reviewed cron overlap/role checks remain in force; Actions do not modify
+or silently enable schedules. Legacy Tasks without Actions retain their old entry.
+
+`taskActions({taskId})` and `saveTaskActions({taskId,actions,revision})` use
+`dsh_task_action_catalog` in the existing SQLite database, with revision CAS.
+`dsh_task_action_requests` records submission deduplication, not another scheduler.
+Actions are not part of TaskSpec or its reviewed definition/hash. Empty catalogs
+stay empty; installing `presets/fleet-task-actions.json` is an explicit CAS save,
+never a migration that overwrites user configuration. The editor supports create,
+copy, delete, disable, one default, schema controls and non-executing preview.
+
+Task parameters can declare `binding`: `target-ip`, `ssh-user`, `ssh-password`,
+`gemini-account`. The exact target comes from the bound IPv4, not all IP addresses
+mentioned by candidate labels or prompt text. First-login credentials are stored
+only in the existing mode-0600, 24-hour batch private input mechanism; they are
+redacted in Task events/turns. Native composer drafts still contain what the user
+types: this is not a masked secure credential form. No password default is allowed.
+Each Batch freezes `turn.action` with the Action identity/revision/schema/template
+and safe parameter values. See it under “创建与编排 → 本次输入”; editing Actions never
+rewrites a historical execution.
+
+Task candidate reads require the matching read capability on a participating
+Agent, not the unrelated role of the current conversation. Only the existing
+fixed metadata providers are callable. `fleet-base-v2` may select a Vault account
+intent for a not-yet-registered IP; this grants no node access and allows no live
+browser fallback. Runtime MCP policy still checks actual admission and inventory.
+With an explicitly bound Gemini account, the trusted Task login fence rejects
+wrong targets/accounts and live-browser copy; resume must refer to a matching
+stored operation. It narrows, never expands the existing role/MCP permissions.
+Healthy unrelated logins and the original dual-browser 20-minute gate remain intact.
+
+Creator's context now supplies the Action contract and Fleet example. Its public
+`task_create_submit` requires Actions on new plans; reuse/revise cannot overwrite
+the current Action catalog. Independent review displays and hashes the proposed
+Actions. Only approval installs them, idempotently, alongside the new Task.
+Legacy saved plans remain readable/reviewable. No new Agent permissions are granted.
+
+`scripts/test-task-actions-browser.py` uses the real native browser UI with clearly
+labeled intercepted Task API fixtures: it exercises selection isolation, keyboard
+defaults and Vault candidates, refresh, failed-delivery retries, successful route
+navigation, lazy configuration/preview and responsive layouts. It never dispatches
+a production Task. Real SQLite/scheduler integration is separately covered in the
+runner tests. A real installation requires a separately confirmed target.
+
 Each preset may have `actions.json` next to `task-console.json`:
 
 ```json

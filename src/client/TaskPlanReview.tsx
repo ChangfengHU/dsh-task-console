@@ -53,7 +53,8 @@ export function TaskPlanReview({ api, id }: { api: Api; id?: string }) {
         <h3>原始目标</h3><pre>{plan.request}</pre><p>{plan.definition.brief}</p><TaskDesignView design={plan.definition.design} />
         {plan.definition.trigger?.kind === 'cron' ? <p>时间表：{plan.definition.trigger.expr} · {plan.definition.trigger.timeZone || '宿主时区'}。批准后先手动验收，通过后才可启用定时；每次触发复用同一任务、新增执行记录。</p> : null}
         <h3>参与角色</h3><ol className="dtc-workflow-roles">{plan.definition.participants.map((p: any, i: number) => <li key={i}><b>{p.agentId}</b><p>{p.brief}</p></li>)}{plan.definition.design?.notifications?.agentId ? <li><b>{plan.definition.design.notifications.agentId}</b><p>辅助参与者 · 企微通知支线；按阶段创建独立卡和会话，不成为浏览器修复的前置依赖。</p></li> : null}</ol>
-        <details><summary>完整冻结计划 JSON</summary><pre>{JSON.stringify(plan.definition, null, 2)}</pre></details>
+        {plan.actions?.length ? <details open><summary>Task Actions · 随计划审查</summary>{plan.actions.map((a: any) => <div key={a.id}><h4>{a.name}{a.isDefault ? ' · 默认' : ''}{a.enabled === false ? ' · 停用' : ''}</h4><p>{a.description}</p><pre>{a.template}</pre></div>)}</details> : null}
+        <details><summary>完整冻结计划 JSON</summary><pre>{JSON.stringify({ ...plan.definition, actions: plan.actions ?? [] }, null, 2)}</pre></details>
         {plan.reviewReason ? <p>审查意见：{plan.reviewReason}</p> : null}
         {['pending', 'approved'].includes(plan.state) ? <section><h3>独立审查</h3><p>请核对范围、权限、条件、失败处理和验收标准。批准仅执行本计划，不增加节点或工具授权。</p>
           <textarea aria-label="审查意见" className="dtc-input" rows={3} value={reason} onChange={e => setReason(e.target.value)} placeholder="填写通过或退回的依据" style={{ width: '100%', boxSizing: 'border-box' }} />

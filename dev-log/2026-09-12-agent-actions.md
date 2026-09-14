@@ -566,3 +566,62 @@ Five final `/tmp/dtc-focus-prototype-*.png` screenshots (549,654 bytes total) ar
 temporarily retained as review evidence; regenerate with the committed script
 and remove after UI review. Local preview server is stopped at closing. The HTML
 and test remain source, not disposable generated files.
+
+## 2026-09-14 — V2 narrows scope to compact layout, preserves original interactions
+
+User rejected the breadth of V1: preserve the existing Sessions side drawer and
+the existing inline collaboration plan, keep secondary evidence collapsible,
+and make the execution page single-screen. Do not interpret this as approval to
+replace or deploy the live plugin. The confirmed scope is recorded in
+`prototype/task-execution-compact-v2-scope.md`.
+
+Read original `WorkflowPlan.tsx`, `DynamicTaskReplay.tsx` SessionDrawer and the
+corresponding CSS before designing V2. Preserved inline 协作计划 / 本次输入 /
+计划 JSON; creator conversation and Trace links; Related Sessions right drawer
+with authoring/run groups, Trace, back-to-list and open-session actions; original
+row inspector; report, Canonical task_events and full task/runtime boundary
+information. The prototype's open-session links open only a separate mock view
+of the same static HTML. No native session is created or requested.
+
+The only layout changes are compact header/creation/statistics, a dominant DAG,
+bounded inline plan and bottom evidence areas, and internal scrolling rather
+than document scrolling. Plan/bottom sections are mutually exclusive to retain
+canvas room. Fullscreen keeps the inspector; Escape closes a session drawer
+without also exiting fullscreen. Runtime IDs/lease remain accessible but folded.
+Complete boundary content includes the user request, target, workspace, role
+responsibilities, timeout/failure policy, preservation/forbidden operations,
+Vault account selection and original browser-1/2 20-minute acceptance. All are
+explicitly fictional sample records; no TaskSpec or operational claim is changed.
+
+Browser testing caught and corrected the initial selector typo in the new
+inline-plan handler and insufficient canvas room in short landscape windows.
+Final script `scripts/test-execution-compact-prototype.py` passed locally and
+against the published URL. It checks 1440x1000, 1366x768, 1920x1080, 390x844,
+390x667 and 844x390 document bounds, actual internal scrolling, all plan tabs,
+right drawer geometry/grouping, Trace requests/responses, isolated mock session
+tab, unchanged replay cursor after drawer closing, fullscreen inspector and
+Escape behavior, all three evidence sections, creation/link replay, autoplay,
+blocked/passed examples, download disposal and dark theme. Zero page errors;
+all requests are GETs to the same prototype document, including mock-session
+query parameters. No API or external dependency requests. Local measured load
+179ms, public 1751ms; these are not performance results for the real DSH plugin.
+
+Vault service:github and service:suqu-api were freshly read in memory. GitHub
+read-only checks verified ChangfengHU and push permission for the existing
+repository. Verified configured upload host, public domain and 404 for the new
+basename before upload; checked the returned image_url/object_key rather than
+guessing a path. Public GET is 200, text/html; charset=utf-8; 82,328 bytes and
+SHA256 `d0cb20a0a320f0ba2593e5899b93727831d51282dbc2c1e9d417cfd461cd4ef8`,
+byte-identical to the source HTML.
+
+Public V2:
+https://resource.vyibc.com/dsh-task-execution-compact-v2-20260914.html
+
+Only prototype, scoped design document, test and these continuity records changed.
+V1 remains intact. No plugin build/restart/deployment, target operation, task
+prompt, permission update, database write or schedule change occurred.
+No dependencies/build caches were installed. The test deletes its downloaded
+demo JSON and disposes browser contexts. Eight final `/tmp/dtc-compact-v2-*.png`
+screenshots (1,006,333 bytes) remain temporarily for design review; reproduce
+with the committed test and remove after review. The loopback preview server is
+stopped at closing. Production runtime files and existing evidence are untouched.

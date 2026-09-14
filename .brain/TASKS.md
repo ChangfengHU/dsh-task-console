@@ -1,5 +1,7 @@
 # 后续优化
 
+- [x] [TASK-EXECUTION-UI-PROTOTYPE-028] 用户纠正 V1 重构过多后，独立 V2 仅做单屏布局调整：保留 Sessions 右侧抽屉、Trace / 原会话入口、原位协作计划三页签、行检查器、报告、Canonical 事件、完整任务书和运行边界。仅压缩头部/统计、放大 DAG、限制展开区高度；六种尺寸公网浏览器测试通过。原型与范围见 prototype/task-execution-compact-v2*；未替换线上插件或操作任务/机器，V1 保留对照，正式页面改造仍待用户确认。
+
 - [x] [TASK-EXECUTION-UI-PROTOTYPE-027] 独立执行页 Focus V1 原型已发布公网；压缩头部和技术统计，主画布展示三角色协作，右侧按需查看进展/Trace/数据，顶部提供验收入口。支持虚构执行中/受阻/通过、数据库时刻逐步/自动回放、全屏保留详情、会话预览及多格式结果。1440/390px 公网浏览器验收通过，零 API/子资源请求；不改线上插件、任务定义、历史、定时或目标机器。代码 prototype/task-execution-focus-v1.html；证据见既有 Actions dev-log 末尾。此项只是设计评审原型，不能作为当前装机业务通过的证据。
 
 - [x] [TASK-ACTIONS-026] 0.30.22：Task 专属 Actions 的 SQLite CAS、原生 @Task 占位符/候选/刷新恢复、幂等 Batch 提交、安全输入快照和 Creator 待审查接入完成；293 项测试零跳过、构建、公网拦截回执及真实候选/配置浏览器测试通过。10:29:02Z 零活跃窗口重载，原 Fleet Task 仅 CAS 增加默认「装机与账号验收」Action。真实无效 IP 提交在 Batch 创建前拒绝；未提交装机。TaskSpec、角色、每小时定时及历史不变。混合前后端版本时保留旧入口，避免重载前按钮调用不存在的 API。见既有 Actions dev-log 最新段。

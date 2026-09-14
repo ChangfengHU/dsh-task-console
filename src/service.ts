@@ -380,7 +380,7 @@ export class TaskConsoleService extends TypertRemoteService {
     } catch (e) {
       // Known UI messages only, never propagate credentials, paths or raw bodies.
       const message = e instanceof Error ? e.message : ''
-      throw Error(/^(此部署尚未|请先填写|目标尚无|账号发现记录暂)/.test(message) ? message : '只读候选查询失败，请稍后重试；没有执行任何目标操作')
+      throw Error(/^(此部署尚未|请先填写|目标尚无|目标未在|账号发现记录暂)/.test(message) ? message : '只读候选查询失败，请稍后重试；没有执行任何目标操作')
     }
   }
 

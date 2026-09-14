@@ -7,6 +7,7 @@ from playwright.sync_api import sync_playwright, expect
 
 BASE = os.environ.get('DSH_ACTION_BASE', 'https://dsh-152-32-214-95.vyibc.com')
 RPC = os.environ.get('DSH_ACTION_RPC', 'http://127.0.0.1:3080')
+EVIDENCE = os.environ.get('DSH_ACTION_EVIDENCE', '/tmp')
 SESSION = 'agent-browser-manager-mty0qfi0'
 OTHER = 'agent-task-create-agent-mtwlf6hg'
 
@@ -75,7 +76,7 @@ with sync_playwright() as p:
         page.wait_for_timeout(500)
 
     try:
-        page.goto(BASE + '/?v=0.30.16&session=' + SESSION, wait_until='domcontentloaded')
+        page.goto(BASE + '/?v=0.30.20&session=' + SESSION, wait_until='domcontentloaded')
         expect(c).to_be_visible(timeout=60000)
         pick()
         nodes = popup.get_by_role('option')
@@ -83,7 +84,7 @@ with sync_playwright() as p:
         assert nodes.count() >= 2
         ip1 = nodes.nth(0).locator('span').text_content()
         ip2 = nodes.nth(1).locator('span').text_content()
-        page.screenshot(path='/tmp/dtc-action-options-machines-1440.png')
+        page.screenshot(path=os.path.join(EVIDENCE, 'dtc-action-options-machines-1440.png'))
         c.press('Enter'); selected('【机器 IP】')  # No silent first-machine choice.
         c.press_sequentially(ip1)
         expect(nodes).to_have_count(1, timeout=45000)
@@ -99,7 +100,7 @@ with sync_playwright() as p:
         expect(eligible.first).to_be_visible(timeout=45000)
         assert all('金库 v' in text for text in accounts.all_text_contents())
         assert not any('faker322424' in text for text in accounts.all_text_contents())
-        page.screenshot(path='/tmp/dtc-action-options-accounts-1440.png')
+        page.screenshot(path=os.path.join(EVIDENCE, 'dtc-action-options-accounts-1440.png'))
         eligible.first.click()
         assert '【' not in c.input_value() and not writes
         assert 'accountId=gemini_' in c.input_value()
@@ -153,14 +154,14 @@ with sync_playwright() as p:
         page.set_viewport_size({'width': 390, 'height': 844})
         page.wait_for_timeout(300)
         collapse = page.get_by_role('button', name='Collapse sidebar', exact=True)
-        if collapse.count(): collapse.click()
+        if collapse.is_visible(): collapse.click()
         page.mouse.move(385, 500)
         expect(page.get_by_role('button', name='Open sidebar', exact=True)).to_be_visible()
         assert c.bounding_box()['width'] > 220
         focus_value('【机器 IP】'); expect(popup.get_by_role('option').first).to_be_visible(timeout=45000)
         box = popup.bounding_box()
         assert box['x'] >= 0 and box['x'] + box['width'] <= 390 and box['y'] >= 0
-        page.screenshot(path='/tmp/dtc-action-options-machines-390.png')
+        page.screenshot(path=os.path.join(EVIDENCE, 'dtc-action-options-machines-390.png'))
         page.evaluate("document.body.setAttribute('data-ds-dark-theme','')")
         assert popup.evaluate("e=>getComputedStyle(e).backgroundColor") == 'rgb(22, 27, 33)'
         assert popup.evaluate("e=>getComputedStyle(e).color") == 'rgb(228, 233, 238)'

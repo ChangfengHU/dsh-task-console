@@ -90,6 +90,9 @@ test('Fleet adapter only reads metadata; reuses policy/ranker, excludes denied a
   assert.ok(calls.every(c=>c[1]===null && !c[0].includes('refresh') && !c[0].includes('copy')))
   await assert.rejects(fleetActionOptions(cfg,action.parameters[3],{ip:'192.0.2.9'},load),/尚无/)
   await assert.rejects(fleetActionOptions({args:['relative/server.mjs']},action.parameters[0],{},load),/适配器/)
+  modules.runtime.policy=async()=>({scope:'registered-fleet',nodes:{'192.0.2.1':{read:true}}})
+  assert.match((await fleetActionOptions(cfg,action.parameters[0],{},load)).notice,/无需逐机授权/)
+  await assert.rejects(fleetActionOptions(cfg,action.parameters[3],{ip:'192.0.2.9'},load),/未在启用的 Fleet 名册/)
 })
 test('Vault account Actions deduplicate by stored ID and work without a live source browser', async () => {
   const candidate = { kind:'vault', accountId:'gemini_aaaaaaaa', version:7, fingerprint:'aaaaaaaa', label:'owner@example.test', authorized:true, eligible:true, reasons:[], currentHolders:0 }

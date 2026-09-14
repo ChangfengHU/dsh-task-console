@@ -28,12 +28,12 @@ export async function fleetActionOptions(config: Record<string, unknown>, p: Act
   if (p.source === 'fleet.nodes') {
     const [{ browserInventory }, data] = await Promise.all([module('inventory'), get('/api/fleet')])
     const inventory = browserInventory(data, grants)
-    return { items: inventory.nodes.filter((n: any) => n.ip && n.readAuthorized).map((n: any) => ({ value: n.ip, label: n.ip, detail: `${n.nodeId} · ${n.reachable ? '在线' : '不可达'} · 浏览器 ${n.browsers.length}` })), notice: '只读名册；也可手填新机器 IP。选择不代表已有操作权限。' }
+    return { items: inventory.nodes.filter((n: any) => n.ip && n.readAuthorized).map((n: any) => ({ value: n.ip, label: n.ip, detail: `${n.nodeId} · ${n.reachable ? '在线' : '不可达'} · 浏览器 ${n.browsers.length}` })), notice: grants.scope === 'registered-fleet' ? '已登记启用的机器统一由浏览器 MCP 管理，无需逐机授权；执行前仍检查资源和实例状态。' : '只读名册；也可手填新机器 IP。选择不代表已有操作权限。' }
   }
   if (p.source !== 'fleet.gemini-accounts') throw Error('未注册的候选来源')
   const ip = String(values[p.dependsOn?.[0] ?? ''] ?? '')
   if (!/^(?:\d{1,3}\.){3}\d{1,3}$/.test(ip) || ip.split('.').some(v => Number(v) > 255)) throw Error('请先填写具体目标机器 IP')
-  if (grants.nodes?.[ip]?.read !== true) throw Error('目标尚无浏览器只读授权；请保留自动分配方式，由 Agent 检查授权')
+  if (grants.nodes?.[ip]?.read !== true) throw Error(grants.scope === 'registered-fleet' ? '目标未在启用的 Fleet 名册中；请确认机器已注册并启用' : '目标尚无浏览器只读授权；请保留自动分配方式，由 Agent 检查授权')
   const { rankLoginSources } = await module('login')
   // Reuse account exclusions/admission from the MCP. No invented target instance:
   // this is intent authoring, not a recommendation/authorization for a transfer.

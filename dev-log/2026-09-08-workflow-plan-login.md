@@ -1,5 +1,22 @@
 # Workflow composition and explicit login acceptance
 
+## 2026-09-14 — Fleet-scope Actions readiness (0.30.20)
+
+Fleet registry/scope and MCP selectors are live. The visible read-only Browser
+Manager Session agent-browser-manager-mu0waqf3 observed63 next browser3 and
+existing lifecycle IDs1/2, both healthy logins and explicit Vault accountId.
+No additional browser creation/deletion/import, AgentSpec or Task edit. Its
+public desktop/mobile transcript was inspected with no page errors.
+
+Actions were CAS-updated only after deep equality with the previous starter;
+all five remain, revision43fe3ffb043d3a10f3dd9999b0eac5395d4cd8082f04401a297ad0d7f65f3e94.
+The Fleet-mode candidate notice now says no per-machine grants; unregistered
+targets are distinguished from legacy permission denial. Browser acceptance
+uses a separate evidence directory and visibility-aware sidebar handling.
+286 tests and build pass; live bundled backend still requires idle reload and
+the public candidate-popup test. The original hourly patrol was allowed to
+run undisturbed; its durable wait now provides a safe reload window.
+
 ## 2026-09-14 — Deployment and visible Vault acceptance follow-up
 
 Later checkpoint: the last missing manual account was rejected because old

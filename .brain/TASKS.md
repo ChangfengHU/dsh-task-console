@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [TASK-LOGIN-VAULT-023] 0.30.19原巡查Task增加不可变操作结果分类：确认未导入的预检不计入实际修复次数，按Batch另设预检上限；未知/已导入保留预算及独立稳定性验收。保留原Task/AgentSpec/每小时定时和历史。285测试及构建通过；尚未重启部署或完成真实Task验收，见既有workflow-plan-login日志。
+- [ ] [TASK-LOGIN-VAULT-023] 0.30.19已在零活跃边界重启部署；285测试及构建通过。原巡查Task仅为6条精确预检拒绝追加不可变未导入分类，原始次数、Task/AgentSpec审查哈希和每小时历史不改。可见browser-manager会话已验证6节点HTTP协议、金库候选/账号使用分布及188/b2真实登录。Fleet已启用金库下发、账号/复制预览桌面手机通过；尚有1个手动账号捕获未入库、原Batch未结算导致整点不重叠启动。未完成真实导入或原Task整体验收，见既有workflow-plan-login日志。
 
 - [ ] [TASK-PATROL-LIVENESS-022 · 真实返工进展] 原 Batch b-mtzs8atbjxv 已自主完成首轮评估、p2交接及第二轮闸门放行，started/findings/rework 三条通知均真实 sent，无开发者代替角色交卷。browser-manager 已一次授权复制并验证84/b1、187/b1；187操作 d4601bd71dc262f84167b899d50414e5 于12:39:38Z complete/loginVerified=true。12:40Z公网Chrome确认187两个不同账号均已验证、检测时间继续推进。下一步仍是同一Batch的后续独立20分钟稳定性复验与最终通知，尚未通过整项Task；每小时仍启用，部署后的自动整点触发尚未实测。此行更新下方022的早期b1未登录快照，不改写日志历史。
 

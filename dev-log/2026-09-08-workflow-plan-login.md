@@ -1,5 +1,32 @@
 # Workflow composition and explicit login acceptance
 
+## 2026-09-14 — Deployment and visible Vault acceptance follow-up
+
+This supersedes the pending-deployment checkpoint below, without rewriting it.
+DSH0.30.19 was restarted only at zero active Task claims and zero running native
+Sessions. The existing task definitions, AgentSpec/review hashes, hourly schedule
+and all execution histories remain unchanged. Six host-authenticated original
+Task preflight refusals received additive not_started classifications; no raw
+attempt counter was reset and unknown/imported attempts remain charged.
+
+Visible Session agent-browser-manager-mu0nnwqq used existing MCPs to prepare and
+HTTP-verify the six authorized nodes, preserving browser PIDs/profiles and shared
+services. Its actual candidates call returned delivery=vault, accountUsage and
+the existing excluded account; read-only188/browser-2 operation
+7d9b1ae8f6c32d21a07ad91b685c5ebd verified ef3b7d7b at04:21:04.537Z.
+No developer SSH/login import, new AgentSpec/permission or replacement Task.
+
+Companion Fleet release enables Vault delivery and shows each account's current
+browser holders separately from historical assignments. Real public1440/390
+Chrome opened stored inventory and copy previews; test interception prevented
+all production imports. Five of six identified Gemini accounts are captured;
+the remaining verified manual account's upload diagnosis is still pending.
+These are protocol/UI/preservation proofs, not completed login delivery or
+whole-Task stability. The04:00 hourly event was skipped because a prior Batch
+remains unsettled; scheduling is still enabled, not silently switched off.
+Detailed source/deployment/receipt evidence stays in linux-clash's existing
+dev-log/2026-09-13-browser-node-create.md.
+
 ## 2026-09-14 — Vault receipt classification, not a new Task
 
 Add `dsh_browser_operation_outcomes` without rewriting reservations/history. Status,

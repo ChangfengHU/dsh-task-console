@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [TASK-BROWSER-FLEET-SCOPE-024] 0.30.20：指定账号 Actions 使用金库 accountId、版本和持有浏览器元数据，不依赖在线来源，模板要求传入 MCP 强选择参数；节点范围由 linux-clash 的 Fleet 名册授权提供，不改 AgentSpec/原 Task 审查与定时。286测试及构建通过；待生产重载、公网 Actions 和可见 Agent 只读验收。本轮不额外新增、不删除浏览器，见既有 workflow-plan-login 日志。
+- [x] [TASK-BROWSER-FLEET-SCOPE-024] 0.30.20：指定账号 Actions 使用金库 accountId、版本和持有浏览器元数据，不依赖在线来源，模板传入 MCP 强选择参数；节点范围由 linux-clash Fleet 名册授权提供。286测试及构建通过，07:20:17Z零活跃/原Task持久等待边界重载；公网1440/390px候选、角色隔离、回车、分页/失败及历史不变验收通过。可见Agent只读会话 agent-browser-manager-mu0waqf3 证明63可追加browser-3。AgentSpec/Task哈希及每小时定时不变；本轮未额外新增、删除或导入登录，不代表原巡查整体验收完成。见既有workflow-plan-login日志。
 
 - [ ] [TASK-LOGIN-VAULT-023] 0.30.19已在零活跃边界重启部署；285测试及构建通过。原巡查Task仅为6条精确预检拒绝追加不可变未导入分类，原始次数、Task/AgentSpec审查哈希和每小时历史不改。可见browser-manager会话完成6节点登录协议/严格域名脚本更新及真实HTTP证明；Fleet已启用金库下发，6个已发现Gemini账号均有匹配加密库存，账号/复制预览桌面手机通过。原Batch未结算导致整点不重叠启动；未强制导入健康浏览器，原Task整体验收未完成，见既有workflow-plan-login日志。
 

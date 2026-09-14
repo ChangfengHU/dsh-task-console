@@ -1,5 +1,33 @@
 # Workflow composition and explicit login acceptance
 
+## 2026-09-14 — Fleet-scope Actions live and browser-verified
+
+DSH0.30.20 reloaded only sop-dsh-web.service at07:20:17Z, after proving no
+running native Sessions, Task claims, browser jobs or active/unknown proxy calls.
+The original patrol had entered a durable wait until07:23:36Z; its wakeup,
+hourly schedule and history remained intact. No Task was paused or replaced.
+Task definitions SHA256 remains c0b94fe3db2cad8ef4a1fae28dab7baec627576745508af291cdd6272c4ab30a;
+browser AgentSpec remains dfb0ec793c57884386ea6da21891f659264a81bb679170a032175c11e1cfe6d6.
+
+Live candidate API now returns three authorized stored account rows, each with
+an exact accountId, without duplicated source-browser rows. Existing account
+grants/exclusions were not widened. Public Chrome1440/390 Actions acceptance
+passed: real machine/account reads, default/integer fields, Enter progression,
+conditional selector, draft recovery, parent invalidation, delayed-role isolation,
+pagination/error presentation and no final-field auto-send. Pagination/failure
+cases are explicitly mocked; real metadata is not. All business writes were
+blocked. Native history totals and saved Actions hash are unchanged by the test.
+Screenshots inspected in /tmp/dtc-fleet-scope-actions-20260914-tiWJmo.
+
+Visible read-only Session:
+https://dsh-152-32-214-95.vyibc.com/?v=0.30.20&session=agent-browser-manager-mu0waqf3
+Its desktop/mobile transcript acceptance is separate from the candidate popup.
+286 DSH tests/build pass; companion merged Fleet/MCP suite369 and adapter38 pass.
+This release removes per-node grant maintenance and carries explicit Vault IDs;
+it does not claim a new browser was installed, deleted or logged in. Original
+patrol business acceptance remains separate. No temporary dependencies installed;
+tracked lib files serve production, and screenshots/logs are retained evidence.
+
 ## 2026-09-14 — Fleet-scope Actions readiness (0.30.20)
 
 Fleet registry/scope and MCP selectors are live. The visible read-only Browser

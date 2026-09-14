@@ -11,7 +11,7 @@ export function TaskRunAction({ task, api, toast }: { task: TaskSpec; api: Tasks
   return <button className="dtc-btn pri" disabled={external || (!task.enabled && !scheduled)} title={external ? '从来源系统重新提交，由 Task Agent 核对目标与角色' : '复用工作流，新增独立执行记录'} onClick={async event => {
     event.stopPropagation()
     try {
-      if (chat && (await api.taskActions(task.id)).actions.some(a => a.enabled !== false)) {
+      if (chat && (await api.workflowCatalog()).some(t => t.id === task.id && (t.actionCount ?? 0) > 0)) {
         closeConsole()
         window.dispatchEvent(new CustomEvent('dtc:compose-task', { detail: { taskId: task.id } }))
         return

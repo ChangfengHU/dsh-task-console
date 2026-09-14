@@ -21,7 +21,6 @@ export interface Api extends TasksApi {
   taskPlan: (id: string) => Promise<any>
   reviewTaskPlan: (id: string, hash: string, decision: 'approve' | 'reject', reason: string) => Promise<any>
   agentHistory: (query: import('../wire.ts').AgentHistoryQuery) => Promise<import('../wire.ts').AgentHistoryPage>
-  workflowCatalog: () => Promise<Pick<import('../wire.ts').TaskSpec, 'id' | 'title' | 'brief' | 'participants'>[]>
   launchWorkflow: (taskId: string, text: string, requestId: string, cwd?: string) => Promise<{ taskId: string; batchId: string; path: string }>
   catalog: () => Promise<Catalog>
   agents: () => Promise<AgentRow[]>
@@ -74,6 +73,14 @@ class Boundary extends React.Component<{ children: React.ReactNode }, { error: E
   render() { return this.state.error ? <div className="dtc-err" style={{ margin: 20 }}>页面出错:{this.state.error.message}<br /><button className="dtc-btn sm" style={{ marginTop: 8 }} onClick={() => this.setState({ error: null })}>重试</button></div> : this.props.children }
 }
 
+/** Static assets can update while an active Task keeps the old host alive. */
+function TaskTabs({ api, id, actions }: { api: Api; id: string; actions: boolean }) {
+  const [supported, setSupported] = useState(false)
+  useEffect(() => { let live = true; setSupported(false); void api.workflowCatalog().then(rows => { if (live) setSupported(rows.some(t => t.id === id && typeof t.actionCount === 'number')) }).catch(() => {}); return () => { live = false } }, [api, id])
+  if (!supported) return null
+  return <nav className="dtc-action-toolbar" aria-label="Task 导航"><button className={`dtc-btn sm ${!actions ? 'pri' : ''}`} aria-pressed={!actions} onClick={() => go(`tasks/${id}`)}>执行记录</button><button className={`dtc-btn sm ${actions ? 'pri' : ''}`} aria-pressed={actions} onClick={() => go(`tasks/${id}/actions`)}>Actions</button></nav>
+}
+
 export function Console({ api }: { api: Api }) {
   const [route, setRoute] = useState<string[]>(readRoute())
   const [query, setQuery] = useState<URLSearchParams>(readRouteQuery())
@@ -105,7 +112,7 @@ export function Console({ api }: { api: Api }) {
   else if (route[1] === 'new') page = !agents || !catalog ? loading : <div className="dtc-body"><NewTask api={api} agents={agents} toast={showToast} workspaces={catalog.workspaces} /></div>
   else if (route[1] === 'plans') page = <div className="dtc-body"><TaskPlanReview api={api} id={route[2]} /></div>
   else if (route[1] === 'executions') page = <div className="dtc-body"><TaskExecutions api={api} query={query} /></div>
-  else if (route[1]) page = <div className="dtc-body"><nav className="dtc-action-toolbar" aria-label="Task 导航"><button className={`dtc-btn sm ${route[2] !== 'actions' ? 'pri' : ''}`} aria-pressed={route[2] !== 'actions'} onClick={() => go(`tasks/${route[1]}`)}>执行记录</button><button className={`dtc-btn sm ${route[2] === 'actions' ? 'pri' : ''}`} aria-pressed={route[2] === 'actions'} onClick={() => go(`tasks/${route[1]}/actions`)}>Actions</button></nav>{route[2] === 'actions' ? <ActionEditor key={route[1]} api={api} taskId={route[1]} /> : <TaskReplay api={api} agents={agents ?? []} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} sessionId={query.get('session') ?? undefined} toast={showToast} />}</div>
+  else if (route[1]) page = <div className="dtc-body"><TaskTabs api={api} id={route[1]} actions={route[2] === 'actions'} />{route[2] === 'actions' ? <ActionEditor key={route[1]} api={api} taskId={route[1]} /> : <TaskReplay api={api} agents={agents ?? []} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} sessionId={query.get('session') ?? undefined} toast={showToast} />}</div>
   else page = <div className="dtc-body"><TaskBoard api={api} agents={agents ?? []} toast={showToast} /></div>
 
   return (

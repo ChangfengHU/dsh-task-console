@@ -195,6 +195,11 @@ defaults and Vault candidates, refresh, failed-delivery retries, successful rout
 navigation, lazy configuration/preview and responsive layouts. It never dispatches
 a production Task. Real SQLite/scheduler integration is separately covered in the
 runner tests. A real installation requires a separately confirmed target.
+`scripts/test-task-actions-live-browser.py` reads the installed Task catalog and
+real Fleet/Vault candidates with every execution/config mutation blocked. It
+preserves the original session history and catalog. Mixed-version static/host
+deployments expose Task Actions only when workflow metadata advertises support,
+so the older host's execution entry is not broken while waiting for a safe reload.
 
 Each preset may have `actions.json` next to `task-console.json`:
 

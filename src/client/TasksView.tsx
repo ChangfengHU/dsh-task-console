@@ -12,6 +12,7 @@ import { ArtifactResultAction, canPreviewArtifact } from './ArtifactDelivery.tsx
 import { TaskRunAction } from './TaskRunAction.tsx'
 
 export interface TasksApi {
+  workflowCatalog: () => Promise<(Pick<TaskSpec, 'id' | 'title' | 'brief' | 'participants'> & { actionCount?: number })[]>
   taskActions: (taskId: string) => Promise<import('../agent-actions.ts').ActionCatalog>
   executionHistory: (query: import('../execution-history.ts').ExecutionQuery) => Promise<import('../execution-history.ts').ExecutionPage>
   launchWorkflow: (taskId: string, text: string, requestId: string, cwd?: string) => Promise<{ taskId: string; batchId: string; path: string }>

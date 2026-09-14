@@ -458,3 +458,55 @@ No dependencies or download caches were installed. Test fixtures tear down their
 own temporary SQLite/profile trees; tracked lib/ is production runtime. Retain the
 three final task-actions screenshots for user review; the resolved diagnostic is
 rebuildable and will be removed at final cleanup.
+
+### Deployment and final acceptance
+
+Implementation commit `8f26fe0` was immediately pushed to the verified authorized
+GitHub upstream. Subsequent mixed-version UI gating keeps legacy Task entry buttons
+usable until the host advertises Action support; adding a UI tab must not make an
+in-flight older backend fail. Local browser fixture acceptance passed again.
+
+At **2026-09-14T10:29:02.136Z**, read-only checks found no live native session,
+running Task claim, fresh browser operation, or running proxy operation in the
+actual proxy SQLite store. Restarted only the existing user sop-dsh-web service.
+The autonomous patrol was not cancelled, archived or disabled. The service became
+active with its existing configuration; no target host was touched.
+
+CAS-installed `presets/fleet-task-actions.json` into the previously empty catalog
+of **T-chat-b4c6fcb369f0c20a9739**. Action `onboard-node`, name 装机与账号验收,
+revision `2a835ee80745dae14ab5606d40fb5d8a6941e0edcee2879e5f3092de4b0e65b4`.
+No new Task or Batch was created. Installer and patrol raw spec_json SHA256 values
+remained respectively `0be6047f328727afab0526080b4f4c1e5d0162f00415a7840ae7ad63b7fda9cd`
+and `c5da82ac3c1b78f3f19189e951668019b5a76c9a3a2591edec487f6b74f36b06`;
+both enabled=1, patrol `0 * * * *` / Asia/Shanghai. Browser-manager AgentSpec file
+hash remains `dfb0ec793c57884386ea6da21891f659264a81bb679170a032175c11e1cfe6d6`.
+
+Live metadata returned seven Fleet machine choices and three admitted Vault
+accounts for the documentation-only unregistered IP 192.0.2.30, with no login
+transfer or source-browser fallback. Public live browser test passed at1440/390:
+installed editor, @ original Task → Action, native defaults, actual machine and
+Vault dropdowns, explicit excluded-account omission and no page errors. All
+execution/config writes were blocked in that browser test. Original session totals
+and catalog were identical before/after. Images were visually inspected:
+`/tmp/dtc-task-actions-live-editor-1440.png`, `-390.png`, and
+`/tmp/dtc-task-actions-live-vault-1440.png`, `-390.png`.
+
+The live launchTaskAction endpoint was separately tested with `not-an-ip` and a
+fresh fixture request ID. It rejected at the IPv4 gate; installer Batch IDs were
+unchanged and dsh_task_action_requests remained empty. This proves rejection and
+registration of the real endpoint, not a successful production installation.
+Successful scheduler/role-only Session routing is proved by the real-kernel fake
+host tests; successful UI receipt routing uses intercepted fixtures. No claim of
+live successful installation is made.
+
+Original Agent Actions keyboard/default/mobile regression first hit one public
+menu timeout; local then public reruns passed, preserving its session and sidecar.
+Do not report the first timeout as a repaired production login failure. Full
+native-host-aware suite: **293 passed / zero failed / zero skipped**, build and
+diff checks passed. No npm release or target operation was performed.
+
+Removed only `/tmp/dtc-task-actions-diagnostic.png` (255,190 bytes); it was this
+task's resolved, reproducible UI fixture diagnostic. Seven final screenshots
+(three fixture, four live) remain as private user-review evidence; regenerate with
+the committed browser scripts, never upload them publicly. No dependencies or
+cache downloads were installed; tracked lib/ and running dependencies remain.

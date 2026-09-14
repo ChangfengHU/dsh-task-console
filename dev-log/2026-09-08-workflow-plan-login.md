@@ -1,5 +1,49 @@
 # Workflow composition and explicit login acceptance
 
+## 2026-09-14 — Public187 lifecycle completed,63 remains paused
+
+DSH0.30.21 deployed at07:44:30.466Z by restarting only sop-dsh-web.service at
+the verified zero-active boundary. All target mutations subsequently ran through
+the visible browser-manager Session agent-browser-manager-mu0xvbyb, using the
+public New Session/Actions/composer. No developer SSH or direct lifecycle/import.
+
+- Create ee29864a5efe3d420b6512791b01b252 completed07:48:26.812Z, new browser-3.
+- Vault delivery1e366a992846c0687c684238ee260a7f imported once from selected
+  gemini_98caccf3, requested1284/actual1285; independently verified08:17:40.149Z.
+- Acceptance70d4c9e56ec9f8d6c2d5dd8d1566966a completed08:39:13.579Z, stable=true:
+  17 distinct samples08:19:00.272Z–08:39:02.836Z,1,202,564ms. No repeated copy.
+- Delete Browser Action submitted08:46:08.039Z to the SAME Session, explicitly
+  only instance3/no backup. Retire2e0cdcfd912f067ae2cddd7f68e5b2fd completed;
+  purge0f77fb1bfcf0e14cc7cff70c539f06b4 completed08:48:12.997Z. Only
+  /var/lib/linux-browser-vnc/profile-3 removed,150,286,336 allocated bytes;
+  irreversible test data deletion. Shared cache/config/program/journal retained.
+- Original1/2 PIDs2678965/2459842 unchanged, profiles retained, CDP and fresh
+  verified logins present. Public Fleet displays only1/2; VNC shared services active.
+
+The run exposed additional MCP/Fleet defects, fixed in linux-clash-skill's existing
+browser-node-create log: accidental version pin, competing-session continuation,
+Workerd redirect handling, latest same-account inventory across slow preflight,
+and imported-versus-pending-verification receipts. Earlier failed/no-import
+attempts remain; this was a corrected real lifecycle, not a claim of first-shot
+unattended success or perpetual/all-machine stability. No retry of healthy login.
+
+Final public screenshots inspected:
+/tmp/fleet-187-canary-purged-card-20260914.png and
+/tmp/dsh-187-canary-completed-20260914.png. Actual history rendered in23.28s,
+no page errors; its completed report matches durable receipts. Initial automation
+closed before async Action submission; checked no turn/job, then resubmitted once
+and waited for accepted session.prompt. No duplicate deletion was dispatched.
+The VNC desktop was also actually rendered earlier, not only its splash canvas.
+
+Readonly final hashes unchanged: Task specs
+c0b94fe3db2cad8ef4a1fae28dab7baec627576745508af291cdd6272c4ab30a;
+browser AgentSpec dfb0ec793c57884386ea6da21891f659264a81bb679170a032175c11e1cfe6d6.
+Original hourly schedule still enabled; no Task definitions/history removed.
+63 Session agent-browser-manager-mtzj4dnj remains stopped with zero node jobs.
+288 DSH tests/build,379 Fleet/MCP Node tests and38 Python tests pass. Existing
+runtimes reused, no dependencies installed. Small screenshots/logs and durable
+receipts retained as unique acceptance evidence; production tracked lib retained.
+
 ## 2026-09-14 — Corrected acceptance boundary: browser-driven187 lifecycle
 
 Owner's63 Action Session agent-browser-manager-mtzj4dnj exposed a real omission:

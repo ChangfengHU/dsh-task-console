@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [TASK-BROWSER-SESSION-025] 0.30.21：真实63 Action会话反复猜sessionId，宿主拒绝且无节点作业，之前只读验收未覆盖变更身份接入。已通过浏览器停止该会话，63暂不操作。MCP适配器改为宿主绑定身份、不暴露模型填写字段，保留工具/Task围栏与删除证据校验。待部署并通过公网会话在187新增一个测试实例、指定金库登录、独立验收后仅删除该新增实例；原浏览器/Task/定时/历史不变。
+- [x] [TASK-BROWSER-SESSION-025] 0.30.21：修复模型猜sessionId，改由宿主绑定真实身份，保留工具/Task围栏和删除证据校验；288测试及构建通过，已部署。公网会话agent-browser-manager-mu0xvbyb在187真实新增browser-3，从指定金库gemini_98caccf3导入一次，17次独立采样跨20m02.564s通过，再经删除Action仅清理新实例profile-3（150,286,336 bytes）。原1/2 PID、资料及登录保留，Fleet页面仅剩1/2，DSH会话完整显示结果。过程中修复版本误钉死、竞争等待无续接及Worker传输问题，失败回执保留，不声称首次无干预成功。Task/AgentSpec哈希及每小时定时不变；63会话已停止、无节点作业，继续暂停。见既有workflow-plan-login日志。
 
 - [x] [TASK-BROWSER-FLEET-SCOPE-024] 0.30.20：指定账号 Actions 使用金库 accountId、版本和持有浏览器元数据，不依赖在线来源，模板传入 MCP 强选择参数；节点范围由 linux-clash Fleet 名册授权提供。286测试及构建通过，07:20:17Z零活跃/原Task持久等待边界重载；公网1440/390px候选、角色隔离、回车、分页/失败及历史不变验收通过。可见Agent只读会话 agent-browser-manager-mu0waqf3 证明63可追加browser-3。AgentSpec/Task哈希及每小时定时不变；本轮未额外新增、删除或导入登录，不代表原巡查整体验收完成。见既有workflow-plan-login日志。
 

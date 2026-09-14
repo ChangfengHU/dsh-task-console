@@ -1,5 +1,29 @@
 # Workflow composition and explicit login acceptance
 
+## 2026-09-14 — Corrected acceptance boundary: browser-driven187 lifecycle
+
+Owner's63 Action Session agent-browser-manager-mtzj4dnj exposed a real omission:
+inventory/inspect worked, but the model guessed sessionId on browser_create and
+the canonical host guard rejected every attempt before any durable node job.
+The earlier read-only/draft-only acceptance did not cover this write path.
+After the owner moved testing to187, used public UI Stop generating on that
+exact63 Session; native running=false, its failed history retained. No63 operation.
+
+0.30.21 binds sessionId from trusted exec context in the filtered MCP adapter;
+the model schema omits it. Supplied spoofed identity still fails; missing context
+cannot dispatch. Binding precedes original policy and Task checks, and raw MCP
+schema/receipts remain canonical. Existing AgentSpec/actions/Task hashes are not
+rewritten. Added per-execution/Task/spoof tests and native ToolRuntime create/purge
+fixtures. A first fixture wrongly assumed raw ToolRuntime validates all MCP fields;
+corrected the fixture to model the actual server/policy boundary, not weakened it.
+
+Success requires visible public composer creation on129.146.125.187, specified
+Vault account and independent login proof, followed by explicit deletion of only
+that newly created test instance/data. Existing browsers/shared services must
+survive. This is pending, not proven by the eight passing adapter tests/build.
+Full288 regression tests and build now pass; production canary remains pending.
+No new dependencies installed.63 stays paused pending187 acceptance.
+
 ## 2026-09-14 — Fleet-scope Actions live and browser-verified
 
 DSH0.30.20 reloaded only sop-dsh-web.service at07:20:17Z, after proving no

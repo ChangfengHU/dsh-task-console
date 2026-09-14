@@ -91,6 +91,26 @@ export function assertBrowserSession(rawName: string, candidate: unknown, exec: 
   if (!actual || (candidate as any).sessionId !== actual) throw new Error('MCP browser sessionId must match this live Agent session')
 }
 
+/** Session identity is trusted execution context, not a field for the model to guess. */
+export function bindBrowserSessionDefinition<T extends { description?: string; parameters?: any; execute: (args: any, exec: any) => any }>(rawName: string, definition: T): T {
+  const schema = definition.parameters
+  if (!rawName.startsWith('browser_') || schema?.type !== 'object' || !Object.hasOwn(schema.properties ?? {}, 'sessionId')) return definition
+  const { sessionId: _identity, ...properties } = schema.properties
+  return {
+    ...definition,
+    description: `${definition.description ?? ''}\n当前 sessionId 由 DSH 宿主自动绑定，无需填写；其他工具权限和 Task 范围保持不变。`,
+    parameters: { ...schema, properties, required: schema.required?.filter((key: string) => key !== 'sessionId') },
+    execute(args: unknown, exec: any) {
+      const session = exec?.agent?.session
+      const actual = session?.id ?? session?.header?.id
+      if (typeof actual !== 'string' || !actual) throw new Error('DSH live browser session unavailable; no operation started')
+      if (!args || typeof args !== 'object' || Array.isArray(args)) throw new Error('MCP browser arguments must be an object')
+      if ('sessionId' in args && args.sessionId !== actual) throw new Error('MCP browser sessionId must match this live Agent session; omit sessionId, DSH binds it automatically')
+      return definition.execute({ ...args, sessionId: actual }, exec)
+    },
+  }
+}
+
 export async function apply(ctx: Context, config: Config): Promise<void> {
   const { allowedTools: rawAllowed, toolRules = {}, sourceEntryId, ...inlineMcp } = config
   if (!Array.isArray(rawAllowed) || rawAllowed.some(tool => typeof tool !== 'string' || !tool.trim())) {
@@ -111,11 +131,11 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   const tools = new Proxy(ctx.tools, {
     get(target, property) {
       if (property === 'register') {
-        return (definition: { name: string; execute: (args: unknown, exec: unknown) => unknown }) => {
+        return (definition: { name: string; description?: string; parameters?: any; execute: (args: unknown, exec: unknown) => unknown }) => {
           const rawName = rawByInternal.get(definition.name)
           if (!rawName) return () => undefined
           const execute = definition.execute
-          return target.register({
+          return target.register(bindBrowserSessionDefinition(rawName, {
             ...definition,
             name: publicToolName(stableServerName, rawName),
             execute(args: unknown, exec: unknown) {
@@ -129,7 +149,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
               }
               return execute(args, exec)
             },
-          } as never)
+          }) as never)
         }
       }
       const value = Reflect.get(target, property, target)

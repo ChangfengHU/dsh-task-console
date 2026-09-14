@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { assertToolArguments, instanceServerName, publicToolName, resolveSourceConfig } from '../src/filtered-mcp-client.ts'
+import { assertBrowserSession, assertToolArguments, bindBrowserSessionDefinition, instanceServerName, publicToolName, resolveSourceConfig } from '../src/filtered-mcp-client.ts'
+import { createRequire } from 'node:module'
+import { dirname } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 
 test('filtered MCP public names match the DSH naming contract', () => {
   assert.equal(publicToolName('vault-agent', 'get_config'), 'mcp__vault-agent__get_config')
@@ -45,4 +49,58 @@ test('filtered MCP resolves auth from one exact official host entry', () => {
   assert.deepEqual(resolveSourceConfig(ctx, 'host-vault'), secretConfig)
   official.options.name = 'another-plugin'
   assert.throws(() => resolveSourceConfig(ctx, 'host-vault'), /not an official MCP client/)
+})
+
+test('browser identity is bound per execution without changing the MCP schema or accepting spoofed sessions', () => {
+  const parameters = {type:'object',properties:{ip:{type:'string'},sessionId:{type:'string'},requestId:{type:'string'}},required:['ip','sessionId','requestId']}
+  const calls: any[] = []
+  const original = {parameters,description:'Create one',execute:(args:any,exec:any)=>{assertBrowserSession('browser_create',args,exec);calls.push(args);return args}}
+  const tool = bindBrowserSessionDefinition('browser_create',original)
+  assert.equal(original.parameters,parameters);assert.ok(parameters.properties.sessionId)
+  assert.equal(tool.parameters.properties.sessionId,undefined)
+  assert.deepEqual(tool.parameters.required,['ip','requestId'])
+  assert.match(tool.description,/宿主自动绑定/)
+  const input = {ip:'192.0.2.1',requestId:'same-attempt'}
+  for (const id of ['agent-browser-manager-one','task-real']) {
+    const result = tool.execute(input,{agent:{session:{id}}})
+    assert.deepEqual(result,{...input,sessionId:id});assert.equal('sessionId' in input,false)
+  }
+  assert.equal(tool.execute(input,{agent:{session:{header:{id:'agent-browser-manager-two'}}}}).sessionId,'agent-browser-manager-two')
+  assert.throws(()=>tool.execute(input,{agent:{session:{}}}),/unavailable/)
+  assert.throws(()=>tool.execute({...input,sessionId:'agent-browser-manager-forged'},{agent:{session:{id:'task-real'}}}),/omit sessionId/)
+  assert.equal(calls.length,3)
+  assert.equal(bindBrowserSessionDefinition('vault_get',original),original)
+  const read = {...original,parameters:{type:'object',properties:{ip:{type:'string'}}}}
+  assert.equal(bindBrowserSessionDefinition('browser_inspect',read),read)
+})
+
+test('native ToolRuntime executes create and purge without model sessionId; policy and exact purge evidence remain enforced', async () => {
+  const require = createRequire(import.meta.url)
+  const cordis = require.resolve('@deepseek-ai/cordis',{paths:[dirname(require.resolve('@deepseek-ai/dsh-tools'))]})
+  const {Context} = await import(pathToFileURL(cordis).href)
+  const ctx = new Context();ctx.provide('systemPrompt',{tools:()=>{}})
+  const runtime = new ToolRuntime(ctx), agent = {ctx,session:{id:'agent-browser-manager-ui-fixture'}}
+  const calls: any[] = [], disposers: (()=>void)[] = []
+  for (const name of ['browser_create','browser_purge']) {
+    const properties:any = {ip:{type:'string'},requestId:{type:'string'},sessionId:{type:'string'}}
+    if(name==='browser_purge')Object.assign(properties,{instances:{type:'array',items:{type:'integer'}},planHash:{type:'string'},confirm:{type:'string',enum:['PURGE-EXACT']}})
+    disposers.push(runtime.register(bindBrowserSessionDefinition(name,{
+      name,description:'Fixture, no network',parameters:{type:'object',properties,required:Object.keys(properties)},
+      output:{schema:{type:'object'},render:(_a:any,value:any)=>[{type:'text',text:JSON.stringify(value)}]},
+      execute:(args:any,exec:any)=>{
+        // The real MCP owns purge validation; this fixture models that boundary.
+        assertToolArguments(name,{requiredArguments:Object.keys(properties),valuesOrPrefixes:{ip:['192.0.2.1']}},args)
+        assertBrowserSession(name,args,exec);calls.push({name,args});return {ok:true,sessionId:args.sessionId}
+      },
+    })))
+  }
+  const run=(name:string,args:any,as=agent)=>runtime.execute({name,arguments:args,agent:as,callId:'fixture-'+name,signal:new AbortController().signal} as any)
+  try {
+    assert.equal((await run('browser_create',{ip:'192.0.2.1',requestId:'create-once'})).isError,false)
+    assert.equal((await run('browser_create',{ip:'192.0.2.9',requestId:'denied'})).isError,true)
+    assert.equal((await run('browser_purge',{ip:'192.0.2.1',requestId:'purge-once',instances:[3]})).isError,true)
+    assert.equal((await run('browser_purge',{ip:'192.0.2.1',requestId:'purge-once',instances:[3],planHash:'real-fixture-plan',confirm:'PURGE-EXACT'})).isError,false)
+    assert.equal(calls.length,2);assert.ok(calls.every(c=>c.args.sessionId===agent.session.id))
+    assert.deepEqual(calls[1].args.instances,[3]);assert.equal(calls[1].args.planHash,'real-fixture-plan')
+  } finally {disposers.forEach(dispose=>dispose())}
 })

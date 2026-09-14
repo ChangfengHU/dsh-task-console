@@ -1,5 +1,22 @@
 # Task Console runtime contracts
 
+## Browser MCP execution identity
+
+The filtered MCP adapter removes sessionId from the model-facing parameters of
+browser tools that declare it, then binds the actual exec.agent.session identity
+before existing argument/Task guards and transport. Missing live identity or an
+explicit different identity fails without dispatch. Read-only tools and unrelated
+MCPs are unchanged. The raw MCP still receives its required canonical sessionId;
+Task scopes, exact purge evidence, requestId idempotency and output receipts remain.
+Never solve a standalone chat's missing identity by asking the model to guess an
+ID or putting one particular session ID into its reusable Action/preset.
+
+Read-only inventory/inspect/candidate and draft-only UI checks cannot establish
+create/provision/purge acceptance. Run an explicitly authorized lifecycle canary
+through the actual public browser composer and native ToolRuntime; delete only
+the newly created test instance, verify its owned files are gone, and preserve
+all original profiles, PIDs and shared services. Keep the failed attempts too.
+
 ## Browser delivery receipts
 
 `dsh_browser_operation_outcomes` appends host-authenticated Vault v2 outcomes to existing

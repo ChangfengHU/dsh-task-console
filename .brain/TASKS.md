@@ -1,5 +1,7 @@
 # 后续优化
 
+- [x] [TASK-EXECUTION-UI-PROTOTYPE-027] 独立执行页 Focus V1 原型已发布公网；压缩头部和技术统计，主画布展示三角色协作，右侧按需查看进展/Trace/数据，顶部提供验收入口。支持虚构执行中/受阻/通过、数据库时刻逐步/自动回放、全屏保留详情、会话预览及多格式结果。1440/390px 公网浏览器验收通过，零 API/子资源请求；不改线上插件、任务定义、历史、定时或目标机器。代码 prototype/task-execution-focus-v1.html；证据见既有 Actions dev-log 末尾。此项只是设计评审原型，不能作为当前装机业务通过的证据。
+
 - [x] [TASK-ACTIONS-026] 0.30.22：Task 专属 Actions 的 SQLite CAS、原生 @Task 占位符/候选/刷新恢复、幂等 Batch 提交、安全输入快照和 Creator 待审查接入完成；293 项测试零跳过、构建、公网拦截回执及真实候选/配置浏览器测试通过。10:29:02Z 零活跃窗口重载，原 Fleet Task 仅 CAS 增加默认「装机与账号验收」Action。真实无效 IP 提交在 Batch 创建前拒绝；未提交装机。TaskSpec、角色、每小时定时及历史不变。混合前后端版本时保留旧入口，避免重载前按钮调用不存在的 API。见既有 Actions dev-log 最新段。
 
 - [x] [TASK-BROWSER-SESSION-025] 0.30.21：修复模型猜sessionId，改由宿主绑定真实身份，保留工具/Task围栏和删除证据校验；288测试及构建通过，已部署。公网会话agent-browser-manager-mu0xvbyb在187真实新增browser-3，从指定金库gemini_98caccf3导入一次，17次独立采样跨20m02.564s通过，再经删除Action仅清理新实例profile-3（150,286,336 bytes）。原1/2 PID、资料及登录保留，Fleet页面仅剩1/2，DSH会话完整显示结果。过程中修复版本误钉死、竞争等待无续接及Worker传输问题，失败回执保留，不声称首次无干预成功。Task/AgentSpec哈希及每小时定时不变；63会话已停止、无节点作业，继续暂停。见既有workflow-plan-login日志。

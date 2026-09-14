@@ -510,3 +510,59 @@ task's resolved, reproducible UI fixture diagnostic. Seven final screenshots
 (three fixture, four live) remain as private user-review evidence; regenerate with
 the committed browser scripts, never upload them publicly. No dependencies or
 cache downloads were installed; tracked lib/ and running dependencies remain.
+
+## 2026-09-14 — Standalone execution-page Focus V1 prototype
+
+User requested a separately reviewable HTML prototype, not a production UI change.
+The existing page placed repeated headers, four technical statistics, creation
+metadata and lease narration above the useful execution view. A real 1440x1000
+browser showed the graph title around y=430, role cards around y=680 and results
+below the first viewport. This was layout evidence, not machine acceptance.
+
+Added only `prototype/task-execution-focus-v1.html` and the standalone browser
+acceptance script. The prototype brings the workspace to approximately y=214,
+keeps the dependency graph central and places current role progress, Trace and
+raw snapshot data in a selectable inspector. Results have a top-level entry;
+creation/plan, Sessions and Action metadata are secondary. Fullscreen retains
+the inspector; mobile uses a dismissible detail sheet. Replay changes actual
+fictional snapshots: roles and links do not appear before their creation frames.
+The original three-role sequential contract is represented, without inventing
+a Gate or additional agent for this workflow.
+
+All status, times, accounts, sessions, receipts and reports are fictional and
+visibly marked. Target is documentation IP 192.0.2.63. Includes running, blocked
+and passed examples, single-step/autoplay, trace filters with request/response,
+conversation preview, report/HTML preview and JSON download. No service API,
+external script, font, image, credentials or production identifiers are included;
+CSP denies network connections. No runtime source, bundle, preset, Task/Batch,
+database, permission, schedule or machine was modified. No build/deploy/restart
+of DSH occurred. The currently running user's Task was not interrupted.
+
+Vault service:github and service:suqu-api were read in process. GitHub read-only
+/user and repository checks verified ChangfengHU and authorized push access.
+Upload host/public domain matched configured endpoints. Upload service sanitizes
+slashes in `name` to underscores: the first guessed nested URL returned 404.
+Read existing upload implementation, located the single actual uploaded object,
+and verified that URL instead; did not upload a second duplicate or change the
+upload service. Final public GET is 200, text/html; charset=utf-8, 48,561 bytes,
+identical SHA256 `dcc3ec849199286316aa3d46d56b12fd55611ffdd1aa77572ed054190230c248`.
+
+Public review URL:
+https://resource.vyibc.com/dsh-task-console_prototypes_task-execution-focus-v1-20260914.html
+
+Verification: `python3 scripts/test-execution-focus-prototype.py` against a
+loopback static server, then `DSH_PROTOTYPE_URL=<public URL>` with the same script.
+Both passed: desktop/mobile overflow, role selection, Trace types and I/O, raw
+snapshot, fullscreen inspector, creation-order replay, blocked/passed outcomes,
+HTML preview, JSON download, session conversations, autoplay, execution switching
+and dark theme. Zero page errors; only the HTML GET, no API/subresource requests.
+Local page load 118ms; public measured 1652ms on this machine, not a guarantee for
+other clients or an optimization of the real production plugin. Screenshots were
+visually inspected. Fixed mobile wrapping/fit and captured completed transitions.
+
+No dependencies, build directories or download caches were installed. Test JSON
+downloads were deleted by the test; Playwright temporary profiles are disposed.
+Five final `/tmp/dtc-focus-prototype-*.png` screenshots (549,654 bytes total) are
+temporarily retained as review evidence; regenerate with the committed script
+and remove after UI review. Local preview server is stopped at closing. The HTML
+and test remain source, not disposable generated files.

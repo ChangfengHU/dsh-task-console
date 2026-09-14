@@ -91,3 +91,17 @@ test('Fleet adapter only reads metadata; reuses policy/ranker, excludes denied a
   await assert.rejects(fleetActionOptions(cfg,action.parameters[3],{ip:'192.0.2.9'},load),/尚无/)
   await assert.rejects(fleetActionOptions({args:['relative/server.mjs']},action.parameters[0],{},load),/适配器/)
 })
+test('Vault account Actions deduplicate by stored ID and work without a live source browser', async () => {
+  const candidate = { kind:'vault', accountId:'gemini_aaaaaaaa', version:7, fingerprint:'aaaaaaaa', label:'owner@example.test', authorized:true, eligible:true, reasons:[], currentHolders:0 }
+  const calls: any[] = []
+  const modules: any = {
+    runtime: {policy:async()=>({nodes:{'192.0.2.1':{read:true}}})},
+    transport: {request:async(...args:any[])=>{calls.push(args);return {ok:true,pages:1,contract:'login-vault-v2',deliveryEnabled:true,rows:[{credential:{accountId:candidate.accountId},holders:[]}]}}},
+    login: {rankLoginSources:()=>[candidate,candidate,{...candidate,kind:'live',sourceIp:'192.0.2.2',sourceInstance:1},{...candidate,accountId:'gemini_bbbbbbbb',reasons:['account-excluded']}]},
+  }
+  const result=await fleetActionOptions({args:['/trusted/browser-manager/server.mjs']},action.parameters[3],{ip:'192.0.2.1'},async n=>modules[n])
+  assert.equal(result.items.length,1);assert.equal(result.items[0].disabled,false)
+  assert.match(result.items[0].value,/accountId=gemini_aaaaaaaa/)
+  assert.match(result.items[0].detail!,/金库 v7/);assert.match(result.items[0].detail!,/无在线来源/)
+  assert.ok(calls.every(c=>c[1]===null&&!c[0].includes('refresh')))
+})

@@ -38,13 +38,27 @@ export async function fleetActionOptions(config: Record<string, unknown>, p: Act
   // Reuse account exclusions/admission from the MCP. No invented target instance:
   // this is intent authoring, not a recommendation/authorization for a transfer.
   const accounts: any[] = []
-  let pages = 1
+  let pages = 1, vaultEnabled = false
   for (let page = 1; page <= pages; page++) {
     const data = await get(`/api/fleet/login-accounts?view=discovered&pageSize=100&page=${page}`, true)
     if (data.ok !== true || !Array.isArray(data.rows) || !Number.isInteger(data.pages) || data.pages < 0 || data.pages > 50) throw Error('账号发现记录暂不可用')
+    if (page === 1) vaultEnabled = data.contract === 'login-vault-v2' && data.deliveryEnabled === true
     pages = data.pages; accounts.push(...data.rows)
   }
   const ranked = rankLoginSources(accounts, grants, { ip })
+  if (vaultEnabled) {
+    const seen = new Set<string>()
+    return {
+      items: ranked.filter((c: any) => c.kind === 'vault' && c.authorized && !c.reasons.includes('account-excluded') && c.label && /^gemini_[a-f0-9]{8,64}$/.test(c.accountId) && !seen.has(c.accountId) && seen.add(c.accountId)).map((c: any) => {
+        const holders = accounts.find(a => a.credential?.accountId === c.accountId)?.holders ?? []
+        const usage = holders.map((h: any) => `${h.ip ?? h.node} / browser-${h.instance}`).join('、')
+        return { value: `${c.label} · accountId=${c.accountId} · #${c.fingerprint}`, label: c.label,
+          detail: `金库 v${c.version} · ${c.eligible ? '可下发' : c.reasons.join('、')} · 当前已验证 ${c.currentHolders} 个浏览器 · ${usage || '无在线来源，也可使用有效库存'}`,
+          disabled: !c.eligible }
+      }),
+      notice: '按金库账号选择，不依赖来源浏览器在线。执行时将 accountId 传入 MCP；不可用不替换账号，健康目标不覆盖。版本、排除策略和登录结果仍须执行时核验。',
+    }
+  }
   return {
     items: ranked.filter((c: any) => c.authorized && !c.reasons.includes('account-excluded') && c.label && c.sourceIp && Number.isInteger(c.sourceInstance)).map((c: any) => ({
       value: `${c.label} · ${c.sourceIp} / browser-${c.sourceInstance} · #${c.fingerprint}`,

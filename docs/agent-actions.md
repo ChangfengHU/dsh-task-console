@@ -75,7 +75,11 @@ behaviors without an invocation form. The native draft remains the only input:
 The browser-manager starter uses count=1; login mode defaults to
 `按账号分配策略`, with `指定账号` and (for creation) `不自动登录` alternatives.
 Only the specified-account mode asks for an account source. Its popup displays
-full email, source IP and browser number, without hardcoded machine/account data.
+full email and, on Vault v2, one row per authorized stored account with current
+version and holder IP/browser counts. The selected value includes stable accountId,
+not cookies or a requirement that a source browser be online. Templates instruct
+the Agent to pass accountId into browser_login_provision; unavailable IDs must not
+be silently replaced. Legacy deployments retain source-browser choices.
 For example, its account parameter is configured as:
 
 ```json
@@ -100,8 +104,10 @@ from Action configuration.
 Only GET `/api/fleet` and paginated GET `/api/fleet/login-accounts?view=discovered`
 are used. No SSH, refresh POST, verification, cookie export/import or MCP mutation
 is invoked by selection. Concurrent reads coalesce and metadata is cached for five
-seconds; policy and freshness ranking are reapplied. Nodes require existing read
-grants. The current Agent must already have the corresponding registered tool:
+seconds; policy and freshness ranking are reapplied. Fleet-scoped deployments read
+the authenticated lightweight `/api/fleet/registry` for membership instead of old
+per-IP/instance grants. Explicit-mode deployments retain those grants. The current
+Agent must already have the corresponding registered tool:
 `browser_fleet_inventory` or `browser_login_candidates`. Missing permission and
 MCP-not-ready are reported separately; this feature does not create grants.
 
@@ -149,7 +155,7 @@ Task review. An empty file does not restore deleted defaults automatically.
 The browser-manager starter pack is `presets/browser-manager-actions.json`; merge
 it explicitly through `saveAgentActions` when installing, never overwrite existing
 user Actions. It references no fixed host or account. Creation/deletion/login still
-require the deployment's exact instance grants and existing skill acceptance rules.
+require the deployment's MCP scope, exact operation targets and existing skill acceptance rules.
 
 Authenticated native `taskConsole` RPCs (standard string JSON argument/result):
 

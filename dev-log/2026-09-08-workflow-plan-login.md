@@ -495,3 +495,15 @@ coverage gap. No native Sessions or historical graph evidence were deleted.
 No dependencies were installed and no rebuildable cache remains to clean from this
 verification. Tracked lib/ is production runtime, not temporary output. Keep the
 private7.8MiB pre-archive SQLite backup and screenshots as recovery/acceptance evidence.
+# 2026-09-14 — Fleet-scoped Browser MCP and exact Vault Action selection
+
+Owner authorized implementing one MCP assignment across registered Fleet machines,
+not another authorization Agent or per-IP/instance workflow. linux-clash owns that
+policy/registry and exact accountId/credentialVersion enforcement. DSH0.30.20 only
+adapts Actions to stored-account IDs, deduplicated options and holder metadata;
+healthy logins, account exclusions and original AgentSpec/Task hashes stay intact.
+Starter templates require the selected ID at the actual provision call, no silent
+fallback. Effective Task round/action fences still narrow broader MCP capabilities.
+286 tests and build pass with existing dependencies. Production reload/sidecar CAS,
+public browser and visible Agent read-only acceptance are pending at this checkpoint.
+No target browser create/delete/import, direct SSH or historical Task mutation.

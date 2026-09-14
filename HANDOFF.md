@@ -10,6 +10,14 @@ Task/AgentSpec hashes, schedules and all history. Node execution remains visible
 
 ## Agent Actions
 
+Vault-v2 account suggestions use a stable `accountId` per stored authorized account,
+with version/current holder metadata, including inventory without an online source.
+The browser-manager starter passes this ID to the MCP's exact selector, not just an
+email preference. Unknown/denied/changed selections never fall back. Node scope is
+owned by linux-clash/browser-manager: `registered-fleet` dynamically covers enabled
+registered machines; existing Task role/action/review boundaries still narrow it.
+Actions/preset sidecars do not grant permissions or alter AgentSpec review hashes.
+
 `actions.json` is an optional preset sidecar for parameterized user prompts; never
 merge it into AgentSpec, generated tool composition or Task roster review hashes.
 User-preset saves preserve it under the same in-process write lock. Action edits

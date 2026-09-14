@@ -97,11 +97,12 @@ with sync_playwright() as p:
         expect(accounts.first).to_be_visible(timeout=45000)
         eligible = popup.locator('[role=option][aria-disabled=false]')
         expect(eligible.first).to_be_visible(timeout=45000)
-        assert all('browser-' in text for text in accounts.all_text_contents())
+        assert all('金库 v' in text for text in accounts.all_text_contents())
         assert not any('faker322424' in text for text in accounts.all_text_contents())
         page.screenshot(path='/tmp/dtc-action-options-accounts-1440.png')
         eligible.first.click()
         assert '【' not in c.input_value() and not writes
+        assert 'accountId=gemini_' in c.input_value()
         draft = c.input_value()
         mode = 'catalog-hold'
         page.reload(wait_until='domcontentloaded'); expect(c).to_be_visible(timeout=60000); expect(c).to_have_value(draft)

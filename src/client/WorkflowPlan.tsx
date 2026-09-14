@@ -3,11 +3,14 @@ import type { Batch, TaskSpec } from '../wire.ts'
 import { workflowView } from '../workflow-plan.ts'
 import { TaskDesignView } from './TaskPlanReview.tsx'
 
-export function WorkflowPlan({ task, batch, nameOf, openSession, trace }: {
+export function WorkflowPlan({ task, batch, nameOf, openSession, trace, expanded: controlledExpanded, onExpandedChange }: {
   task: TaskSpec; batch?: Batch; nameOf: (id: string) => string
   openSession: (id: string) => void; trace: (id: string) => void
+  expanded?: boolean; onExpandedChange?: (expanded: boolean) => void
 }) {
-  const [expanded, setExpanded] = useState(false)
+  const [localExpanded, setLocalExpanded] = useState(false)
+  const expanded = controlledExpanded ?? localExpanded
+  const setExpanded = onExpandedChange ?? setLocalExpanded
   const [tab, setTab] = useState('plan')
   const view = workflowView(task, batch)
   const plan = view.definition

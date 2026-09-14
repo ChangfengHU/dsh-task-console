@@ -4,6 +4,8 @@
  * defined here and every surface sets background and color together.
  */
 
+import { executionLayout } from './execution-layout.ts'
+
 const STYLE_ID = 'dsh-task-console-styles'
 
 const CSS = `
@@ -608,6 +610,7 @@ body[data-ds-dark-theme] .dtc-node .q { color:#a794e0 }
 .dtc-patrol-row { display:grid; grid-template-columns:minmax(125px,.8fr) minmax(130px,1fr) minmax(155px,1fr) minmax(180px,1.3fr); gap:10px 16px; padding:13px 0; border-top:1px solid var(--dtc-line-soft); font-size:12px }.dtc-patrol-row > div { display:flex; flex-direction:column; gap:3px; min-width:0; overflow-wrap:anywhere }.dtc-patrol-row b { font-size:12px; font-weight:600 }.dtc-patrol-detail { grid-column:1/-1; color:var(--dtc-muted); font-size:11px }.dtc-patrol summary { cursor:pointer; width:fit-content; padding:3px 0 }.dtc-patrol dl { margin:8px 0 0; padding:10px; border-radius:8px; background:var(--dtc-surface-2) }.dtc-patrol dl > div { display:grid; grid-template-columns:110px minmax(0,1fr); gap:8px; padding:3px 0 }.dtc-patrol dd { margin:0; overflow-wrap:anywhere; color:var(--dtc-ink) }.dtc-patrol-original { margin:8px 0; font-size:12px; color:var(--dtc-muted) }.dtc-patrol-original p { white-space:pre-wrap; overflow-wrap:anywhere }
 @media (max-width:1050px) { .dtc-patrol-row { grid-template-columns:repeat(2,minmax(0,1fr)) } } @media (max-width:500px) { .dtc-patrol { padding:12px }.dtc-patrol-row { grid-template-columns:minmax(0,1fr) }.dtc-patrol-row > div { gap:2px }.dtc-patrol dl > div { grid-template-columns:minmax(0,1fr); gap:1px } }
 @keyframes dtc-drawer-in { from { transform:translateX(30px); opacity:.4 } to { transform:none; opacity:1 } }
+${executionLayout}
 `
 
 export function installStyles(): () => void {

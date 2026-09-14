@@ -21,7 +21,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
-const out = join(root, 'lib')
+// An explicit staging directory lets browser tests validate assets before publishing.
+const out = process.env.DTC_BUILD_OUT || join(root, 'lib')
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
 
 await mkdir(out, { recursive: true })

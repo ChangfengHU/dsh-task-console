@@ -625,3 +625,65 @@ demo JSON and disposes browser contexts. Eight final `/tmp/dtc-compact-v2-*.png`
 screenshots (1,006,333 bytes) remain temporarily for design review; reproduce
 with the committed test and remove after review. The loopback preview server is
 stopped at closing. Production runtime files and existing evidence are untouched.
+
+## 2026-09-14 — Approved V2 execution layout, 0.30.23
+
+The user approved implementing V2 in the existing plugin. This supersedes the
+prototype-only scope above, without authorizing workflow/permission changes or
+direct machine operations. Agent/Board remain one plugin. No new task, service,
+schema, role, schedule, installation or login operation was introduced.
+
+Reused DynamicTaskReplay, WorkflowPlan, SessionDrawer/TurnLedger, ExecutionPicker,
+TaskRunAction, ArtifactDelivery and PatrolEvidence. The layout-specific stylesheet
+applies only while the database execution view is mounted: compact header and
+inline counters, remaining-height DAG, scrollable original inspector, local
+plan/report/event/boundary overflow. The original plan tabs and source sessions
+remain in place. Plan and bottom evidence expansion are mutually exclusive.
+Canonical event selection, step/play/live projection and real Gate nodes are
+unchanged. Every event retains a visible label, with full facts in a disclosure.
+Fullscreen places Sessions above the graph and handles Escape one layer at a
+time; narrow screens expose the same inspector as a sheet. Other pages retain
+their own scrolling. Actions and all execution controls remain available.
+
+Validation:
+
+- `DTC_BUILD_OUT=/tmp/dtc-layout-build.67onY0 /usr/bin/node scripts/build.mjs`
+  built a candidate before publication. New optional build output only selects
+  a staging directory; the default still writes tracked production `lib/`.
+- `DTC_LAYOUT_ASSETS=/tmp/dtc-layout-build.67onY0 python3 -u
+  scripts/test-execution-layout-browser.py` tested the candidate against live
+  read-only APIs. Tests caught and corrected mobile picker overflow, narrow
+  landscape graph height and 390x667 expanded-plan squeezing before release.
+- `/usr/bin/node scripts/build.mjs` published through the existing verified
+  `/home/claude/.dsh/profiles/web/node_modules/dsh-task-console` repo symlink.
+  Only `lib/client.js` and `lib/client-heavy.js` differ; host bundles are unchanged.
+  Candidate and published heavy SHA256 both:
+  `5290f4b31a565862dffed88bc12ded23f46882a64ceb574f4f98b6b515b561eb`.
+- `python3 -u scripts/test-execution-layout-browser.py` then passed against
+  the actual public service, with NO asset override. Tested 1440x1000,1366x768,
+  1920x1080,390x844,390x667,844x390, expanded areas, dark palette, native session
+  navigation, real Trace, fullscreen/inspector, accurate start/step/autoplay,
+  Canonical rows, actual dynamic Gate/PatrolEvidence, and old HTML sandbox
+  preview/download. The download is deleted by the test. Mutation endpoints
+  are guarded; no execution/config writes were attempted and no page errors.
+- The ended execution `b-chat-c1cfcc3f3d6db787c30e` was unchanged before/after
+  each test (full graph snapshot comparison). Other regression views use an
+  ended patrol Batch and existing `T-mtj1xwah` artifacts, not fabricated tasks.
+- Full test suite: 293 passed, 0 failed/cancelled/skipped. Command:
+  `DSH_INSTALL_ROOT=/home/claude/.local/lib/node_modules/@deepseek-ai/dsh
+  NODE_ENV=test /usr/bin/node --import tsx --test --test-concurrency=1
+  --test-reporter=tap test/*.test.ts`. Build and `git diff --check` pass.
+- DSH PID remained 1673240 with the same 2026-09-14 06:29:02 EDT activation.
+  No restart or interruption. Public cold readiness was 20.81–24.60 seconds;
+  this is a remaining startup issue, not fixed or hidden by the layout work.
+
+No dependency installation. After public verification and a /proc open-file/cwd
+check finding no dependent process, removed only the uniquely owned candidate
+directory `/tmp/dtc-layout-build.67onY0` (1,440,962 bytes including directory).
+Recover with source/lockfile and the staging build command. Production `lib/`,
+source and existing prototype evidence are preserved.
+The 24 `/tmp/dtc-layout-*.png` screenshots (3,770,619 bytes, including candidate
+failure evidence) are private acceptance evidence, not
+public uploads of real task/session content. Keep them through review; reproduce
+with the committed browser test. GitHub identity and repository push permission
+were verified using Vault `service:github`, without persisting credentials.

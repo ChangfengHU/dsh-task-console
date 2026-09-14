@@ -2,6 +2,15 @@
 
 ## 2026-09-14 — Deployment and visible Vault acceptance follow-up
 
+Later checkpoint: the last missing manual account was rejected because old
+export matching included non-authorized domains. The same visible Agent updated
+only browser_sync.sh on all six nodes via login-vault prepare; actual HTTP proofs
+passed and profiles/browser processes stayed unchanged.188/63 browser-2 now
+automatically capture ef3b7d7b; all six identified Gemini accounts have matching
+encrypted inventory. Public desktop/mobile account-search and copy-preview
+acceptance passed. No new Agent grants or actual target imports; the original
+Task's independent stability/settlement is still not claimed complete.
+
 This supersedes the pending-deployment checkpoint below, without rewriting it.
 DSH0.30.19 was restarted only at zero active Task claims and zero running native
 Sessions. The existing task definitions, AgentSpec/review hashes, hourly schedule

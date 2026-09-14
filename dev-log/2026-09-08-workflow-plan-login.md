@@ -1,5 +1,20 @@
 # Workflow composition and explicit login acceptance
 
+## 2026-09-14 — Vault receipt classification, not a new Task
+
+Add `dsh_browser_operation_outcomes` without rewriting reservations/history. Status,
+bounded rework, resumption eligibility and stability accounting exclude only final
+host-authenticated no-write outcomes. Separate per-Batch preflight bounds prevent
+endless checks; unknown/imported operations still consume the persistent budget.
+Task output exposes safe delivery metadata for the original execution. No AgentSpec,
+review hash, schedule, historical receipt or target-machine login has been changed.
+
+All285 tests passed with DSH_INSTALL_ROOT pointing to the installed native host.
+Version0.30.19 runtime/client build passed after confirming zero active Task claims.
+Service restart/deployment, DSH/MCP node rollout and original Task acceptance are still
+pending. Companion Fleet implementation and UI tests are recorded in linux-clash's
+existing browser-node-create log; fixture results are not real login acceptance.
+
 ## Live no-backup Task: lifecycle passes, stability gate correctly blocks
 
 After deploying 0.27.3, the original Creator session agent-task-create-agent-mtso55u3

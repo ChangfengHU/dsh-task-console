@@ -30,6 +30,20 @@ function proof(input: any,at: number,state='verified',seq=10, options: { ttlMs?:
   const checkedAt = new Date(at).toISOString(), id=String(seq).padStart(32,'0')
   return pair(input,seq,'browser_status',{ip:'192.0.2.10',operationId:id},{id,action:'login-verify',phase:'complete',updatedAt:new Date(options.observedAt ?? at).toISOString(),args:{ip:'192.0.2.10',instance:1,sessionId:input.sessionId},result:{verification:{instance:1,loginVerified:state==='verified',identity:{gemini:state==='verified'?'in':'out',account:{source:'gemini-account-control',fingerprint:options.fingerprint ?? '01234567'}},loginVerification:{checkedAt,expiresAt:new Date(at+(options.ttlMs ?? 10*60_000)).toISOString(),status:state}}}})
 }
+test('confirmed preflight failures retain history but do not spend mutation or stability budget',async t=>{
+  const {input,patrol,store}=await setup(t),db=store.kernel.db,at=Date.now()-1000
+  db.prepare("INSERT INTO dsh_browser_issues(id,spec_id,target_key,status,attempts,opened_at) VALUES (1,?,'192.0.2.10:1','open',3,?)").run(input.task.id,new Date(at-1000).toISOString())
+  for(let i=1;i<=3;i++){
+    db.prepare('INSERT INTO dsh_browser_operations VALUES (?,?,?,?,?,?)').run('preflight'+i,1,input.batch.id,input.card.id,'login-provision',new Date(at-1000+i).toISOString())
+    db.prepare('INSERT INTO dsh_browser_operation_outcomes VALUES (?,?,?,?)').run('preflight'+i,'not_started','login-contract-upgrade-required',new Date(at-1000+i).toISOString())
+  }
+  input.card.role='reviewer';input.profileId='fleet-ops-reviewer';input.sessionId='task-fixture-reviewer'
+  patrol.capture(input,proof(input,at))
+  const row=patrol.status(input).items[0]
+  assert.equal(row.attempts,0);assert.equal(row.preflightFailures,3);assert.equal(row.observation,null);assert.equal(row.accepted,true)
+  assert.equal((db.prepare('SELECT attempts FROM dsh_browser_issues').get() as any).attempts,3)
+  assert.equal(row.loginDelivery.mutation,'not_started')
+})
 test('scope freezes atomically, unknown never grants copy and invented target is denied',async t=>{
   const {input,patrol,store}=await setup(t)
   const row={ip:'192.0.2.10',instance:1,action:'provision',reason:'fixture'}

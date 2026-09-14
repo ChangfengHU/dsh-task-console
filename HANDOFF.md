@@ -1,5 +1,13 @@
 # Task Console runtime contracts
 
+## Browser delivery receipts
+
+`dsh_browser_operation_outcomes` appends host-authenticated Vault v2 outcomes to existing
+reservations. Only final `not_started` reduces effective mutation attempts; preflight
+has a separate per-Batch bound. Unknown/imported stay charged and require independent
+review/stability. Missing receipts cannot refund attempts. This extension preserves
+Task/AgentSpec hashes, schedules and all history. Node execution remains visible DSH/MCP.
+
 ## Agent Actions
 
 `actions.json` is an optional preset sidecar for parameterized user prompts; never

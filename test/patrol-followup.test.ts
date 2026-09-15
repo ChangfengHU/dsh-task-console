@@ -35,6 +35,13 @@ test('Fleet projection separates observed login, handling and notification witho
   assert.doesNotMatch(JSON.stringify(result),/NEVER-EXPOSE|fixture-group/)
   assert.deepEqual(db.prepare('SELECT COUNT(*) n FROM task_events').get(),before)
 })
+test('an independent unknown receipt is not presented as no independent check',async t=>{
+  const {db}=await fixture(t)
+  db.prepare("UPDATE dsh_patrol_observations SET state='unknown'").run()
+  const row=patrolFollowup(db).items[0]
+  assert.equal(row.observedState,'unknown');assert.match(row.verdict,/无法确认登录/)
+  assert.match(row.next,/不能直接复制或重建/)
+})
 test('operator resend is explicitly recipient-pinned, append-only and idempotent even after an ambiguous send',async t=>{
   const {db}=await fixture(t);let sends=0
   const deliver=async(a:any)=>{sends++;assert.deepEqual(a.chatids,['fixture-group']);assert.match(a.markdown,/已达累计修复上限/);return{sent:1}}

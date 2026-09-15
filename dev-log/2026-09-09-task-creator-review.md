@@ -2,6 +2,41 @@
 
 ## 2026-09-15 — patrol follow-up, receipt liveness and reviewed continuation
 
+### Final deployed checkpoint,04:54Z
+
+Manual Batch b-chat-d335a8061b8f72f25505 settled failed/unresolved at04:51:08Z:
+23/23 cards done, six proxy checks passed,10/13 browsers accepted;84/b2 signed_out,
+188/b1 Google challenge,187/b1 independent verification unknown. Seven normal
+stage notices sent. This is a complete bounded patrol, not complete login recovery.
+The existing reviewed completed-patrol activation guard accepted the trial.
+
+Reloaded0.30.26 only with zero native running Sessions and zero canonical running
+Runs. Visible read-only Session agent-browser-manager-mu2736a8 read84's original
+browser_status twice; MCP appended not_started. Both84/188 raw issue counters stay4;
+84 has zero actual continuations,188 one continued/challenge. No mutation was retried
+and no failed operation or prior import was deleted. Fresh unknown verification is
+now described as inconclusive, not incorrectly as no independent check.
+
+Official setTaskEnabled restored the unchanged0 * * * * Asia/Shanghai schedule;
+next due05:00Z/13:00 Beijing. Automatic execution after this reload is not yet observed.
+Source/full serial303/303 tests, zero skips, and build passed. Fleet283 and MCP112
+checks remain passing from this change set. Public Chrome1440/390 loaded Fleet in
+9.18s/5.08s, all13 disclosures rendered, open state survives refresh, no overflow or
+page errors. Viewed screenshots show the actual challenge, preflight refusal and
+unknown-check explanations; the Task report/Session/DAG interactions remain.
+
+Explicit final diagnostic resend6edfb9a67c2a3cdc5c7ab8b3 confirmed sent to the single
+reviewed group at12:53:19 Beijing (eight total receipts including resend). It states
+the real three outstanding cases, not all repaired. User was asked to complete188's
+Google security verification; none has been confirmed. No direct node writes,
+account substitution, token changes or browser rebuilds occurred.
+
+DSH cold execution-page loading remains a separate known issue (50.4s actual public
+render). A local taskGraph read was0.03s/718175bytes; a nonbrowser public comparison
+was403 and cannot be used as a latency comparison. Do not attribute the whole delay
+to SQLite or claim the loading problem fixed. Retain small screenshots/test logs and
+/tmp/patrol-followup-release-3vqzEB rollback evidence; no new dependencies installed.
+
 ### Readable terminal diagnostics
 
 The shared report/Fleet projection now distinguishes an actual Google challenge

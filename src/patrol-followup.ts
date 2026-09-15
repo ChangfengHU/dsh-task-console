@@ -40,7 +40,7 @@ export function patrolFollowup(db: any, now = Date.now()) {
       const snapshot = proof && db.prepare("SELECT payload FROM task_events WHERE graph_id=? AND kind='patrol_snapshot' ORDER BY id DESC LIMIT 1").get(proof.batch_id)
       const recorded = parse(snapshot?.payload)?.items?.find((r: any) => r.ip === node.ip && r.instance === browser.instance && r.checkedAt === proof.checked_at)
       const row = { state:proof?.state ?? 'unknown',accepted:recorded?.accepted === true && issue?.status !== 'open',
-        reason:signedOut?'signed-out':proof?.state === 'verified'?'observation-window-pending-or-failed':'missing-independent-verification',
+        reason:recorded?.reason ?? (signedOut?'signed-out':proof?.state === 'verified'?'observation-window-pending-or-failed':proof?'verification-unknown':'missing-independent-verification'),
         attempts,repairLimit:limit,repairExhausted:exhausted,loginDelivery:delivery,canResume:recorded?.canResume===true&&resumeLimit===1&&resumeAttempts<1 }
       const view = patrolItemView(row)
       if (row.accepted) { view.verdict='最近独立检查通过'; view.reason='最近记录已有独立验收证据，不代表当前仍然有效' }

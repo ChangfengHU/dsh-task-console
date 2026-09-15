@@ -31,6 +31,7 @@ export type TaskProposal = {
   design?: TaskDesign
   trigger?: TaskSpec['trigger']
   actions?: AgentAction[]
+  recurringObjective?: string
 }
 
 export class TaskCreator {
@@ -48,6 +49,8 @@ export class TaskCreator {
 
   async context() {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
+      loginDiagnosis: '巡查可显式审查 browserPatrol.resumeAfterCopyLimit=1（需 actions 包含 resume）：复制预算耗尽但有同 Task 同故障已确认导入时，保留计数，允许额外一次正常登录续接。先新鲜 verify；canResume=true 应冻结 resume 而非再次 provision。原账号由 MCP 跨会话解析并核对当前授权，禁止静默换号；不再次导入、不重启、不绕过验证码。续接后独立20分钟4样本；失败只报告真实原因。一个目标失败，继续其他目标，本轮有界收口；未登录或未知不等于整轮执行协议应永久阻塞。旧计划不自动获得额外预算，必须 revise 审查。',
+      recurringInput: 'create/revise 定时计划可显式提供顶层 recurringObjective：完整可复用的业务执行目标，包含原始目标的范围、禁令、验收与通知约束，但不含“生成待审查计划/等待审批”这类 Creator 控制指令。它与原始请求并列供独立审查，批准后才用于后续 cron；不提供时保留旧输入语义。不得省略原请求中的操作限制。reuse 不允许改写它。',
       actions: { fleetBaseExample: fleetTaskActions, contract: '新建可复用 Task 时同时提交 actions 数组，独立审查显示快捷入口。每项 {id,name,description,template,parameters,enabled?,isDefault?}。模板用 {{key}}；参数 {key,label,type:text|number|boolean,required,default?,choices?,source?,dependsOn?,visibleWhen?,binding?}。binding 可用 target-ip、ssh-user、ssh-password、gemini-account；密码不能保存默认值。账号来源 fleet.gemini-accounts 依赖目标 IP，账号必须保存明确 accountId 意图；机器候选 fleet.nodes 可手填新 IP。Task Actions 仅提供本次参数，不改变角色、工具、验收、定时；执行同 Task 新 Batch，绝不复制历史 IP/密码。复用和 revise 不覆盖现有 Actions；用户在 Task Actions 页单独编辑。' },
       revisions: { decision: 'revise', contract: '同一已暂停的 cron Task 可用 taskId、reason、完整 design 及要调整的 title/brief/participants 生成新待审查版本，不创建另一 Task。不能更改时间表、移除证据合同、缩短独立验收或改变通知范围。未结束执行或缺少历史冻结定义时拒绝更新；审查会再次核验原定义与全部角色指纹。批准只更新未来定义，定时仍关闭，不派发 Batch。新增编排能力仍须实际支持，不能仅在自然语言中承诺。' },
       capabilityLimits: { browserPatrolV2: '固定规划者、browser-manager、独立评估者及可选通知员。可选 design.proxy={agentId:真实独立代理角色,lineId:批准线路,maxAttempts:1至3}；每轮规划者以 proxyItems:[{ip,action:verify|repair,reason}] 与浏览器items同时冻结本轮动作，生成代理处理→Gate→浏览器→独立评估→规划者。代理全部确定终态后交接；宿主逐机器禁止未通过目标登录写入，其他已通过目标继续。登录复制/续接需15分钟内真实网络证据，最终需评估者自己只读验收；独立历史验收不因后续等待过期，新的异常或修复仍使它失效。互斥限于本MCP操作及本Task串行支线，不能承诺其他工具或直接SSH受约束；角色仍须持有相应权限。',
@@ -138,6 +141,7 @@ export class TaskCreator {
     return { id: row.id, hash: row.hash, state: row.state, createdAt: row.created_at,
       reviewedAt: row.reviewed_at, reviewReason: row.review_reason, sourceSessionId: row.source_session,
       request: p.input.text, definition: workflowDefinition(p.task), decision: p.decision,
+      ...(p.recurringObjective ? { recurringObjective: p.recurringObjective } : {}),
       actions: p.actions ?? [],
       ...(p.previous ? { previousDefinition: workflowDefinition(p.previous), revisionTaskId: p.previous.id } : {}),
       taskId: row.task_id, batchId: row.batch_id, path: `/#/tc/tasks/plans/${row.id}`,
@@ -160,8 +164,8 @@ export class TaskCreator {
       if (digest(selected) !== p.rosterHash) throw new Error('参与 Agent 的能力或配置已变化，需创建并审查新计划')
       if (p.decision === 'revise') {
         const definition = workflowDefinition(p.task)
-        const turn: TaskTurn = { objective: `${p.task.brief}\n\n[THIS EXECUTION — USER REQUEST]\n${p.input.text}`, participants: p.task.participants,
-          userRequest: p.input.text, workflow: { id: digest(definition), definition }, ...(p.cwd ? { cwd: p.cwd } : {}), targets: p.targets,
+        const turn: TaskTurn = { objective: p.recurringObjective ?? `${p.task.brief}\n\n[THIS EXECUTION — USER REQUEST]\n${p.input.text}`, participants: p.task.participants,
+          userRequest: p.recurringObjective ?? p.input.text, workflow: { id: digest(definition), definition }, ...(p.cwd ? { cwd: p.cwd } : {}), targets: p.targets,
           origin: { source: 'task-chat', signalId: p.input.requestId, intakeSessionId: p.input.sessionId, decision: 'reuse', reason: p.reason, reviewPlanId: id } }
         const revised = { ...p.task, enabled: false, origin: { ...p.task.origin, reviewPlanId: id } }
         await this.runner.store.reviseReviewedTask(p.previous, revised, id, () => {
@@ -185,8 +189,8 @@ export class TaskCreator {
       if (!store.tasks.has(p.task.id)) await store.append({ t: 'task/created', at: new Date().toISOString(), taskId: p.task.id, task: { ...p.task, ...(p.task.trigger.kind === 'cron' ? { enabled: false } : {}), origin: { ...p.task.origin, reviewPlanId: id } } })
       if (p.actions?.length && this.actions.read(p.task.id).revision === '0') this.actions.save(p.task.id, p.actions, '0')
       const definition = workflowDefinition(p.task)
-      const turn: TaskTurn = { objective: `${p.task.brief}\n\n[THIS EXECUTION — USER REQUEST]\n${p.input.text}`, participants: p.task.participants,
-        userRequest: p.input.text, workflow: { id: digest(definition), definition }, ...(p.cwd ? { cwd: p.cwd } : {}), targets: p.targets,
+      const turn: TaskTurn = { objective: p.recurringObjective ?? `${p.task.brief}\n\n[THIS EXECUTION — USER REQUEST]\n${p.input.text}`, participants: p.task.participants,
+        userRequest: p.recurringObjective ?? p.input.text, workflow: { id: digest(definition), definition }, ...(p.cwd ? { cwd: p.cwd } : {}), targets: p.targets,
         origin: { source: 'task-chat', signalId: p.input.requestId, intakeSessionId: p.input.sessionId, decision: p.decision, reason: p.reason, reviewPlanId: id } }
       if (p.task.trigger.kind === 'cron') {
         db.prepare(`INSERT INTO dsh_schedule_bindings VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET plan_id=excluded.plan_id,turn_json=excluded.turn_json,roster_hash=excluded.roster_hash`).run(p.task.id, id, JSON.stringify(turn), p.rosterHash)
@@ -298,6 +302,8 @@ export class TaskCreator {
         if (proposal.recipe) task.workflowRecipe = { ...proposal.recipe }
       }
       if (task.trigger.kind === 'cron' && leases.length) throw new Error('定时任务不能保存或复用首次登录密码；请先完成金库接入')
+      if (proposal.recurringObjective !== undefined && (!stageOnly || proposal.decision === 'reuse' || task.trigger.kind !== 'cron' || typeof proposal.recurringObjective !== 'string' || proposal.recurringObjective.trim().length < 2 || proposal.recurringObjective.length > 32000))
+        throw Error('定时业务目标仅允许在 create/revise 待审查计划中提供2至32000字符；复用不能改写')
       if (task.participants.length > 8 || task.participants.some(p => !ids.has(p.agentId))) throw new Error('工作流角色已失效或超出 8 位参与者上限')
       if (proposal.design) {
         if (proposal.decision === 'reuse' && JSON.stringify(validateDesign(proposal.design)) !== JSON.stringify(task.design)) throw new Error('复用不能改写决策设计；请创建新的待审查计划')
@@ -348,6 +354,9 @@ export class TaskCreator {
       if (stageOnly) {
         const planId = `P-chat-${digest([input.requestId, hash]).slice(0, 20)}`, db = this.plansDb()
         const payload = JSON.stringify({ task, input: { ...input, text: scrub(input.text) }, cwd, batchId,
+          // Preserve the design request for audit, not as a recurring worker command.
+          // Persist this choice before review; older plans retain their original input.
+          ...(proposal.recurringObjective ? { recurringObjective: proposal.recurringObjective.trim() } : {}),
           ...(previous ? { previous } : {}),
           ...(actions ? { actions } : {}),
           decision: proposal.decision, reason: proposal.reason, targets: ips.map(ip => ({ kind: 'fleet-node', id: ip })),

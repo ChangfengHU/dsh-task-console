@@ -1,5 +1,42 @@
 # Structured Creator plans and independent review
 
+## 2026-09-15 — patrol follow-up, receipt liveness and reviewed continuation
+
+User approved resolving Task blocks, readable WeCom resend and Fleet processing
+visibility. Changes remain local to cards, follow-up and execution contracts; no
+developer SSH/node/browser mutation. Version0.30.25 was built and reloaded only
+after both native active sessions and canonical running Runs were zero.
+
+Fixed narrow fixed-width cards/overflowing controls; public Chrome1440/1920/1366/390
+showed no horizontal overflow and card scrollWidth=clientWidth. Fleet read-through
+shows13 per-browser processing entries, two unresolved, notification stage/time and
+execution links. Mobile390 expanded details survive refresh. No page errors.
+The execution deep link rendered its actual16 nodes/14 links at50.4s cold; initial
+tests waited for obsolete selectors, then corrected to the real `.dtc-dbdag`.
+The route works, but cold startup remains slow; this is not a performance fix.
+
+Original Batch b-cron-b652339403d05161e4a01b7e resumed its existing executor/reviewer
+cards through official APIs. Browser verification53cedf6da6b25d7be8d9738cec0aa1a1
+was already terminal unknown/verification-timeout, not still running or logged in.
+Reviewer later truncated a proxy operation ID; same-card exact IDs and local-terminal
+reconciliation now guide original receipt reads without re-running a mutation.
+All roles subsequently ended; Batch is honestly unresolved. Started/blocked/resend/
+findings/rework/unresolved notifications all have sent receipts. Explicit resend
+f9d9cb7032e14949e83899a1 was confirmed to one reviewed group at11:54:02 Beijing.
+
+Original two signed-out targets remain84/browser2 and188/browser1 at this checkpoint;
+three confirmed imports each remain in history. New optional resumeAfterCopyLimit=1
+is separately reviewed, one per open issue, original authorized account only, no
+extra import/rebuild or challenge bypass. Full301 DSH tests passed with native
+DSH_INSTALL_ROOT and zero skips; build passed. Browser MCP112 tests passed.
+
+Creator session agent-task-create-agent-mu25ngup is revising the same paused Task.
+First plan P-chat-207ac659ac1e0715e1c3 was rejected: its natural-language ban on
+unresolved schedule activation contradicted completed-patrol. New recurringObjective
+is explicitly reviewed separately from Creator instructions; omitted fields preserve
+old restrictions rather than silently dropping original user constraints. Schedule
+must be restored after reviewed manual trial; no claim of login recovery yet.
+
 ## Reviewed legacy login-observation repair — real Agent completion
 
 Creator agent-task-create-agent-mttv8vzp generated plan

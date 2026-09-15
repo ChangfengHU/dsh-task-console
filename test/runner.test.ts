@@ -214,6 +214,28 @@ test('delegated notifications are real idempotent side cards with frozen reports
   assert.equal(store.kernel.getTask(first.cardId)?.max_runtime_seconds,300)
 })
 
+test('a genuine blocked role queues an independent notifier without waiting for the blocked dependency', async()=>{
+  let outbox: TaskNotifications, storeRef: EventStore
+  const design:any={evidenceContract:'browser-patrol-v2',failurePolicy:{maxAttempts:3},notifications:{agentId:'notifier',chatIds:['fixture']}}
+  const {host,runner,store}=await setup({graphMode:'dynamic-rounds',design},{
+    afterBlock:async input=>{await storeRef.createNotification(input.task,input.batch,input.card,'blocked',{ready:false,summary:'操作受阻，尚未恢复',items:[]})},
+    notify:async(input,stage)=>outbox.send(input,stage as any,{},async()=>({sent:1})),
+  })
+  storeRef=store;outbox=new TaskNotifications(store)
+  const batch=await runner.fire('T','manual'),planner=[...host.sessions.keys()].at(-1)!
+  host.consumeFirst(planner)
+  await host.callTool(planner,'task_block',{reason:'real external blocker',kind:'capability'})
+  host.endTurn(planner);await tick()
+  const source=store.s.cards.get(batch.cardIds[0])!,notice=[...store.s.cards.values()].find(c=>c.role==='notifier')!
+  assert.equal(source.status,'blocked');assert.ok(notice);assert.deepEqual(notice.deps,[])
+  assert.equal(store.kernel.db.prepare('SELECT COUNT(*) n FROM task_links WHERE child_id=?').get(notice.id).n,0)
+  const again=await store.createNotification(store.tasks.get('T')!,batch,source,'blocked',{})
+  assert.equal(again,notice.id);assert.equal([...store.s.cards.values()].filter(c=>c.role==='notifier').length,1)
+  const session=[...store.s.runs.values()].find(r=>r.cardId===notice.id)!.sessionId
+  host.consumeFirst(session);const receipt=await host.callTool(session,'task_notify',{stage:'blocked'})
+  assert.equal(receipt.notifications[0].state,'sent');assert.equal(source.status,'blocked')
+})
+
 test('a failed notification branch does not cancel browser work', async()=>{
   const {host,runner,store}=await setup({graphMode:'dynamic-rounds',onFail:'stop',design:{failurePolicy:{maxAttempts:3},notifications:{agentId:'notifier',chatIds:['fixture']}} as any})
   const batch=await runner.fire('T','manual'), plannerSession=[...host.sessions.keys()].at(-1)!
@@ -380,7 +402,7 @@ test('Creator recurring approval only schedules; frozen turn is checked again at
   const creator = new TaskCreator(runner, async () => [{ id: 'a', name: 'a', profileHash: hash } as any])
   const design = { scope: 'Read fixture', branches: [{ id: 'check', when: 'due', action: 'read', evidence: 'fixture' }], coordination: 'serial', failurePolicy: { isolateItems: true, maxAttempts: 2, stopConditions: ['missing capability'] }, acceptance: ['verified fixture'] }
   try {
-    const plan = await creator.prepare({ decision: 'create', reason: 'hourly fixture', title: 'Hourly', brief: 'Check current fixture only', participants: [{ agentId: 'a' }], trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' }, design }, { agent: { session: { id: 'schedule-creator', deriveMessages: () => [{ role: 'user', content: 'Check the fixture hourly' }] } } }, root) as any
+    const plan = await creator.prepare({ decision: 'create', reason: 'hourly fixture', title: 'Hourly', brief: 'Check current fixture only', recurringObjective: 'Check current fixture only', participants: [{ agentId: 'a' }], trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' }, design }, { agent: { session: { id: 'schedule-creator', deriveMessages: () => [{ role: 'user', content: 'Check the fixture hourly' }] } } }, root) as any
     assert.equal(plan.definition.trigger.kind, 'cron'); assert.equal(host.sessions.size, 0)
     const approved = await creator.review(plan.id, plan.hash, 'approve', 'fixture-only recurring scope approved')
     assert.equal(approved.state, 'awaiting_trial'); assert.equal(approved.batchId, null)
@@ -390,6 +412,10 @@ test('Creator recurring approval only schedules; frozen turn is checked again at
     assert.equal(runner.schedule.claim(task, Date.now() + 3600000), undefined)
     await assert.rejects(creator.assertScheduleActivation(task), /先对当前已审查计划手动执行/)
     const turn = await creator.scheduledTurn(task, 'scheduled-occurrence')
+    assert.equal(plan.recurringObjective, task.brief)
+    assert.equal(turn?.objective, task.brief)
+    assert.equal(turn?.userRequest, task.brief)
+    assert.equal(creator.plan(plan.id).request, 'Check the fixture hourly')
     assert.equal(turn?.origin?.reviewPlanId, plan.id)
     assert.equal(turn?.origin?.signalId, 'scheduled-occurrence')
     const batch = await runner.fire(task.id, 'manual', { turn })
@@ -627,7 +653,7 @@ test('Creator revises the same paused Task by review without executing or rewrit
   const original = store.tasks.get(first.taskId)!, oldBatch = JSON.stringify(store.s.batches.get(batch.id))
   const raw = store.kernel.db.prepare('SELECT * FROM task_runs').all()
   const revision = { decision: 'revise' as const, taskId: original.id, reason: 'review changed scope', title: 'Updated',
-    brief: 'Inspect the fixture with a stronger prerequisite', design: { ...design, acceptance: [...design.acceptance, 'prerequisite checked'] } }
+    brief: 'Inspect the fixture with a stronger prerequisite', recurringObjective: 'Inspect the fixture with a stronger prerequisite', design: { ...design, acceptance: [...design.acceptance, 'prerequisite checked'] } }
   const p: any = await creator.prepare(revision, input('revision-new'), root)
   const competing: any = await creator.prepare({ ...revision, title: 'Competing' }, input('revision-competing'), root)
   assert.equal(p.revisionTaskId, original.id); assert.equal(p.previousDefinition.title, 'Original')
@@ -647,6 +673,10 @@ test('Creator revises the same paused Task by review without executing or rewrit
   await assert.rejects(creator.assertScheduleActivation(store.tasks.get(original.id)!), /先对当前已审查计划/)
   const next = await creator.scheduledTurn(store.tasks.get(original.id)!, 'next-fixture')
   assert.equal(next?.workflow?.definition.title, 'Updated')
+  assert.equal(next?.objective, revision.brief)
+  assert.equal(next?.userRequest, revision.brief)
+  assert.equal(updated.recurringObjective, revision.brief)
+  assert.equal(updated.request, 'Inspect the fixture; preserve history')
   runner.stop(); const restored = new EventStore(store.root); await restored.load()
   assert.equal(restored.tasks.get(original.id)?.title, 'Updated')
   assert.equal(JSON.stringify(restored.s.batches.get(batch.id)), oldBatch)

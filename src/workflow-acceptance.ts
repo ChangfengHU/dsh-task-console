@@ -52,6 +52,10 @@ export async function validateWorkflowBlock(input: CompletionCheck, deps: JobDep
   const now = (deps.now || Date.now)()
   const active = jobs.find(j => j.args?.sessionId === input.sessionId && j.phase === 'running' && now - Date.parse(j.updatedAt) < 360000)
   if (active) throw new Error(`操作 ${active.id} 仍为 running，尚未失败。继续调用 browser_status 到 complete/blocked/interrupted；不能因等待一分钟或公开状态 pending 而 task_block。`)
+  const requested = input.metadata?.requestedBlock as {reason?:string;kind?:string} | undefined
+  const finished = jobs.find(j => j.args?.sessionId === input.sessionId && j.phase === 'complete' && /^[a-f0-9]{32}$/.test(j.id || '') && requested?.reason?.includes(j.id))
+  if (finished && requested?.kind === 'transient' && /running|仍在运行|持续运行|未得到.*终态/.test(requested.reason || ''))
+    throw new Error(`原操作 ${finished.id} 已结束为 complete，不能按旧的 running 回执阻塞。读取原 browser_status 终态，然后按真实证据交接；不要重复发起验证或复制。`)
   // The job can finish between the model's last poll and its block call. Use
   // that receipt's actual reason instead of persisting a stale "still running".
   const latest = jobs.filter(j => j.args?.sessionId === input.sessionId && now - Date.parse(j.updatedAt) < 360000)

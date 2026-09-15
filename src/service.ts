@@ -40,6 +40,7 @@ import { browserPatrolEvidence } from './browser-patrol-evidence.ts'
 import { BrowserPatrolWorkflow } from './browser-patrol-workflow.ts'
 import { ProxyWorkflow, proxyRequestId } from './proxy-workflow.ts'
 import { TaskNotifications, type NotificationStage } from './task-notifications.ts'
+import { patrolFollowup } from './patrol-followup.ts'
 import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation, browserOperationOutcome } from './workflow-acceptance.ts'
 import type { Artifact, Card } from './tasks.ts'
 import type { ArtifactView, BoardView } from './wire.ts'
@@ -65,6 +66,11 @@ export class TaskConsoleService extends TypertRemoteService {
   private readonly ready: Promise<void>
   private headerCache?: { at: number; value: AgentSessionHeader[] }
   private headerRead?: Promise<AgentSessionHeader[]>
+
+  async patrolFollowup(): Promise<ReturnType<typeof patrolFollowup>> {
+    await this.ready
+    return patrolFollowup(this.runner.store.kernel.db)
+  }
 
   constructor(ctx: Context) {
     super(ctx, NAMESPACE)
@@ -99,7 +105,12 @@ export class TaskConsoleService extends TypertRemoteService {
         if (report?.failure) return { reason: report.failure, kind: 'capability' }
       },
       pendingOperation: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? await pendingBrowserOperation(input),
-      operationOutcome: async input => input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input),
+      afterBlock: async input => {
+        if (input.task.design?.evidenceContract !== 'browser-patrol-v2' || !input.task.design.notifications?.agentId || input.card.role === 'notifier') return
+        const report=(await this.patrolWorkflow(input)).snapshot(input)
+        await this.runner.store.createNotification(input.task,input.batch,input.card,'blocked',report)
+      },
+      operationOutcome: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? (input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input)),
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
       beforePlanRound: async (input, items, proxyItems) => {
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2') return

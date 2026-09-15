@@ -109,7 +109,10 @@ export class ProxyWorkflow {
     if(raw==='proxy_status'){
       if(typeof args.operationId!=='string'||!args.operationId.trim())throw Error('proxy-status-operation-id-required: parse the original MCP text/content result and pass its operationId; do not repeat a verify/repair or poll without an ID')
       const row=db.prepare('SELECT * FROM dsh_proxy_calls WHERE operation_id=? AND spec_id=? AND card_id=?').get(args.operationId,input.task.id,input.card.id) as any
-      if(!row)throw Error('proxy-operation-not-owned-by-session')
+      if(!row){
+        const own=db.prepare('SELECT operation_id AS operationId,ip,action,state FROM dsh_proxy_calls WHERE spec_id=? AND card_id=? AND operation_id IS NOT NULL ORDER BY created_at DESC LIMIT 8').all(input.task.id,input.card.id)
+        throw Error('proxy-operation-not-owned-by-session: 输入 ID 与本角色记录不匹配；不要手抄缩短 ID，不代表缺少权限。先 task_patrol_status 核对，原样查询自己的记录：'+JSON.stringify(own))
+      }
       const value=await invoke(args);this.observe(input,row,decoded(value));return value
     }
     if(!['proxy_verify','proxy_repair'].includes(raw))throw Error('proxy-tool-unsupported')
@@ -167,13 +170,15 @@ export class ProxyWorkflow {
   /** Read local operation ownership only; never SSH/poll the remote from the host. */
   pending(input:CompletionCheck){
     if(!input.task.design?.proxy)return undefined
-    const rows=this.db().prepare("SELECT operation_id FROM dsh_proxy_calls WHERE session_id=? AND state='running'").all(input.sessionId) as any[]
+    const rows=this.db().prepare("SELECT operation_id,ip FROM dsh_proxy_calls WHERE spec_id=? AND card_id=? AND state='running'").all(input.task.id,input.card.id) as any[]
     if(!rows.length)return undefined
     let local:Database.Database|undefined
     try{
       local=new Database(join(process.env.DSH_PROXY_STATE_DIR??join(homedir(),'.local/state/dsh-proxy'),'proxy.db'),{readonly:true,fileMustExist:true})
       for(const row of rows){const operation=local.prepare('SELECT state,updated_at FROM proxy_operations WHERE id=?').get(row.operation_id) as any
-        if(operation?.state==='running'&&Date.now()-Date.parse(operation.updated_at)<180_000)return '代理操作仍运行；查询同一个 proxy_status，不能提前结束或换编号重试'}
+        if(operation?.state==='running'&&Date.now()-Date.parse(operation.updated_at)<180_000)return '代理操作仍运行；查询同一个 proxy_status，不能提前结束或换编号重试'
+        if(operation&&['succeeded','blocked'].includes(operation.state))return '原代理操作已在本地结束，Task 尚未读取终态；调用 proxy_status，原样使用 '+JSON.stringify({ip:row.ip,operationId:row.operation_id})+'。不要漏字、重复 verify 或按旧 running 阻塞。'
+      }
     }catch{/* Missing local state cannot be proof of a completed proxy operation. */}finally{local?.close()}
     return undefined
   }

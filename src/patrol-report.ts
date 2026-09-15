@@ -17,6 +17,13 @@ export function patrolItemView(row: any) {
   if (row.accepted) return { kind: 'passed', state, freshness, verdict: row.observation ? '本轮稳定性验收通过' : '本轮检查通过',
     reason: freshness === 'expired' ? '检查事实保留，实时证据待刷新' : '已有本轮独立检查证据',
     next: freshness === 'expired' ? '无需因过期修复；下轮巡查刷新实时状态' : '健康登录复用，不重复复制' }
+  if (row.state === 'signed_out' && !row.verificationFailure && row.repairExhausted) return {
+    kind: 'signed_out', state, freshness, verdict: '已处理，未解决',
+    reason: row.loginDelivery?.mutation === 'imported'
+      ? `已尝试修复 ${row.attempts} 次；最近一次已导入登录资料，但验证仍要求登录`
+      : `已尝试修复 ${row.attempts} 次，仍未登录`,
+    next: row.canResume ? '复制预算已用完；已有确认导入，可按已审查的一次续接预算诊断原账号，不能再次复制或静默换号' : '已达累计修复上限，暂停自动重试；需排查失败原因后再决定下一步，不能重复复制或清空次数',
+  }
   const [kind, reason, next] = reasons[row.reason] ?? (row.state === 'signed_out' ? reasons['signed-out'] : ['unknown', '证据不足，尚不能验收', '根据真实工具回执继续核查'])
   return { kind, state, freshness, verdict: kind === 'refresh' ? '待复验（非登录失败）' : reason, reason, next }
 }

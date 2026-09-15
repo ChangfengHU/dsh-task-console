@@ -357,22 +357,24 @@ export class EventStore {
   /** A durable side branch: notification failure never becomes a repair dependency. */
   async createNotification(task: TaskSpec, batch: Batch, planner: Card, stage: string, report: unknown): Promise<string> {
     const agentId = task.design?.notifications?.agentId
-    if (!agentId || planner.role !== 'planner' || !planner.round) throw new Error('没有已审查的通知员配置')
-    const id = `${batch.id}#n${planner.round}-${stage}`
+    const blockedNotice = stage === 'blocked' && planner.role !== 'notifier'
+    if (!agentId || (!blockedNotice && planner.role !== 'planner') || !planner.round) throw new Error('没有已审查的通知员配置')
+    const id = `${batch.id}#n${planner.round}-${stage}${blockedNotice ? '-'+planner.index : ''}`
     await this.transition(() => {
       const db = this.kernel.db
-      if (this.kernel.getTask(planner.id)?.status !== 'running' || this.state.batches.get(batch.id)?.settled) throw new Error('规划者已不在运行中')
+      if (this.kernel.getTask(planner.id)?.status !== (blockedNotice ? 'blocked' : 'running') || this.state.batches.get(batch.id)?.settled) throw new Error('通知来源状态已变化')
       if (this.kernel.getTask(id)) return undefined
       const at = new Date().toISOString(), epoch = toEpoch(at)
       const position = (db.prepare('SELECT COALESCE(MAX(position),-1)+1 AS n FROM dsh_card_bindings WHERE batch_id=?').get(batch.id) as {n:number}).n
       const brief = `只负责 ${stage} 阶段企微通知；先 task_patrol_status 读取冻结交接，再 task_notify(stage="${stage}")，按真实回执 task_complete。`
-      const card = { id, agentId, kind: 'agent' as const, role: 'notifier' as const, round: planner.round, deps: [planner.id], brief }
+      const parents = blockedNotice ? [] : [planner.id]
+      const card = { id, agentId, kind: 'agent' as const, role: 'notifier' as const, round: planner.round, deps: parents, brief }
       db.prepare('INSERT INTO dsh_card_bindings(card_id,spec_id,batch_id,position,brief) VALUES (?,?,?,?,?)').run(id,task.id,batch.id,position,brief)
       db.prepare(`INSERT INTO tasks(id,title,body,assignee,status,priority,created_by,created_at,workspace_kind,workspace_path,tenant,max_runtime_seconds,max_retries,node_kind,round,role)
         VALUES (?,?,?,?,'todo',?,'dsh-task-console',?,'dir',?,?,300,1,'agent',?,'notifier')`).run(id,`企微通知 · ${stage}`,brief,agentId,-position,epoch,task.cwd,batch.id,planner.round)
-      db.prepare("INSERT INTO task_links(parent_id,child_id,kind,created_at) VALUES (?,?,'dependency',?)").run(planner.id,id,epoch)
-      this.kernel.recordEvent(id,'created',{title:`企微通知 · ${stage}`,body:brief,assignee:agentId,status:'todo',parents:[planner.id],tenant:batch.id,node_kind:'agent',round:planner.round,role:'notifier',created_at:epoch})
-      this.kernel.recordEvent(id,'linked',{parent_id:planner.id,kind:'dependency'})
+      if (!blockedNotice) db.prepare("INSERT INTO task_links(parent_id,child_id,kind,created_at) VALUES (?,?,'dependency',?)").run(planner.id,id,epoch)
+      this.kernel.recordEvent(id,'created',{title:`企微通知 · ${stage}`,body:brief,assignee:agentId,status:'todo',parents,tenant:batch.id,node_kind:'agent',round:planner.round,role:'notifier',created_at:epoch})
+      if (!blockedNotice) this.kernel.recordEvent(id,'linked',{parent_id:planner.id,kind:'dependency'})
       this.kernel.recordEvent(id,'notification_requested',{source_card_id:planner.id,stage,report})
       return { t: 'card/created' as const, at, taskId:task.id, batchId:batch.id, card }
     }, event => event)

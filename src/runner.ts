@@ -56,6 +56,7 @@ export interface RunnerOptions {
   onSessionCreated?: (sessionId: string) => void | Promise<void>
   beforeComplete?: (input: CompletionCheck) => CompletionDecision | void | Promise<CompletionDecision | void>
   beforeBlock?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
+  afterBlock?: (input: CompletionCheck) => Promise<void>
   pendingOperation?: (input: CompletionCheck) => Promise<string | undefined>
   operationOutcome?: (input: CompletionCheck) => Promise<string | undefined>
   scheduledTurn?: (task: TaskSpec, occurrenceId: string) => Promise<TaskTurn | undefined>
@@ -91,6 +92,7 @@ export class TaskRunner {
   private readonly onSessionCreated?: (sessionId: string) => void | Promise<void>
   private readonly beforeComplete?: RunnerOptions['beforeComplete']
   private readonly beforeBlock?: RunnerOptions['beforeBlock']
+  private readonly afterBlock?: RunnerOptions['afterBlock']
   private readonly pendingOperation?: RunnerOptions['pendingOperation']
   private readonly operationOutcome?: RunnerOptions['operationOutcome']
   private readonly scheduledTurn?: RunnerOptions['scheduledTurn']
@@ -106,6 +108,7 @@ export class TaskRunner {
     this.onSessionCreated = opts.onSessionCreated
     this.beforeComplete = opts.beforeComplete
     this.beforeBlock = opts.beforeBlock
+    this.afterBlock = opts.afterBlock
     this.pendingOperation = opts.pendingOperation
     this.operationOutcome = opts.operationOutcome
     this.scheduledTurn = opts.scheduledTurn
@@ -381,7 +384,8 @@ export class TaskRunner {
     card.deps.forEach(collect)
     for (const d of [...prior.values()].sort((a, b) => a.index - b.index)) upstream.push({ agentName: await this.displayName(d.agentId), summary: d.summary ?? '' })
     const previousWait = this.store.kernel.db.prepare('SELECT reason,wake_at FROM dsh_task_wakeups WHERE card_id=?').get(card.id) as any
-    const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}${previousWait ? `\n[RESUMED DURABLE WAIT]\nDue: ${new Date(previousWait.wake_at).toISOString()}\n${previousWait.reason}\nContinue verification; do not repeat completed side effects.` : ''}`
+    const resumeFacts = card.runIds.length ? await this.operationOutcome?.({task,batch,card,sessionId,profileId}) : undefined
+    const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}${resumeFacts ? '\n[RESUME FACTS]\n'+resumeFacts : ''}${previousWait ? `\n[RESUMED DURABLE WAIT]\nDue: ${new Date(previousWait.wake_at).toISOString()}\n${previousWait.reason}\nContinue verification; do not repeat completed side effects.` : ''}`
     const messageId = randomUUID()
     const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview)
     if (!claim) return
@@ -464,7 +468,7 @@ export class TaskRunner {
               flight.terminal = {kind:'completed',summary:`通知未完成：${reason}`,metadata:{workflowOutcome:'unresolved',notificationBlocked:true}}
               return
             }
-            const observed = await this.beforeBlock?.({ task, batch, card, sessionId, profileId })
+            const observed = await this.beforeBlock?.({ task, batch, card, sessionId, profileId, metadata:{requestedBlock:{reason,kind}} })
             flight.terminal = { kind: 'blocked', reason: observed?.reason ?? reason, blockKind: observed?.kind ?? kind }
           },
           planRound: async (summary, items, proxyItems) => {
@@ -700,6 +704,11 @@ export class TaskRunner {
       changed => changed ? { t: 'run/blocked', at: this.now(), taskId: f.taskId, runId: f.runId, kind, reason, terminal: true } : undefined,
     )
     if (!ok) console.warn(`[task-console] stale block refused: ${f.cardId} core run ${f.coreRunId}`)
+    if (ok && this.afterBlock) {
+      const card=this.store.s.cards.get(f.cardId)!,batch=this.store.s.batches.get(card.batchId)!,base=this.store.tasks.get(f.taskId)!
+      try { await this.afterBlock({task:taskForBatch(base,batch),batch,card,sessionId:f.sessionId,profileId:f.profileId}) }
+      catch { console.warn('[task-console] blocked notification could not be queued; original block retained') }
+    }
     await this.tick()
   }
 

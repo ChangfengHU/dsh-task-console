@@ -3,8 +3,27 @@ import type { EventStore } from './tasks.ts'
 import type { CompletionCheck } from './runner.ts'
 import { patrolItemView } from './patrol-report.ts'
 
-export type NotificationStage = 'started' | 'findings' | 'rework' | 'restored' | 'unresolved'
-const labels = { started: '开始巡查', findings: '巡查发现', rework: '继续返工', restored: '独立验收通过', unresolved: '仍有未解决项' }
+export type NotificationStage = 'started' | 'findings' | 'rework' | 'restored' | 'unresolved' | 'blocked'
+const labels = { started: '开始巡查', findings: '巡查发现', rework: '继续返工', restored: '独立验收通过', unresolved: '仍有未解决项', blocked:'巡查处理受阻' }
+
+export function patrolNotificationMarkdown(stage: NotificationStage, report: any, taskId: string, batchId: string, id: string) {
+  const problems = (report.items ?? []).filter((r: any) => !r.accepted)
+  const lines = [`## 浏览器巡查 · ${labels[stage]}`, report.summary || report.reason]
+  if (stage === 'blocked') lines.push('本轮尚未完成，后台操作或角色交接受阻；不是等待结束就会自动修复。请查看对应执行记录。')
+  if (stage !== 'started') for (const row of problems) {
+    const view = patrolItemView(row)
+    lines.push(`\n**${row.ip} / browser-${row.instance}：${view.verdict}**`,
+      `检测结果：${view.state}。`, `处理情况：${view.reason}。`, `下一步：${view.next}。`)
+  }
+  for (const row of report.uncovered ?? []) lines.push(`- ${row.nodeId}：无法检查，不能当作浏览器已登录。`)
+  if (report.items?.length && !problems.length && stage !== 'started') lines.push('本轮已观测浏览器均通过独立验收；这不代表永久不会掉线。')
+  const expired = (report.items ?? []).filter((r: any) => r.accepted && r.freshness === 'expired')
+  if (expired.length) lines.push(`${expired.length} 个浏览器检查时已登录；实时证据待刷新，不等于登录失效。`)
+  const origin = process.env.DSH_PUBLIC_ORIGIN
+  if (origin && /^https:\/\/[^/?#]+$/.test(origin)) lines.push(`\n[查看本次执行报告](${origin}/#/tc/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(batchId)}/report)`)
+  lines.push(`Task：${taskId}`, `执行：${batchId}`, `通知编号：${id}`)
+  return lines.filter(Boolean).join('\n')
+}
 
 /** Durable, recipient-pinned outbox. Delegated cards reuse the same MCP transport. */
 export class TaskNotifications {
@@ -24,6 +43,7 @@ export class TaskNotifications {
   }
 
   async request(input: CompletionCheck, stage: NotificationStage, report: any) {
+    if (stage === 'blocked') throw new Error('受阻通知由宿主根据实际阻塞事件生成')
     if (stage === 'rework' && report.ready) throw new Error('本次已独立验收通过，不能发送返工通知；使用 restored 并收口')
     if (input.card.role !== 'planner' || !Object.hasOwn(labels,stage)) throw new Error('只有规划者可交接通知')
     if (stage === 'rework' && input.task.design && (input.card.round ?? 0) > input.task.design.failurePolicy.maxAttempts)
@@ -52,10 +72,8 @@ export class TaskNotifications {
     if (!Object.hasOwn(labels,stage) || stage === 'restored' && !report.ready || stage === 'unresolved' && report.ready) throw new Error('通知阶段与真实验收结果不一致')
     const db = this.store.kernel.db, results: any[] = []
     for (const chatId of config.chatIds) {
-      const id = createHash('sha256').update(JSON.stringify([input.batch.id, input.card.round, stage, chatId])).digest('hex').slice(0, 24)
-      const markdown = [`## 浏览器巡查 · ${labels[stage]}`, `Task: ${input.task.id}`, `执行: ${input.batch.id} · 第 ${input.card.round} 轮`,
-        report.summary || report.reason, ...(report.items ?? []).map((r: any) => { const view = patrolItemView(r); return `- ${r.ip}/browser-${r.instance}: ${view.state}；${view.verdict}；${view.reason}；修复尝试 ${r.attempts}；下一步：${view.next}` }),
-        ...(report.uncovered ?? []).map((r: any) => `- ${r.nodeId}: 无法确认覆盖`), `通知编号: ${id}`].filter(Boolean).join('\n')
+      const id = createHash('sha256').update(JSON.stringify([input.batch.id, input.card.round, stage, chatId, ...(stage==='blocked'?[input.card.id]:[])])).digest('hex').slice(0, 24)
+      const markdown = patrolNotificationMarkdown(stage,report,input.task.id,input.batch.id,id)
       db.prepare("INSERT OR IGNORE INTO dsh_task_notifications VALUES (?,?,?,?,?,?,?,'pending',0,?,NULL,?)").run(id,input.task.id,input.batch.id,input.card.id,stage,chatId,markdown,Date.now(),input.sessionId)
       const claim = this.store.kernel.write(() => {
         const row = db.prepare('SELECT * FROM dsh_task_notifications WHERE id=?').get(id) as any

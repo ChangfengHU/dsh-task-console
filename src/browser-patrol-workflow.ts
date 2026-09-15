@@ -60,6 +60,9 @@ export class BrowserPatrolWorkflow {
       if (keys.has(key) || !browser || !node.readAuthorized || input.task.design.browserPatrol?.excludedNodeIds?.includes(node.nodeId) || !['verify', 'provision', 'resume', 'recover'].includes(row.action) || typeof row.reason !== 'string' || !row.reason.trim() || row.reason.length > 1000) throw new Error('轮次目标/动作不在本次真实可读清单，或缺少决策理由')
       if (row.action !== 'verify' && (!browser.loginAuthorized || !input.task.design.browserPatrol!.actions.includes(row.action))) throw new Error('本计划没有该目标的登录修复授权')
       if (row.action !== 'verify') {
+        const budget=this.status(input).items.find(r=>r.ip===row.ip&&r.instance===row.instance)
+        if(input.task.design.browserPatrol?.resumeAfterCopyLimit===1&&row.action==='resume'&&!budget?.canResume)throw Error('正常续接需要新鲜未登录证据、同故障已确认导入及剩余一次续接预算；不能换号或绕过挑战')
+        if(row.action==='provision'&&budget?.canResume)throw Error('已有导入但仍未登录，先按原账号安排一次正常 resume 诊断；不能用重复复制替代续接')
         const latest = db.prepare('SELECT state,checked_at,expires_at FROM dsh_patrol_observations WHERE batch_id=? AND target_key=? ORDER BY checked_at DESC LIMIT 1').get(input.batch.id, key) as any
         const unavailable = db.prepare("SELECT json_extract(payload,'$.at') at FROM task_events WHERE graph_id=? AND kind='patrol_verification_unavailable' AND json_extract(payload,'$.key')=? ORDER BY at DESC LIMIT 1").get(input.batch.id,key) as any
         if (row.action === 'recover') {
@@ -107,11 +110,13 @@ export class BrowserPatrolWorkflow {
       const notStarted = issue ? (db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations o JOIN dsh_browser_operation_outcomes r ON r.operation_id=o.operation_id WHERE o.issue_id=? AND r.mutation='not_started'").get(issue.id) as any).n : 0
       const preflightFailures = (db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id JOIN dsh_browser_operation_outcomes r ON r.operation_id=o.operation_id WHERE o.batch_id=? AND i.target_key=? AND r.mutation='not_started'").get(input.batch.id,key) as any).n
       const changedThisBatch = (db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id WHERE o.batch_id=? AND i.target_key=? AND NOT EXISTS (SELECT 1 FROM dsh_browser_operation_outcomes r WHERE r.operation_id=o.operation_id AND r.mutation='not_started')").get(input.batch.id,key) as any).n
-      const attempts = issue ? Math.max(0,issue.attempts-notStarted) : changedThisBatch
+      const resumeAttempts = issue ? (db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations WHERE issue_id=? AND action='login-resume'").get(issue.id) as any).n : 0
+      const totalAttempts = issue ? Math.max(0,issue.attempts-notStarted) : changedThisBatch
+      const attempts = Math.max(0,totalAttempts-(input.task.design.browserPatrol?.resumeAfterCopyLimit===1?resumeAttempts:0))
       const needsStability = attempts > 0 || changedThisBatch > 0
       // Closing an issue must not discard this Batch's repair/observation requirement.
       const lastChange = db.prepare("SELECT o.created_at FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id WHERE i.spec_id=? AND i.target_key=? AND (o.batch_id=? OR i.id=?) AND NOT EXISTS (SELECT 1 FROM dsh_browser_operation_outcomes r WHERE r.operation_id=o.operation_id AND r.mutation='not_started') ORDER BY o.created_at DESC LIMIT 1").get(input.task.id,key,input.batch.id,issue?.id ?? -1) as any
-      const delivery = db.prepare('SELECT r.mutation,r.reason,r.recorded_at,o.operation_id FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id JOIN dsh_browser_operation_outcomes r ON r.operation_id=o.operation_id WHERE o.batch_id=? AND i.target_key=? ORDER BY r.recorded_at DESC LIMIT 1').get(input.batch.id,key) as any
+      const delivery = db.prepare('SELECT r.mutation,r.reason,r.recorded_at,o.operation_id FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id JOIN dsh_browser_operation_outcomes r ON r.operation_id=o.operation_id WHERE i.spec_id=? AND i.target_key=? AND (o.batch_id=? OR i.id=?) ORDER BY r.recorded_at DESC LIMIT 1').get(input.task.id,key,input.batch.id,issue?.id ?? -1) as any
       // Any later negative/unknown result or identity change invalidates older review,
       // including executor receipts; a later executor success alone cannot restore it.
       const adverse = history.findLast(s => s.state !== 'verified' || s.fingerprint !== proof?.fingerprint)
@@ -122,6 +127,8 @@ export class BrowserPatrolWorkflow {
         (!adverse || Date.parse(s.checked_at) > Date.parse(adverse.checked_at))).map(s => [s.checked_at, s])).values()]
       const last = relevant.at(-1), first = relevant[0]
       const cfg = input.task.design!.browserPatrol!
+      const confirmedImport=issue&&db.prepare("SELECT o.operation_id FROM dsh_browser_operations o JOIN dsh_browser_operation_outcomes r ON r.operation_id=o.operation_id WHERE o.issue_id=? AND o.action='login-provision' AND r.mutation='imported' ORDER BY o.created_at DESC LIMIT 1").get(issue.id) as any
+      const canResume=cfg.resumeAfterCopyLimit===1&&cfg.actions.includes('resume')&&resumeAttempts<1&&!!confirmedImport&&proof?.state==='signed_out'&&Date.parse(proof.expires_at)>now&&(!failure||Date.parse(failure.at)<Date.parse(proof.checked_at))
       const stable = !needsStability || (relevant.length >= cfg.minSamples && Date.parse(last?.checked_at) - Date.parse(first?.checked_at) >= cfg.observationMinutes * 60_000)
       // Acceptance is this Batch's point-in-time evidence, not a promise that every
       // short-lived receipt stays fresh while downstream agents finish their work.
@@ -138,6 +145,9 @@ export class BrowserPatrolWorkflow {
         expiresAt: reference?.expires_at ?? null, lastChangeAt: lastChange?.created_at ?? null,
         verificationFailure: failure && !last ? failure : null,
         readAuthorized: node.readAuthorized, loginAuthorized: browser.loginAuthorized, attempts, preflightFailures,
+        totalAttempts,resumeAttempts,resumeLimit:cfg.resumeAfterCopyLimit??0,canResume,
+        repairLimit: input.task.design!.failurePolicy.maxAttempts,
+        repairExhausted: attempts >= input.task.design!.failurePolicy.maxAttempts,
         loginDelivery:delivery ? {operationId:delivery.operation_id,mutation:delivery.mutation,reason:delivery.reason,at:delivery.recorded_at} : null,
         independentlyObserved: samples.length,
         observation: needsStability ? { samples: relevant.length, requiredSamples: cfg.minSamples, minutes: cfg.observationMinutes, passed: stable, nextCheckAt, checkDue: !stable && (!nextCheckAt || Date.parse(nextCheckAt) <= now) } : null,
@@ -146,9 +156,9 @@ export class BrowserPatrolWorkflow {
     const uncovered = nodes.filter((n: any) => n.reachable !== true && !n.browsers.length).map((n: any) => ({ nodeId: n.nodeId, reason: 'unreachable-no-browser-observation' }))
     const plan = db.prepare('SELECT target_key,action,reason FROM dsh_patrol_round_items WHERE batch_id=? AND round=?').all(input.batch.id, input.card.round ?? 0)
     const pendingStability = items.filter(i => !i.accepted && i.readAuthorized && inventory.nodes.find((n: any) => n.ip === i.ip)?.reachable && i.state === 'verified' && !i.verificationFailure && i.observation && !i.observation.passed)
-    const canHandoffForRework = (input.card.round ?? 0) < input.task.design!.failurePolicy.maxAttempts && items.some(i => !i.accepted && i.readAuthorized && inventory.nodes.some((n: any) => n.ip === i.ip && n.reachable) && i.loginAuthorized && i.attempts < input.task.design!.failurePolicy.maxAttempts && i.preflightFailures < input.task.design!.failurePolicy.maxAttempts && (i.checkedAt && i.state !== 'verified' || i.verificationFailure))
+    const canHandoffForRework = (input.card.round ?? 0) < input.task.design!.failurePolicy.maxAttempts && items.some(i => !i.accepted && i.readAuthorized && inventory.nodes.some((n: any) => n.ip === i.ip && n.reachable) && i.loginAuthorized && (i.canResume||i.attempts < input.task.design!.failurePolicy.maxAttempts) && i.preflightFailures < input.task.design!.failurePolicy.maxAttempts && (i.checkedAt && i.state !== 'verified' || i.verificationFailure))
     const canCloseUnresolved = items.every(i => i.accepted || !i.readAuthorized || !inventory.nodes.find((n: any) => n.ip === i.ip)?.reachable || i.independentlyObserved > 0 && (
-      (input.card.round ?? 0) > input.task.design!.failurePolicy.maxAttempts || i.attempts >= input.task.design!.failurePolicy.maxAttempts || i.preflightFailures >= input.task.design!.failurePolicy.maxAttempts || i.state === 'unknown' && i.independentlyObserved >= 2
+      (input.card.round ?? 0) > input.task.design!.failurePolicy.maxAttempts || !i.canResume&&i.attempts >= input.task.design!.failurePolicy.maxAttempts || i.preflightFailures >= input.task.design!.failurePolicy.maxAttempts || i.state === 'unknown' && i.independentlyObserved >= 2
     )) && pendingStability.length === 0 && (items.length > 0 || uncovered.length > 0)
     const proxy=input.task.design?.proxy?new ProxyWorkflow(this.store).status(input):undefined
     const networkReady=!proxy||proxy.items.length>0&&proxy.items.every(row=>row.independent)

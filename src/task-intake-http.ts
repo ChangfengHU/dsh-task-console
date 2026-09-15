@@ -45,6 +45,10 @@ export async function handleTaskSignalHttp(req: any, res: any, service: any, tok
   if (!sameSecret(bearer(req), token)) { reply(res, 401, { ok: false, error: 'unauthorized' }); return }
   const url = new URL(String(req.url ?? '/'), 'http://127.0.0.1')
   try {
+    if (url.pathname === '/dsh-task-console/api/patrol-followup') {
+      if (req.method !== 'GET') { reply(res,405,{ok:false,error:'read only'}); return }
+      reply(res,200,{ok:true,...await service.patrolFollowup()}); return
+    }
     if (req.method === 'POST') {
       const value = JSON.parse(await service.submitTaskSignal(JSON.stringify({ signal: await body(req) })))
       reply(res, 202, { ok: true, ...value }); return
@@ -67,13 +71,14 @@ export async function handleTaskSignalHttp(req: any, res: any, service: any, tok
 }
 
 export function registerTaskSignalHttp(ctx: any): () => void {
-  return ctx.webServer.register({
+  const disposers = ['/dsh-task-console/api/task-signals','/dsh-task-console/api/patrol-followup'].map(path => ctx.webServer.register({
     kind: 'exact',
-    path: '/dsh-task-console/api/task-signals',
+    path,
     handler: (req: any, res: any) => {
       const service = ctx.get('taskConsole') ?? ctx.taskConsole
       if (!service) { reply(res, 503, { ok: false, error: 'Task Console 尚未就绪' }); return }
       return handleTaskSignalHttp(req, res, service)
     },
-  })
+  }))
+  return () => { for (const dispose of disposers) dispose() }
 }

@@ -4,6 +4,7 @@ import { mkdtemp,rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import Database from 'better-sqlite3'
 import { EventStore } from '../src/tasks.ts'
 import { ProxyWorkflow,proxyRequestId,validProxyProof } from '../src/proxy-workflow.ts'
 import { validateDesign,taskAgentIds } from '../src/task-design.ts'
@@ -118,4 +119,26 @@ test('a focused repair round cannot hide other inventoried nodes from final prox
   assert.equal(workflow.status(input)!.plan.length,1)
   assert.equal(workflow.status(input)!.items.length,2)
   assert.throws(()=>workflow.complete(input),/independent-review/)
+})
+
+test('resumed role reconciles its original terminal operation; mistyped IDs expose only its own IDs',async t=>{
+  const {store,input,workflow}=await setup(t)
+  const plan=workflow.plan(input,[{ip}],[{ip,action:'verify',reason:'fixture'}])!
+  await store.expandRound(input.task,input.batch,input.card,'fixture',plan.commit)
+  const proxy={...input,card:store.s.cards.get('fixture-batch#x1'),sessionId:'task-proxy-original',profileId:'proxy-operator'}
+  const id=randomUUID()
+  await workflow.invoke(proxy,'proxy_verify',{ip,requestId:'fixture-resume-0001'},async()=>wrap({...proof(id),state:'running',result:null}))
+  const resumed={...proxy,sessionId:'task-proxy-resumed'}
+  await assert.rejects(workflow.invoke(resumed,'proxy_status',{operationId:randomUUID()},async()=>assert.fail('must not dispatch')),e=>String(e).includes(id)&&String(e).includes('不代表缺少权限'))
+  const prior=process.env.DSH_PROXY_STATE_DIR;process.env.DSH_PROXY_STATE_DIR=input.task.cwd
+  const local=new Database(join(input.task.cwd,'proxy.db'))
+  try{
+    local.exec('CREATE TABLE proxy_operations(id TEXT PRIMARY KEY,state TEXT,updated_at TEXT)')
+    local.prepare('INSERT INTO proxy_operations VALUES (?,?,?)').run(id,'succeeded',new Date().toISOString())
+    assert.ok(workflow.pending(resumed)?.includes(id))
+    assert.match(workflow.pending(resumed)!,/尚未读取终态/)
+    assert.equal(workflow.pending({...resumed,card:store.s.cards.get('fixture-batch#r1')}),undefined)
+    await workflow.invoke(resumed,'proxy_status',{operationId:id},async()=>wrap(proof(id)))
+    assert.equal(workflow.pending(resumed),undefined)
+  }finally{local.close();if(prior===undefined)delete process.env.DSH_PROXY_STATE_DIR;else process.env.DSH_PROXY_STATE_DIR=prior}
 })

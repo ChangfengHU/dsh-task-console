@@ -404,6 +404,33 @@ and destructive uninstall/reinstall require their own evidence.
 
 ## Durable scheduled browser patrol (0.29)
 
+Patrol follow-up/liveness (0.30.25): Fleet reads the allowlisted SQLite projection
+through `GET /dsh-task-console/api/patrol-followup`, authenticated with the existing
+`DSH_TASK_INTAKE_TOKEN`. Configure `DSH_PUBLIC_ORIGIN` for exact execution links in
+notifications. No second status database or scheduler is introduced. A real blocked
+business card can enqueue an independent `blocked` notifier without depending on
+the blocked card. Explicit operator resend uses `scripts/resend-patrol-report.ts`
+with a stable request ID; original notices and ambiguous-send protection remain.
+
+Completed local browser/proxy operations must be read by the owning resumed role,
+not mistaken for still-running work or restarted under a new operation ID. Proxy
+ownership errors show only that card's own exact IDs; the host does not guess an
+ID or query the remote on the Agent's behalf.
+
+New reviewed cron plans may explicitly provide top-level `recurringObjective`.
+Review compares it with the original request and full definition: preserve all
+business restrictions but omit Creator-only staging instructions. Older plans and
+bindings keep their original semantics; upgrades do not rewrite them.
+
+Optional reviewed `browserPatrol.resumeAfterCopyLimit:1` permits one normal
+continuation of a confirmed prior import for the same Task/open issue. It requires
+`actions` to include `resume`, fresh signed-out proof and the original account's
+current authorization. Copy counters/history remain; this does not grant another
+import, deletion, rebuild or challenge bypass. Browser MCP resolves the original
+import across sessions via SQLite, not candidate ranking. Repaired targets still
+need 20-minute/4-sample independent verification. Older frozen executions do not
+acquire this extra budget.
+
 Opt-in reviewed patrol extensions (0.30.10): `browserPatrol.excludedNodeIds`
 contains exact user-approved node IDs. Inventory remains intact and replay reports
 exclusions with their observed reachability; excluded nodes cannot enter round actions

@@ -79,6 +79,24 @@ test('only independent real receipts pass; changed target needs distinct samples
   assert.equal(patrol.status(reviewer,now+60_000).ready,false)
   assert.throws(()=>patrol.complete(input),/不能收口/)
 })
+test('separately reviewed continuation is offered after confirmed import, not another copy or an early unresolved close',async t=>{
+  const {input,patrol,store}=await setup(t),db=store.kernel.db,now=Date.now()-1000
+  input.task.design=validateDesign({...design,browserPatrol:{...design.browserPatrol,resumeAfterCopyLimit:1}})
+  const reviewer={...input,card:{...input.card,role:'reviewer'},profileId:'fleet-ops-reviewer'}
+  patrol.capture(reviewer,proof(reviewer,now,'signed_out'))
+  db.prepare("INSERT INTO dsh_browser_issues VALUES (1,'fixture','192.0.2.10:1','open',3,?,NULL)").run(new Date(now-1000).toISOString())
+  db.prepare("INSERT INTO dsh_browser_operations VALUES ('copy3',1,'old-batch','old-card','login-provision',?)").run(new Date(now-1000).toISOString())
+  db.prepare("INSERT INTO dsh_browser_operation_outcomes VALUES ('copy3','imported','sign-in-required',?)").run(new Date(now-1000).toISOString())
+  const result=patrol.status(input)
+  assert.equal(result.items[0].attempts,3);assert.equal(result.items[0].canResume,true);assert.equal(result.canCloseUnresolved,false)
+  assert.throws(()=>patrol.plan(input,[{ip:'192.0.2.10',instance:1,action:'provision',reason:'repeat'}]),/重复复制/)
+  assert.equal(patrol.plan(input,[{ip:'192.0.2.10',instance:1,action:'resume',reason:'diagnose original import'}])!.items[0].action,'resume')
+  db.prepare("INSERT INTO dsh_browser_operations VALUES ('resume1',1,'batch','card','login-resume',?)").run(new Date(now).toISOString())
+  db.prepare('UPDATE dsh_browser_issues SET attempts=4').run()
+  assert.equal(patrol.status(input).items[0].attempts,3);assert.equal(patrol.status(input).items[0].canResume,false)
+  assert.throws(()=>patrol.plan(input,[{ip:'192.0.2.10',instance:1,action:'resume',reason:'retry'}]),/续接预算/)
+})
+
 test('an unreachable zero-observation node remains uncovered, not an empty success',async t=>{
   const {input,patrol,store}=await setup(t)
   store.kernel.db.prepare('UPDATE dsh_patrol_inventory SET inventory_json=?').run(JSON.stringify({nodes:[{nodeId:'unreachable',reachable:false,browsers:[]}]}))

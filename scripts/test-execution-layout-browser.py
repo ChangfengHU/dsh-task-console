@@ -79,7 +79,7 @@ with sync_playwright() as p:
             expect(plan.get_by_role('tab', name=name, exact=True)).to_have_attribute('aria-selected', 'true')
         # Mutually exclusive lower regions, no lost evidence components.
         nav = page.get_by_role('navigation', name='执行资料', exact=True)
-        for name, selector in [('执行报告', '#dtc-evidence-report'), ('任务书与运行边界', '#dtc-evidence-brief'), ('Canonical task_events', '#dtc-evidence-events')]:
+        for name, selector in [('任务书与运行边界', '#dtc-evidence-brief'), ('Canonical task_events', '#dtc-evidence-events')]:
             nav.get_by_role('button', name=name).click()
             expect(page.locator(selector)).to_be_visible()
             expect(plan.locator('.dtc-workflow-body')).to_have_count(0)
@@ -162,13 +162,15 @@ with sync_playwright() as p:
             page.locator('.dtc-compact').wait_for(timeout=60000)
             expect(page.locator('.dtc-dbnode.k-gate').first).to_be_visible()
             screen('dynamic-gates', 300)
-            page.get_by_role('navigation', name='执行资料').get_by_role('button', name='执行报告').click()
+            page.get_by_role('button', name='查看执行报告', exact=True).click()
             expect(page.locator('.dtc-patrol').first).to_be_visible()
-            screen('dynamic-patrol-evidence', 150)
+            expect(page.locator('.dtc-compact')).to_be_hidden()
+            page.screenshot(path='/tmp/dtc-layout-dynamic-patrol-report.png', animations='disabled')
+            page.get_by_role('button', name='← 返回工作流', exact=True).click()
         # Existing multi-version HTML delivery, unchanged sandbox preview and download.
         page.evaluate('location.hash="/tc/tasks/T-mtj1xwah/runs/b-mtj1xwasjuv"')
         page.locator('.dtc-compact').wait_for(timeout=60000)
-        page.get_by_role('navigation', name='执行资料').get_by_role('button', name='执行报告').click()
+        page.get_by_role('button', name='查看执行报告', exact=True).click()
         expect(page.locator('.dtc-artifact-group').first).to_be_visible()
         page.locator('.dtc-artifact-group').first.get_by_role('button', name='预览', exact=True).click()
         expect(page.get_by_role('dialog').locator('iframe')).to_have_attribute('sandbox', 'allow-scripts')
@@ -179,7 +181,7 @@ with sync_playwright() as p:
         download = download_info.value
         assert download.failure() is None
         download.delete()
-        screen('artifact-delivery', 100)
+        page.screenshot(path='/tmp/dtc-layout-artifact-report.png', animations='disabled')
         assert not errors and not writes, (errors, writes)
     finally:
         browser.close()

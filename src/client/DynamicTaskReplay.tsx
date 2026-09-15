@@ -3,7 +3,7 @@ import { graphEventLabel, replayGraph, type GraphEventRow, type GraphFrame, type
 import type { AgentRow, ArtifactView, Batch, TaskSpec } from '../wire.ts'
 import { finalArtifact, groupArtifacts, type ArtifactActor } from '../artifact-delivery.ts'
 import { go } from './Console.tsx'
-import { ArtifactDelivery, FinalArtifactActions } from './ArtifactDelivery.tsx'
+import { FinalArtifactActions } from './ArtifactDelivery.tsx'
 import type { TasksApi } from './TasksView.tsx'
 import { TurnLedgerView, useLedger } from './TurnLedger.tsx'
 import { TaskRunAction } from './TaskRunAction.tsx'
@@ -11,7 +11,7 @@ import { ExecutionPicker } from './ExecutionPicker.tsx'
 import { executionLabel } from '../execution-label.ts'
 import { workflowView } from '../workflow-plan.ts'
 import { WorkflowPlan } from './WorkflowPlan.tsx'
-import { PatrolEvidence } from './PatrolEvidence.tsx'
+import { ExecutionReport } from './ExecutionReport.tsx'
 
 const epoch = (value?: number | null) => value ? new Date(value * 1000).toLocaleTimeString('zh-CN', { hour12: false }) : '—'
 const STATUS: Record<string, string> = { todo: '等依赖', ready: '就绪', scheduled: '定时等待', running: '运行中', blocked: '阻塞', review: '待验收', done: '完成', archived: '归档', triage: '需处理' }
@@ -141,7 +141,7 @@ function SessionTrace({ api, sessionId, onOpen }: { api: TasksApi; sessionId: st
   return <section className="dtc-session-trace"><div className="dtc-session-trace-head"><code className="dtc-session-trace-id">{sessionId}</code><button className="dtc-btn sm" onClick={onOpen}>打开原会话 ↗</button></div>{error ? <div className="dtc-err">{error}</div> : ledger ? <TurnLedgerView ledger={ledger} compact /> : <div className="dtc-empty"><span className="dtc-spin" /> 读取 Session Trace…</div>}</section>
 }
 
-export function DynamicTaskReplay({ api, agents, task, batches, batchId, sessionId, toast, onBatchArchive }: { api: TasksApi; agents: AgentRow[]; task: TaskSpec; batches: Batch[]; batchId: string; sessionId?: string; toast: (text: string) => void; onBatchArchive: (id: string, archived: boolean) => Promise<void> }) {
+export function DynamicTaskReplay({ api, agents, task, batches, batchId, sessionId, report = false, toast, onBatchArchive }: { api: TasksApi; agents: AgentRow[]; task: TaskSpec; batches: Batch[]; batchId: string; sessionId?: string; report?: boolean; toast: (text: string) => void; onBatchArchive: (id: string, archived: boolean) => Promise<void> }) {
   const archivedAt = batches.find(batch => batch.id === batchId)?.archivedAt
   const [data, setData] = useState<GraphSnapshot | null>(null)
   const [artifacts, setArtifacts] = useState<ArtifactView[]>([])
@@ -152,7 +152,7 @@ export function DynamicTaskReplay({ api, agents, task, batches, batchId, session
   const [selected, setSelected] = useState<string | null>(null)
   const [dagFullscreen, setDagFullscreen] = useState(false)
   const [sessionsOpen, setSessionsOpen] = useState(Boolean(sessionId))
-  const [expanded, setExpanded] = useState<'plan' | 'report' | 'events' | 'brief' | null>(null)
+  const [expanded, setExpanded] = useState<'plan' | 'events' | 'brief' | null>(null)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const closeSessions = () => { setSessionsOpen(false); if (sessionId) go(`tasks/${task.id}/runs/${batchId}`) }
   const timer = useRef<number | undefined>(undefined)
@@ -184,21 +184,12 @@ export function DynamicTaskReplay({ api, agents, task, batches, batchId, session
   useEffect(() => { if (cursor !== null && current?.task_id) setSelected(current.task_id) }, [cursor, step, current?.task_id])
   useEffect(() => {
     window.clearTimeout(timer.current)
-    if (!playing) return
+    if (!playing || report) return
     if (step >= events.length) { setPlaying(false); setCursor(null); return }
     timer.current = window.setTimeout(() => setCursor(step + 1), Math.round(900 / speed))
     return () => window.clearTimeout(timer.current)
-  }, [playing, step, events.length, speed])
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return
-      if (sessionsOpen) closeSessions()
-      else if (inspectorOpen && window.matchMedia('(max-width:800px), (max-height:500px)').matches) setInspectorOpen(false)
-      else if (dagFullscreen) setDagFullscreen(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [dagFullscreen, sessionsOpen, inspectorOpen, sessionId, task.id, batchId])
+  }, [playing, step, events.length, speed, report])
+  useEffect(() => { if (report) setPlaying(false) }, [report])
   const nameOf = (id: string | null) => id ? agents.find(agent => agent.id === id)?.name ?? id : '系统'
   if (!data) return <div className="dtc-empty">{error || <><span className="dtc-spin" /> 读取 SQLite 图数据…</>}</div>
   const node = frame.tasks.find(row => row.id === selected) ?? frame.tasks.at(-1)
@@ -238,27 +229,25 @@ export function DynamicTaskReplay({ api, agents, task, batches, batchId, session
   const origin = turn?.origin ?? task.origin
   const objective = turn?.objective ?? task.brief
   const seek = (next: number) => { setPlaying(false); setCursor(Math.max(0, Math.min(next, events.length))) }
-  return <div className="dtc-cartoon dtc-dbtruth dtc-compact">
-    <header className="dtc-cartoon-head"><button className="dtc-cartoon-back" onClick={() => go('tasks')}>←</button><div className="dtc-cartoon-title"><span>任务执行</span><h1>{task.title}</h1><small title={`完整执行 ID：${batchId}`}>{executionLabel({ id: batchId, firedAt: selectedBatch?.firedAt ?? new Date(data.batch.firedAt * 1000).toISOString() })} · 北京时间</small></div><div className="dtc-cartoon-live"><i />{cursor === null ? 'SQLite 实时态' : `历史事件 #${step}`}</div><button className="dtc-btn dtc-session-trigger" onClick={() => setSessionsOpen(true)}><i>{sessionCount}</i> Sessions</button>{workflowDone && !final ? <button className="dtc-btn sm" onClick={() => setExpanded(expanded === 'report' ? null : 'report')}>查看执行报告</button> : <FinalArtifactActions compact api={api} taskId={task.id} batchId={batchId} group={final} toast={toast} refresh={refreshArtifacts} />}<div className="dtc-cartoon-actions"><ExecutionPicker batches={batches} value={batchId} onChange={id => go(`tasks/${task.id}/runs/${id}`)} onArchive={onBatchArchive} /><TaskRunAction task={task} api={api} toast={toast} />{!data.batch.outcome && !selectedBatch?.archivedAt ? <button className="dtc-btn" onClick={async () => { await api.cancelRun(batchId); toast('已取消运行') }}>取消</button> : null}<button className="dtc-btn danger" onClick={async () => { if (!window.confirm('删除任务和它的运行记录?会话本身不删。')) return; await api.deleteTask(task.id); go('tasks') }}>删除</button></div></header>
+  const execution = executionLabel({ id: batchId, firedAt: selectedBatch?.firedAt ?? new Date(data.batch.firedAt * 1000).toISOString() })
+  const openReport = () => { setPlaying(false); go(`tasks/${task.id}/runs/${batchId}/report`) }
+  return <div className="dtc-execution-view"><div className="dtc-cartoon dtc-dbtruth dtc-compact" hidden={report}>
+    <header className="dtc-cartoon-head"><button className="dtc-cartoon-back" onClick={() => go('tasks')}>←</button><div className="dtc-cartoon-title"><span>任务执行</span><h1>{task.title}</h1><small title={`完整执行 ID：${batchId}`}>{executionLabel({ id: batchId, firedAt: selectedBatch?.firedAt ?? new Date(data.batch.firedAt * 1000).toISOString() })} · 北京时间</small></div><div className="dtc-cartoon-live"><i />{cursor === null ? 'SQLite 实时态' : `历史事件 #${step}`}</div><button className="dtc-btn dtc-session-trigger" onClick={() => setSessionsOpen(true)}><i>{sessionCount}</i> Sessions</button><button className="dtc-btn sm" onClick={openReport}>查看执行报告</button>{!(workflowDone && !final) ? <FinalArtifactActions compact api={api} taskId={task.id} batchId={batchId} group={final} toast={toast} refresh={refreshArtifacts} /> : null}<div className="dtc-cartoon-actions"><ExecutionPicker batches={batches} value={batchId} onChange={id => go(`tasks/${task.id}/runs/${id}`)} onArchive={onBatchArchive} /><TaskRunAction task={task} api={api} toast={toast} />{!data.batch.outcome && !selectedBatch?.archivedAt ? <button className="dtc-btn" onClick={async () => { await api.cancelRun(batchId); toast('已取消运行') }}>取消</button> : null}<button className="dtc-btn danger" onClick={async () => { if (!window.confirm('删除任务和它的运行记录?会话本身不删。')) return; await api.deleteTask(task.id); go('tasks') }}>删除</button></div></header>
     {archivedAt ? <p role="status">已归档执行 · 原始状态、证据和会话保留，不参与当前调度。</p> : null}
     {error ? <div className="dtc-err">{error}</div> : null}
     <WorkflowPlan key={batchId} expanded={expanded === 'plan'} onExpandedChange={open => setExpanded(open ? 'plan' : null)} task={task} batch={selectedBatch} nameOf={nameOf} openSession={id => void api.openSession(id).catch(e => toast(String(e.message ?? e)))} trace={id => go(`tasks/${task.id}/runs/${batchId}?session=${encodeURIComponent(id)}`)} />
     <section className={`dtc-dag-cockpit ${dagFullscreen ? 'dtc-dag-fullscreen' : ''} ${inspectorOpen ? 'inspector-open' : ''}`}>
       <main className="dtc-cpanel dtc-dag-panel">
-        <div className="dtc-cpanel-head"><div><b>协作流程 · {frame.tasks.length}</b><small title="数据库有向无环图：节点=tasks 行；箭头=task_links 行；页面不补角色、不补边">{done} 完成 · {frame.tasks.length - done} 未完成 · {frame.links.length} Links · {frame.runs.length} Runs{task.graphMode === 'dynamic-rounds' ? ` · ${rounds} 轮（真实 Gate）` : ' · 顺序交接'}</small></div><div className="dtc-dag-head-actions">{dagFullscreen ? <button className="dtc-btn sm" onClick={() => setSessionsOpen(true)}>Sessions ({sessionCount})</button> : null}<button className="dtc-btn sm dtc-inspector-toggle" aria-expanded={inspectorOpen} onClick={() => setInspectorOpen(value => !value)}>行检查器</button><button className="dtc-btn sm" onClick={() => setDagFullscreen(value => !value)}>{dagFullscreen ? '退出全屏' : '全屏 DAG'}</button></div></div>
+        <div className="dtc-cpanel-head"><div><b>协作流程 · {frame.tasks.length}</b><small title="数据库有向无环图：节点=tasks 行；箭头=task_links 行；页面不补角色、不补边">{done} 完成 · {frame.tasks.length - done} 未完成 · {frame.links.length} Links · {frame.runs.length} Runs{task.graphMode === 'dynamic-rounds' ? ` · ${rounds} 轮（真实 Gate）` : ' · 顺序交接'}</small></div><div className="dtc-dag-head-actions">{dagFullscreen ? <button className="dtc-btn sm" onClick={() => setSessionsOpen(true)}>Sessions ({sessionCount})</button> : null}<button className="dtc-btn sm dtc-inspector-toggle" aria-expanded={inspectorOpen} onClick={() => setInspectorOpen(value => !value)}>行检查器</button><button className="dtc-btn sm" data-dtc-exit-fullscreen={dagFullscreen || undefined} onClick={() => setDagFullscreen(value => !value)}>{dagFullscreen ? '退出全屏' : '全屏 DAG'}</button></div></div>
         <details key={current?.id ?? 'start'} className={`dtc-compact-event kind-${current?.kind ?? 'idle'}`}><summary><span>{effect?.icon ?? '○'}</span><small>{current ? `STEP ${step}` : '回放起点'}</small><b>{effect?.title ?? '尚未写入数据库事件'}</b><em>详情</em></summary><div><p>{effect?.copy ?? '点击下一步后，第一个真实 Task 才会出现在 DAG。'}</p>{effect ? <dl>{effect.facts.map((fact, index) => <div key={index}><dt>{index ? '证据' : '变更'}</dt><dd>{fact}</dd></div>)}</dl> : null}</div></details>
         {frame.tasks.length ? <DbDag frame={frame} selected={node?.id ?? null} current={cursor === null ? undefined : current} onSelect={id => { setSelected(id); if (window.matchMedia('(max-width:800px), (max-height:500px)').matches) setInspectorOpen(true) }} nameOf={nameOf} /> : <div className="dtc-empty">事件 #0：数据库还没有 Task 行。</div>}
       <div className={`dtc-replaybar ${playing ? 'playing' : ''}`}><div className="dtc-replay-now"><span>{cursor === null ? '实时数据库' : playing ? '自动回放中' : '历史快照'}</span><b>{String(step).padStart(2, '0')} / {String(events.length).padStart(2, '0')}</b><small>{current ? `${epoch(current.created_at)} · ${graphEventLabel(current)}` : '尚未发生事件'}</small></div><div className="dtc-replay-actions"><button onClick={() => seek(0)} disabled={!step}>从头</button><button onClick={() => seek(step - 1)} disabled={!step}>←</button><button className="play" onClick={() => { if (step >= events.length) setCursor(0); setPlaying(value => !value) }}>{playing ? 'Ⅱ 暂停' : '▶ 播放'}</button><button onClick={() => seek(step + 1)} disabled={step >= events.length}>→</button></div><label className="dtc-replay-range"><span>task_events.id</span><input type="range" min="0" max={events.length} value={step} onChange={e => seek(Number(e.target.value))} /><output>{step}</output></label><div className="dtc-replay-tail"><label>速度<select value={speed} onChange={e => setSpeed(Number(e.target.value))}><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option></select></label><button className="live" disabled={cursor === null} onClick={() => { setPlaying(false); setCursor(null) }}>● 回到实时</button></div></div>
     </main><aside className="dtc-cpanel dtc-dag-inspector" aria-label="数据库行检查器"><button className="dtc-close dtc-inspector-close" aria-label="收起行检查器" onClick={() => setInspectorOpen(false)}>×</button><div className="dtc-cpanel-head"><div><b>数据库行检查器</b><small>当前回放时刻可见的真实证据</small></div>{node ? <span>{node.node_kind.toUpperCase()}</span> : null}</div>{node ? <div className="dtc-dbinspect"><h2>{(ROLE[node.role ?? node.node_kind] ?? { icon: '◎', label: nameOf(node.assignee) }).icon} {(ROLE[node.role ?? node.node_kind] ?? { icon: '◎', label: nameOf(node.assignee) }).label} {node.round}</h2><p className="dtc-mono">{node.id}</p><dl><dt>tasks.status</dt><dd>{node.status}</dd><dt>assignee</dt><dd>{nameOf(node.assignee)}</dd><dt>created_at</dt><dd>{epoch(node.created_at)}</dd><dt>completed_at</dt><dd>{epoch(node.completed_at)}</dd><dt>父依赖</dt><dd>{parents.map(row => row.role ? `${row.role}${row.round ?? ''}` : nameOf(row.assignee)).join('、') || '无'}</dd><dt>子节点</dt><dd>{children.map(row => row.role ? `${row.role}${row.round ?? ''}` : nameOf(row.assignee)).join('、') || '尚未写入'}</dd></dl><h3>task_runs ({runs.length})</h3>{runs.length ? runs.map(run => <button key={run.id} className="dtc-dbrun" onClick={() => run.session_id && api.openSession(run.session_id)}><b>Run #{run.id} · {run.status}</b><span className="dtc-dbrun-phase">{PHASES.map(phase => <i key={phase.id} className={run.evidence.includes(phase.id) ? 'on' : ''}>{phase.label}</i>)}</span><small>{nameOf(run.profile)} · {epoch(run.started_at)}{run.session_id ? ' · 打开会话 ↗' : ''}</small>{run.external_run_id ? <code>external: {run.external_run_id}</code> : null}{run.session_id ? <code>session: {run.session_id}</code> : null}{run.message_id ? <code>message: {run.message_id}</code> : null}{run.last_heartbeat_at ? <code>heartbeat: {epoch(run.last_heartbeat_at)} · lease: {epoch(run.claim_expires)}</code> : null}{run.summary ? <p>{run.summary}</p> : null}</button>) : <div className="dtc-clegend">Gate 和尚未领取的 Task 没有 Run 行。</div>}</div> : <div className="dtc-empty">这个时刻没有节点。</div>}</aside></section>
     <section className="dtc-execution-evidence" aria-label="执行证据">
-      <nav aria-label="执行资料">{([['report', '执行报告'], ['events', 'Canonical task_events'], ['brief', '任务书与运行边界']] as const).map(([key, label]) => <button key={key} aria-expanded={expanded === key} aria-controls={`dtc-evidence-${key}`} onClick={() => setExpanded(expanded === key ? null : key)}>{label}{key === 'events' ? <small>{events.length}</small> : null}<span>{expanded === key ? '▾' : '▸'}</span></button>)}</nav>
-      <div className="dtc-evidence-content" id="dtc-evidence-report" hidden={expanded !== 'report'}>
-    <ArtifactDelivery api={api} taskId={task.id} batchId={batchId} artifacts={visibleArtifacts} actors={artifactActors} summary={finalSummary} toast={toast} refresh={refreshArtifacts} empty="执行者调用 task_complete(artifacts) 后，版本会随数据库事件出现在这里。" />
-        <PatrolEvidence events={events.slice(0, step)} />
-      </div>
+      <nav aria-label="执行资料">{([['events', 'Canonical task_events'], ['brief', '任务书与运行边界']] as const).map(([key, label]) => <button key={key} aria-expanded={expanded === key} aria-controls={`dtc-evidence-${key}`} onClick={() => setExpanded(expanded === key ? null : key)}>{label}{key === 'events' ? <small>{events.length}</small> : null}<span>{expanded === key ? '▾' : '▸'}</span></button>)}</nav>
       <div className="dtc-evidence-content dtc-timeline" id="dtc-evidence-events" hidden={expanded !== 'events'}><p className="dtc-muted">点击任一事件，把协作图还原到该事务之后；未来记录不会提前出现在图中。</p><div className="dtc-activity-list">{[...events].reverse().map((event, index) => { const eventStep = events.length - index; return <button key={event.id} className={`dtc-activity-row ${eventStep > step ? 'off' : ''} ${eventStep === step ? 'cur' : ''}`} onClick={() => seek(eventStep)}><span className="dot" /><span className="copy"><b>{graphEventLabel(event)}</b><span>{event.kind}</span><small>{epoch(event.created_at)} · task_events.id={event.id}</small></span><span className="dtc-pill dtc-p-grey">DB</span></button> })}</div></div>
       <div className="dtc-evidence-content dtc-cartoon-details" id="dtc-evidence-brief" hidden={expanded !== 'brief'}><div className="dtc-hand">{objective}</div><div className="dtc-kv"><span className="k">工作区</span><span className="dtc-mono">{turn?.cwd ?? task.cwd}</span><span className="k">超时</span><span>{Math.round(task.timeoutSec / 60)} 分钟 / 角色</span><span className="k">失败策略</span><span>{task.onFail === 'retry' ? `最多重试 ${task.maxTries} 次` : '失败后停止'}</span></div></div>
     </section>
     {sessionsOpen ? <SessionDrawer api={api} frame={data.live} authoring={authoring} taskId={task.id} batchId={batchId} selectedSessionId={sessionId} nameOf={nameOf} onSelectNode={setSelected} onClose={closeSessions} /> : null}
-  </div>
+  </div>{report ? <ExecutionReport title={task.title} label={execution} historicalStep={cursor === null ? null : step} events={events.slice(0, step)} onBack={() => go(`tasks/${task.id}/runs/${batchId}`)} delivery={{ api, taskId: task.id, batchId, artifacts: visibleArtifacts, actors: artifactActors, summary: finalSummary, toast, refresh: refreshArtifacts, empty: '执行者调用 task_complete(artifacts) 后，版本会随数据库事件出现在这里。' }} /> : null}</div>
 }

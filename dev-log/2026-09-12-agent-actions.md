@@ -687,3 +687,53 @@ failure evidence) are private acceptance evidence, not
 public uploads of real task/session content. Keep them through review; reproduce
 with the committed browser test. GitHub identity and repository push permission
 were verified using Vault `service:github`, without persisting credentials.
+
+## 2026-09-14 — Separate execution report and center Escape, 0.30.24
+
+User requested only two follow-ups: move execution reports out of the workflow
+layout into a separate returnable page, and let Escape close both Task and Agent
+centers. Added `/tc/tasks/:id/runs/:batch/report` and the report navigation entry.
+The same ArtifactDelivery and PatrolEvidence components retain all original
+content/actions; long report text now scrolls with the report page, not a small
+nested text box. Canonical events and task boundaries remain in the workflow.
+Same-Batch navigation keeps the mounted graph, cursor, selection, zoom and pan;
+report navigation pauses autoplay without changing task execution. Direct report
+reload reads current Batch state, while in-memory historical reports identify
+their exact step. Different Batches use separate keyed replay instances.
+
+Console centrally consumes Escape once, invokes the existing top-layer close
+control, then falls back to the same closeConsole used by X. It respects disabled
+modal closure and composition/repeat/default-prevented events. Removed the old
+competing DynamicTaskReplay Escape listener. Preview, execution picker, Sessions,
+mobile inspector and fullscreen retain their existing click handlers/behavior.
+
+Validation: 293 Node tests passed, zero failed/skipped/cancelled; build and diff
+checks passed. Both scripts were run with staged heavy assets against read-only
+live data, then again against the actual public service without asset overrides:
+`scripts/test-execution-report-browser.py` and updated
+`scripts/test-execution-layout-browser.py`. Covered direct/reloaded report URLs,
+return with cursor 5 and identical DAG element/zoom/pan/selection, report/preview
+Escape, picker/Sessions/fullscreen single-layer dismissal, Agent center dismissal
+while its search input is focused, Task management dialog cancellation, plain
+center closure preserving native session URL, all original six viewport sizes,
+real dynamic Gates/PatrolEvidence and HTML preview/download. No page errors or
+mutation calls; the existing ended graph snapshot stayed unchanged. Private
+screenshots were inspected; removing the old report text height cap corrected
+unused report space. This is UI verification, not new machine/login acceptance.
+
+Deployment uses the verified live repository symlink. Only tracked client bundles
+changed; backend bundles and service PID 1673240/activation time remained unchanged.
+Staged and public-serving heavy asset SHA256:
+`1ef2b2ff4c5fa6cf2f7a18ed77a17a2ddeb16e8ca6aafc081f037533fd9f685c`.
+No dependency install, service restart, Task trigger, policy, schedule or machine
+operation. GitHub identity/repository permissions were freshly verified through
+Vault `service:github`; no credential values were persisted. Cold startup remains
+outside this change (public layout test: 21.07 seconds).
+
+Removed the staged `/tmp/dtc-report-build.B7VMLM` after a /proc open-file/cwd
+check found no dependent process: only reproducible build outputs were removed
+(1,444,508 bytes including directory).
+Recover with the source, lockfile and `DTC_BUILD_OUT=<staging> /usr/bin/node
+scripts/build.mjs`. Six private `/tmp/dtc-report-*.png` screenshots (672,005 bytes)
+and refreshed existing layout evidence are retained through user review, then
+can be reproduced by the browser scripts. Production `lib/` is not temporary.

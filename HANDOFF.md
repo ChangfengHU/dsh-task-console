@@ -93,6 +93,14 @@ Do not silently repair and execute malformed arguments. Reapply through the exis
 `scripts/patch-history-ids.mjs` host patch after a supported host reinstall.
 
 Package remains `dsh-task-console`; Agent and Board are modules of the same plugin.
+Database execution reports live at `#/tc/tasks/:id/runs/:batch/report`, with a
+return-to-workflow button. Keep the same Batch's replay/selection/canvas mounted
+while showing the separate report; report navigation pauses autoplay, not the
+business execution. Refreshing the report opens the current state of that Batch.
+Historical views must identify their replay step and never add future evidence.
+Console Escape closes the visible top layer via its explicit close control,
+otherwise closes the center like X. Preserve disabled-close and IME guards;
+never let one Escape dismiss both Sessions/fullscreen and the whole center.
 Task-owned Actions use the same native composer, with configuration at
 `#/tc/tasks/:id/actions`. Keep their SQLite catalog separate from TaskSpec/reviewed
 workflow hashes and cron bindings. Submission is `launchTaskAction`, not a normal

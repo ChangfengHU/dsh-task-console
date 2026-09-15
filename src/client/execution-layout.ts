@@ -6,7 +6,20 @@ export const executionLayout = `
 .dtc-overlay:has(.dtc-compact) .dtc-brand { min-width:0 }
 .dtc-overlay:has(.dtc-compact) .dtc-brand .ic { width:24px; height:24px; background:transparent; color:var(--dtc-muted) }
 .dtc-overlay:has(.dtc-compact) .dtc-action-toolbar { margin:0; flex-wrap:nowrap; gap:4px }
-.dtc-body:has(> .dtc-compact) { display:flex; flex-direction:column; min-height:0; padding:10px 14px; overflow:hidden }
+.dtc-body:has(> .dtc-execution-view) { display:flex; flex-direction:column; min-height:0; padding:10px 14px; overflow:hidden }
+.dtc-execution-view { display:flex; flex-direction:column; flex:1; min-height:0; min-width:0 }
+.dtc-compact[hidden] { display:none }
+.dtc-execution-report { display:flex; flex-direction:column; flex:1; min-height:0; min-width:0; gap:10px }
+.dtc-execution-report > header { display:flex; align-items:center; gap:16px; padding:12px; border:1px solid var(--dtc-line); border-radius:10px; background:var(--dtc-surface); flex-shrink:0 }
+.dtc-execution-report > header > div { min-width:0 }
+.dtc-execution-report h1 { font-size:16px; margin:2px 0; overflow-wrap:anywhere }
+.dtc-execution-report header span,.dtc-execution-report header small { font-size:11px; color:var(--dtc-muted) }
+.dtc-report-body { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain }
+.dtc-report-body > .dtc-delivery { margin:0 0 12px }
+.dtc-report-body .dtc-hand { max-height:none; overflow:visible }
+.dtc-report-body .dtc-delivery-head > div > span { color:var(--dtc-accent) }
+.dtc-report-snapshot { padding:10px 12px; margin:0 0 10px; border-radius:8px; color:var(--dtc-warn); background:var(--dtc-warn-bg); font-size:12px }
+@media(max-width:700px) { .dtc-execution-report > header { align-items:flex-start; flex-direction:column; gap:8px }.dtc-execution-report h1 { font-size:14px } }
 .dtc-compact { display:flex; flex:1; flex-direction:column; gap:8px; min-height:0; min-width:0; max-width:none; margin:0; padding:0 }
 .dtc-compact > * { flex-shrink:0; min-width:0 }
 .dtc-compact > .dtc-cartoon-head { min-height:0; padding:10px 12px; gap:8px; margin:0; border-radius:10px; box-shadow:none; flex-wrap:wrap }
@@ -87,7 +100,7 @@ export const executionLayout = `
   .dtc-compact > .dtc-dag-cockpit { grid-template-columns:minmax(0,1fr) 280px }
 }
 @media (max-width:800px) {
-  .dtc-body:has(> .dtc-compact) { padding:6px; gap:6px }
+  .dtc-body:has(> .dtc-execution-view) { padding:6px; gap:6px }
   .dtc-compact { gap:6px }
   .dtc-compact .dtc-cartoon-title { flex-basis:calc(100% - 40px) }
   .dtc-compact .dtc-cartoon-live { display:none }
@@ -122,7 +135,7 @@ export const executionLayout = `
 }
 @media (max-height:500px) {
   .dtc-overlay:has(.dtc-compact) > .dtc-head { height:34px; min-height:34px }
-  .dtc-body:has(> .dtc-compact) { padding:4px 6px }
+  .dtc-body:has(> .dtc-execution-view) { padding:4px 6px }
   .dtc-compact { gap:4px }
   .dtc-compact > .dtc-cartoon-head { padding:3px 6px; height:38px; overflow:auto; flex-wrap:nowrap }
   .dtc-compact .dtc-cartoon-title { flex:1 0 150px }

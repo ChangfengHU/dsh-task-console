@@ -74,11 +74,11 @@ class Boundary extends React.Component<{ children: React.ReactNode }, { error: E
 }
 
 /** Static assets can update while an active Task keeps the old host alive. */
-function TaskTabs({ api, id, actions }: { api: Api; id: string; actions: boolean }) {
+function TaskTabs({ api, id, actions, batchId, report = false }: { api: Api; id: string; actions: boolean; batchId?: string; report?: boolean }) {
   const [supported, setSupported] = useState(false)
   useEffect(() => { let live = true; setSupported(false); void api.workflowCatalog().then(rows => { if (live) setSupported(rows.some(t => t.id === id && typeof t.actionCount === 'number')) }).catch(() => {}); return () => { live = false } }, [api, id])
   if (!supported) return null
-  return <nav className="dtc-action-toolbar" aria-label="Task 导航"><button className={`dtc-btn sm ${!actions ? 'pri' : ''}`} aria-pressed={!actions} onClick={() => go(`tasks/${id}`)}>执行记录</button><button className={`dtc-btn sm ${actions ? 'pri' : ''}`} aria-pressed={actions} onClick={() => go(`tasks/${id}/actions`)}>Actions</button></nav>
+  return <nav className="dtc-action-toolbar" aria-label="Task 导航"><button className={`dtc-btn sm ${!actions && !report ? 'pri' : ''}`} aria-pressed={!actions && !report} onClick={() => go(batchId ? `tasks/${id}/runs/${batchId}` : `tasks/${id}`)}>执行记录</button>{batchId ? <button className={`dtc-btn sm ${report ? 'pri' : ''}`} aria-pressed={report} onClick={() => go(`tasks/${id}/runs/${batchId}/report`)}>执行报告</button> : null}<button className={`dtc-btn sm ${actions ? 'pri' : ''}`} aria-pressed={actions} onClick={() => go(`tasks/${id}/actions`)}>Actions</button></nav>
 }
 
 export function Console({ api }: { api: Api }) {
@@ -88,6 +88,40 @@ export function Console({ api }: { api: Api }) {
   const [agents, setAgents] = useState<AgentRow[] | null>(null)
   const [error, setError] = useState('')
   const [toast, showToast] = useToast()
+  const root = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    // Use the same explicit close buttons as pointer users, from top layer down.
+    // A disabled close button must not fall through and dismiss the whole center.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.repeat || event.defaultPrevented || !root.current) return
+      const visible = (selector: string, within: Element = root.current!) =>
+        Array.from(within.querySelectorAll<HTMLElement>(selector)).find(el => el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden')
+      const layers: [string, string][] = [
+        ['.dtc-art-modal', 'header button'],
+        ['.dtc-execution-popover', ''],
+        ['.dtc-session-layer', '.dtc-session-scrim'],
+        ['.dtc-modal', '.dtc-close'],
+        ['.inspector-open .dtc-dag-inspector', '.dtc-inspector-close'],
+        ['.dtc-dag-fullscreen', '[data-dtc-exit-fullscreen]'],
+      ]
+      event.preventDefault(); event.stopImmediatePropagation()
+      for (const [selector, closeSelector] of layers) {
+        const layer = visible(selector)
+        if (!layer) continue
+        const button = selector === '.dtc-execution-popover'
+          ? visible('.dtc-execution-picker button[aria-expanded="true"]')
+          : visible(closeSelector, layer)
+        // Desktop inspectors are always visible, but are not a dismissible layer.
+        if (!button && selector === '.inspector-open .dtc-dag-inspector') continue
+        if (button && !(button as HTMLButtonElement).disabled) button.click()
+        return
+      }
+      if (!visible('[role="dialog"]')) closeConsole()
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [])
 
   useEffect(() => { const on = () => { setRoute(readRoute()); setQuery(readRouteQuery()) }; window.addEventListener('hashchange', on); return () => window.removeEventListener('hashchange', on) }, [])
   useEffect(() => { if (route[0] === 'sessions') go('agents') }, [route])
@@ -102,6 +136,7 @@ export function Console({ api }: { api: Api }) {
 
   const section = route[0] === 'tasks' ? 'tasks' : 'agents'
   const executionPage = section === 'tasks' && !!route[1] && !['new', 'plans', 'executions'].includes(route[1]) && route[2] !== 'actions'
+  const report = executionPage && route[2] === 'runs' && route[4] === 'report'
   const needsCatalog = section === 'agents' || route[1] === 'new'
   const reload = useCallback(async () => { await Promise.all([loadCatalog(), loadAgents()]) }, [loadCatalog, loadAgents])
   useEffect(() => { void loadAgents(); if (needsCatalog) void loadCatalog() }, [loadAgents, loadCatalog, needsCatalog])
@@ -113,22 +148,22 @@ export function Console({ api }: { api: Api }) {
   else if (route[1] === 'new') page = !agents || !catalog ? loading : <div className="dtc-body"><NewTask api={api} agents={agents} toast={showToast} workspaces={catalog.workspaces} /></div>
   else if (route[1] === 'plans') page = <div className="dtc-body"><TaskPlanReview api={api} id={route[2]} /></div>
   else if (route[1] === 'executions') page = <div className="dtc-body"><TaskExecutions api={api} query={query} /></div>
-  else if (route[1]) page = <div className="dtc-body">{!executionPage && <TaskTabs api={api} id={route[1]} actions={true} />}{route[2] === 'actions' ? <ActionEditor key={route[1]} api={api} taskId={route[1]} /> : <TaskReplay api={api} agents={agents ?? []} id={route[1]} runId={route[2] === 'runs' ? route[3] : undefined} sessionId={query.get('session') ?? undefined} toast={showToast} />}</div>
+  else if (route[1]) page = <div className="dtc-body">{!executionPage && <TaskTabs api={api} id={route[1]} actions={true} />}{route[2] === 'actions' ? <ActionEditor key={route[1]} api={api} taskId={route[1]} /> : <TaskReplay api={api} agents={agents ?? []} id={route[1]} report={report} runId={route[2] === 'runs' ? route[3] : undefined} sessionId={query.get('session') ?? undefined} toast={showToast} />}</div>
   else page = <div className="dtc-body"><TaskBoard api={api} agents={agents ?? []} toast={showToast} /></div>
 
   return (
-    <div className="dtc-root dtc-overlay">
+    <div className="dtc-root dtc-overlay" ref={root}>
       <div className="dtc-head">
         <div className="dtc-brand"><span className="ic">{section === 'agents' ? '◎' : '▦'}</span><span><b>{section === 'agents' ? 'Agent' : '任务中心'}</b><small>{section === 'agents' ? '预置配置与能力边界' : '任务编排与交付验收'}</small></span></div>
         <div className="dtc-head-actions">
-          {executionPage ? <TaskTabs api={api} id={route[1]} actions={false} /> : null}
+          {executionPage ? <TaskTabs api={api} id={route[1]} actions={false} batchId={route[2] === 'runs' ? route[3] : undefined} report={report} /> : null}
           {section === 'tasks' && !route[1] ? <><button className="dtc-btn sm" onClick={() => go('tasks/executions')}>执行记录</button><button className="dtc-btn sm" onClick={() => go('tasks/plans')}>计划审查</button><button className="dtc-btn sm pri" onClick={() => go('tasks/new')}>＋ 新建任务</button></> : null}
           <span className="dtc-head-context">{section === 'agents' ? (route[1] === 'new' ? '新建 Agent' : 'Agent 配置') : route[1] === 'new' ? '新建任务' : route[1] === 'executions' ? '执行记录' : route[1] ? '任务详情' : '任务看板'}</span>
           <button className="dtc-close" title="关闭工作台" aria-label="关闭工作台" onClick={closeConsole}>×</button>
         </div>
       </div>
       {error ? <div className="dtc-err" style={{ margin: '12px 20px 0' }}>{error}</div> : null}
-      <Boundary key={url}>{page}</Boundary>
+      <Boundary key={executionPage ? `execution/${route[1]}` : url}>{page}</Boundary>
       {toast ? <div className="dtc-toast">{toast}</div> : null}
     </div>
   )

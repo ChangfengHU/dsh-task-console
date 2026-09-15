@@ -431,6 +431,13 @@ import across sessions via SQLite, not candidate ranking. Repaired targets still
 need 20-minute/4-sample independent verification. Older frozen executions do not
 acquire this extra budget.
 
+0.30.26 counts actual continuations separately from explicit `not_started` preflight
+refusals. Raw issue counters/operations never decrement. The Browser MCP may append
+that classification only from its private authenticated adapter receipt showing
+the exact pre-apply `main -> idle` refusal, matching the original Task role/target.
+Timeouts, unknown outcomes, target-control errors and post-apply errors retain the
+reservation. This does not authorize another copy or bypass a busy browser.
+
 Opt-in reviewed patrol extensions (0.30.10): `browserPatrol.excludedNodeIds`
 contains exact user-approved node IDs. Inventory remains intact and replay reports
 exclusions with their observed reachability; excluded nodes cannot enter round actions

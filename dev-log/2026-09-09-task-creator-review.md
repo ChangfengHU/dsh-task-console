@@ -2,6 +2,30 @@
 
 ## 2026-09-15 — patrol follow-up, receipt liveness and reviewed continuation
 
+### Manual trial checkpoint and preflight accounting correction
+
+Revised plan P-chat-b1ae15d569447b1beeec was independently approved; same Task manual
+Batch b-chat-d335a8061b8f72f25505 started12:20:21 Beijing. It froze six proxy verifies,
+11 browser verifies and two original-account resumes. All proxy checks passed.
+Both original imports belonged to account fingerprint0c1e90d8, not a new recommendation.
+188/b1 operation17c4624651ba4b088ca5340870bb36a5 selected the exact authorized account
+tile, then Google returned a real interactive challenge at12:30:19; loginVerified=false.
+84/b2 operationf8d898e8ce08d380b0e451ef5a9b60b9 was rejected by pre-apply idle(), before
+the login action. No developer copied credentials or touched these machines.
+
+The latter exposed a reservation accounting defect: preflight rejection consumed
+one allowed actual continuation. Version0.30.26 excludes only an append-only,
+host-proven not_started classification; raw attempts and failed job remain.301 tests
+and build passed. No unknown/after-apply result is refundable; no busy guard removed.
+Reload/receipt reconciliation await a zero-active boundary; the trial is still
+running and hourly schedule is still paused at this checkpoint.
+
+Actual Fleet disclosure link opened the new Batch DAG, report tab navigated to
+its separate /report page, and Esc closed the overlay. Agent overlay Esc also passed.
+Removed owned failed-build directories /tmp/patrol-followup-release-vtwoof and
+/tmp/patrol-followup-release-ExAjS3 (~7.7MiB); duplicate before.mjs hashes matched the
+retained deployment evidence. Rebuild from source; production/audit files unaffected.
+
 User approved resolving Task blocks, readable WeCom resend and Fleet processing
 visibility. Changes remain local to cards, follow-up and execution contracts; no
 developer SSH/node/browser mutation. Version0.30.25 was built and reloaded only

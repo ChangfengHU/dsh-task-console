@@ -95,6 +95,11 @@ test('separately reviewed continuation is offered after confirmed import, not an
   db.prepare('UPDATE dsh_browser_issues SET attempts=4').run()
   assert.equal(patrol.status(input).items[0].attempts,3);assert.equal(patrol.status(input).items[0].canResume,false)
   assert.throws(()=>patrol.plan(input,[{ip:'192.0.2.10',instance:1,action:'resume',reason:'retry'}]),/续接预算/)
+  db.prepare("INSERT INTO dsh_browser_operation_outcomes VALUES ('resume1','not_started','browser-work-in-progress',?)").run(new Date(now).toISOString())
+  const deferred=patrol.status(input).items[0]
+  assert.equal(deferred.attempts,3);assert.equal(deferred.resumeAttempts,0);assert.equal(deferred.canResume,true)
+  assert.equal((db.prepare('SELECT attempts FROM dsh_browser_issues').get() as any).attempts,4)
+  assert.equal(patrol.plan(input,[{ip:'192.0.2.10',instance:1,action:'resume',reason:'idle preflight never started login'}])!.items[0].action,'resume')
 })
 
 test('an unreachable zero-observation node remains uncovered, not an empty success',async t=>{

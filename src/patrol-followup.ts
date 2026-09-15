@@ -31,7 +31,7 @@ export function patrolFollowup(db: any, now = Date.now()) {
       const proof = db.prepare('SELECT o.batch_id,o.checked_at,o.state,o.role FROM dsh_patrol_observations o JOIN dsh_batches b ON b.id=o.batch_id WHERE b.spec_id=? AND o.target_key=? ORDER BY o.checked_at DESC LIMIT 1').get(saved.id,key)
       const issue = db.prepare('SELECT id,status,attempts FROM dsh_browser_issues WHERE spec_id=? AND target_key=? ORDER BY id DESC LIMIT 1').get(saved.id,key)
       const refund = issue ? db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations o JOIN dsh_browser_operation_outcomes r ON r.operation_id=o.operation_id WHERE o.issue_id=? AND r.mutation='not_started'").get(issue.id).n : 0
-      const resumeAttempts=issue?db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations WHERE issue_id=? AND action='login-resume'").get(issue.id).n:0
+      const resumeAttempts=issue?db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations o LEFT JOIN dsh_browser_operation_outcomes r ON r.operation_id=o.operation_id WHERE o.issue_id=? AND o.action='login-resume' AND COALESCE(r.mutation,'unknown')!='not_started'").get(issue.id).n:0
       const resumeLimit=definition.design?.browserPatrol?.resumeAfterCopyLimit??0
       const attempts = issue ? Math.max(0,issue.attempts-refund-(resumeLimit?resumeAttempts:0)) : 0
       const delivery = issue ? db.prepare('SELECT o.action,o.created_at,r.mutation,r.reason FROM dsh_browser_operations o LEFT JOIN dsh_browser_operation_outcomes r ON r.operation_id=o.operation_id WHERE o.issue_id=? ORDER BY o.created_at DESC LIMIT 1').get(issue.id) : null

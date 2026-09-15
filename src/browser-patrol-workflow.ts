@@ -110,7 +110,7 @@ export class BrowserPatrolWorkflow {
       const notStarted = issue ? (db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations o JOIN dsh_browser_operation_outcomes r ON r.operation_id=o.operation_id WHERE o.issue_id=? AND r.mutation='not_started'").get(issue.id) as any).n : 0
       const preflightFailures = (db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id JOIN dsh_browser_operation_outcomes r ON r.operation_id=o.operation_id WHERE o.batch_id=? AND i.target_key=? AND r.mutation='not_started'").get(input.batch.id,key) as any).n
       const changedThisBatch = (db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations o JOIN dsh_browser_issues i ON i.id=o.issue_id WHERE o.batch_id=? AND i.target_key=? AND NOT EXISTS (SELECT 1 FROM dsh_browser_operation_outcomes r WHERE r.operation_id=o.operation_id AND r.mutation='not_started')").get(input.batch.id,key) as any).n
-      const resumeAttempts = issue ? (db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations WHERE issue_id=? AND action='login-resume'").get(issue.id) as any).n : 0
+      const resumeAttempts = issue ? (db.prepare("SELECT COUNT(*) n FROM dsh_browser_operations o LEFT JOIN dsh_browser_operation_outcomes r ON r.operation_id=o.operation_id WHERE o.issue_id=? AND o.action='login-resume' AND COALESCE(r.mutation,'unknown')!='not_started'").get(issue.id) as any).n : 0
       const totalAttempts = issue ? Math.max(0,issue.attempts-notStarted) : changedThisBatch
       const attempts = Math.max(0,totalAttempts-(input.task.design.browserPatrol?.resumeAfterCopyLimit===1?resumeAttempts:0))
       const needsStability = attempts > 0 || changedThisBatch > 0

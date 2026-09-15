@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-console",
-  "version": "0.30.26",
+  "version": "0.30.27",
   "description": "Local-first Agent presets and task orchestration for DeepSeek Harness, backed by SQLite.",
   "license": "MIT",
   "type": "module",
@@ -48,6 +48,7 @@
     "scripts/patch-dsh-host.mjs",
     "scripts/patch-task-mentions.mjs",
     "scripts/patch-input-menu.mjs",
+    "scripts/patch-session-shortcuts.mjs",
     "scripts/patch-history-ids.mjs",
     "scripts/restore-history-tool-ids.mjs",
     "prototype",

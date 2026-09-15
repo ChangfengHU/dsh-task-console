@@ -5,6 +5,7 @@ import { realpathSync } from 'node:fs'
 import { patchHistoryIds } from './patch-history-ids.mjs'
 import { patchTaskMentions } from './patch-task-mentions.mjs'
 import { installInputMenuPatch } from './patch-input-menu.mjs'
+import { installSessionShortcutPatch } from './patch-session-shortcuts.mjs'
 
 const SUPPORTED_DSH_VERSION = '0.1.1-rc.2'
 
@@ -59,6 +60,7 @@ const runtime = join(packages, 'dsh-client-runtime', 'lib', 'client.js')
 const ui = join(packages, 'dsh-client-ui-workspace', 'lib', 'client.js')
 
 const changed = []
+if ((await installSessionShortcutPatch(dshRoot)).changed) changed.push('session-shortcuts')
 if ((await installInputMenuPatch(dshRoot)).changed) changed.push('input-menu-and-action-recovery')
 const reference = join(packages, 'dsh-client-ui-reference', 'lib', 'client.js')
 const referenceBefore = await readFile(reference, 'utf8')

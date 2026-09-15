@@ -45,6 +45,7 @@ import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperat
 import type { Artifact, Card } from './tasks.ts'
 import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
+import { SessionShortcuts, shortcutChange } from './session-shortcuts.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
 
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
@@ -66,6 +67,26 @@ export class TaskConsoleService extends TypertRemoteService {
   private readonly ready: Promise<void>
   private headerCache?: { at: number; value: AgentSessionHeader[] }
   private headerRead?: Promise<AgentSessionHeader[]>
+
+  private shortcutHidden(): Set<string> {
+    const registry = (this.ctx as any).get('workspaceRegistry')
+    if (!registry) throw Error('会话可见性服务尚未就绪')
+    return new Set([...(registry.archivedSessionIds ?? []), ...(registry.internalSessionIds ?? [])])
+  }
+
+  async sessionShortcuts(): Promise<string> {
+    await this.ready
+    return JSON.stringify(new SessionShortcuts(this.runner.store.kernel.db).list(this.shortcutHidden()))
+  }
+
+  async setSessionShortcut(payload: string): Promise<string> {
+    const change = shortcutChange(JSON.parse(payload))
+    await this.ready
+    const headers = await this.sessionHeaders(), hidden = this.shortcutHidden()
+    const eligible = new Set(headers.filter(h => !hidden.has(h.id)).map(h => h.id))
+    new SessionShortcuts(this.runner.store.kernel.db).set(change, eligible)
+    return this.sessionShortcuts()
+  }
 
   async patrolFollowup(): Promise<ReturnType<typeof patrolFollowup>> {
     await this.ready

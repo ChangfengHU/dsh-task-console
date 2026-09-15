@@ -1,5 +1,40 @@
 # Task Console runtime contracts
 
+## Session module: pinned and favorite shortcuts
+
+The package remains `dsh-task-console`. Session enhancements are a small module,
+not a third top-level menu or another session database. `dsh_session_shortcuts`
+in the existing local SQLite database stores only session ID and independent
+pin/favorite timestamps. The native metadata index supplies titles, selection and
+running state; lists never load transcripts. Original workspace membership,
+Task history, schedules, drafts and session content are unchanged.
+
+`sessionShortcuts` and `setSessionShortcut` are Console RPCs, not Agent tools.
+Writes validate a known non-archived/non-internal session, a fixed flag and an
+explicit desired/expected boolean; retries are idempotent. The browser also hides
+blank/subagent/missing sessions. Archiving hides shortcuts without deleting their
+marks; a subsequent native restore makes the same marks eligible again.
+Flags persist server-side across reloads, browser clients and hostname aliases.
+Open pages refresh metadata on focus/visibility and every 30 seconds while visible.
+Failures keep the last confirmed state with an explicit retry notice.
+
+The original session ellipsis menu gains Pin/Unpin and Add/Remove Favorites.
+Pinned rows appear directly above native folders; Favorites is a collapsible
+virtual group. Neither action moves or copies a session. Both reuse host theme
+tokens, and opening uses the native session plus its exact `?session=` URL.
+The original search, grouping, rename/fork/archive actions and Agent/Board menus
+remain. Native search is not expanded to include hidden task sessions.
+
+`scripts/patch-session-shortcuts.mjs` provides an additive, DSH 0.1.1-rc.2-fenced
+menu/slot bridge. It ships with `host:patch`, keeps an exact-file
+`.dtc-session-shortcuts-backup`, rejects unknown anchors and is idempotent. The
+plugin owns behavior/storage; no official workspace schema is rewritten for this
+feature. Verify this bridge after reinstalling/upgrading the host. Deploy server
+changes only after both native running sessions and running Task Runs reach zero.
+Use `scripts/test-session-shortcuts-browser.py` for candidate read-only fixtures
+or opt-in live marker/restore acceptance. Never send a prompt or archive/delete
+business data to test shortcut UI.
+
 ## Browser MCP execution identity
 
 The filtered MCP adapter removes sessionId from the model-facing parameters of

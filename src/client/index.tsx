@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { installLightStyles } from './light-styles.ts'
 import { agentMentionSource } from './agent-mentions.ts'
+import { installSessionShortcuts } from './session-shortcuts.tsx'
 
 declare const require: (id: string) => unknown
 declare const __DTC_VERSION__: string
@@ -41,6 +42,7 @@ export async function apply(ctx: any): Promise<void> {
   ctx.effect(() => { document.documentElement.setAttribute('data-dsh-task-entry', ''); return () => document.documentElement.removeAttribute('data-dsh-task-entry') }, 'task-console: task mentions replace history references')
   ctx.effect(() => installLightStyles(), 'task-console: lightweight stylesheet')
   ctx.effect(() => installSessionUrlSync(ctx), 'task-console: session URL sync')
+  ctx.effect(() => installSessionShortcuts(ctx), 'task-console: Session shortcuts')
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'task-console', order: 30, inject: () => ({ ctx }) }, FooterEntry))
   ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'task-console-trace', order: 25, label: () => 'Trace', inject: (sessionId: string) => ({ ctx, sessionId }) }, LazyTrace))
   try { ctx.effect(() => ctx.inputTriggers.registerSource(agentMentionSource(ctx, async () => (await loadHeavy()).activate(ctx), go)), 'task-console: lazy @agent trigger') } catch (error) { console.warn('[task-console] @agent trigger not registered:', error) }

@@ -2,6 +2,14 @@
 
 任务台 for DeepSeek Harness (dsh).
 
+**Session shortcuts (0.30.27):** the existing session `⋯` menu supports Pin/Unpin
+and Add/Remove Favorites. Pinned sessions are directly accessible above native
+folders; Favorites is a collapsible virtual group. Both are independent,
+persist in local SQLite and do not move or copy conversations. Existing task-
+session filtering and native folders remain intact. No separate Session menu or
+heavy Board/Trace load is added. Apply the supported `npm run host:patch` after a
+host reinstall; see HANDOFF.md for persistence and verification boundaries.
+
 **Optional proxy MCP (0.30.8):** `lib/proxy-mcp.js` exposes protected-node inspection,
 independent verification, bounded Clash recovery and persistent operation status.
 It reuses the existing Controller, defaults to deny-all, and does not automatically

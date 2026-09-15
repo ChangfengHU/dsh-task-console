@@ -102,6 +102,17 @@ test('separately reviewed continuation is offered after confirmed import, not an
   assert.equal(patrol.plan(input,[{ip:'192.0.2.10',instance:1,action:'resume',reason:'idle preflight never started login'}])!.items[0].action,'resume')
 })
 
+test('reports distinguish a real Google challenge from a pre-login busy refusal without overriding recovery',()=>{
+  const base={state:'signed_out',accepted:false,attempts:3,repairExhausted:true}
+  const challenge={...base,loginDelivery:{mutation:'continued',reason:'interactive-verification-required'}}
+  assert.match(patrolItemView(challenge).verdict,/人工/)
+  assert.match(patrolItemView(challenge).next,/安全验证/)
+  const busy={...base,loginDelivery:{mutation:'not_started',reason:'browser-work-in-progress'}}
+  assert.match(patrolItemView(busy).reason,/不占用实际续接/)
+  assert.doesNotMatch(patrolItemView({...busy,state:'verified',reason:'missing-independent-verification'}).next,/安排剩余续接/)
+  assert.equal(patrolItemView({...challenge,state:'verified',accepted:true}).kind,'passed')
+})
+
 test('an unreachable zero-observation node remains uncovered, not an empty success',async t=>{
   const {input,patrol,store}=await setup(t)
   store.kernel.db.prepare('UPDATE dsh_patrol_inventory SET inventory_json=?').run(JSON.stringify({nodes:[{nodeId:'unreachable',reachable:false,browsers:[]}]}))

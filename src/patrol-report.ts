@@ -17,6 +17,16 @@ export function patrolItemView(row: any) {
   if (row.accepted) return { kind: 'passed', state, freshness, verdict: row.observation ? '本轮稳定性验收通过' : '本轮检查通过',
     reason: freshness === 'expired' ? '检查事实保留，实时证据待刷新' : '已有本轮独立检查证据',
     next: freshness === 'expired' ? '无需因过期修复；下轮巡查刷新实时状态' : '健康登录复用，不重复复制' }
+  if (['signed_out','unknown'].includes(row.state) && row.loginDelivery?.reason === 'interactive-verification-required') return {
+    kind: row.state === 'signed_out' ? 'signed_out' : 'unknown', state, freshness, verdict: '待人工安全验证',
+    reason: '最近一次已尝试正常登录续接，Google 要求交互式安全验证；尚未确认恢复',
+    next: '请在该浏览器打开 Gemini 完成 Google 安全验证，再由 Task 独立复验；不要重复复制或绕过验证',
+  }
+  if (['signed_out','unknown'].includes(row.state) && row.loginDelivery?.mutation === 'not_started' && row.loginDelivery.reason === 'browser-work-in-progress') return {
+    kind: row.state === 'signed_out' ? 'signed_out' : 'unknown', state, freshness, verdict: '登录前忙碌，尚未执行',
+    reason: '最近一次在登录动作开始前被忙碌检查拒绝；原记录保留，不占用实际续接次数',
+    next: '等待浏览器空闲后，由 Task 重新核验并安排剩余续接；不终止现有工作，不重复复制',
+  }
   if (row.state === 'signed_out' && !row.verificationFailure && row.repairExhausted) return {
     kind: 'signed_out', state, freshness, verdict: '已处理，未解决',
     reason: row.loginDelivery?.mutation === 'imported'

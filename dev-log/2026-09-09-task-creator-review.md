@@ -2,6 +2,17 @@
 
 ## 2026-09-15 — patrol follow-up, receipt liveness and reviewed continuation
 
+### Readable terminal diagnostics
+
+The shared report/Fleet projection now distinguishes an actual Google challenge
+from a proven pre-login busy refusal. A newer accepted login still takes precedence;
+neither old failure instructs another mutation once the observation is verified.
+Full serial suite passes302/302, zero skips (native DSH_INSTALL_ROOT); build and
+diff checks pass. Parallel execution had an existing fixed-tick chat fixture race;
+the isolated fixture and full serial run passed. No acceptance check was weakened.
+The manual trial is in its final independent review; these source changes are not
+yet loaded into the running server and do not mean the unresolved logins recovered.
+
 ### Manual trial checkpoint and preflight accounting correction
 
 Revised plan P-chat-b1ae15d569447b1beeec was independently approved; same Task manual

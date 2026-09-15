@@ -19,7 +19,7 @@ with sync_playwright() as p:
     page.on('pageerror', lambda e: errors.append(str(e)))
     allowed = {'taskGraph','taskArtifacts','taskSnapshot','taskEvents','workflowCatalog','agents','catalog',
                'taskActions','sessionTurns','tasks','agentActions','agentHistory','agentActivity',
-               'taskSchedule','executionHistory','artifactContent'}
+               'taskSchedule','executionHistory','artifactContent','sessionShortcuts'}
     def guard(route):
         url = route.request.url
         method = url.split('/taskConsole/')[-1].split('?')[0]

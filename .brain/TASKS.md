@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [TASK-SESSION-SHORTCUTS-032] 在现有插件内新增 Session 模块：原侧栏置顶和收藏虚拟分组，SQLite 独立标记，不移动复制会话、不新增菜单。308 回归零跳过及公网候选版本1440/390px、深浅色、刷新/失败/取消交互通过；源码已准备，生产 lib 保持旧版，等待现有 Task 空闲后部署及真实标记验收。范围/证据见 `dev-log/2026-09-15-session-shortcuts.md`。
+- [x] [TASK-SESSION-SHORTCUTS-032] 0.30.27 已于07:18:24Z在原生会话及Task双零活跃窗口部署。Session模块提供原侧栏置顶/收藏虚拟分组及SQLite独立标记，不移动复制会话、不新增菜单。308回归零跳过，公网真实菜单四次标记写入、刷新/取消/跳转、1440/390px和深浅色通过；测试标记已取消，无新crashed Run。任务定义/定时绑定/Task Actions哈希不变；执行报告/返回DAG/Esc/Agent/Board原交互回归通过。临时构建已清理；证据见 `dev-log/2026-09-15-session-shortcuts.md`。
 
 - [ ] [TASK-PATROL-FOLLOWUP-031] 0.30.26 已零活跃重载：任务卡自适应、回执续读、真实受阻通知、Fleet 处置/通知/深链及忙碌未开始与 Google 挑战区分已部署；303 测试零跳过及构建、公网1440/390px通过。Creator 修订 P-chat-b1ae15d569447b1beeec 已独立审查；同 Task 手动 b-chat-d335a8061b8f72f25505 于04:51:08Z完整收口（23卡done、10/13浏览器通过、6代理通过、8通知sent含12:53:19北京时间补发），业务仍unresolved。84/b2预检忙碌经可见只读Agent归类not_started，原计数保留，未实际续接；188/b1实际续接遇Google人工验证；187/b1独立验证unknown。原整点定时已恢复，下一次13:00北京时间，尚未观察此版本自动触发；不声称全部登录恢复。执行页冷加载50.4秒仍未解决；证据与后续见既有Creator dev-log。
 

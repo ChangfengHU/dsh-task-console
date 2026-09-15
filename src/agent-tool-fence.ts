@@ -10,6 +10,9 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 
+// Platform read-only introspection is not a business or delegation grant.
+const CAPABILITY_TOOLS = ['session_capabilities', 'environment_capabilities']
+
 export const name = 'task-console-agent-tool-fence'
 export const inject = ['tools']
 
@@ -17,7 +20,7 @@ export interface Config { selected?: string[]; allow?: string[]; deny?: string[]
 
 export function apply(ctx: Context, config: Config): void {
   if (Array.isArray(config?.selected)) {
-    const selected = new Set(config.selected)
+    const selected = new Set([...config.selected, ...CAPABILITY_TOOLS])
     const inherited = ctx.tools.schemas().map(schema => schema.name)
     const deny = inherited.filter(name => !selected.has(name))
     if (deny.length) ctx.tools.restrict({ deny })

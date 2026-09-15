@@ -2,6 +2,13 @@
 
 任务台 for DeepSeek Harness (dsh).
 
+**Session capability facts (0.30.28):** the conversation's Capabilities tab and
+read-only `session_capabilities` tool share actual runtime facts, with separate
+role configuration, environment inheritance, missing registrations and historical
+failure evidence. Standard chat has a configurable 24-step default budget and
+repeat-result protection; Task execution contracts are unchanged. Directory
+discovery neither executes business tools nor automatically delegates a task.
+
 **Session shortcuts (0.30.27):** the existing session `⋯` menu supports Pin/Unpin
 and Add/Remove Favorites. Pinned sessions are directly accessible above native
 folders; Favorites is a collapsible virtual group. Both are independent,

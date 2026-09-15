@@ -19,6 +19,7 @@ import { renderAction, parameterVisible, type ActionCatalog } from './agent-acti
 import { optionPage, sourceTool, type ActionOptionQuery } from './action-options.ts'
 import { fleetActionOptions } from './fleet-action-options.ts'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
+import { SessionCapabilities } from './session-capabilities.ts'
 import { applyAgentPermission } from './agent-session.ts'
 import { agentHistory, firstAgentUse, historyQuery, type AgentSessionHeader } from './agent-history.ts'
 import { sortAgents } from './agent-order.ts'
@@ -55,6 +56,7 @@ const TOOL_PREFIX = /^mcp__(.+?)__(.+)$/
 const KNOWN_MODELS = [
   'codex-local/gpt-5.6-terra', 'codex-local/gpt-5.6-mini',
   'claude-local/haiku', 'claude-local/sonnet',
+  'deepseek-official/qwen-flash',
   'llm-deepseek/qwen-plus-latest', 'llm-deepseek/deepseek-v3',
 ]
 
@@ -64,6 +66,7 @@ export class TaskConsoleService extends TypertRemoteService {
   readonly runner: TaskRunner
   readonly intake: TaskIntakeCoordinator
   readonly creator: TaskCreator
+  capabilities!: SessionCapabilities
   private readonly ready: Promise<void>
   private headerCache?: { at: number; value: AgentSessionHeader[] }
   private headerRead?: Promise<AgentSessionHeader[]>
@@ -158,6 +161,12 @@ export class TaskConsoleService extends TypertRemoteService {
     })
     this.creator = new TaskCreator(this.runner, () => this.intakeAgents())
     this.ready = this.runner.start()
+      .then(() => { this.capabilities = new SessionCapabilities(ctx, async () => ({
+      checkedAt: new Date().toISOString(), scope: 'environment-directory-not-execution-grant',
+      mcp: this.hostMcp().map(m => ({ server: m.serverName, disabled: m.disabled, registeredTools: m.tools, connection: 'not-probed' })),
+      skills: (await scanSkills()).map(s => ({ name: s.name, source: s.root, state: 'installed-not-necessarily-loaded' })),
+      agents: (await this.intakeAgents()).map(a => ({ id: a.id, name: a.name, mcpTools: a.mcpTools, skills: a.skills, delegation: 'not-started' })),
+    }), this.runner.store.kernel.db) })
       .then(() => this.markExistingTaskSessionsInternal())
       .then(() => this.intake.start())
     void this.ready.catch(err => console.error('[task-console] runner failed to start:', err))
@@ -578,6 +587,10 @@ export class TaskConsoleService extends TypertRemoteService {
   }
 
   // ── turn ledger ────────────────────────────────────────────────────────
+
+  async sessionCapabilities(payload: string): Promise<string> {
+    return JSON.stringify(await this.capabilities.read(JSON.parse(payload).sessionId))
+  }
 
   /** Fold one session's own log into turns → steps → tool calls (live or cold). */
   async sessionTurns(payload: string): Promise<string> {

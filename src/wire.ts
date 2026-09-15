@@ -46,6 +46,7 @@ export const METHODS = [
   ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
   ['startAgentSession', 1], ['sessionTurns', 1], ['agentHistory', 1],
   ['sessionShortcuts', 0], ['setSessionShortcut', 1],
+  ['sessionCapabilities', 1],
   ['agentActions', 1], ['saveAgentActions', 1], ['prepareAgentAction', 1], ['agentActionOptions', 1],
   ['workflowCatalog', 0], ['launchWorkflow', 1],
   ['taskActions', 1], ['saveTaskActions', 1], ['launchTaskAction', 1],

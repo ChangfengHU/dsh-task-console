@@ -1,5 +1,58 @@
 # Task Console runtime contracts
 
+## Session capability facts and standard-chat loop protection (0.30.28)
+
+`session_capabilities` and `environment_capabilities` are host-owned, read-only
+tools. The conversation's Capabilities tab calls `sessionCapabilities`, sharing
+the same runtime reader. Separate the authored preset from current scoped tool
+registrations/Skill discovery and environment inventory. An absent Task Console
+definition is not proof that a built-in or CLI Agent has no tools. Label inherited,
+restricted, configured-but-unregistered and last-failure states; never probe a
+business tool to answer an inventory question. No headers, commands, prompt bodies,
+tool arguments or credentials enter the capability snapshot.
+
+`dsh_session_capability_snapshots` stores the latest safe facts plus the exact
+tool-name list/provider/model from native `request/header`. Cold sessions expose
+historical snapshots without restoring or starting an Agent. Skill history loading
+is distinct from current retained context. CLI-internal extra discovery is unknown
+until independently observed; the host catalog cannot certify it.
+
+The plugin's `standardMcpInheritance` and `standardSkillInheritance` accept
+`inherit` (preserve deployment defaults) or `discover-only`. These control native
+standard-chat model exposure and ToolRuntime dispatch, not a CLI's private loader.
+Additionally, raw browser schemas requiring sessionId are unavailable to standard
+chat, with an execution guard even if a model guesses an Agent ID. Authored Agent
+fences and reviewed Task business guards remain; two introspection tools confer no
+new business or delegation grants. Do not loosen identity checks to make a failed
+inventory probe succeed.
+
+Only standard native chat has the new `standardMaxSteps` budget (default 24).
+Four identical non-status tool/argument/result observations, including interleaved
+calls, halt progress at the next step. Changed results reset that key; status/wait
+polling retains its normal semantics within the total budget. Existing Task budgets,
+durable waits and rework are not replaced. Guard termination is an explicit error,
+not a fabricated successful completion. User follow-ups start a fresh turn budget.
+
+Automatic cross-Agent delegation is not implemented by these directory tools.
+Recommend an actual configured Agent without claiming a handoff happened. Search
+authentication remains independent of model chat authentication. Qwen Flash's
+menu entry still requires a matching host model route; the local deployment adds
+qwen-flash beside qwen-plus-latest through its existing provider, without changing
+the model chosen by any existing Task or rotating credentials.
+
+Acceptance: `test/session-capabilities.test.ts` covers registry facts, identity
+denial via native ToolRuntime, repeat limits and safe persistence;
+`scripts/test-session-capabilities-browser.py` inspects the public tab without
+starting a chat. Production prompt acceptance must separately prove the original
+inventory request terminates without business-tool calls. Deploy only at the
+existing two-part zero-active boundary.
+
+Initialize the capability reader only after `runner.start()` has loaded SQLite;
+plugin activation waits for service readiness before registering capability hooks.
+Native complete role prompts replace assembled sections after middleware, so
+capability guidance belongs in runtime contexts, not a new system section. Verify
+its presence in actual session context events, not merely a mocked hook result.
+
 ## Session module: pinned and favorite shortcuts
 
 The package remains `dsh-task-console`. Session enhancements are a small module,

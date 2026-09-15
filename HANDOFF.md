@@ -1,6 +1,6 @@
 # Task Console runtime contracts
 
-## Session capability facts and standard-chat loop protection (0.30.28)
+## Session capability facts and standard-chat loop protection (0.30.29)
 
 `session_capabilities` and `environment_capabilities` are host-owned, read-only
 tools. The conversation's Capabilities tab calls `sessionCapabilities`, sharing
@@ -20,11 +20,20 @@ until independently observed; the host catalog cannot certify it.
 The plugin's `standardMcpInheritance` and `standardSkillInheritance` accept
 `inherit` (preserve deployment defaults) or `discover-only`. These control native
 standard-chat model exposure and ToolRuntime dispatch, not a CLI's private loader.
-Additionally, raw browser schemas requiring sessionId are unavailable to standard
-chat, with an execution guard even if a model guesses an Agent ID. Authored Agent
-fences and reviewed Task business guards remain; two introspection tools confer no
-new business or delegation grants. Do not loosen identity checks to make a failed
-inventory probe succeed.
+Default empty exclusions preserve the native Skill/MCP surface, including browser
+tools. No business name or role is hardcoded as forbidden for standard chat.
+`standardExcludedSkills` accepts exact skill names, `standardExcludedMcpServers`
+accepts native serverName values, and `standardExcludedTools` accepts exact public
+tool names. Configure these in the existing plugin configuration, not AgentSpec.
+Server exclusions cover late registration and hashed long raw tool names. Model
+exposure, execution guards and capability facts share this policy. The prepended
+pre-step listener filters excluded native Skill catalog/instruction injections
+after native middleware; tool dispatch separately rejects excluded skill loads.
+Already-loaded historical instructions are not erased; use a new session after a
+policy change when clean context is required. Skill exclusion is not a filesystem
+sandbox or CLI-private loader policy. Do not claim it prevents arbitrary file reads.
+Authored Agent fences, native approval and server-side target/identity checks remain.
+Removing a plugin exclusion is not a credential or target authorization grant.
 
 Only standard native chat has the new `standardMaxSteps` budget (default 24).
 Four identical non-status tool/argument/result observations, including interleaved
@@ -40,8 +49,9 @@ menu entry still requires a matching host model route; the local deployment adds
 qwen-flash beside qwen-plus-latest through its existing provider, without changing
 the model chosen by any existing Task or rotating credentials.
 
-Acceptance: `test/session-capabilities.test.ts` covers registry facts, identity
-denial via native ToolRuntime, repeat limits and safe persistence;
+Acceptance: `test/session-capabilities.test.ts` covers default native inheritance,
+explicit exclusions/removal via native ToolRuntime, native middleware order,
+unchanged authored roles/permissions, repeat limits and safe persistence;
 `scripts/test-session-capabilities-browser.py` inspects the public tab without
 starting a chat. Production prompt acceptance must separately prove the original
 inventory request terminates without business-tool calls. Deploy only at the

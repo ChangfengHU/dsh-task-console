@@ -166,7 +166,7 @@ export class TaskConsoleService extends TypertRemoteService {
       mcp: this.hostMcp().map(m => ({ server: m.serverName, disabled: m.disabled, registeredTools: m.tools, connection: 'not-probed' })),
       skills: (await scanSkills()).map(s => ({ name: s.name, source: s.root, state: 'installed-not-necessarily-loaded' })),
       agents: (await this.intakeAgents()).map(a => ({ id: a.id, name: a.name, mcpTools: a.mcpTools, skills: a.skills, delegation: 'not-started' })),
-    }), this.runner.store.kernel.db) })
+    }), this.runner.store.kernel.db, () => this.hostMcp()) })
       .then(() => this.markExistingTaskSessionsInternal())
       .then(() => this.intake.start())
     void this.ready.catch(err => console.error('[task-console] runner failed to start:', err))

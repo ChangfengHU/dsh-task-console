@@ -22,6 +22,9 @@ export const Config = z.object({
   standardMaxSteps: z.natural().min(1).default(24),
   standardMcpInheritance: z.union(['inherit', 'discover-only']).default('inherit'),
   standardSkillInheritance: z.union(['inherit', 'discover-only']).default('inherit'),
+  standardExcludedSkills: z.array(z.string()).default([]),
+  standardExcludedMcpServers: z.array(z.string()).default([]),
+  standardExcludedTools: z.array(z.string()).default([]),
 })
 
 export { TaskConsoleService } from './service.ts'

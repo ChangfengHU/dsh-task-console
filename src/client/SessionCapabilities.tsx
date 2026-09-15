@@ -35,6 +35,13 @@ export function SessionCapabilitiesView({ sessionId }: { sessionId: string }) {
     {!value ? <p>正在读取能力事实…</p> : <>
       <p>角色：{value.definition?.role ?? '未知'} · {value.live ? '当前运行时' : '历史 / 尚未观测'} · {value.checkedAt ? new Date(value.checkedAt).toLocaleString() : '无快照'}</p>
       <p>{value.notice ?? '已注册不代表凭据有效或所有目标操作获授权。此页面不执行任何业务探测。'}</p>
+      {value.inheritancePolicy ? <details><summary>通用 Agent：默认继承 · 显式排除</summary>
+        <p>Skill：{value.inheritancePolicy.skills} · MCP：{value.inheritancePolicy.mcp}</p>
+        <p>排除 Skill：{value.inheritancePolicy.excludedSkills?.join('、') || '无'}</p>
+        <p>排除 MCP：{value.inheritancePolicy.excludedMcpServers?.join('、') || '无'}</p>
+        <p style={{ overflowWrap: 'anywhere' }}>排除工具：{value.inheritancePolicy.excludedTools?.join('、') || '无'}</p>
+        <p>仅适用于通用 Agent；专用角色、原生审批及服务端鉴权保持不变。历史已加载内容不会被抹除。</p>
+      </details> : null}
       <details><summary>角色定义（不是实际加载结果）</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(value.definition ?? {}, null, 2)}</pre></details>
       {value.lastModelRequest ? <details><summary>最近实际发送给模型的工具 · {value.lastModelRequest.tools.length} 项</summary><p>{value.lastModelRequest.provider} / {value.lastModelRequest.model} · {new Date(value.lastModelRequest.checkedAt).toLocaleString()}</p><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{value.lastModelRequest.tools.join('\n')}</pre></details> : null}
       <h4>实际工具与环境继承</h4>

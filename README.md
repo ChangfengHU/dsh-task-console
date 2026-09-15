@@ -2,7 +2,7 @@
 
 任务台 for DeepSeek Harness (dsh).
 
-**Session capability facts (0.30.28):** the conversation's Capabilities tab and
+**Session capability facts (0.30.29):** the conversation's Capabilities tab and
 read-only `session_capabilities` tool share actual runtime facts, with separate
 role configuration, environment inheritance, missing registrations and historical
 failure evidence. Standard chat has a configurable 24-step default budget and

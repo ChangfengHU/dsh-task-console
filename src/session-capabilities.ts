@@ -6,18 +6,20 @@ import { publicToolName } from './filtered-mcp-client.ts'
 
 export const CAPABILITY_TOOLS = ['session_capabilities', 'environment_capabilities']
 const STANDARD_LIMIT = 24
-export interface CapabilityPolicy { standardMaxSteps?: number; standardMcpInheritance?: 'inherit' | 'discover-only'; standardSkillInheritance?: 'inherit' | 'discover-only' }
+export interface CapabilityPolicy {
+  standardMaxSteps?: number
+  standardMcpInheritance?: 'inherit' | 'discover-only'
+  standardSkillInheritance?: 'inherit' | 'discover-only'
+  standardExcludedSkills?: string[]
+  standardExcludedMcpServers?: string[]
+  standardExcludedTools?: string[]
+}
 const REPEAT_LIMIT = 4
 const canonical = (v: any): any => Array.isArray(v) ? v.map(canonical) : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])])) : v
 const digest = (v: any) => createHash('sha256').update(JSON.stringify(canonical(v)) ?? '').digest('hex')
 const standard = (agent: any) => !!agent?.session && !agent.session.id.startsWith('task-') && (!agent.session.header?.agentPreset || agent.session.header.agentPreset === 'standard')
 const roleOf = (agent: any) => agent?.session?.header?.agentPreset ?? 'standard'
 const toolText = (message: any): string => (message?.content ?? []).flatMap((b: any) => b.type === 'tool-result' ? b.content ?? [] : [b]).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
-
-/** A registered schema is not a role grant. Only hide the known raw identity surface. */
-export function restrictedBrowserTool(schema: any, agent: any): boolean {
-  return standard(agent) && /^mcp__.*__browser_/.test(schema.name) && Object.hasOwn(schema.parameters?.properties ?? {}, 'sessionId')
-}
 
 export class ChatProgress {
   turn = -1
@@ -53,7 +55,7 @@ export class ChatProgress {
 export class SessionCapabilities {
   private progress = new WeakMap<object, ChatProgress>()
   policy: CapabilityPolicy = {}
-  constructor(private ctx: any, private environment: () => Promise<any>, private db: any) {
+  constructor(private ctx: any, private environment: () => Promise<any>, private db: any, private mcpSources: () => { serverName: string; tools: string[] }[] = () => []) {
     db.exec('CREATE TABLE IF NOT EXISTS dsh_session_capability_snapshots (session_id TEXT PRIMARY KEY, checked_at TEXT NOT NULL, snapshot_json TEXT NOT NULL, request_json TEXT)')
   }
   private state(agent: any) {
@@ -62,7 +64,25 @@ export class SessionCapabilities {
     return state
   }
   private restricted(schema: any, agent: any) {
-    return restrictedBrowserTool(schema, agent) || standard(agent) && (this.policy.standardMcpInheritance === 'discover-only' && schema.name.startsWith('mcp__') || this.policy.standardSkillInheritance === 'discover-only' && schema.name === 'skill')
+    if (!standard(agent)) return false
+    return this.policy.standardExcludedTools?.includes(schema.name) ||
+      this.policy.standardMcpInheritance === 'discover-only' && schema.name.startsWith('mcp__') ||
+      this.policy.standardSkillInheritance === 'discover-only' && schema.name === 'skill' ||
+      this.policy.standardExcludedMcpServers?.some(server => /^[A-Za-z0-9_-]{1,32}$/.test(server) && schema.name.startsWith(`mcp__${server}__`)) ||
+      this.mcpSources().some(m => this.policy.standardExcludedMcpServers?.includes(m.serverName) && m.tools.some(n => publicToolName(m.serverName, n) === schema.name))
+  }
+  private skillRestricted(name: string, agent: any) {
+    return standard(agent) && (this.policy.standardSkillInheritance === 'discover-only' || this.policy.standardExcludedTools?.includes('skill') || this.policy.standardExcludedSkills?.includes(name))
+  }
+  private filterSkillMessages(messages: any[], agent: any) {
+    return messages.flatMap(message => {
+      const source = message.source ?? {}
+      if (source.kind === 'skill-invocation' && this.skillRestricted(source.name, agent)) return []
+      if (source.kind !== 'skill-catalog' || !Array.isArray(source.entries)) return [message]
+      const entries = source.entries.filter((s: any) => !this.skillRestricted(s.name, agent))
+      if (entries.length === source.entries.length) return [message]
+      return [{ ...message, source: { ...source, entries }, content: [{ type: 'text', text: `当前允许按需加载的 Skill（替代之前的目录；未列出的被当前策略排除）：\n${entries.map((s: any) => JSON.stringify({ name: s.name, description: s.description })).join('\n')}\n执行匹配任务前使用 skill 工具加载完整说明；目录不是授权绕过其他工具限制。` }] }]
+    })
   }
   async describe(agent: any, exposed?: any[]) {
     const session = agent.session, role = roleOf(agent)
@@ -92,14 +112,14 @@ export class SessionCapabilities {
     if (this.ctx.get('skills')) {
       try {
         const catalog = await this.ctx.get('skills').snapshot({ scope: agent, cwd: session.header?.cwd })
-        skills = catalog.skills.filter((s: any) => s.invocation?.modelInvocable !== false).map((s: any) => ({ name: s.name, source: spec?.skills.includes(s.name) ? 'agent-definition' : 'environment-inherited', state: loaded.has(s.name) ? 'loaded-in-session-history' : availableNames.has('skill') ? 'available-on-demand' : 'not-callable', provider: s.provider }))
+        skills = catalog.skills.filter((s: any) => s.invocation?.modelInvocable !== false).map((s: any) => ({ name: s.name, source: spec?.skills.includes(s.name) ? 'agent-definition' : 'environment-inherited', state: this.skillRestricted(s.name, agent) ? 'restricted' : loaded.has(s.name) ? 'loaded-in-session-history' : availableNames.has('skill') ? 'available-on-demand' : 'not-callable', provider: s.provider }))
         skillDiscovery = catalog.complete ? 'complete' : 'partial'
       } catch { skillDiscovery = 'discovery-failed' }
     }
-    const tools = schemas.map((s: any) => ({ name: s.name, kind: s.name.startsWith('mcp__') ? 'mcp' : 'native', source: CAPABILITY_TOOLS.includes(s.name) ? 'platform' : declared.has(s.name) ? 'agent-definition' : 'environment-inherited', state: availableNames.has(s.name) ? 'registered' : 'restricted', ...(restrictedBrowserTool(s, agent) ? { reason: 'requires-browser-manager-or-reviewed-task' } : {}), ...(errors.has(s.name) ? { lastFailure: errors.get(s.name) } : {}) }))
+    const tools = schemas.map((s: any) => ({ name: s.name, kind: s.name.startsWith('mcp__') ? 'mcp' : 'native', source: CAPABILITY_TOOLS.includes(s.name) ? 'platform' : declared.has(s.name) ? 'agent-definition' : 'environment-inherited', state: availableNames.has(s.name) ? 'registered' : 'restricted', ...(this.restricted(s, agent) ? { reason: 'explicit-standard-exclusion' } : {}), ...(errors.has(s.name) ? { lastFailure: errors.get(s.name) } : {}) }))
     const out = {
       sessionId: session.id, checkedAt: new Date().toISOString(), live: true,
-      inheritancePolicy: { mcp: this.policy.standardMcpInheritance ?? 'inherit', skills: this.policy.standardSkillInheritance ?? 'inherit', appliesTo: 'standard-native-session', maxSteps: this.policy.standardMaxSteps ?? STANDARD_LIMIT },
+      inheritancePolicy: { mcp: this.policy.standardMcpInheritance ?? 'inherit', skills: this.policy.standardSkillInheritance ?? 'inherit', excludedSkills: this.policy.standardExcludedSkills ?? [], excludedMcpServers: this.policy.standardExcludedMcpServers ?? [], excludedTools: this.policy.standardExcludedTools ?? [], appliesTo: 'standard-native-session', maxSteps: this.policy.standardMaxSteps ?? STANDARD_LIMIT },
       definition: { role, authored: !!spec, observation: spec ? 'task-console-definition' : 'no-task-console-definition; use runtime facts, not an assumed empty preset', tools: [...declared], skills: spec?.skills ?? [] },
       current: { tools, skills, skillDiscovery, permissionPreset: this.ctx.get('permissionPresets')?.current(session.events ?? []) ?? 'not-observed', configuredButNotRegistered: [...declared].filter(n => !schemas.some((s: any) => s.name === n)) },
       answerContract: { language: '用户当前消息的语言', registeredIsNotAuthorized: true, cannotCall: tools.filter((t: any) => t.state === 'restricted').map((t: any) => t.name), requiredCaveat: '必须单独说明受限工具不可调用；其余已注册工具也不保证凭据有效或具体操作获授权。禁止总结为全部能力都可使用。Skill 是可按需加载，不等于已加载。' },
@@ -134,7 +154,7 @@ export class SessionCapabilities {
     disposers.push(this.ctx.tools.guard((exec: any) => {
       if (!standard(exec.agent)) return
       const schema = this.ctx.tools.get(exec.name, exec.agent)
-      if (schema && this.restricted(schema, exec.agent)) return '当前角色未获此操作身份或部署不允许继承此工具。请查询 environment_capabilities 查找已配置的 Agent；不得猜测 sessionId 或通过其他工具绕过限制。'
+      if (schema && this.restricted(schema, exec.agent) || exec.name === 'skill' && this.skillRestricted(exec.arguments?.name, exec.agent)) return '管理员显式排除了通用 Agent 的这项能力。不得通过其他工具绕过；原生鉴权与审批仍然适用。'
       return this.state(exec.agent).reason || undefined
     }))
     disposers.push(this.ctx.on('session/event', (session: any, event: any) => {
@@ -163,8 +183,8 @@ export class SessionCapabilities {
       if (decision.kind === 'reject' || !standard(input.agent)) return decision
       const reason = this.state(input.agent).boundary(input.step, this.policy.standardMaxSteps ?? STANDARD_LIMIT)
       if (reason) throw Error(`SESSION_PROGRESS_GUARD: ${reason}`)
-      return decision
-    }))
+      return { ...decision, messages: this.filterSkillMessages(decision.messages, input.agent) }
+    }, { prepend: true }))
     return () => { for (const dispose of disposers.reverse()) dispose() }
   }
 }

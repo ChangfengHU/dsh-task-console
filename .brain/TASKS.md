@@ -1,5 +1,7 @@
 # 后续优化
 
+- [x] [TASK-SESSION-RECENT-ALIAS-034] 0.30.30：Recent按原生活动时间跨文件夹显示，10条/更多/收起，保留隐藏规则、Pinned/Favorites及文件夹；dsh.vyibc.com复用原隧道DNS目标和既有Worker，仅新增别名DNS与路由。314测试无跳过；双域名真实浏览器深链、历史、切换、刷新及1440/390列表验收通过，无业务写入。Task/定时/Action哈希不变，见 `dev-log/2026-09-15-recent-sessions-alias.md`。
+
 - [ ] [TASK-SESSION-CAPABILITY-033] 0.30.29 按用户确认改为通用Agent默认继承、显式排除Skill/MCP/工具，去掉0.30.28硬编码浏览器限制；专用角色、原生鉴权及循环保护保留。双零部署，313测试无跳过通过；真实Qwen Plus只查询一次目录22.176秒结束，89注册工具与实际模型请求89项一致，排除为空，Task/定时/Action哈希不变。Qwen Flash曾未调用目录直接生成答案，不算成功验收。自动委派、CLI私有观测与独立搜索认证仍非本轮已完成能力。详见 `dev-log/2026-09-15-standard-inheritance.md`，旧版诊断保留于原日志。
 
 - [x] [TASK-SESSION-SHORTCUTS-032] 0.30.27 已于07:18:24Z在原生会话及Task双零活跃窗口部署。Session模块提供原侧栏置顶/收藏虚拟分组及SQLite独立标记，不移动复制会话、不新增菜单。308回归零跳过，公网真实菜单四次标记写入、刷新/取消/跳转、1440/390px和深浅色通过；测试标记已取消，无新crashed Run。任务定义/定时绑定/Task Actions哈希不变；执行报告/返回DAG/Esc/Agent/Board原交互回归通过。临时构建已清理；证据见 `dev-log/2026-09-15-session-shortcuts.md`。

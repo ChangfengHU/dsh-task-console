@@ -65,6 +65,25 @@ its presence in actual session context events, not merely a mocked hook result.
 
 ## Session module: pinned and favorite shortcuts
 
+Recent (0.30.30) is a metadata-only cross-folder projection in the same sidebar
+slot, below Pinned and above Favorites. Sort native `updatedAt` descending with
+session ID as deterministic tie-breaker, unknown timestamps last. Show ten rows,
+expand by ten, and retain collapse/less controls. It does not track last opened
+time, move folders, persist another session table or load transcripts for sorting.
+Native metadata subscriptions update it; existing archived/internal/subagent/blank
+filters remain. Selecting a row uses the existing native open and session query.
+
+The deployment alias `dsh.vyibc.com` points to the same backend as
+`dsh-152-32-214-95.vyibc.com`. In the Vault `service:cloudflare` forwarding account,
+the exact DNS CNAME follows the original tunnel target and its exact `/*` Worker
+route uses existing `dsh-loopback-proxy`. No duplicate service or separate session
+store exists. The Worker already rewrites Origin/Referer and forwards WebSockets
+through the existing loopback-origin tunnel. Do not add another auth bypass or
+change the original hostname route to implement aliases. Query live CF records
+before changes; preserve all unrelated DNS, Worker routes and tunnel ingress.
+Browser-local preferences remain origin-specific even though backend sessions and
+shortcut marks are shared. Verify deep links and WebSocket/history on both names.
+
 The package remains `dsh-task-console`. Session enhancements are a small module,
 not a third top-level menu or another session database. `dsh_session_shortcuts`
 in the existing local SQLite database stores only session ID and independent

@@ -11,6 +11,12 @@ export function shortcutRows(rows: SessionShortcut[], sessions: any, workspaces:
   return rows.filter(row => sessions.byId?.[row.sessionId] && !sessions.byId[row.sessionId].blank && sessions.byId[row.sessionId].origin !== 'subagent' && !hidden.has(row.sessionId))
 }
 
+export function recentSessionRows(sessions: any, workspaces: any): SessionShortcut[] {
+  const rows = Object.keys(sessions.byId ?? {}).map(sessionId => ({ sessionId, pinned: false, favorite: false, pinnedAt: 0, favoriteAt: 0 }))
+  const time = (id: string) => Number.isFinite(sessions.byId[id]?.updatedAt) ? sessions.byId[id].updatedAt : 0
+  return shortcutRows(rows, sessions, workspaces).sort((a, b) => time(b.sessionId) - time(a.sessionId) || a.sessionId.localeCompare(b.sessionId))
+}
+
 export function installSessionShortcuts(ctx: any): () => void {
   let state: State = { rows: [], ready: false, error: '', pending: new Set() }, live = true, generation = 0
   const listeners = new Set<() => void>()
@@ -70,27 +76,35 @@ export function installSessionShortcuts(ctx: any): () => void {
   return () => { live = false; ++generation; clearInterval(timer); stopSessions(); stopWorkspaces(); window.removeEventListener('focus', focus); document.removeEventListener('visibilitychange', focus); for (const c of controllers) c.abort(); style.remove(); if ((window as any)[KEY] === bridge) delete (window as any)[KEY]; window.dispatchEvent(new Event(EVENT)); listeners.clear() }
 }
 
-function MarkIcon({ kind }: { kind: ShortcutKind | 'folder' }) {
+function MarkIcon({ kind }: { kind: ShortcutKind | 'folder' | 'recent' }) {
+  if (kind === 'recent') return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 6v6l4 2" /></svg>
   return <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true"><path d={kind === 'pinned' ? 'M9 3h6l-1 6 4 4v2h-5v6l-1-2-1 2v-6H6v-2l4-4z' : kind === 'favorite' ? 'm12 3 2.8 5.7 6.3.9-4.6 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9z' : 'M3 7V5h7l2 2h9v13H3z'} /></svg>
 }
 
 function SessionShortcuts({ ctx, bridge }: { ctx: any; bridge: any }) {
   const state = useSyncExternalStore(bridge.subscribe, bridge.getSnapshot) as State
   const [expanded, expand] = useState(true)
+  const [recentExpanded, expandRecent] = useState(true), [recentLimit, setRecentLimit] = useState(10)
   const rows: SessionShortcut[] = bridge.visible(), sessions = ctx.sessions.list.getSnapshot()
+  const recent = recentSessionRows(sessions, ctx.workspaces.list.getSnapshot())
   const pinned = rows.filter(r => r.pinned).sort((a, b) => b.pinnedAt - a.pinnedAt || a.sessionId.localeCompare(b.sessionId))
   const favorites = rows.filter(r => r.favorite).sort((a, b) => b.favoriteAt - a.favoriteAt || a.sessionId.localeCompare(b.sessionId))
-  const row = (r: SessionShortcut, kind: ShortcutKind) => {
+  const row = (r: SessionShortcut, kind: ShortcutKind | 'recent') => {
     const s = sessions.byId[r.sessionId], title = s.displayTitle || r.sessionId
-    return <div className={`dtc-session-row ${sessions.current === r.sessionId ? 'selected' : ''}`} key={r.sessionId} data-session-shortcut={r.sessionId}>
+    return <div className={`dtc-session-row ${sessions.current === r.sessionId ? 'selected' : ''}`} key={r.sessionId} data-session-shortcut={kind === 'recent' ? undefined : r.sessionId} data-session-recent={kind === 'recent' ? r.sessionId : undefined}>
       <button className="dtc-session-open" title={title} onClick={() => { const url = new URL(window.location.href); url.searchParams.set('session', r.sessionId); url.hash = ''; history.pushState('', '', url); ctx.sessions.open(r.sessionId); window.dispatchEvent(new HashChangeEvent('hashchange')) }}><MarkIcon kind={kind} /><span>{title}</span>{s.running ? <i title="Running" /> : null}</button>
-      <button className="dtc-session-remove" disabled={state.pending.size > 0} aria-label={kind === 'pinned' ? `Unpin ${title}` : `Unfavorite ${title}`} title={kind === 'pinned' ? '取消置顶' : '取消收藏'} onClick={() => bridge.set(r.sessionId, kind, false)}>×</button>
+      {kind === 'recent' ? <small style={{ flexShrink: 0, paddingRight: 8, color: 'var(--dsw-alias-label-tertiary)' }} title={s.updatedAt ? new Date(s.updatedAt).toLocaleString() : '活动时间未知'}>{s.updatedAt ? new Date(s.updatedAt).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' }) : '—'}</small> : <button className="dtc-session-remove" disabled={state.pending.size > 0} aria-label={kind === 'pinned' ? `Unpin ${title}` : `Unfavorite ${title}`} title={kind === 'pinned' ? '取消置顶' : '取消收藏'} onClick={() => bridge.set(r.sessionId, kind, false)}>×</button>}
     </div>
   }
   return <section className="dtc-session-shortcuts" aria-label="Session shortcuts">
     {state.error ? <div className="dtc-session-error" role="status">{state.error} <button onClick={() => bridge.refresh()}>重试</button></div> : null}
     {state.pending.size ? <div className="dtc-session-empty" role="status">正在保存会话标记…</div> : null}
     {pinned.length ? <div className="dtc-session-pinned"><div className="dtc-session-heading">Pinned <span>{pinned.length}</span></div><div className="dtc-session-items">{pinned.map(r => row(r, 'pinned'))}</div></div> : null}
+    <button className="dtc-session-heading folder" aria-label="Recent sessions" title="按最近活动排序，独立于文件夹；不移动原会话" aria-expanded={recentExpanded} onClick={() => expandRecent(!recentExpanded)}><span aria-hidden="true">{recentExpanded ? '▾' : '▸'}</span><MarkIcon kind="recent" />Recent <span>{recent.length}</span></button>
+    {recentExpanded ? <div className="dtc-session-recent"><div className="dtc-session-items">{recent.length ? recent.slice(0, recentLimit).map(r => row(r, 'recent')) : <div className="dtc-session-empty">暂无可显示的最近会话</div>}</div>
+      {recent.length > recentLimit ? <button className="dtc-session-heading folder" onClick={() => setRecentLimit(n => n + 10)}>Show more</button> : null}
+      {recentLimit > 10 ? <button className="dtc-session-heading folder" onClick={() => setRecentLimit(10)}>Show less</button> : null}
+    </div> : null}
     <button className="dtc-session-heading folder" aria-expanded={expanded} onClick={() => expand(!expanded)}><span aria-hidden="true">{expanded ? '▾' : '▸'}</span><MarkIcon kind="folder" />Favorites <span>{favorites.length}</span></button>
     {expanded ? <div className="dtc-session-items">{favorites.length ? favorites.map(r => row(r, 'favorite')) : <div className="dtc-session-empty">{state.ready ? '在会话 ⋯ 菜单中添加收藏' : '正在读取收藏…'}</div>}</div> : null}
   </section>

@@ -41,7 +41,7 @@ test('marks reject unknown/internal targets, malformed inputs and stale expected
 
 test('shortcut groups reuse native metadata, exclude archived/internal/subagent/blank/missing sessions and do not move folders', async () => {
   const source = await readFile(new URL('../src/client/session-shortcuts.tsx', import.meta.url), 'utf8')
-  const { code } = await transform(source.slice(source.indexOf('export function shortcutRows'), source.indexOf('export function installSessionShortcuts')).replace('export function', 'function'), { loader: 'ts' })
+  const { code } = await transform(source.slice(source.indexOf('export function shortcutRows'), source.indexOf('export function installSessionShortcuts')).replaceAll('export function', 'function'), { loader: 'ts' })
   const shortcutRows = runInNewContext(code + ';shortcutRows')
   const rows = ['visible', 'archived', 'internal', 'child', 'blank', 'missing'].map(sessionId => ({ sessionId, pinned: true, favorite: true, pinnedAt: 1, favoriteAt: 1 }))
   const sessions = { byId: { visible: { displayTitle: 'Original title' }, archived: {}, internal: {}, child: { origin: 'subagent' }, blank: { blank: true } } }
@@ -63,6 +63,19 @@ test('supported native sidebar bridge is additive, syntactically valid, idempote
   assert.ok(patched.includes('archivedSessionIds: undiscoverableSessionIds'))
   assert.throws(() => patchSessionShortcuts(source.replace('const sessionMenuItems = [', 'const changedMenu = [')))
   assert.throws(() => patchSessionShortcuts('/* dtc:session-shortcuts-v1 */'))
+})
+
+test('recent sessions span folders, sort actual activity, and preserve hidden-session policy', async () => {
+  const source = await readFile(new URL('../src/client/session-shortcuts.tsx', import.meta.url), 'utf8')
+  const { code } = await transform(source.slice(source.indexOf('export function shortcutRows'), source.indexOf('export function installSessionShortcuts')).replaceAll('export function', 'function'), { loader: 'ts' })
+  const recent = runInNewContext(code + ';recentSessionRows')
+  const sessions = { byId: { old: { updatedAt: 1 }, recent: { updatedAt: 20 }, tie: { updatedAt: 20 }, unknown: {}, child: { origin: 'subagent', updatedAt: 50 }, blank: { blank: true, updatedAt: 60 }, archived: { updatedAt: 70 }, internal: { updatedAt: 80 } } }
+  const workspaces = { items: [{ id: 'folder-a', sessionIds: ['old'] }, { id: 'folder-b', sessionIds: ['recent'] }], archivedSessionIds: ['archived'], internalSessionIds: ['internal'] }
+  const before = JSON.stringify({ sessions, workspaces })
+  assert.equal(JSON.stringify(recent(sessions, workspaces).map((r: any) => r.sessionId)), '["recent","tie","old","unknown"]')
+  assert.equal(JSON.stringify({ sessions, workspaces }), before)
+  sessions.byId.old.updatedAt = 100
+  assert.equal(recent(sessions, workspaces)[0].sessionId, 'old')
 })
 
 test('client uses narrow RPCs, keeps failed writes honest, and ignores stale refresh responses', async () => {

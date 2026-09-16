@@ -21,3 +21,16 @@ the same user service, loading this already-pushed package. The public live
 Capabilities tab subsequently passed the same read-only desktop/narrow acceptance:
 two reads, no page errors, no business writes, and the post-check still found zero
 running native sessions.
+
+## Follow-up — light Tab style loading and mobile fit
+
+The initial visual refresh accidentally placed the Capabilities rules only in
+the deferred Agent/Board stylesheet. The conversation Tab is intentionally a
+lightweight entry, so opening it first rendered unstyled host text. Its own
+light stylesheet now carries the complete scoped token set and component rules;
+it no longer depends on opening another Console page. Narrow layouts use a
+two-column capability summary before the Tool/Skill cards collapse, keeping the
+first useful controls above the fixed composer. Candidate desktop and narrow
+browser acceptance passed with two read calls, no page errors and no business
+writes. Screenshots were inspected then moved to the system trash; no temporary
+assets remain in the project.

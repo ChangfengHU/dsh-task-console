@@ -1,7 +1,8 @@
 # Agent and Task configuration migration
 
-Implemented `dsh-task-console` 0.31.0 configuration-only migration. The Task
-home now links to `#/tc/tasks/migration`, with R2 export and URL-based import.
+Implemented `dsh-task-console` 0.31.1 configuration-only migration. Agent home
+and Task home both link to the shared `#/tc/tasks/migration` page, with R2 export
+and URL-based import. 0.31.1 fixes the missing Agent-page entry found in public UI.
 
 Export allowlist: authored user AgentSpec, Agent Actions, non-archived Task
 definition, Task Actions, participant order, workflow/DAG design, failure policy

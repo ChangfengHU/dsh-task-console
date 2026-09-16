@@ -159,6 +159,7 @@ export function Console({ api }: { api: Api }) {
         <div className="dtc-brand"><span className="ic">{section === 'agents' ? '◎' : '▦'}</span><span><b>{section === 'agents' ? 'Agent' : '任务中心'}</b><small>{section === 'agents' ? '预置配置与能力边界' : '任务编排与交付验收'}</small></span></div>
         <div className="dtc-head-actions">
           {executionPage ? <TaskTabs api={api} id={route[1]} actions={false} batchId={route[2] === 'runs' ? route[3] : undefined} report={report} /> : null}
+          {section === 'agents' && !route[1] ? <button className="dtc-btn sm" onClick={() => go('tasks/migration')}>导入 / 导出</button> : null}
           {section === 'tasks' && !route[1] ? <><button className="dtc-btn sm" onClick={() => go('tasks/migration')}>导入 / 导出</button><button className="dtc-btn sm" onClick={() => go('tasks/executions')}>执行记录</button><button className="dtc-btn sm" onClick={() => go('tasks/plans')}>计划审查</button><button className="dtc-btn sm pri" onClick={() => go('tasks/new')}>＋ 新建任务</button></> : null}
           <span className="dtc-head-context">{section === 'agents' ? (route[1] === 'new' ? '新建 Agent' : 'Agent 配置') : route[1] === 'new' ? '新建任务' : route[1] === 'executions' ? '执行记录' : route[1] === 'migration' ? '配置迁移' : route[1] ? '任务详情' : '任务看板'}</span>
           <button className="dtc-close" title="关闭工作台" aria-label="关闭工作台" onClick={closeConsole}>×</button>

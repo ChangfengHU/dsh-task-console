@@ -1,8 +1,8 @@
 # Task Console runtime contracts
 
-## Configuration migration (0.31.0)
+## Configuration migration (0.31.1)
 
-The Task home exposes one configuration-migration page. Export is host-side and
+Agent home and Task home expose one shared configuration-migration page. Export is host-side and
 uploads one JSON envelope to the configured R2 endpoint; the browser receives
 only its public URL, byte count and SHA256. The versioned envelope contains
 authored user Agent specs and Actions plus non-archived Task definitions and

@@ -90,3 +90,4 @@
   - Stage 2 仅走受限 host-adapter；Stage 5/6/7/8/10 走控制面；Stage 1/3/4/9 为新鲜探测闸门。
   - Cloud 成功后仍须新鲜宿主探测证明健康；运行中操作沿用相同 operation ID 和账本 attempt。
   - 代码和离线回归完成，生产配置、迁移、隔离节点集成验收与部署尚未执行。
+- [x] [TASK-CONFIG-MIGRATION-035] 0.31.0 为 dsh-task-console 增加 Agent/Task 纯配置迁移：服务端导出 R2 URL、同源 URL 预检、单次确认导入；不含会话/执行/产物/密钥，冲突与缺依赖跳过，导入 cron 强制停用。318 测试零失败、构建和公网桌面/手机只读验收通过；未在验收中真实导出生产配置或执行导入。详见 `dev-log/2026-09-16-config-migration.md`。

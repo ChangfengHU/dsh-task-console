@@ -48,6 +48,7 @@ import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
 import { SessionShortcuts, shortcutChange } from './session-shortcuts.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
+import { createEnvelope, downloadConfig, taskConfig, uploadConfig, type ConfigEnvelope } from './config-migration.ts'
 
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
 const TOOL_PREFIX = /^mcp__(.+?)__(.+)$/
@@ -70,6 +71,7 @@ export class TaskConsoleService extends TypertRemoteService {
   private readonly ready: Promise<void>
   private headerCache?: { at: number; value: AgentSessionHeader[] }
   private headerRead?: Promise<AgentSessionHeader[]>
+  private readonly pendingConfigImports = new Map<string, { envelope: ConfigEnvelope; expiresAt: number }>()
 
   private shortcutHidden(): Set<string> {
     const registry = (this.ctx as any).get('workspaceRegistry')
@@ -337,6 +339,101 @@ export class TaskConsoleService extends TypertRemoteService {
       rows.push({ id: p.id, name, description, trust: p.trust, broken: p.broken, path: dir, spec, actionCount, createdAt: await readAgentCreatedAt(dir), firstUsedAt: firstUsed.get(p.id) ?? null })
     }
     return JSON.stringify(sortAgents(rows))
+  }
+
+  private configR2() {
+    return {
+      endpoint: process.env.DSH_TASK_CONSOLE_UPLOAD_URL ?? process.env.UPLOAD_R2_URL ?? 'https://upload-r2.vyibc.com',
+      domain: process.env.DSH_TASK_CONSOLE_PUBLIC_DOMAIN ?? process.env.UPLOAD_R2_DOMAIN ?? 'https://resource.vyibc.com',
+      token: process.env.DSH_TASK_CONSOLE_UPLOAD_TOKEN ?? process.env.UPLOAD_R2_TOKEN ?? '',
+    }
+  }
+
+  private taskActionsForExport(taskId: string) {
+    return this.creator.actions.read(taskId).actions
+  }
+
+  /** Export definitions only. Sessions, runs, events, artifacts and secret values never enter the envelope. */
+  async exportConfig(): Promise<string> {
+    await this.ready
+    const presets = (this.ctx as any).get('agentPresets')
+    const agents = [] as { spec: AgentSpec; actions: import('./agent-actions.ts').AgentAction[] }[]
+    for (const preset of (presets ? await presets.list() : []) as any[]) {
+      if (preset.trust !== 'user') continue
+      const dir = dirname(String(preset.path)), spec = await readSpec(dir)
+      if (!spec) continue
+      agents.push({ spec, actions: (await readActions(dir)).actions })
+    }
+    const tasks = [...this.runner.store.tasks.values()].filter(task => !task.archivedAt).map(task => taskConfig(task, this.taskActionsForExport(task.id)))
+    let version = 'unknown'
+    try { version = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json', import.meta.url), 'utf8')).version ?? version } catch { /* package metadata is optional */ }
+    const envelope = createEnvelope({ agents, tasks }, version)
+    const result = await uploadConfig(envelope, this.configR2())
+    return JSON.stringify({ ...result, exportedAt: envelope.exportedAt, digest: envelope.digest.value, counts: { agents: agents.length, tasks: tasks.length }, omitted: ['sessions', 'runs', 'events', 'artifacts', 'attachments', 'logs', 'credentials'] })
+  }
+
+  private configImportView(envelope: ConfigEnvelope) {
+    const existingAgents = new Set<string>(), existingTasks = new Set(this.runner.store.tasks.keys())
+    const presets = (this.ctx as any).get('agentPresets')
+    const skills = new Set<string>(), mcp = new Set(this.hostMcp().map(row => row.serverName))
+    return Promise.all([(presets ? presets.list() : []) as Promise<any[]> | any[], scanSkills()]).then(([rows, skillRows]) => {
+      for (const row of rows as any[]) existingAgents.add(String(row.id))
+      for (const row of skillRows) skills.add(row.name)
+      const agents = envelope.payload.agents.map(row => {
+        const missingSkills = row.spec.skills.filter(name => !skills.has(name))
+        const missingMcp = Object.keys(row.spec.mcpTools).filter(name => !mcp.has(name))
+        return { id: row.spec.id, name: row.spec.name, conflict: existingAgents.has(row.spec.id), missingSkills, missingMcp, ready: !missingSkills.length && !missingMcp.length }
+      })
+      const available = new Set([...existingAgents, ...agents.filter(row => !row.conflict && row.ready).map(row => row.id)])
+      const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: row.participants.map(p => p.agentId).filter(id => !available.has(id)), scheduleDisabled: row.trigger.kind === 'cron' }))
+      return { agents, tasks, counts: { agents: agents.length, tasks: tasks.length }, exportedAt: envelope.exportedAt, sourceVersion: envelope.source.version, digest: envelope.digest.value }
+    })
+  }
+
+  async previewConfigImport(payload: string): Promise<string> {
+    await this.ready
+    const { url } = JSON.parse(payload) as { url?: string }
+    if (!url) throw Error('请输入 R2 配置地址')
+    const downloaded = await downloadConfig(url, this.configR2().domain)
+    const importId = randomUUID()
+    const now = Date.now()
+    for (const [id, row] of this.pendingConfigImports) if (row.expiresAt <= now) this.pendingConfigImports.delete(id)
+    this.pendingConfigImports.set(importId, { envelope: downloaded.envelope, expiresAt: now + 10 * 60_000 })
+    return JSON.stringify({ importId, expiresAt: new Date(now + 10 * 60_000).toISOString(), bytes: downloaded.bytes, fileSha256: downloaded.fileSha256, ...(await this.configImportView(downloaded.envelope)) })
+  }
+
+  async applyConfigImport(payload: string): Promise<string> {
+    await this.ready
+    const { importId } = JSON.parse(payload) as { importId?: string }
+    const pending = importId ? this.pendingConfigImports.get(importId) : undefined
+    if (!pending || pending.expiresAt <= Date.now()) throw Error('导入预览已过期，请重新校验 R2 地址')
+    this.pendingConfigImports.delete(importId!)
+    const view = await this.configImportView(pending.envelope)
+    const importedAgents: string[] = [], skippedAgents: { id: string; reason: string }[] = []
+    const importedTasks: string[] = [], skippedTasks: { id: string; reason: string }[] = []
+    const agentRows = new Map(view.agents.map(row => [row.id, row]))
+    const library = await scanSkills(), hostMcp = this.hostMcp(), hostTools = this.hostToolNames()
+    for (const row of pending.envelope.payload.agents) {
+      const state = agentRows.get(row.spec.id)!
+      if (state.conflict) { skippedAgents.push({ id: row.spec.id, reason: '同 ID Agent 已存在' }); continue }
+      if (!state.ready) { skippedAgents.push({ id: row.spec.id, reason: `缺少 ${[...state.missingSkills, ...state.missingMcp].join('、')}` }); continue }
+      const saved = await writePreset(row.spec, hostMcp, library, userPresetRoot(), hostTools)
+      const current = await readActions(saved.path)
+      await saveActions(saved.path, row.actions, current.revision)
+      importedAgents.push(row.spec.id)
+    }
+    const availableAgents = new Set<string>([...view.agents.filter(row => row.conflict).map(row => row.id), ...importedAgents])
+    for (const row of pending.envelope.payload.tasks) {
+      if (this.runner.store.tasks.has(row.id)) { skippedTasks.push({ id: row.id, reason: '同 ID Task 已存在' }); continue }
+      const missing = row.participants.map(p => p.agentId).filter(id => !availableAgents.has(id))
+      if (missing.length) { skippedTasks.push({ id: row.id, reason: `缺少 Agent:${missing.join('、')}` }); continue }
+      const task = { ...row, actions: undefined, enabled: false, createdAt: new Date().toISOString() } as any
+      delete task.actions
+      await this.runner.store.append({ t: 'task/created', at: task.createdAt, taskId: task.id, task })
+      if (row.actions.length) this.creator.actions.save(row.id, row.actions, '0')
+      importedTasks.push(row.id)
+    }
+    return JSON.stringify({ importedAgents, skippedAgents, importedTasks, skippedTasks, schedulesEnabled: false })
   }
 
   /** Header-only persistence index, coalesced briefly; live headers always win. */

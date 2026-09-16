@@ -20,6 +20,9 @@ export function activate(ctx: any): Promise<Api> {
       return JSON.parse(unwrap<string>(result, method)) as T
     }
     return {
+      exportConfig: () => call('exportConfig'),
+      previewConfigImport: (url: string) => call('previewConfigImport', { url }),
+      applyConfigImport: (importId: string) => call('applyConfigImport', { importId }),
       taskActions: taskId => call('taskActions', { taskId }),
       saveTaskActions: (taskId, actions, revision) => call('saveTaskActions', { taskId, actions, revision }),
       launchTaskAction: query => call('launchTaskAction', query),

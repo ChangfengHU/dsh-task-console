@@ -12,6 +12,9 @@ import { ArtifactResultAction, canPreviewArtifact } from './ArtifactDelivery.tsx
 import { TaskRunAction } from './TaskRunAction.tsx'
 
 export interface TasksApi {
+  exportConfig: () => Promise<ConfigExportResult>
+  previewConfigImport: (url: string) => Promise<ConfigImportPreview>
+  applyConfigImport: (importId: string) => Promise<ConfigImportResult>
   workflowCatalog: () => Promise<(Pick<TaskSpec, 'id' | 'title' | 'brief' | 'participants'> & { actionCount?: number })[]>
   taskActions: (taskId: string) => Promise<import('../agent-actions.ts').ActionCatalog>
   executionHistory: (query: import('../execution-history.ts').ExecutionQuery) => Promise<import('../execution-history.ts').ExecutionPage>
@@ -36,6 +39,10 @@ export interface TasksApi {
   openSession: (sessionId: string) => Promise<void>
   sessionTurns: (sessionId: string) => Promise<import('../wire.ts').TurnLedger>
 }
+
+export interface ConfigExportResult { publicUrl: string; bytes: number; sha256: string; digest: string; exportedAt: string; counts: { agents: number; tasks: number }; omitted: string[] }
+export interface ConfigImportPreview { importId: string; expiresAt: string; bytes: number; fileSha256: string; exportedAt: string; sourceVersion: string; digest: string; counts: { agents: number; tasks: number }; agents: { id: string; name: string; conflict: boolean; missingSkills: string[]; missingMcp: string[]; ready: boolean }[]; tasks: { id: string; title: string; conflict: boolean; missingAgents: string[]; scheduleDisabled: boolean }[] }
+export interface ConfigImportResult { importedAgents: string[]; skippedAgents: { id: string; reason: string }[]; importedTasks: string[]; skippedTasks: { id: string; reason: string }[]; schedulesEnabled: false }
 
 type TaskRow = TaskSpec & { nextFire: string | null }
 

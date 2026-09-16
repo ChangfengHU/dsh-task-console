@@ -1,5 +1,26 @@
 # Task Console runtime contracts
 
+## Configuration migration (0.31.0)
+
+The Task home exposes one configuration-migration page. Export is host-side and
+uploads one JSON envelope to the configured R2 endpoint; the browser receives
+only its public URL, byte count and SHA256. The versioned envelope contains
+authored user Agent specs and Actions plus non-archived Task definitions and
+Task Actions. Task definitions include participant order, workflow/DAG design,
+failure policy and cron rule. It never reads native sessions, batches, runs,
+events, replay rows, artifacts, attachments or logs. Credentials remain in
+Vault/host configuration; only references already present in authored config
+can travel.
+
+Import accepts HTTPS `.json` URLs from the configured public R2 origin only,
+rejects redirects and files above 5 MiB, validates schema and content digest,
+and holds the validated envelope in memory for ten minutes. Apply consumes that
+one preview, skips existing IDs, skips Agents with missing Skill/MCP dependencies,
+and skips Tasks with unavailable participants. It never overwrites an existing
+Agent or Task. Imported cron Tasks are always disabled and no Task is fired.
+Re-preview is required after expiry or service restart. The first release has
+no replace/merge mode by design.
+
 ## Session capability facts and standard-chat loop protection (0.30.29)
 
 `session_capabilities` and `environment_capabilities` are host-owned, read-only

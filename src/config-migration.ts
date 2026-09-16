@@ -16,9 +16,28 @@ export interface ConfigTask {
   cwd: string; timeoutSec: number; onFail: TaskSpec['onFail']; maxTries: number; actions: AgentAction[]
 }
 export interface ConfigPayload { agents: ConfigAgent[]; tasks: ConfigTask[] }
+export interface ConfigRuntime {
+  schema: 'dsh-task-console/fleet-runtime-v1'
+  mcps: { serverName: string; transport: 'streamable-http' | 'stdio'; credentialRef: 'fleet-admin' | 'onboard-vault-resolve'; runtime: string }[]
+  skills: { id: string; runtime: 'bootstrap-bundle' }[]
+}
 export interface ConfigEnvelope {
   schema: typeof CONFIG_SCHEMA; exportedAt: string; source: { plugin: 'dsh-task-console'; version: string }
-  digest: { algorithm: 'sha256'; value: string }; payload: ConfigPayload
+  digest: { algorithm: 'sha256'; value: string }; payload: ConfigPayload; runtime?: ConfigRuntime
+}
+
+/** Portable runtime contract. It intentionally names credentials, never values. */
+export const FLEET_RUNTIME: ConfigRuntime = {
+  schema: 'dsh-task-console/fleet-runtime-v1',
+  mcps: [
+    { serverName: 'vault', transport: 'streamable-http', credentialRef: 'fleet-admin', runtime: 'fleet-vault' },
+    { serverName: 'vyibc-fleet', transport: 'streamable-http', credentialRef: 'fleet-admin', runtime: 'fleet-api' },
+    { serverName: 'fleet-browser', transport: 'stdio', credentialRef: 'fleet-admin', runtime: 'browser-manager' },
+    { serverName: 'fleet-proxy-read', transport: 'stdio', credentialRef: 'onboard-vault-resolve', runtime: 'proxy-reader' },
+    { serverName: 'fleet-proxy', transport: 'stdio', credentialRef: 'onboard-vault-resolve', runtime: 'proxy-operator' },
+    { serverName: 'vyibc-wecom', transport: 'stdio', credentialRef: 'fleet-admin', runtime: 'wecom-mcp' },
+  ],
+  skills: ['awesome-novel', 'fleet-node-onboard', 'fleet-proxy-switch', 'linux-browser-vnc', 'linux-clash-skill'].map(id => ({ id, runtime: 'bootstrap-bundle' })),
 }
 
 function canonical(value: unknown): string {
@@ -41,12 +60,12 @@ export function taskConfig(task: TaskSpec, actions: AgentAction[]): ConfigTask {
   }
 }
 
-export function createEnvelope(payload: ConfigPayload, version: string, now = new Date()): ConfigEnvelope {
+export function createEnvelope(payload: ConfigPayload, version: string, now = new Date(), runtime: ConfigRuntime = FLEET_RUNTIME): ConfigEnvelope {
   const normalized: ConfigPayload = {
     agents: [...payload.agents].sort((a, b) => a.spec.id.localeCompare(b.spec.id)),
     tasks: [...payload.tasks].sort((a, b) => a.id.localeCompare(b.id)),
   }
-  return { schema: CONFIG_SCHEMA, exportedAt: now.toISOString(), source: { plugin: 'dsh-task-console', version }, digest: { algorithm: 'sha256', value: payloadDigest(normalized) }, payload: normalized }
+  return { schema: CONFIG_SCHEMA, exportedAt: now.toISOString(), source: { plugin: 'dsh-task-console', version }, digest: { algorithm: 'sha256', value: payloadDigest(normalized) }, payload: normalized, runtime }
 }
 
 function text(value: unknown, name: string, max = 8000): string {
@@ -86,7 +105,14 @@ export function parseEnvelope(raw: unknown): ConfigEnvelope {
   const payload = { agents, tasks }
   if (!/^[a-f0-9]{64}$/.test(e.digest.value) || payloadDigest(payload) !== e.digest.value) throw Error('配置包 SHA256 校验失败')
   if (!Number.isFinite(Date.parse(e.exportedAt))) throw Error('配置包导出时间无效')
-  return { schema: CONFIG_SCHEMA, exportedAt: new Date(e.exportedAt).toISOString(), source: { plugin: 'dsh-task-console', version: text(e.source.version, '版本', 80) }, digest: e.digest, payload }
+  let runtime: ConfigRuntime | undefined
+  if (e.runtime !== undefined) {
+    if (e.runtime?.schema !== 'dsh-task-console/fleet-runtime-v1' || !Array.isArray(e.runtime.mcps) || !Array.isArray(e.runtime.skills)) throw Error('运行时依赖清单无效')
+    const mcps = e.runtime.mcps.map((row: any) => ({ serverName: text(row?.serverName, 'MCP 名称', 120), transport: row?.transport === 'stdio' || row?.transport === 'streamable-http' ? row.transport : (() => { throw Error('MCP transport 无效') })(), credentialRef: row?.credentialRef === 'fleet-admin' || row?.credentialRef === 'onboard-vault-resolve' ? row.credentialRef : (() => { throw Error('MCP 凭据引用无效') })(), runtime: text(row?.runtime, 'MCP runtime', 160) }))
+    const skills = e.runtime.skills.map((row: any) => ({ id: text(row?.id, 'Skill 名称', 120), runtime: row?.runtime === 'bootstrap-bundle' ? row.runtime : (() => { throw Error('Skill runtime 无效') })() }))
+    runtime = { schema: 'dsh-task-console/fleet-runtime-v1', mcps, skills }
+  }
+  return { schema: CONFIG_SCHEMA, exportedAt: new Date(e.exportedAt).toISOString(), source: { plugin: 'dsh-task-console', version: text(e.source.version, '版本', 80) }, digest: e.digest, payload, ...(runtime ? { runtime } : {}) }
 }
 
 export function encodeEnvelope(envelope: ConfigEnvelope): Buffer {

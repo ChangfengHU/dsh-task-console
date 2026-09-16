@@ -48,7 +48,7 @@ import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
 import { SessionShortcuts, shortcutChange } from './session-shortcuts.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
-import { createEnvelope, downloadConfig, taskConfig, uploadConfig, type ConfigEnvelope } from './config-migration.ts'
+import { createBootstrapCommand, createEnvelope, downloadConfig, taskConfig, uploadConfig, type ConfigEnvelope } from './config-migration.ts'
 
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
 const TOOL_PREFIX = /^mcp__(.+?)__(.+)$/
@@ -349,6 +349,13 @@ export class TaskConsoleService extends TypertRemoteService {
     }
   }
 
+  private configBootstrap() {
+    return {
+      endpoint: process.env.FLEET_DSH_BOOTSTRAP_URL ?? 'https://fleet.vyibc.com/api/hub/dsh-config-bootstrap/service',
+      token: process.env.FLEET_DSH_BOOTSTRAP_TOKEN ?? '',
+    }
+  }
+
   private taskActionsForExport(taskId: string) {
     return this.creator.actions.read(taskId).actions
   }
@@ -370,6 +377,14 @@ export class TaskConsoleService extends TypertRemoteService {
     const envelope = createEnvelope({ agents, tasks }, version)
     const result = await uploadConfig(envelope, this.configR2())
     return JSON.stringify({ ...result, exportedAt: envelope.exportedAt, digest: envelope.digest.value, counts: { agents: agents.length, tasks: tasks.length }, omitted: ['sessions', 'runs', 'events', 'artifacts', 'attachments', 'logs', 'credentials'] })
+  }
+
+  /** Available only to the server process; the browser receives a scoped command. */
+  async createConfigBootstrap(payload: string): Promise<string> {
+    await this.ready
+    const { url } = JSON.parse(payload) as { url?: string }
+    if (!url) throw Error('请先导出配置包')
+    return JSON.stringify(await createBootstrapCommand(url, { domain: this.configR2().domain, ...this.configBootstrap() }))
   }
 
   private configImportView(envelope: ConfigEnvelope) {

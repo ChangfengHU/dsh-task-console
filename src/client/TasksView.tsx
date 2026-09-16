@@ -13,6 +13,7 @@ import { TaskRunAction } from './TaskRunAction.tsx'
 
 export interface TasksApi {
   exportConfig: () => Promise<ConfigExportResult>
+  createConfigBootstrap: (url: string) => Promise<ConfigBootstrapResult>
   previewConfigImport: (url: string) => Promise<ConfigImportPreview>
   applyConfigImport: (importId: string) => Promise<ConfigImportResult>
   workflowCatalog: () => Promise<(Pick<TaskSpec, 'id' | 'title' | 'brief' | 'participants'> & { actionCount?: number })[]>
@@ -41,6 +42,7 @@ export interface TasksApi {
 }
 
 export interface ConfigExportResult { publicUrl: string; bytes: number; sha256: string; digest: string; exportedAt: string; counts: { agents: number; tasks: number }; omitted: string[] }
+export interface ConfigBootstrapResult { command: string; expiresInSeconds: number }
 export interface ConfigImportPreview { importId: string; expiresAt: string; bytes: number; fileSha256: string; exportedAt: string; sourceVersion: string; digest: string; counts: { agents: number; tasks: number }; agents: { id: string; name: string; conflict: boolean; missingSkills: string[]; missingMcp: string[]; ready: boolean }[]; tasks: { id: string; title: string; conflict: boolean; missingAgents: string[]; scheduleDisabled: boolean }[] }
 export interface ConfigImportResult { importedAgents: string[]; skippedAgents: { id: string; reason: string }[]; importedTasks: string[]; skippedTasks: { id: string; reason: string }[]; schedulesEnabled: false }
 

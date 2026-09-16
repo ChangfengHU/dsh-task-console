@@ -1,12 +1,13 @@
 import { useState } from 'react'
-import type { TasksApi, ConfigExportResult, ConfigImportPreview, ConfigImportResult } from './TasksView.tsx'
+import type { TasksApi, ConfigBootstrapResult, ConfigExportResult, ConfigImportPreview, ConfigImportResult } from './TasksView.tsx'
 import { go } from './Console.tsx'
 
 export function ConfigMigration({ api, toast }: { api: TasksApi; toast: (text: string) => void }) {
   const [url, setUrl] = useState('')
-  const [busy, setBusy] = useState<'export' | 'preview' | 'apply' | ''>('')
+  const [busy, setBusy] = useState<'export' | 'bootstrap' | 'preview' | 'apply' | ''>('')
   const [error, setError] = useState('')
   const [exported, setExported] = useState<ConfigExportResult | null>(null)
+  const [bootstrap, setBootstrap] = useState<ConfigBootstrapResult | null>(null)
   const [preview, setPreview] = useState<ConfigImportPreview | null>(null)
   const [result, setResult] = useState<ConfigImportResult | null>(null)
 
@@ -15,10 +16,12 @@ export function ConfigMigration({ api, toast }: { api: TasksApi; toast: (text: s
     try { done(await work()) } catch (cause) { setError(String((cause as Error).message ?? cause)) }
     finally { setBusy('') }
   }
-  const exportNow = () => void run('export', api.exportConfig, value => { setExported(value); toast('配置包已上传到 R2') })
+  const exportNow = () => void run('export', api.exportConfig, value => { setExported(value); setBootstrap(null); toast('配置包已上传到 R2') })
+  const makeBootstrap = () => exported && void run('bootstrap', () => api.createConfigBootstrap(exported.publicUrl), value => { setBootstrap(value); toast('已生成新机器安装并导入命令') })
   const check = () => void run('preview', () => api.previewConfigImport(url.trim()), value => { setPreview(value); setResult(null) })
   const apply = () => preview && void run('apply', () => api.applyConfigImport(preview.importId), value => { setResult(value); setPreview(null); toast('配置导入完成；时间表保持停用') })
   const copy = async () => { if (!exported) return; await navigator.clipboard.writeText(exported.publicUrl); toast('已复制 R2 地址') }
+  const copyBootstrap = async () => { if (!bootstrap) return; await navigator.clipboard.writeText(bootstrap.command); toast('已复制新机器安装并导入命令') }
 
   return <main className="dtc-migration">
     <header className="dtc-executions-heading"><div><button className="dtc-btn sm" onClick={() => go('tasks')}>← 任务列表</button><h1>配置迁移</h1><p>只迁移 Agent 与 Task 定义；不包含会话、执行记录、产物、日志或凭据。</p></div></header>
@@ -29,7 +32,7 @@ export function ConfigMigration({ api, toast }: { api: TasksApi; toast: (text: s
         <p>包含 Agent、Task、依赖、Action、Schedule 和 Skill/MCP 引用。Vault 仅保留 key 名称。</p>
         <ul><li>不读取会话和执行记录</li><li>不导出附件与密钥值</li><li>上传后只返回 R2 地址与校验值</li></ul>
         <button className="dtc-btn pri" disabled={!!busy} onClick={exportNow}>{busy === 'export' ? '生成并上传中…' : '生成并上传到 R2'}</button>
-        {exported ? <div className="dtc-migration-result"><b>导出完成</b><a href={exported.publicUrl} target="_blank" rel="noreferrer">{exported.publicUrl}</a><small>{exported.counts.agents} Agents · {exported.counts.tasks} Tasks · {exported.bytes.toLocaleString()} bytes</small><code>SHA256 {exported.sha256}</code><button className="dtc-btn sm" onClick={copy}>复制地址</button></div> : null}
+        {exported ? <div className="dtc-migration-result"><b>导出完成</b><a href={exported.publicUrl} target="_blank" rel="noreferrer">{exported.publicUrl}</a><small>{exported.counts.agents} Agents · {exported.counts.tasks} Tasks · {exported.bytes.toLocaleString()} bytes</small><code>SHA256 {exported.sha256}</code><button className="dtc-btn sm" onClick={copy}>复制地址</button><button className="dtc-btn pri" disabled={!!busy} onClick={makeBootstrap}>{busy === 'bootstrap' ? '生成中…' : '复制新机器安装并导入命令'}</button>{bootstrap ? <><small>命令有效期 {Math.floor(bootstrap.expiresInSeconds / 86400)} 天；在已安装 DSH 的新机器执行，会安装依赖、验证工具列表后再导入。</small><button className="dtc-btn sm" onClick={copyBootstrap}>复制安装并导入命令</button></> : null}</div> : null}
       </section>
       <section className="dtc-migration-card">
         <span className="dtc-kicker">IMPORT FROM R2</span><h2>从地址导入配置</h2>

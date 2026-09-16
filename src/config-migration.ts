@@ -132,3 +132,20 @@ export async function downloadConfig(value: string, publicDomain: string): Promi
   try { parsed = JSON.parse(data.toString('utf8')) } catch { throw Error('配置包不是有效 JSON') }
   return { envelope: parseEnvelope(parsed), bytes: data.byteLength, fileSha256: createHash('sha256').update(data).digest('hex') }
 }
+
+/** Issue a package-bound, time-limited command through the trusted Fleet service.
+ * The command contains only an installation capability; Fleet credentials are
+ * fetched by the installer into owner-only files and never pass through R2. */
+export async function createBootstrapCommand(value: string, config: { domain: string; endpoint: string; token: string }): Promise<{ command: string; expiresInSeconds: number }> {
+  const url = assertPublicConfigUrl(value, config.domain)
+  if (!config.token) throw Error('宿主未配置新机器引导授权')
+  const response = await fetch(config.endpoint, {
+    method: 'POST', headers: { Authorization: `Bearer ${config.token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ configUrl: url.toString() }), redirect: 'error', signal: AbortSignal.timeout(30_000),
+  })
+  let body: any = {}
+  try { body = await response.json() } catch { /* report the HTTP status below */ }
+  if (!response.ok || !body?.ok || typeof body.command !== 'string') throw Error(body?.error || `新机器引导命令生成失败（HTTP ${response.status}）`)
+  if (!/^bash <\(curl -fsSL https:\/\/skill\.vyibc\.com\/dsh-config-bootstrap\/release\/install-dsh-config-bootstrap\.sh\) --bootstrap-token \S+ --config-url /.test(body.command)) throw Error('新机器引导命令格式无效')
+  return { command: body.command, expiresInSeconds: Number(body.expiresInSeconds) || 0 }
+}

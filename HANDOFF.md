@@ -12,6 +12,12 @@ events, replay rows, artifacts, attachments or logs. Credentials remain in
 Vault/host configuration; only references already present in authored config
 can travel.
 
+The production DSH host loads the R2 upload capability from its owner-only
+`sop-dsh-web` systemd credential environment, not from the browser or an Agent.
+Keep that file mode 0600 and do not copy its value into a profile patch, export,
+log, URL, command or repository. A missing host credential is a deployment
+fault, not a request for the operator to paste a token into the migration page.
+
 Import accepts HTTPS `.json` URLs from the configured public R2 origin only,
 rejects redirects and files above 5 MiB, validates schema and content digest,
 and holds the validated envelope in memory for ten minutes. Apply consumes that

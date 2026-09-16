@@ -22,6 +22,13 @@ test('digest rejects tampering', () => {
   assert.throws(() => parseEnvelope(envelope), /SHA256/)
 })
 
+test('runtime bootstrap capability survives validation without entering the payload digest', () => {
+  const envelope = createEnvelope({ agents: [{ spec: agent, actions: [] }], tasks: [] }, '1.0.0')
+  envelope.runtime!.bootstrap = { issuer: 'https://fleet.vyibc.com/api/hub/dsh-config-bootstrap', token: 'signed.capability', expiresAt: '2026-10-01T00:00:00.000Z' }
+  const parsed = parseEnvelope(JSON.parse(encodeEnvelope(envelope).toString('utf8')))
+  assert.equal(parsed.runtime?.bootstrap?.token, 'signed.capability')
+})
+
 test('import URL is restricted to configured R2 origin and JSON', () => {
   assert.equal(assertPublicConfigUrl('https://resource.vyibc.com/a/config.json', 'https://resource.vyibc.com').hostname, 'resource.vyibc.com')
   assert.throws(() => assertPublicConfigUrl('http://resource.vyibc.com/a.json', 'https://resource.vyibc.com'), /只允许/)
@@ -42,7 +49,7 @@ test('R2 upload keeps credentials in the request and verifies exact public bytes
       uploaded = Buffer.from(await blob.arrayBuffer())
       return new Response(JSON.stringify({ image_url: 'https://resource.example/dsh-task-console/config-exports/config.json' }), { status: 200 })
     }
-    if (url === 'https://resource.example/dsh-task-console/config-exports/config.json') return new Response(uploaded, { status: 200 })
+    if (url.startsWith('https://resource.example/dsh-task-console/config-exports/config.json?verify=')) return new Response(uploaded, { status: 200 })
     return new Response('not found', { status: 404 })
   }) as typeof fetch
   try {
@@ -59,12 +66,13 @@ test('new-machine command is issued only for the exported R2 package and preserv
   globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
     authorization = String((init?.headers as Record<string, string>).Authorization)
     requestBody = String(init?.body)
-    return new Response(JSON.stringify({ ok: true, expiresInSeconds: 60, command: 'bash <(curl -fsSL https://skill.vyibc.com/dsh-config-bootstrap/release/install-dsh-config-bootstrap.sh) --bootstrap-token scoped-token --config-url "https://resource.example/dsh-task-console/config-exports/config.json"' }), { status: 200 })
+    return new Response(JSON.stringify({ ok: true, expiresInSeconds: 60, bootstrapToken: 'scoped.token', command: 'bash <(curl -fsSL https://skill.vyibc.com/dsh-config-bootstrap/release/install-dsh-config-bootstrap.sh) --bootstrap-token scoped.token --config-url "https://resource.example/dsh-task-console/config-exports/config.json"' }), { status: 200 })
   }) as typeof fetch
   try {
     const result = await createBootstrapCommand('https://resource.example/dsh-task-console/config-exports/config.json', { domain: 'https://resource.example', endpoint: 'https://fleet.example/bootstrap', token: 'server-only-token' })
     assert.equal(authorization, 'Bearer server-only-token')
     assert.equal(JSON.parse(requestBody).configUrl, 'https://resource.example/dsh-task-console/config-exports/config.json')
-    assert.match(result.command, /--bootstrap-token scoped-token/)
+    assert.match(result.command, /--bootstrap-token scoped\.token/)
+    assert.equal(result.bootstrapToken, 'scoped.token')
   } finally { globalThis.fetch = original }
 })

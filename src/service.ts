@@ -13,7 +13,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID, createHash } from 'node:crypto'
 import { homedir } from 'node:os'
-import { dirname, resolve } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { readActions, saveActions } from './agent-action-store.ts'
 import { renderAction, parameterVisible, type ActionCatalog } from './agent-actions.ts'
 import { optionPage, sourceTool, type ActionOptionQuery } from './action-options.ts'
@@ -49,6 +49,7 @@ import { NAMESPACE } from './wire.ts'
 import { SessionShortcuts, shortcutChange } from './session-shortcuts.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
 import { createBootstrapCommand, createEnvelope, downloadConfig, taskConfig, uploadConfig, type ConfigEnvelope } from './config-migration.ts'
+import { runtimeBootstrapStatus, startRuntimeBootstrap } from './config-runtime-bootstrap.ts'
 
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
 const TOOL_PREFIX = /^mcp__(.+?)__(.+)$/
@@ -375,7 +376,10 @@ export class TaskConsoleService extends TypertRemoteService {
     let version = 'unknown'
     try { version = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json', import.meta.url), 'utf8')).version ?? version } catch { /* package metadata is optional */ }
     const envelope = createEnvelope({ agents, tasks }, version)
-    const result = await uploadConfig(envelope, this.configR2())
+    const initial = await uploadConfig(envelope, this.configR2())
+    const bootstrap = await createBootstrapCommand(initial.publicUrl, { domain: this.configR2().domain, ...this.configBootstrap() })
+    envelope.runtime = { ...envelope.runtime!, bootstrap: { issuer: 'https://fleet.vyibc.com/api/hub/dsh-config-bootstrap', token: bootstrap.bootstrapToken, expiresAt: new Date(Date.now() + bootstrap.expiresInSeconds * 1000).toISOString() } }
+    const result = await uploadConfig(envelope, this.configR2(), basename(new URL(initial.publicUrl).pathname))
     return JSON.stringify({ ...result, exportedAt: envelope.exportedAt, digest: envelope.digest.value, counts: { agents: agents.length, tasks: tasks.length }, omitted: ['sessions', 'runs', 'events', 'artifacts', 'attachments', 'logs', 'credentials'] })
   }
 
@@ -384,7 +388,8 @@ export class TaskConsoleService extends TypertRemoteService {
     await this.ready
     const { url } = JSON.parse(payload) as { url?: string }
     if (!url) throw Error('请先导出配置包')
-    return JSON.stringify(await createBootstrapCommand(url, { domain: this.configR2().domain, ...this.configBootstrap() }))
+    const { command, expiresInSeconds } = await createBootstrapCommand(url, { domain: this.configR2().domain, ...this.configBootstrap() })
+    return JSON.stringify({ command, expiresInSeconds })
   }
 
   private configImportView(envelope: ConfigEnvelope) {
@@ -401,7 +406,12 @@ export class TaskConsoleService extends TypertRemoteService {
       })
       const available = new Set([...existingAgents, ...agents.filter(row => !row.conflict && row.ready).map(row => row.id)])
       const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: row.participants.map(p => p.agentId).filter(id => !available.has(id)), scheduleDisabled: row.trigger.kind === 'cron' }))
-      return { agents, tasks, counts: { agents: agents.length, tasks: tasks.length }, exportedAt: envelope.exportedAt, sourceVersion: envelope.source.version, digest: envelope.digest.value }
+      const runtime = envelope.runtime ? {
+        missingMcp: envelope.runtime.mcps.map(row => row.serverName).filter(name => !mcp.has(name)),
+        missingSkills: envelope.runtime.skills.map(row => row.id).filter(name => !skills.has(name)),
+        bootstrapAvailable: Boolean(envelope.runtime.bootstrap && Date.parse(envelope.runtime.bootstrap.expiresAt) > Date.now()),
+      } : undefined
+      return { agents, tasks, runtime, counts: { agents: agents.length, tasks: tasks.length }, exportedAt: envelope.exportedAt, sourceVersion: envelope.source.version, digest: envelope.digest.value }
     })
   }
 
@@ -451,6 +461,22 @@ export class TaskConsoleService extends TypertRemoteService {
       importedTasks.push(row.id)
     }
     return JSON.stringify({ importedAgents, skippedAgents, importedTasks, skippedTasks, schedulesEnabled: false })
+  }
+
+  async installConfigRuntime(payload: string): Promise<string> {
+    await this.ready
+    const { url } = JSON.parse(payload) as { url?: string }
+    if (!url) throw Error('请输入 R2 配置地址')
+    const { envelope } = await downloadConfig(url, this.configR2().domain)
+    const bootstrap = envelope.runtime?.bootstrap
+    if (!bootstrap || Date.parse(bootstrap.expiresAt) <= Date.now()) throw Error('配置包没有可用的运行时引导授权，请在源机器重新导出')
+    return JSON.stringify(await startRuntimeBootstrap(url, bootstrap.token))
+  }
+
+  async configRuntimeStatus(payload: string): Promise<string> {
+    const { jobId } = JSON.parse(payload) as { jobId?: string }
+    if (!jobId) throw Error('缺少运行时安装任务编号')
+    return JSON.stringify(await runtimeBootstrapStatus(jobId))
   }
 
   /** Header-only persistence index, coalesced briefly; live headers always win. */

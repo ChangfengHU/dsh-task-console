@@ -20,6 +20,7 @@ export interface ConfigRuntime {
   schema: 'dsh-task-console/fleet-runtime-v1'
   mcps: { serverName: string; transport: 'streamable-http' | 'stdio'; credentialRef: 'fleet-admin' | 'onboard-vault-resolve'; runtime: string }[]
   skills: { id: string; runtime: 'bootstrap-bundle' }[]
+  bootstrap?: { issuer: 'https://fleet.vyibc.com/api/hub/dsh-config-bootstrap'; token: string; expiresAt: string }
 }
 export interface ConfigEnvelope {
   schema: typeof CONFIG_SCHEMA; exportedAt: string; source: { plugin: 'dsh-task-console'; version: string }
@@ -110,7 +111,12 @@ export function parseEnvelope(raw: unknown): ConfigEnvelope {
     if (e.runtime?.schema !== 'dsh-task-console/fleet-runtime-v1' || !Array.isArray(e.runtime.mcps) || !Array.isArray(e.runtime.skills)) throw Error('运行时依赖清单无效')
     const mcps = e.runtime.mcps.map((row: any) => ({ serverName: text(row?.serverName, 'MCP 名称', 120), transport: row?.transport === 'stdio' || row?.transport === 'streamable-http' ? row.transport : (() => { throw Error('MCP transport 无效') })(), credentialRef: row?.credentialRef === 'fleet-admin' || row?.credentialRef === 'onboard-vault-resolve' ? row.credentialRef : (() => { throw Error('MCP 凭据引用无效') })(), runtime: text(row?.runtime, 'MCP runtime', 160) }))
     const skills = e.runtime.skills.map((row: any) => ({ id: text(row?.id, 'Skill 名称', 120), runtime: row?.runtime === 'bootstrap-bundle' ? row.runtime : (() => { throw Error('Skill runtime 无效') })() }))
-    runtime = { schema: 'dsh-task-console/fleet-runtime-v1', mcps, skills }
+    let bootstrap: ConfigRuntime['bootstrap']
+    if (e.runtime.bootstrap !== undefined) {
+      if (e.runtime.bootstrap?.issuer !== 'https://fleet.vyibc.com/api/hub/dsh-config-bootstrap' || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(e.runtime.bootstrap?.token ?? '') || !Number.isFinite(Date.parse(e.runtime.bootstrap?.expiresAt))) throw Error('运行时引导授权无效')
+      bootstrap = { issuer: e.runtime.bootstrap.issuer, token: e.runtime.bootstrap.token, expiresAt: new Date(e.runtime.bootstrap.expiresAt).toISOString() }
+    }
+    runtime = { schema: 'dsh-task-console/fleet-runtime-v1', mcps, skills, ...(bootstrap ? { bootstrap } : {}) }
   }
   return { schema: CONFIG_SCHEMA, exportedAt: new Date(e.exportedAt).toISOString(), source: { plugin: 'dsh-task-console', version: text(e.source.version, '版本', 80) }, digest: e.digest, payload, ...(runtime ? { runtime } : {}) }
 }
@@ -128,9 +134,10 @@ export function assertPublicConfigUrl(value: string, publicDomain: string): URL 
   return url
 }
 
-export async function uploadConfig(envelope: ConfigEnvelope, config: { endpoint: string; domain: string; token: string }): Promise<{ publicUrl: string; bytes: number; sha256: string }> {
+export async function uploadConfig(envelope: ConfigEnvelope, config: { endpoint: string; domain: string; token: string }, fixedName?: string): Promise<{ publicUrl: string; bytes: number; sha256: string }> {
   if (!config.token) throw Error('宿主未配置配置导出所需的 R2 凭据')
-  const data = encodeEnvelope(envelope), name = `dsh-config-${Date.now()}-${randomUUID().slice(0, 8)}.json`
+  const data = encodeEnvelope(envelope), name = fixedName ?? `dsh-config-${Date.now()}-${randomUUID().slice(0, 8)}.json`
+  if (!/^dsh-config-[A-Za-z0-9._-]+\.json$/.test(name)) throw Error('R2 配置文件名无效')
   const form = new FormData()
   form.set('file', new Blob([data], { type: 'application/json' }), name); form.set('domain', config.domain); form.set('name', name); form.set('path', 'dsh-task-console/config-exports')
   const response = await fetch(config.endpoint, { method: 'POST', headers: { Authorization: `Bearer ${config.token}` }, body: form, signal: AbortSignal.timeout(60_000) })
@@ -140,7 +147,7 @@ export async function uploadConfig(envelope: ConfigEnvelope, config: { endpoint:
   try { const parsed = JSON.parse(body); publicUrl = String(parsed.url ?? parsed.image_url ?? parsed.data?.url ?? parsed.result?.url ?? '') } catch { publicUrl = body.trim() }
   if (!publicUrl.startsWith(`${config.domain.replace(/\/$/, '')}/`)) publicUrl = `${config.domain.replace(/\/$/, '')}/dsh-task-console/config-exports/${name}`
   assertPublicConfigUrl(publicUrl, config.domain)
-  const check = await fetch(publicUrl, { redirect: 'error', signal: AbortSignal.timeout(30_000) })
+  const check = await fetch(`${publicUrl}?verify=${createHash('sha256').update(data).digest('hex').slice(0, 16)}`, { redirect: 'error', signal: AbortSignal.timeout(30_000), cache: 'no-store' })
   const stored = check.ok ? Buffer.from(await check.arrayBuffer()) : Buffer.alloc(0)
   if (!check.ok || !stored.equals(data)) throw Error('R2 上传后内容校验失败')
   return { publicUrl, bytes: data.byteLength, sha256: createHash('sha256').update(data).digest('hex') }
@@ -162,7 +169,7 @@ export async function downloadConfig(value: string, publicDomain: string): Promi
 /** Issue a package-bound, time-limited command through the trusted Fleet service.
  * The command contains only an installation capability; Fleet credentials are
  * fetched by the installer into owner-only files and never pass through R2. */
-export async function createBootstrapCommand(value: string, config: { domain: string; endpoint: string; token: string }): Promise<{ command: string; expiresInSeconds: number }> {
+export async function createBootstrapCommand(value: string, config: { domain: string; endpoint: string; token: string }): Promise<{ command: string; expiresInSeconds: number; bootstrapToken: string }> {
   const url = assertPublicConfigUrl(value, config.domain)
   if (!config.token) throw Error('宿主未配置新机器引导授权')
   const response = await fetch(config.endpoint, {
@@ -171,7 +178,7 @@ export async function createBootstrapCommand(value: string, config: { domain: st
   })
   let body: any = {}
   try { body = await response.json() } catch { /* report the HTTP status below */ }
-  if (!response.ok || !body?.ok || typeof body.command !== 'string') throw Error(body?.error || `新机器引导命令生成失败（HTTP ${response.status}）`)
+  if (!response.ok || !body?.ok || typeof body.command !== 'string' || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(body.bootstrapToken ?? '')) throw Error(body?.error || `新机器引导命令生成失败（HTTP ${response.status}）`)
   if (!/^bash <\(curl -fsSL https:\/\/skill\.vyibc\.com\/dsh-config-bootstrap\/release\/install-dsh-config-bootstrap\.sh\) --bootstrap-token \S+ --config-url /.test(body.command)) throw Error('新机器引导命令格式无效')
-  return { command: body.command, expiresInSeconds: Number(body.expiresInSeconds) || 0 }
+  return { command: body.command, expiresInSeconds: Number(body.expiresInSeconds) || 0, bootstrapToken: body.bootstrapToken }
 }

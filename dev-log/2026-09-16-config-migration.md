@@ -31,3 +31,20 @@ Verification:
 Temporary build directories under `/tmp/dtc-config-migration-build*` were removed
 after the final production build; they are reproducible with `npm run build` and
 `DTC_BUILD_OUT`.
+
+## 0.31.2 direct new-machine import
+
+The export now seals a package-URL-bound, expiring bootstrap capability into the
+same R2 JSON after the trusted Fleet service issues it. Import preview aggregates
+the declared missing MCPs and Skills and offers one action that starts an
+owner-only detached installer. The capability is passed through a mode-0600
+file, not browser output, process arguments or logs. The installer survives the
+expected DSH restart, validates registered MCP tools and Skills, then imports the
+Agents and Tasks with schedules disabled.
+
+Verification: the five focused configuration-migration tests passed, the
+production bundles built, TypeScript/esbuild accepted the new RPC and UI paths,
+and diff checks passed. The broader suite could not be used as a clean signal on
+this host because the existing `better-sqlite3` binary targets Node ABI 127 while
+the active Node targets ABI 115; failures began in unrelated SQLite tests. No
+temporary dependency installation or rebuild was retained.

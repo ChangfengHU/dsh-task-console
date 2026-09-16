@@ -24,6 +24,8 @@ export function activate(ctx: any): Promise<Api> {
       createConfigBootstrap: (url: string) => call('createConfigBootstrap', { url }),
       previewConfigImport: (url: string) => call('previewConfigImport', { url }),
       applyConfigImport: (importId: string) => call('applyConfigImport', { importId }),
+      installConfigRuntime: (url: string) => call('installConfigRuntime', { url }),
+      configRuntimeStatus: (jobId: string) => call('configRuntimeStatus', { jobId }),
       taskActions: taskId => call('taskActions', { taskId }),
       saveTaskActions: (taskId, actions, revision) => call('saveTaskActions', { taskId, actions, revision }),
       launchTaskAction: query => call('launchTaskAction', query),

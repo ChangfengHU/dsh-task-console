@@ -33,18 +33,18 @@ with sync_playwright() as p:
     panel = page.get_by_role('region', name='Session capabilities')
     expect(panel).to_be_visible(timeout=15000)
     expect(panel.get_by_text('当前会话能力', exact=False).first).to_be_visible()
-    expect(panel.get_by_text('实际工具与环境继承')).to_be_visible()
+    expect(panel.get_by_text('服务与工具')).to_be_visible()
     if ASSETS:
         expect(panel.get_by_text('可用工具', exact=True)).to_be_visible()
-        expect(panel.get_by_text('mcp__fleet-browser__browser_create', exact=True)).to_be_visible()
-        expect(panel.get_by_text('环境继承 · 受限 · 不可调用', exact=True)).to_be_visible()
+        expect(panel.get_by_text('通用 Agent · 默认继承全部环境能力')).to_be_visible()
+        expect(panel.get_by_text('服务与工具')).to_be_visible()
     elif os.environ.get('DTC_EXPECT_INHERITANCE'):
         panel.get_by_text('通用 Agent：默认继承 · 显式排除', exact=True).click()
         expect(panel.get_by_text('排除 Skill：无', exact=True)).to_be_visible()
         expect(panel.get_by_text('排除 MCP：无', exact=True)).to_be_visible()
         expect(panel.get_by_text('排除工具：无', exact=True)).to_be_visible()
     panel.get_by_role('button', name='刷新', exact=True).click()
-    expect(panel.get_by_text('实际工具与环境继承')).to_be_visible()
+    expect(panel.get_by_text('服务与工具')).to_be_visible()
     for width in [1440, 390]:
         if width == 390:
             close = page.get_by_role('button', name='Close sidebar', exact=True)

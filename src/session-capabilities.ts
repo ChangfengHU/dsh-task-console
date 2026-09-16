@@ -116,7 +116,7 @@ export class SessionCapabilities {
         skillDiscovery = catalog.complete ? 'complete' : 'partial'
       } catch { skillDiscovery = 'discovery-failed' }
     }
-    const tools = schemas.map((s: any) => ({ name: s.name, kind: s.name.startsWith('mcp__') ? 'mcp' : 'native', source: CAPABILITY_TOOLS.includes(s.name) ? 'platform' : declared.has(s.name) ? 'agent-definition' : 'environment-inherited', state: availableNames.has(s.name) ? 'registered' : 'restricted', ...(this.restricted(s, agent) ? { reason: 'explicit-standard-exclusion' } : {}), ...(errors.has(s.name) ? { lastFailure: errors.get(s.name) } : {}) }))
+    const tools = schemas.map((s: any) => ({ name: s.name, kind: s.name.startsWith('mcp__') ? 'mcp' : 'native', server: this.mcpSources().find(m => m.tools.some(name => publicToolName(m.serverName, name) === s.name))?.serverName ?? null, source: CAPABILITY_TOOLS.includes(s.name) ? 'platform' : declared.has(s.name) ? 'agent-definition' : 'environment-inherited', state: availableNames.has(s.name) ? 'registered' : 'restricted', ...(this.restricted(s, agent) ? { reason: 'explicit-standard-exclusion' } : {}), ...(errors.has(s.name) ? { lastFailure: errors.get(s.name) } : {}) }))
     const out = {
       sessionId: session.id, checkedAt: new Date().toISOString(), live: true,
       inheritancePolicy: { mcp: this.policy.standardMcpInheritance ?? 'inherit', skills: this.policy.standardSkillInheritance ?? 'inherit', excludedSkills: this.policy.standardExcludedSkills ?? [], excludedMcpServers: this.policy.standardExcludedMcpServers ?? [], excludedTools: this.policy.standardExcludedTools ?? [], appliesTo: 'standard-native-session', maxSteps: this.policy.standardMaxSteps ?? STANDARD_LIMIT },

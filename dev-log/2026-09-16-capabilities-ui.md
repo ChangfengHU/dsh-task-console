@@ -34,3 +34,12 @@ first useful controls above the fixed composer. Candidate desktop and narrow
 browser acceptance passed with two read calls, no page errors and no business
 writes. Screenshots were inspected then moved to the system trash; no temporary
 assets remain in the project.
+
+## Follow-up — effective Agent scope first
+
+The page now answers the session question before rendering inventory: which
+Agent owns this session, which MCP services, Skills and native Tools are
+effective for it, and whether that result is explicit or inherited. MCP rows are
+grouped by server and all tool/Skill details stay collapsed until requested.
+Standard is explicitly labelled as the generic Agent that inherits the complete
+environment directory; it is no longer presented as a bespoke Agent definition.

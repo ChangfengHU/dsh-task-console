@@ -42,6 +42,15 @@ export function SessionCapabilitiesView({ sessionId }: { sessionId: string }) {
     callable: tools.filter((item: any) => item.state !== 'not-callable' && item.state !== 'restricted').length,
     restricted: tools.filter((item: any) => item.state === 'not-callable' || item.state === 'restricted').length,
   }), [tools])
+  const mcp = tools.filter((tool: any) => tool.kind === 'mcp')
+  const native = tools.filter((tool: any) => tool.kind !== 'mcp' && tool.name !== 'skill')
+  const mcpGroups = [...mcp.reduce((groups: Map<string, any[]>, tool: any) => {
+    const key = tool.server ?? '未识别服务'
+    groups.set(key, [...(groups.get(key) ?? []), tool]); return groups
+  }, new Map<string, any[]>()).entries()]
+  const explicitMcp = mcp.filter((tool: any) => tool.source === 'agent-definition')
+  const explicitSkills = skills.filter((skill: any) => skill.source === 'agent-definition')
+  const generic = value?.definition?.role === 'standard' && !value?.definition?.authored
 
   return <section className="dtc-capabilities" aria-label="Session capabilities">
     <header className="dtc-cap-head">
@@ -51,22 +60,20 @@ export function SessionCapabilitiesView({ sessionId }: { sessionId: string }) {
     {error ? <div className="dtc-err" role="alert">{error} · 当前内容可能已过期</div> : null}
     {!value ? <div className="dtc-cap-loading"><i>◌</i><b>正在读取能力事实…</b><span>不会执行业务探测</span></div> : <>
       <div className="dtc-cap-overview">
-        <div><span>当前角色</span><b>{value.definition?.role ?? '未知'}</b></div>
+        <div><span>当前会话 Agent</span><b>{value.definition?.role ?? '通用 Agent'}</b></div>
         <div><span>最后核对</span><b>{checkedAt(value.checkedAt)}</b></div>
-        <div><span>可用工具</span><b>{states.callable}<small> / {tools.length}</small></b></div>
-        <div><span>可按需 Skill</span><b>{skills.length}</b></div>
+        <div><span>有效 MCP</span><b>{mcpGroups.length}<small> 服务 / {mcp.length} 工具</small></b></div>
+        <div><span>有效 Skill</span><b>{skills.length}<small> · Tool {native.length}</small></b></div>
       </div>
-      <p className="dtc-cap-notice">{value.notice ?? '已注册不代表凭据有效或所有目标操作获授权。此页面不执行任何业务探测。'}</p>
+      <p className="dtc-cap-notice">{generic ? '通用 Agent 默认继承环境目录：以下是当前实际注册结果，不是它的专属配置。' : '以下按当前 Agent 的定义与本会话实际注册结果汇总；已注册仍受凭据、审批和服务端权限约束。'}</p>
+      <section className="dtc-cap-scope"><header><div><span className="dtc-kicker">THIS AGENT</span><h3>{generic ? '通用 Agent · 默认继承全部环境能力' : 'Agent 明确配置的能力'}</h3></div><small>{generic ? '完整目录按服务展开' : `${explicitMcp.length} MCP 工具 · ${explicitSkills.length} Skill`}</small></header>
+        <div className="dtc-cap-scope-grid"><div><b>MCP</b><span>{generic ? `${mcpGroups.length} 个已注册服务` : explicitMcp.map((tool: any) => tool.server ?? tool.name).filter((v: string, i: number, a: string[]) => a.indexOf(v) === i).join('、') || '未声明'}</span></div><div><b>Skill</b><span>{generic ? `${skills.length} 项可按需加载` : explicitSkills.map((skill: any) => skill.name).join('、') || '未声明'}</span></div><div><b>Tool</b><span>{native.length} 项当前运行时工具</span></div></div>
+      </section>
       <div className="dtc-cap-grid">
-        <section className="dtc-cap-card"><header><div><span className="dtc-kicker">TOOLS</span><h3>实际工具与环境继承</h3></div><small>{tools.length} 项 · {states.restricted ? `${states.restricted} 受限` : '无受限项'}</small></header>
-          <div className="dtc-cap-list">{tools.length ? tools.map((tool: any) => <div className="dtc-cap-row" key={tool.name}><div><b>{tool.name}</b><span>{label(tool.source)} · {label(tool.state)}</span></div>{tool.lastFailure ? <em>{label(tool.lastFailure)}</em> : <i>可见</i>}</div>) : <p className="dtc-cap-empty">本会话尚无可观察的工具。</p>}</div>
-          {current?.configuredButNotRegistered?.length ? <p className="dtc-cap-warning">配置但未注册：{current.configuredButNotRegistered.join('、')}</p> : null}
-        </section>
-        <section className="dtc-cap-card"><header><div><span className="dtc-kicker">SKILLS</span><h3>Skill 与加载边界</h3></div><small>{skills.length} 项</small></header>
-          <div className="dtc-cap-list">{skills.length ? skills.map((skill: any) => <div className="dtc-cap-row" key={skill.name}><div><b>{skill.name}</b><span>{label(skill.source)} · {label(skill.state)}</span></div><i>{skill.state === 'not-callable' ? '受限' : '按需'}</i></div>) : <p className="dtc-cap-empty">当前没有可观察的 Skill。</p>}</div>
-          <p className="dtc-cap-foot">底层 CLI：{value.cliInheritance === 'not-observed' ? '尚无运行时证据，不宣称已加载' : '本页只反映 DSH 工具运行时'}</p>
-        </section>
+        <section className="dtc-cap-card"><header><div><span className="dtc-kicker">MCP</span><h3>服务与工具</h3></div><small>{mcpGroups.length} 服务</small></header><div className="dtc-cap-list">{mcpGroups.map(([server, rows]) => <details className="dtc-cap-service" key={server}><summary><b>{server}</b><span>{rows.length} 工具 · {rows.some((row: any) => row.state === 'restricted') ? '含受限项' : '当前已注册'}</span></summary>{rows.map((tool: any) => <div className="dtc-cap-row" key={tool.name}><div><b>{tool.name}</b><span>{label(tool.source)} · {label(tool.state)}</span></div>{tool.lastFailure ? <em>{label(tool.lastFailure)}</em> : <i>查看</i>}</div>)}</details>)}</div></section>
+        <section className="dtc-cap-card"><header><div><span className="dtc-kicker">SKILL & TOOL</span><h3>按需 Skill 与工具</h3></div><small>{skills.length + native.length} 项</small></header><div className="dtc-cap-list"><details className="dtc-cap-service"><summary><b>Skill</b><span>{skills.length} 项 · 按需加载</span></summary>{skills.map((skill: any) => <div className="dtc-cap-row" key={skill.name}><div><b>{skill.name}</b><span>{label(skill.source)} · {label(skill.state)}</span></div><i>{skill.state === 'not-callable' ? '受限' : '查看'}</i></div>)}</details><details className="dtc-cap-service"><summary><b>Tool</b><span>{native.length} 项当前可见</span></summary>{native.map((tool: any) => <div className="dtc-cap-row" key={tool.name}><div><b>{tool.name}</b><span>{label(tool.source)} · {label(tool.state)}</span></div><i>查看</i></div>)}</details></div></section>
       </div>
+      {current?.configuredButNotRegistered?.length ? <p className="dtc-cap-warning">Agent 已配置但宿主未注册：{current.configuredButNotRegistered.join('、')}</p> : null}
       <section className="dtc-cap-diagnostics"><header><span className="dtc-kicker">DIAGNOSTICS</span><h3>策略与原始事实</h3><p>需要核对继承、模型请求或角色声明时再展开；不会遮住日常能力清单。</p></header>
         {value.inheritancePolicy ? <details><summary>通用 Agent 默认继承与显式排除</summary><div><p>Skill：{value.inheritancePolicy.skills} · MCP：{value.inheritancePolicy.mcp}</p><p>排除 Skill：{value.inheritancePolicy.excludedSkills?.join('、') || '无'}</p><p>排除 MCP：{value.inheritancePolicy.excludedMcpServers?.join('、') || '无'}</p><p>排除工具：{value.inheritancePolicy.excludedTools?.join('、') || '无'}</p></div></details> : null}
         <details><summary>角色定义（不是实际加载结果）</summary><pre>{JSON.stringify(value.definition ?? {}, null, 2)}</pre></details>

@@ -35,7 +35,9 @@ with sync_playwright() as p:
     expect(panel.get_by_text('当前会话能力', exact=False).first).to_be_visible()
     expect(panel.get_by_text('实际工具与环境继承')).to_be_visible()
     if ASSETS:
-        expect(panel.get_by_text('环境继承 · 受限 · 不可调用')).to_be_visible()
+        expect(panel.get_by_text('可用工具', exact=True)).to_be_visible()
+        expect(panel.get_by_text('mcp__fleet-browser__browser_create', exact=True)).to_be_visible()
+        expect(panel.get_by_text('环境继承 · 受限 · 不可调用', exact=True)).to_be_visible()
     elif os.environ.get('DTC_EXPECT_INHERITANCE'):
         panel.get_by_text('通用 Agent：默认继承 · 显式排除', exact=True).click()
         expect(panel.get_by_text('排除 Skill：无', exact=True)).to_be_visible()
@@ -49,7 +51,8 @@ with sync_playwright() as p:
             if close.count() and close.is_visible(): close.click()
         page.set_viewport_size({'width': width, 'height': 1000})
         page.wait_for_timeout(400)
-        page.screenshot(path='/tmp/dsh-capabilities-'+('candidate' if ASSETS else 'live')+'-'+str(width)+'.png')
+        if os.environ.get('DTC_CAPTURE'):
+            page.screenshot(path='/tmp/dsh-capabilities-'+('candidate' if ASSETS else 'live')+'-'+str(width)+'.png')
         assert page.evaluate('document.documentElement.scrollWidth <= innerWidth + 2'), 'horizontal overflow'
         if width == 390: assert panel.bounding_box()['width'] >= 280, 'close native sidebar before narrow-panel acceptance'
     # Native workspace initialization may request a blank session. It remains

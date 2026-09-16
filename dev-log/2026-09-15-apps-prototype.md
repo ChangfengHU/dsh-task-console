@@ -24,6 +24,17 @@ DSH sidebar screenshot. No full interface redesign or runtime version change.
 Public artifact:
 https://resource.vyibc.com/dsh-apps-prototype-v1-20260915.html
 
+Version 2 (2026-09-16) adds the configuration migration interaction: export
+preview and R2 result, import URL validation, conflict preview, and the rule
+that imported schedules remain disabled. These are prototype states only; no
+local DB or R2 write is initiated by the page.
+
+Public artifact v2:
+https://resource.vyibc.com/dsh-apps-prototype-v2-20260916.html
+
+32,758 bytes; SHA256 ae65d5fca33da171761cec7bbbfe74df45f250e5378809ee689de64bf8c8c49b.
+Public GET bytes verified equal to the local HTML.
+
 29,449 bytes; SHA256 f8adcfc02d584965ffda8f4d9a6ebba7e48d04be183afedcceb383873293ac79.
 Upload configuration resolved from Vault service:suqu-api in process. Exact
 destination verified, target absent before upload, public GET bytes identical.

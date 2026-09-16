@@ -14,3 +14,10 @@ rendered desktop and narrow layouts using the built client fixture: two capabili
 reads, no page errors and no business writes. The full Node suite was not usable
 on this machine because the installed `better-sqlite3` binary targets a different
 Node ABI; dependencies were not rebuilt or replaced.
+
+Before release, the host reported zero running native sessions and SQLite reported
+zero running Task Runs. A completed unrelated plugin installation then restarted
+the same user service, loading this already-pushed package. The public live
+Capabilities tab subsequently passed the same read-only desktop/narrow acceptance:
+two reads, no page errors, no business writes, and the post-check still found zero
+running native sessions.

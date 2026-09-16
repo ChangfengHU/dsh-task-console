@@ -445,7 +445,9 @@ export class TaskConsoleService extends TypertRemoteService {
       const task = { ...row, actions: undefined, enabled: false, createdAt: new Date().toISOString() } as any
       delete task.actions
       await this.runner.store.append({ t: 'task/created', at: task.createdAt, taskId: task.id, task })
-      if (row.actions.length) this.creator.actions.save(row.id, row.actions, '0')
+      // Task Actions are intentionally restricted to task-chat origins. A
+      // definition export has no authenticated chat-origin receipt, so never
+      // fabricate one just to restore a shortcut on another machine.
       importedTasks.push(row.id)
     }
     return JSON.stringify({ importedAgents, skippedAgents, importedTasks, skippedTasks, schedulesEnabled: false })

@@ -51,6 +51,18 @@ test('filtered MCP resolves auth from one exact official host entry', () => {
   assert.throws(() => resolveSourceConfig(ctx, 'host-vault'), /not an official MCP client/)
 })
 
+test('filtered MCP resolves a host entry across a preset loader scope', () => {
+  const source = { serverName: 'fleet-browser', command: '/usr/bin/node', args: ['server.mjs'] }
+  const ctx = {
+    get(name: string) {
+      if (name === 'loader') return { entries: () => [] }
+      if (name === 'taskConsole') return { sourceMcpConfig: (id: string) => id === 'mcp-fleet-browser' ? source : undefined }
+    },
+  } as any
+  assert.deepEqual(resolveSourceConfig(ctx, 'mcp-fleet-browser'), source)
+  assert.throws(() => resolveSourceConfig(ctx, 'missing'), /unavailable/)
+})
+
 test('browser identity is bound per execution without changing the MCP schema or accepting spoofed sessions', () => {
   const parameters = {type:'object',properties:{ip:{type:'string'},sessionId:{type:'string'},requestId:{type:'string'}},required:['ip','sessionId','requestId']}
   const calls: any[] = []

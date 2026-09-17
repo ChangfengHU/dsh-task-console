@@ -259,6 +259,12 @@ export class TaskConsoleService extends TypertRemoteService {
     return rows
   }
 
+  /** Resolve one host-owned MCP transport for a child Agent preset. */
+  sourceMcpConfig(sourceEntryId: string): Record<string, unknown> | undefined {
+    const row = this.hostMcp().find(candidate => candidate.sourceEntryId === sourceEntryId && candidate.live)
+    return row ? { ...row.config } : undefined
+  }
+
   private hostToolNames(): string[] {
     return ((this.ctx as any).tools.schemas() as { name: string }[]).map(schema => schema.name)
   }

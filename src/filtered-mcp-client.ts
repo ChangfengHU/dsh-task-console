@@ -35,7 +35,17 @@ const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
 export function resolveSourceConfig(ctx: Context, sourceEntryId: string): McpConfig {
   const loader = (ctx as any).get?.('loader') ?? (ctx as any).loader
   const entry = loader?.entries?.().find((candidate: any) => String(candidate?.options?.id) === sourceEntryId)
-  if (!entry) throw new Error(`filtered-mcp-client: source entry "${sourceEntryId}" is unavailable`)
+  if (!entry) {
+    // Agent presets are mounted in a child Cordis scope. Some DSH versions
+    // expose only that child composition from its loader, so an authoritative
+    // host MCP entry is not visible here even though it exists in the parent.
+    // Resolve through task-console without persisting transport credentials in
+    // the authored preset.
+    const taskConsole = (ctx as any).get?.('taskConsole')
+    const inherited = taskConsole?.sourceMcpConfig?.(sourceEntryId)
+    if (inherited) return { ...inherited } as McpConfig
+    throw new Error(`filtered-mcp-client: source entry "${sourceEntryId}" is unavailable`)
+  }
   if (entry?.options?.name !== MCP_CLIENT) throw new Error(`filtered-mcp-client: source entry "${sourceEntryId}" is not an official MCP client`)
   if (entry.disabled === true || entry.options?.disabled === true) {
     throw new Error(`filtered-mcp-client: source entry "${sourceEntryId}" is disabled`)

@@ -13,7 +13,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID, createHash } from 'node:crypto'
 import { homedir } from 'node:os'
-import { basename, dirname, resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { readActions, saveActions } from './agent-action-store.ts'
 import { renderAction, parameterVisible, type ActionCatalog } from './agent-actions.ts'
 import { optionPage, sourceTool, type ActionOptionQuery } from './action-options.ts'
@@ -376,10 +376,7 @@ export class TaskConsoleService extends TypertRemoteService {
     let version = 'unknown'
     try { version = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json', import.meta.url), 'utf8')).version ?? version } catch { /* package metadata is optional */ }
     const envelope = createEnvelope({ agents, tasks }, version)
-    const initial = await uploadConfig(envelope, this.configR2())
-    const bootstrap = await createBootstrapCommand(initial.publicUrl, { domain: this.configR2().domain, ...this.configBootstrap() })
-    envelope.runtime = { ...envelope.runtime!, bootstrap: { issuer: 'https://fleet.vyibc.com/api/hub/dsh-config-bootstrap', token: bootstrap.bootstrapToken, expiresAt: new Date(Date.now() + bootstrap.expiresInSeconds * 1000).toISOString() } }
-    const result = await uploadConfig(envelope, this.configR2(), basename(new URL(initial.publicUrl).pathname))
+    const result = await uploadConfig(envelope, this.configR2())
     return JSON.stringify({ ...result, exportedAt: envelope.exportedAt, digest: envelope.digest.value, counts: { agents: agents.length, tasks: tasks.length }, omitted: ['sessions', 'runs', 'events', 'artifacts', 'attachments', 'logs', 'credentials'] })
   }
 
@@ -404,7 +401,7 @@ export class TaskConsoleService extends TypertRemoteService {
         const missingMcp = Object.keys(row.spec.mcpTools).filter(name => !mcp.has(name))
         return { id: row.spec.id, name: row.spec.name, conflict: existingAgents.has(row.spec.id), missingSkills, missingMcp, ready: !missingSkills.length && !missingMcp.length }
       })
-      const available = new Set([...existingAgents, ...agents.filter(row => !row.conflict && row.ready).map(row => row.id)])
+      const available = new Set(envelope.payload.agents.map(row => row.spec.id))
       const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: row.participants.map(p => p.agentId).filter(id => !available.has(id)), scheduleDisabled: row.trigger.kind === 'cron' }))
       const runtime = envelope.runtime ? {
         missingMcp: envelope.runtime.mcps.map(row => row.serverName).filter(name => !mcp.has(name)),
@@ -436,18 +433,14 @@ export class TaskConsoleService extends TypertRemoteService {
     const view = await this.configImportView(pending.envelope)
     const importedAgents: string[] = [], skippedAgents: { id: string; reason: string }[] = []
     const importedTasks: string[] = [], skippedTasks: { id: string; reason: string }[] = []
-    const agentRows = new Map(view.agents.map(row => [row.id, row]))
     const library = await scanSkills(), hostMcp = this.hostMcp(), hostTools = this.hostToolNames()
     for (const row of pending.envelope.payload.agents) {
-      const state = agentRows.get(row.spec.id)!
-      if (state.conflict) { skippedAgents.push({ id: row.spec.id, reason: '同 ID Agent 已存在' }); continue }
-      if (!state.ready) { skippedAgents.push({ id: row.spec.id, reason: `缺少 ${[...state.missingSkills, ...state.missingMcp].join('、')}` }); continue }
-      const saved = await writePreset(row.spec, hostMcp, library, userPresetRoot(), hostTools)
+      const saved = await writePreset(row.spec, hostMcp, library, userPresetRoot(), hostTools, { allowMissingSkills: true })
       const current = await readActions(saved.path)
       await saveActions(saved.path, row.actions, current.revision)
       importedAgents.push(row.spec.id)
     }
-    const availableAgents = new Set<string>([...view.agents.filter(row => row.conflict).map(row => row.id), ...importedAgents])
+    const availableAgents = new Set<string>(importedAgents)
     for (const row of pending.envelope.payload.tasks) {
       if (this.runner.store.tasks.has(row.id)) { skippedTasks.push({ id: row.id, reason: '同 ID Task 已存在' }); continue }
       const missing = row.participants.map(p => p.agentId).filter(id => !availableAgents.has(id))

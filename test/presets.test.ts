@@ -128,6 +128,14 @@ test('writePreset fails before replacing a working preset when a selected Skill 
   assert.deepEqual(await readSpec(path), original)
 })
 
+test('configuration import preserves an unavailable Skill reference without blocking the Agent definition', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'tc-portable-'))
+  const spec = validateSpec({ ...base, id: 'portable', tools: [], mcpTools: {}, skills: ['missing'] })
+  const { path } = await writePreset(spec, [], [], root, [], { allowMissingSkills: true })
+  assert.deepEqual((await readSpec(path))?.skills, ['missing'])
+  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'preset.yml', 'skills', 'skills.lock.json', 'task-console.json'])
+})
+
 test('managed Skill copies and hashes ignore interpreter cache files', async () => {
   const root = await mkdtemp(join(tmpdir(), 'tc-skill-cache-'))
   const source = join(root, 'source', 'demo')

@@ -48,3 +48,19 @@ and diff checks passed. The broader suite could not be used as a clean signal on
 this host because the existing `better-sqlite3` binary targets Node ABI 127 while
 the active Node targets ABI 115; failures began in unrelated SQLite tests. No
 temporary dependency installation or rebuild was retained.
+
+## 0.31.3 configuration-first import
+
+The migration boundary was corrected after live new-machine feedback. A package
+is now self-contained: every Task participant must name an Agent included in the
+same package. Import upserts every packaged Agent definition first, then imports
+non-conflicting Task definitions disabled. Missing MCPs and Skills are runtime
+diagnostics only; they neither make an Agent absent nor block Task import. An
+unavailable Skill reference remains in the Agent spec with an empty managed
+Skill directory so the definition stays loadable and can be completed later.
+
+The migration UI no longer offers or waits for runtime installation. It reports
+same-ID Agents as configuration updates, shows missing capabilities as a
+non-blocking notice, and always offers one complete configuration import. Same-ID
+Tasks remain protected because replacing them could collide with local execution
+history. Nineteen focused migration/preset tests and the production build passed.

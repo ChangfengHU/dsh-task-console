@@ -90,4 +90,4 @@
   - Stage 2 仅走受限 host-adapter；Stage 5/6/7/8/10 走控制面；Stage 1/3/4/9 为新鲜探测闸门。
   - Cloud 成功后仍须新鲜宿主探测证明健康；运行中操作沿用相同 operation ID 和账本 attempt。
   - 代码和离线回归完成，生产配置、迁移、隔离节点集成验收与部署尚未执行。
-- [x] [TASK-CONFIG-MIGRATION-035] 0.31.2 为 dsh-task-console 增加 Agent/Task 配置迁移与新机器直接导入：导出 R2 JSON 内含 URL 绑定、限时的运行时引导能力；导入页可一键后台安装包声明的 MCP/Skill，跨 DSH 重启后校验工具并自动导入 Agent/Task，cron 强制停用。能力不进入浏览器展示、进程参数或日志；五项聚焦测试与生产构建通过。全量测试受本机既有 better-sqlite3 Node ABI 不匹配阻断，不将其误报为通过。详见 `dev-log/2026-09-16-config-migration.md`。
+- [x] [TASK-CONFIG-MIGRATION-035] 0.31.3 将迁移收口为配置快照：包内每个 Task 引用的 Agent 必须随包导出；导入先幂等更新全部 Agent，再导入无冲突 Task 并强制停用。MCP/Skill 缺失只作运行诊断，不阻止 Agent/Task 落库；同 ID Task 因可能已有执行历史继续保护。页面取消运行时安装等待，19项聚焦测试与生产构建通过；全量测试仍受本机既有 better-sqlite3 Node ABI 不匹配阻断。详见 `dev-log/2026-09-16-config-migration.md`。

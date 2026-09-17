@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { assertPublicConfigUrl, createBootstrapCommand, createEnvelope, encodeEnvelope, parseEnvelope, taskConfig, uploadConfig } from '../src/config-migration.ts'
+import { assertPublicConfigUrl, createBootstrapCommand, createEnvelope, encodeEnvelope, FLEET_RUNTIME, parseEnvelope, taskConfig, uploadConfig } from '../src/config-migration.ts'
 import type { AgentSpec } from '../src/wire.ts'
 import type { TaskSpec } from '../src/fold.ts'
 
@@ -23,10 +23,15 @@ test('digest rejects tampering', () => {
 })
 
 test('runtime bootstrap capability survives validation without entering the payload digest', () => {
-  const envelope = createEnvelope({ agents: [{ spec: agent, actions: [] }], tasks: [] }, '1.0.0')
+  const envelope = createEnvelope({ agents: [{ spec: agent, actions: [] }], tasks: [] }, '1.0.0', new Date(), structuredClone(FLEET_RUNTIME))
   envelope.runtime!.bootstrap = { issuer: 'https://fleet.vyibc.com/api/hub/dsh-config-bootstrap', token: 'signed.capability', expiresAt: '2026-10-01T00:00:00.000Z' }
   const parsed = parseEnvelope(JSON.parse(encodeEnvelope(envelope).toString('utf8')))
   assert.equal(parsed.runtime?.bootstrap?.token, 'signed.capability')
+})
+
+test('package rejects a Task whose Agent definition is absent from the same export', () => {
+  const envelope = createEnvelope({ agents: [], tasks: [taskConfig(task, [])] }, '1.0.0')
+  assert.throws(() => parseEnvelope(envelope), /不存在的 Agent:planner/)
 })
 
 test('import URL is restricted to configured R2 origin and JSON', () => {

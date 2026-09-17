@@ -442,14 +442,15 @@ export function validateSpec(raw: unknown): AgentSpec {
 }
 
 /** Write (or rewrite) one preset directory from a spec. Returns its path. */
-export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root = userPresetRoot(), inheritedTools: string[] = []): Promise<{ path: string; preview: Preview }> {
-  return withPresetLock(resolve(root, spec.id), () => writePresetLocked(spec, hostMcp, library, root, inheritedTools))
+export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root = userPresetRoot(), inheritedTools: string[] = [], options: { allowMissingSkills?: boolean } = {}): Promise<{ path: string; preview: Preview }> {
+  return withPresetLock(resolve(root, spec.id), () => writePresetLocked(spec, hostMcp, library, root, inheritedTools, options))
 }
-async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root: string, inheritedTools: string[]): Promise<{ path: string; preview: Preview }> {
+async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root: string, inheritedTools: string[], options: { allowMissingSkills?: boolean }): Promise<{ path: string; preview: Preview }> {
   const dir = resolve(root, spec.id)
   if (!dir.startsWith(resolve(root) + '/')) throw new Error('非法 id')
   // Fail before changing any authored files if a selected source vanished.
-  for (const name of spec.skills) if (!selectedSkill(name, library)) throw new Error(`Skill 不存在:${name}`)
+  const availableSkills = spec.skills.filter(name => selectedSkill(name, library))
+  if (!options.allowMissingSkills) for (const name of spec.skills) if (!selectedSkill(name, library)) throw new Error(`Skill 不存在:${name}`)
   await mkdir(root, { recursive: true, mode: 0o700 })
   await chmod(root, 0o700).catch(() => undefined)
 
@@ -465,7 +466,8 @@ async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: S
     await writeFile(join(staged, 'preset.yml'), `name: ${JSON.stringify(spec.name)}\ndescription: ${JSON.stringify(spec.description)}\n`, { mode: 0o600 })
     await writeFile(join(staged, SPEC_FILE), JSON.stringify(spec, null, 2) + '\n', { mode: 0o600 })
     await writeFile(join(staged, 'agent-meta.json'), JSON.stringify({ createdAt }) + '\n', { mode: 0o600 })
-    await syncPresetSkills(spec, library, staged)
+    await syncPresetSkills({ skills: availableSkills }, library, staged)
+    if (spec.skills.length) await mkdir(join(staged, 'skills'), { recursive: true, mode: 0o700 })
     // UI shortcuts are not part of AgentSpec or its Task review hash.
     if (existed) {
       try { await writeFile(join(staged, ACTION_FILE), await readFile(join(dir, ACTION_FILE)), { mode: 0o600 }) }

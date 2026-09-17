@@ -61,12 +61,12 @@ export function taskConfig(task: TaskSpec, actions: AgentAction[]): ConfigTask {
   }
 }
 
-export function createEnvelope(payload: ConfigPayload, version: string, now = new Date(), runtime: ConfigRuntime = FLEET_RUNTIME): ConfigEnvelope {
+export function createEnvelope(payload: ConfigPayload, version: string, now = new Date(), runtime?: ConfigRuntime): ConfigEnvelope {
   const normalized: ConfigPayload = {
     agents: [...payload.agents].sort((a, b) => a.spec.id.localeCompare(b.spec.id)),
     tasks: [...payload.tasks].sort((a, b) => a.id.localeCompare(b.id)),
   }
-  return { schema: CONFIG_SCHEMA, exportedAt: now.toISOString(), source: { plugin: 'dsh-task-console', version }, digest: { algorithm: 'sha256', value: payloadDigest(normalized) }, payload: normalized, runtime }
+  return { schema: CONFIG_SCHEMA, exportedAt: now.toISOString(), source: { plugin: 'dsh-task-console', version }, digest: { algorithm: 'sha256', value: payloadDigest(normalized) }, payload: normalized, ...(runtime ? { runtime } : {}) }
 }
 
 function text(value: unknown, name: string, max = 8000): string {
@@ -104,6 +104,10 @@ export function parseEnvelope(raw: unknown): ConfigEnvelope {
     } as TaskSpec, row.actions ?? [])
   })
   const payload = { agents, tasks }
+  for (const task of tasks) {
+    const missing = task.participants.map(row => row.agentId).filter(id => !agentIds.has(id))
+    if (missing.length) throw Error(`Task ${task.id} 引用了配置包中不存在的 Agent:${missing.join('、')}`)
+  }
   if (!/^[a-f0-9]{64}$/.test(e.digest.value) || payloadDigest(payload) !== e.digest.value) throw Error('配置包 SHA256 校验失败')
   if (!Number.isFinite(Date.parse(e.exportedAt))) throw Error('配置包导出时间无效')
   let runtime: ConfigRuntime | undefined

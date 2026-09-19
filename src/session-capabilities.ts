@@ -21,6 +21,27 @@ const standard = (agent: any) => !!agent?.session && !agent.session.id.startsWit
 const roleOf = (agent: any) => agent?.session?.header?.agentPreset ?? 'standard'
 const toolText = (message: any): string => (message?.content ?? []).flatMap((b: any) => b.type === 'tool-result' ? b.content ?? [] : [b]).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
 
+interface McpIdentity { name: string; server: string; rawName: string }
+
+/** Map an Agent-isolated runtime MCP namespace back to its stable authored identity. */
+export function resolveMcpToolIdentity(name: string, declared: McpIdentity[], sources: { serverName: string; tools: string[] }[]): McpIdentity | undefined {
+  const candidates = [...declared]
+  for (const source of sources) for (const rawName of source.tools) {
+    const identity = { name: publicToolName(source.serverName, rawName), server: source.serverName, rawName }
+    if (!candidates.some(candidate => candidate.name === identity.name)) candidates.push(identity)
+  }
+  const exact = candidates.find(candidate => candidate.name === name)
+  if (exact) return exact
+  if (!name.startsWith('mcp__')) return undefined
+  return candidates.find(candidate => {
+    const suffix = `__${candidate.rawName}`
+    if (!name.endsWith(suffix)) return false
+    const namespace = name.slice(5, -suffix.length)
+    const stable = candidate.server.replace(/[^A-Za-z0-9_-]/g, '_')
+    return namespace === stable || namespace.startsWith(`${stable}-`)
+  })
+}
+
 export class ChatProgress {
   turn = -1
   calls = new Map<string, { key: string; name: string }>()
@@ -91,6 +112,8 @@ export class SessionCapabilities {
     const available = exposed ?? schemas.filter((s: any) => !this.restricted(s, agent))
     const availableNames = new Set(available.map((s: any) => s.name))
     const declared = new Set<string>(spec ? [...spec.tools.flatMap(id => NATIVE_TOOLS.find(t => t.id === id)?.schemaNames ?? []), ...Object.entries(spec.mcpTools).flatMap(([server, names]) => names.map(n => publicToolName(server, n))), ...(spec.skills.length ? ['skill'] : [])] : [])
+    const declaredMcp = spec ? Object.entries(spec.mcpTools).flatMap(([server, names]) => names.map(rawName => ({ name: publicToolName(server, rawName), server, rawName }))) : []
+    const mcpSources = this.mcpSources()
     const errors = new Map<string, string>(), loaded = new Set<string>(), calls = new Map<string, any>()
     for (const event of session.events ?? []) {
       const d = event.data ?? {}
@@ -116,12 +139,18 @@ export class SessionCapabilities {
         skillDiscovery = catalog.complete ? 'complete' : 'partial'
       } catch { skillDiscovery = 'discovery-failed' }
     }
-    const tools = schemas.map((s: any) => ({ name: s.name, kind: s.name.startsWith('mcp__') ? 'mcp' : 'native', server: this.mcpSources().find(m => m.tools.some(name => publicToolName(m.serverName, name) === s.name))?.serverName ?? null, source: CAPABILITY_TOOLS.includes(s.name) ? 'platform' : declared.has(s.name) ? 'agent-definition' : 'environment-inherited', state: availableNames.has(s.name) ? 'registered' : 'restricted', ...(this.restricted(s, agent) ? { reason: 'explicit-standard-exclusion' } : {}), ...(errors.has(s.name) ? { lastFailure: errors.get(s.name) } : {}) }))
+    const registeredStable = new Set<string>()
+    const tools = schemas.map((s: any) => {
+      const identity = resolveMcpToolIdentity(s.name, declaredMcp, mcpSources)
+      if (identity) registeredStable.add(identity.name)
+      const stableName = identity?.name ?? s.name
+      return { name: stableName, ...(stableName !== s.name ? { runtimeName: s.name } : {}), kind: s.name.startsWith('mcp__') ? 'mcp' : 'native', server: identity?.server ?? null, source: CAPABILITY_TOOLS.includes(s.name) ? 'platform' : declared.has(stableName) ? 'agent-definition' : 'environment-inherited', state: availableNames.has(s.name) ? 'registered' : 'restricted', ...(this.restricted(s, agent) ? { reason: 'explicit-standard-exclusion' } : {}), ...(errors.has(s.name) || errors.has(stableName) ? { lastFailure: errors.get(s.name) ?? errors.get(stableName) } : {}) }
+    })
     const out = {
       sessionId: session.id, checkedAt: new Date().toISOString(), live: true,
       inheritancePolicy: { mcp: this.policy.standardMcpInheritance ?? 'inherit', skills: this.policy.standardSkillInheritance ?? 'inherit', excludedSkills: this.policy.standardExcludedSkills ?? [], excludedMcpServers: this.policy.standardExcludedMcpServers ?? [], excludedTools: this.policy.standardExcludedTools ?? [], appliesTo: 'standard-native-session', maxSteps: this.policy.standardMaxSteps ?? STANDARD_LIMIT },
-      definition: { role, authored: !!spec, observation: spec ? 'task-console-definition' : 'no-task-console-definition; use runtime facts, not an assumed empty preset', tools: [...declared], skills: spec?.skills ?? [] },
-      current: { tools, skills, skillDiscovery, permissionPreset: this.ctx.get('permissionPresets')?.current(session.events ?? []) ?? 'not-observed', configuredButNotRegistered: [...declared].filter(n => !schemas.some((s: any) => s.name === n)) },
+      definition: { role, name: spec?.name, authored: !!spec, observation: spec ? 'task-console-definition' : 'no-task-console-definition; use runtime facts, not an assumed empty preset', tools: [...declared], skills: spec?.skills ?? [] },
+      current: { tools, skills, skillDiscovery, permissionPreset: this.ctx.get('permissionPresets')?.current(session.events ?? []) ?? 'not-observed', configuredButNotRegistered: [...declared].filter(n => !schemas.some((s: any) => s.name === n) && !registeredStable.has(n)) },
       answerContract: { language: '用户当前消息的语言', registeredIsNotAuthorized: true, cannotCall: tools.filter((t: any) => t.state === 'restricted').map((t: any) => t.name), requiredCaveat: '必须单独说明受限工具不可调用；其余已注册工具也不保证凭据有效或具体操作获授权。禁止总结为全部能力都可使用。Skill 是可按需加载，不等于已加载。' },
       boundaries: ['registered 表示当前工具已注册，不保证凭据有效或目标操作获授权。', '历史加载的 Skill 不证明其全文仍保留在当前上下文。', '底层 CLI 自行加载的能力未获得运行时证据时标为未知，不能算作已加载。'],
       cliInheritance: /^(codex|claude)-local$/.test(session.requestHeader?.()?.config?.provider ?? agent.options?.provider ?? '') ? 'not-observed' : 'not-applicable-to-native-tool-surface',

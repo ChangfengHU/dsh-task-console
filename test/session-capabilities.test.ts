@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
-import { SessionCapabilities, ChatProgress, CAPABILITY_TOOLS } from '../src/session-capabilities.ts'
+import { SessionCapabilities, ChatProgress, CAPABILITY_TOOLS, resolveMcpToolIdentity } from '../src/session-capabilities.ts'
 import { publicToolName } from '../src/filtered-mcp-client.ts'
 
 const event = (type: string, data: any) => ({ type, data })
@@ -13,6 +13,13 @@ function pair(state: ChatProgress, id: string, name: string, args: any, text = '
   state.observe(event('tool/call', { callId: id, name, arguments: JSON.stringify(args) }))
   state.observe(event('tool/result', { message: { source: { callId: id }, content: [{ type: 'text', text }] } }))
 }
+
+test('isolated Agent MCP namespaces resolve to stable configured identities', () => {
+  const declared = [{ name: 'mcp__fleet-browser__browser_create', server: 'fleet-browser', rawName: 'browser_create' }]
+  assert.deepEqual(resolveMcpToolIdentity('mcp__fleet-browser-browser-manager__browser_create', declared, []), declared[0])
+  assert.deepEqual(resolveMcpToolIdentity('mcp__fleet-browser__browser_create', declared, []), declared[0])
+  assert.equal(resolveMcpToolIdentity('mcp__other__browser_create', declared, []), undefined)
+})
 
 test('progress detects interleaved unchanged calls; argument key order does not reset detection', () => {
   const p = new ChatProgress(); p.observe(event('turn/start', { turn: 1 }))

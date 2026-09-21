@@ -117,7 +117,10 @@ export class TaskConsoleService extends TypertRemoteService {
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return
         const workflow = new StudioWorkflow(this.runner.store)
         workflow.enforceRuntime(input)
-        new StudioOperations(this.runner.store).configure(input,{imageCalls:6,voiceSegments:80})
+        const operations=new StudioOperations(this.runner.store)
+        operations.configure(input,{imageCalls:6,voiceSegments:80})
+        const budget=operations.snapshot(input)
+        workflow.recordBudget(input,{repairRounds:Math.max(0,(workflow.status(input).candidate?.revision??1)-1),used:budget.used,limits:budget.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
         await refreshStudioCapabilities(workflow,input.task)
         const result = workflow.preflight(input.task)
         if (!result.ok) return { kind: 'capability', reason: result.reason ?? 'blocked_quality_capability' }
@@ -131,7 +134,7 @@ export class TaskConsoleService extends TypertRemoteService {
           workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
           return workflow.complete(input)
         }
-        if (input.card.role === 'notifier') return new TaskNotifications(this.runner.store).complete(input)
+        if (input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId) return new TaskNotifications(this.runner.store).complete(input)
         const proxy = new ProxyWorkflow(this.runner.store)
         if (proxy.pending(input)) throw new Error('代理后台操作仍在运行，继续查询原操作回执')
         const proxyReport = proxy.complete(input)
@@ -177,11 +180,11 @@ export class TaskConsoleService extends TypertRemoteService {
       },
       patrolStatus: async input => {
         const outbox = new TaskNotifications(this.runner.store)
-        return { ...(input.card.role === 'notifier' ? outbox.job(input) : (await this.patrolWorkflow(input)).snapshot(input)), notifications:outbox.rows(input.batch.id), proxy:new ProxyWorkflow(this.runner.store).status(input) }
+        return { ...(input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId ? outbox.job(input) : (await this.patrolWorkflow(input)).snapshot(input)), notifications:outbox.rows(input.batch.id), proxy:new ProxyWorkflow(this.runner.store).status(input) }
       },
       notify: async (input, stage, deliver) => {
         const outbox = new TaskNotifications(this.runner.store)
-        if (input.card.role === 'notifier') return outbox.send(input,stage as NotificationStage,undefined,deliver)
+        if (input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId) return outbox.send(input,stage as NotificationStage,undefined,deliver)
         const report = (await this.patrolWorkflow(input)).snapshot(input)
         return input.task.design?.notifications?.agentId ? outbox.request(input,stage as NotificationStage,report) : outbox.send(input,stage as NotificationStage,report,deliver)
       },

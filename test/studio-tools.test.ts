@@ -63,3 +63,11 @@ test('character image is locked by host id and content hash, never caller path',
  await make('planner');const r=await tools.studio_character_image.execute({id:'approved',path:'/etc/hosts'});assert.equal(r.sha256,sha256);assert.equal(r.images.length,1);await assert.rejects(tools.studio_character_image.execute({id:'../../etc/hosts'}),/lock-required/)
  await make('executor');await assert.rejects(tools.studio_character_image.execute({id:'approved'}),/role/);await make('reviewer','f'.repeat(64));await assert.rejects(tools.studio_character_image.execute({id:'approved'}),/file-changed/)
 })
+
+test('Cordis optional attachment service is resolved through ctx.get, never uninjected property',async t=>{
+ const s=await setup(t),tools:any={},path=join(s.cwd,'character.png');await writeFile(path,Buffer.from([137,80,78,71,13,10,26,10,0]));const sha256=await fileSha256(path);let mounted=true,gets=0,saves=0
+ const service={saveImage:async()=>{saves++;return {attachmentId:'cordis-image'}}}
+ const ctx=new Proxy({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}},get:(name:string)=>{assert.equal(name,'attachments');gets++;return mounted?service:undefined}}, {get(target,key,receiver){if(key==='attachments')throw Error('cannot get property "attachments" without inject');return Reflect.get(target,key,receiver)}})
+ await registerStudioTools(ctx,{input:{task:{cwd:s.cwd},card:{role:'reviewer'},sessionId:'s'},workflow:{candidateLocation:()=>({path:join(s.cwd,'film.mp4')}),status:()=>({candidate:s.getCandidate()}),recordReceipt:(_:any,v:any)=>v},isActive:()=>true,characterReferences:[{id:'locked',path,sha256}],runCommand:async(_,args)=>{await writeFile(args.at(-1)!,'frame');return {stdout:''}}})
+ assert.equal((await tools.studio_character_image.execute({id:'locked'})).images.length,1);assert.equal((await tools.studio_inspect_frames.execute({start:0,end:1})).images.length,8);assert.equal(saves,9);assert.equal(gets,2);mounted=false;await assert.rejects(tools.studio_character_image.execute({id:'locked'}),/attachment-capability-required/)
+})

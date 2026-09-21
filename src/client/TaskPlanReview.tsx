@@ -11,7 +11,7 @@ export function TaskDesignView({ design }: { design?: TaskDesign }) {
     {design.browserPatrol?.excludedNodeIds?.length ? <p>明确排除：{design.browserPatrol.excludedNodeIds.join('、')}。保留观测记录，不计为健康，也不阻止本轮验收。</p> : null}
     {design.browserPatrol?.scheduleActivation === 'completed-patrol' ? <p>定时启用验收：巡查全部角色正常结束、原生检查结论完整且通知送达即可；节点未解决项保留为未通过，不停止后续巡查。协议失败、缺失证据或通知未知不能启用。</p> : null}
     {design.proxy ? <p>代理前置验收：<a href={`#/tc/agents/${design.proxy.agentId}`}>{design.proxy.agentId} ↗</a> 处理 {design.proxy.lineId}；单次故障最多 {design.proxy.maxAttempts} 次修复。代理阶段取得终态后交接；宿主逐机器阻止未通过目标复制登录，其他目标继续。最终由评估者独立复验。</p> : null}
-    {design.notifications ? <p>企微收件群：{design.notifications.chatIds.join('、')}；{design.notifications.agentId ? <>独立通知员 <a href={`#/tc/agents/${design.notifications.agentId}`}>{design.notifications.agentId} ↗</a>，阶段触发通知支线，保留自己的执行卡、会话和发送回执。通知失败不重跑浏览器。</> : '由规划者经 task_notify 发送并保存回执。'}不广播到其他群。</p> : null}
+    {design.notifications ? <p>企微收件群：{design.notifications.chatIds.join('、')}；{design.notifications.agentId ? <>独立通知员 <a href={`#/tc/agents/${design.notifications.agentId}`}>{design.notifications.agentId} ↗</a>，{design.notifications.mode === 'final-handoff' ? '作为静态工作流最后一个参与者，仅发送宿主冻结的上游完成交接。' : '阶段触发通知支线，保留自己的执行卡、会话和发送回执。'}通知失败不重跑上游业务。</> : '由规划者经 task_notify 发送并保存回执。'}不广播到其他群。</p> : null}
     {design.evidenceContract ? <p>宿主证据闸门：{design.evidenceContract}（依据实际工具事件核对交卷，不接受模型自报统计）</p> : <p className="dtc-workflow-muted">未选择专用宿主证据闸门；结构化计划本身不保证执行结果正确。</p>}
     <h3>目标与范围</h3><p className="dtc-workflow-copy">{design.scope}</p>
     <h3>条件分支</h3><ol className="dtc-workflow-roles">{design.branches.map(b => <li key={b.id}>
@@ -53,7 +53,7 @@ export function TaskPlanReview({ api, id }: { api: Api; id?: string }) {
         <h3>原始目标</h3><pre>{plan.request}</pre><p>{plan.definition.brief}</p><TaskDesignView design={plan.definition.design} />
         {plan.recurringObjective ? <details><summary>每次定时执行的业务目标 · 随本计划审查</summary><pre>{plan.recurringObjective}</pre><p>原始创建和修订指令保留在上方，不重复发送给执行角色；范围、权限与验收仍使用完整冻结计划。</p></details> : null}
         {plan.definition.trigger?.kind === 'cron' ? <p>时间表：{plan.definition.trigger.expr} · {plan.definition.trigger.timeZone || '宿主时区'}。批准后先手动验收，通过后才可启用定时；每次触发复用同一任务、新增执行记录。</p> : null}
-        <h3>参与角色</h3><ol className="dtc-workflow-roles">{plan.definition.participants.map((p: any, i: number) => <li key={i}><b>{p.agentId}</b><p>{p.brief}</p></li>)}{plan.definition.design?.notifications?.agentId ? <li><b>{plan.definition.design.notifications.agentId}</b><p>辅助参与者 · 企微通知支线；按阶段创建独立卡和会话，不成为浏览器修复的前置依赖。</p></li> : null}</ol>
+        <h3>参与角色</h3><ol className="dtc-workflow-roles">{plan.definition.participants.map((p: any, i: number) => <li key={i}><b>{p.agentId}</b><p>{p.brief}</p></li>)}{plan.definition.design?.notifications?.agentId && plan.definition.design.notifications.mode !== 'final-handoff' ? <li><b>{plan.definition.design.notifications.agentId}</b><p>辅助参与者 · 企微通知支线；按阶段创建独立卡和会话，不成为浏览器修复的前置依赖。</p></li> : null}</ol>
         {plan.actions?.length ? <details open><summary>Task Actions · 随计划审查</summary>{plan.actions.map((a: any) => <div key={a.id}><h4>{a.name}{a.isDefault ? ' · 默认' : ''}{a.enabled === false ? ' · 停用' : ''}</h4><p>{a.description}</p><pre>{a.template}</pre></div>)}</details> : null}
         <details><summary>完整冻结计划 JSON</summary><pre>{JSON.stringify({ ...plan.definition, actions: plan.actions ?? [] }, null, 2)}</pre></details>
         {plan.reviewReason ? <p>审查意见：{plan.reviewReason}</p> : null}

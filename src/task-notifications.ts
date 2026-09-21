@@ -3,8 +3,16 @@ import type { EventStore } from './tasks.ts'
 import type { CompletionCheck } from './runner.ts'
 import { patrolItemView } from './patrol-report.ts'
 
-export type NotificationStage = 'started' | 'findings' | 'rework' | 'restored' | 'unresolved' | 'blocked'
-const labels = { started: '开始巡查', findings: '巡查发现', rework: '继续返工', restored: '独立验收通过', unresolved: '仍有未解决项', blocked:'巡查处理受阻' }
+export type NotificationStage = 'started' | 'findings' | 'rework' | 'restored' | 'unresolved' | 'blocked' | 'completed'
+const labels = { started: '开始巡查', findings: '巡查发现', rework: '继续返工', restored: '独立验收通过', unresolved: '仍有未解决项', blocked:'巡查处理受阻', completed:'任务执行结果' }
+
+export function taskNotificationMarkdown(report: any, taskId: string, batchId: string, id: string) {
+  const lines = [`## ${report.title || '任务执行结果'}`, report.summary || '上游任务已完成，未提供文字摘要。']
+  const origin = process.env.DSH_PUBLIC_ORIGIN
+  if (origin && /^https:\/\/[^/?#]+$/.test(origin)) lines.push(`\n[查看本次执行报告](${origin}/#/tc/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(batchId)}/report)`)
+  lines.push(`Task：${taskId}`, `执行：${batchId}`, `通知编号：${id}`)
+  return lines.filter(Boolean).join('\n')
+}
 
 export function patrolNotificationMarkdown(stage: NotificationStage, report: any, taskId: string, batchId: string, id: string) {
   const problems = (report.items ?? []).filter((r: any) => !r.accepted)
@@ -36,8 +44,17 @@ export class TaskNotifications {
   }
 
   job(input: CompletionCheck) {
-    if (input.card.role !== 'notifier' || input.profileId !== input.task.design?.notifications?.agentId) throw new Error('不是本任务已审查的通知员')
-    const row = this.store.kernel.listEvents(input.card.id).find(e => e.kind === 'notification_requested')
+    const config=input.task.design?.notifications
+    if (input.profileId !== config?.agentId) throw new Error('不是本任务已审查的通知员')
+    let row = this.store.kernel.listEvents(input.card.id).find(e => e.kind === 'notification_requested')
+    if (!row?.payload && config.mode === 'final-handoff') {
+      const upstream = this.store.kernel.db.prepare(`SELECT tr.task_id,tr.summary,tr.ended_at FROM task_links l JOIN task_runs tr ON tr.task_id=l.parent_id
+        WHERE l.child_id=? AND tr.status='done' AND tr.outcome='completed' ORDER BY tr.ended_at DESC LIMIT 1`).get(input.card.id) as any
+      if (!upstream?.summary) throw new Error('上游尚未留下可通知的完成交接')
+      const payload={stage:'completed' as const,report:{title:input.task.title,summary:upstream.summary},source_card_id:upstream.task_id}
+      this.store.kernel.recordEvent(input.card.id,'notification_requested',payload)
+      row = this.store.kernel.listEvents(input.card.id).find(e => e.kind === 'notification_requested')
+    }
     if (!row?.payload) throw new Error('没有冻结的通知交接')
     return JSON.parse(row.payload) as {stage:NotificationStage;report:any;source_card_id:string}
   }
@@ -64,6 +81,8 @@ export class TaskNotifications {
   async send(input: CompletionCheck, stage: NotificationStage, report: any, deliver: (args: { markdown: string; chatids: string[] }) => Promise<any>) {
     const config = input.task.design?.notifications
     if (!config?.chatIds.length) throw new Error('未明确配置收件群，禁止默认广播')
+    if (config.mode === 'final-handoff' && stage !== 'completed') throw new Error('通用末尾通知只允许 completed 阶段')
+    if (config.mode !== 'final-handoff' && stage === 'completed') throw new Error('浏览器巡查不使用 completed 阶段')
     if (config.agentId) {
       const job = this.job(input)
       if (stage !== job.stage) throw new Error('通知员只能发送本卡冻结的阶段')
@@ -73,7 +92,9 @@ export class TaskNotifications {
     const db = this.store.kernel.db, results: any[] = []
     for (const chatId of config.chatIds) {
       const id = createHash('sha256').update(JSON.stringify([input.batch.id, input.card.round, stage, chatId, ...(stage==='blocked'?[input.card.id]:[])])).digest('hex').slice(0, 24)
-      const markdown = patrolNotificationMarkdown(stage,report,input.task.id,input.batch.id,id)
+      const markdown = config.mode === 'final-handoff'
+        ? taskNotificationMarkdown(report,input.task.id,input.batch.id,id)
+        : patrolNotificationMarkdown(stage,report,input.task.id,input.batch.id,id)
       db.prepare("INSERT OR IGNORE INTO dsh_task_notifications VALUES (?,?,?,?,?,?,?,'pending',0,?,NULL,?)").run(id,input.task.id,input.batch.id,input.card.id,stage,chatId,markdown,Date.now(),input.sessionId)
       const claim = this.store.kernel.write(() => {
         const row = db.prepare('SELECT * FROM dsh_task_notifications WHERE id=?').get(id) as any

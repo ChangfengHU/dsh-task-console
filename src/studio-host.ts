@@ -22,7 +22,7 @@ export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any
  const record=(name:string,status:string,proofSha256?:string,reason?:string,method?:string)=>(workflow as any).recordCapability(task,{name,status,checkedAt,expiresAt,...(proofSha256?{proofSha256}:{}),...(reason?{reason}:{}),...(method?{method}:{})})
  let result:any,reference:any,characterReferences:any[]=[]
  if(config.preflightScript){const key=hash(JSON.stringify({id:task.id,cwd:task.cwd,studio:task.design?.studio,script:config.preflightScript})),old=cache.get(key)
-  try{result=old&&now-old.at<60_000?old.value:await exec(config.preflightScript,[],task,config,JSON.stringify(task));if(!old||result!==old.value)cache.set(key,{at:now,value:result})}catch{result={capabilities:{}}}
+  try{result=old&&now-old.at<60_000?old.value:await exec(config.preflightScript,[],task,config,JSON.stringify(task));if(!old||result!==old.value)cache.set(key,{at:Date.now(),value:result})}catch{result={capabilities:{}}}
   for(const [name,source] of [['character','character'],['reference','reference'],['frames','frames'],['render','hyperframes']]){const p=result?.capabilities?.[source];try{
    if(p?.ok!==true||!p.proofPath)throw Error('preflight unavailable');if(source==='hyperframes'&&(p.hyperframes_verified!==true||p.scope!=='actual_hyperframes_smoke_render'))throw Error('actual HyperFrames proof required')
    if(source==='character'){if(p.characterId!==task.design.studio.characterId||await fileSha256(p.imagePath)!==p.imageSha256||await fileSha256(p.profilePath)!==p.sha256)throw Error('character lock mismatch');characterReferences=[{id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256}]}
@@ -43,11 +43,18 @@ export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any
  record('audio_calibration',calibrated?'passed':'unknown',calibrated?calibrationHash:undefined,calibrated?'scope=speech_content_and_acoustic_defects; normal/muted utterance and retrospective deletion/noise regression only; performance_calibrated=false; no film quality approval':'speech content and acoustic defect calibration not established','actual_audio')
  return {reference,characterReferences,preflight:result}
 }
+function audioFailure(result:any,prefix:string){
+ if(result?.ok===true)return
+ const stage=['input','vault','provider'].includes(result?.error_stage)?result.error_stage:'unknown'
+ const type=['HTTPError','ValueError','PermissionError','RuntimeError','TimeoutError','URLError','FileNotFoundError'].includes(result?.error_type)?result.error_type:'Error'
+ const status=Number.isInteger(result?.http_status)&&result.http_status>=100&&result.http_status<=599?`-http-${result.http_status}`:''
+ throw Error(`${prefix}-failed:${stage}:${type}${status}`)
+}
 export async function observeStudioAudio(task:any,args:{wavPath:string,start:number,end:number},deps:HostDeps={}){
  const config=deps.config??await configuration();if(!config.audioScript||!config.vaultTokenFile)throw Error('studio-audio-host-not-configured');const result=await(deps.execute??execute)(config.audioScript,[args.wavPath,'--start-seconds',String(args.start),'--end-seconds',String(args.end)],task,config)
- if(!result.ok||result.input_modality!=='input_audio'||result.finish_reason!=='stop'||result.audio_sha256!==await fileSha256(args.wavPath))throw Error('studio-audio-observation-invalid');return result
+ audioFailure(result,'studio-audio');if(result.input_modality!=='input_audio'||result.finish_reason!=='stop'||result.audio_sha256!==await fileSha256(args.wavPath))throw Error('studio-audio-observation-invalid');return result
 }
 export async function checkStudioSpeech(task:any,args:{wavPath:string,start:number,end:number,expectedText:string,stage:'source'|'final'},deps:HostDeps={}){
  const config=deps.config??await configuration();if(!config.speechScript||!config.vaultTokenFile)throw Error('studio-speech-host-not-configured');const result=await(deps.execute??execute)(config.speechScript,[args.wavPath,'--expected-text',args.expectedText,'--stage',args.stage,'--start-seconds',String(args.start),'--end-seconds',String(args.end)],task,config)
- if(result.ok!==true||result.audio_sha256!==await fileSha256(args.wavPath)||result.expected_text_sha256!==hash(args.expectedText)||!['pass','blocked'].includes(result.content_gate))throw Error('studio-speech-observation-invalid');return result
+ audioFailure(result,'studio-speech');if(result.audio_sha256!==await fileSha256(args.wavPath)||result.expected_text_sha256!==hash(args.expectedText)||!['pass','blocked'].includes(result.content_gate))throw Error('studio-speech-observation-invalid');return result
 }

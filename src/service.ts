@@ -117,7 +117,10 @@ export class TaskConsoleService extends TypertRemoteService {
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return
         const workflow = new StudioWorkflow(this.runner.store)
         workflow.enforceRuntime(input)
-        new StudioOperations(this.runner.store).configure(input,{imageCalls:6,voiceSegments:80})
+        const operations=new StudioOperations(this.runner.store)
+        operations.configure(input,{imageCalls:6,voiceSegments:80})
+        const budget=operations.snapshot(input)
+        workflow.recordBudget(input,{repairRounds:Math.max(0,(workflow.status(input).candidate?.revision??1)-1),used:budget.used,limits:budget.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
         await refreshStudioCapabilities(workflow,input.task)
         const result = workflow.preflight(input.task)
         if (!result.ok) return { kind: 'capability', reason: result.reason ?? 'blocked_quality_capability' }

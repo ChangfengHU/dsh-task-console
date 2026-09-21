@@ -22,7 +22,7 @@ export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any
  const record=(name:string,status:string,proofSha256?:string,reason?:string,method?:string)=>(workflow as any).recordCapability(task,{name,status,checkedAt,expiresAt,...(proofSha256?{proofSha256}:{}),...(reason?{reason}:{}),...(method?{method}:{})})
  let result:any,reference:any,characterReferences:any[]=[]
  if(config.preflightScript){const key=hash(JSON.stringify({id:task.id,cwd:task.cwd,studio:task.design?.studio,script:config.preflightScript})),old=cache.get(key)
-  try{result=old&&now-old.at<60_000?old.value:await exec(config.preflightScript,[],task,config,JSON.stringify(task));if(!old||result!==old.value)cache.set(key,{at:now,value:result})}catch{result={capabilities:{}}}
+  try{result=old&&now-old.at<60_000?old.value:await exec(config.preflightScript,[],task,config,JSON.stringify(task));if(!old||result!==old.value)cache.set(key,{at:Date.now(),value:result})}catch{result={capabilities:{}}}
   for(const [name,source] of [['character','character'],['reference','reference'],['frames','frames'],['render','hyperframes']]){const p=result?.capabilities?.[source];try{
    if(p?.ok!==true||!p.proofPath)throw Error('preflight unavailable');if(source==='hyperframes'&&(p.hyperframes_verified!==true||p.scope!=='actual_hyperframes_smoke_render'))throw Error('actual HyperFrames proof required')
    if(source==='character'){if(p.characterId!==task.design.studio.characterId||await fileSha256(p.imagePath)!==p.imageSha256||await fileSha256(p.profilePath)!==p.sha256)throw Error('character lock mismatch');characterReferences=[{id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256}]}

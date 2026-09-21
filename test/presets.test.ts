@@ -163,3 +163,5 @@ test('Studio web search has a bounded 120-second budget while ordinary Agents an
   const absent=parse(renderComposition({...spec,tools:['studio-runtime']},[]).yml)
   assert.equal(absent.some((row:any)=>row.id==='tool-web'),false)
 })
+
+test('text-only file group excludes read_image from the enforced tool grant',()=>{const spec=validateSpec({...base,tools:['fs-text','studio-runtime'],skills:[],mcpTools:{}}),out=renderComposition(spec,[],['read_image']);assert.deepEqual(spec.tools,['fs-text','studio-runtime']);const selected=out.yml.slice(out.yml.indexOf('    selected:'));assert.match(selected,/studio_preview_image/);assert.match(selected,/studio_preview_frames/);assert.doesNotMatch(selected,/^-?\s+- read_image$/m);assert.match(out.yml,/@deepseek-ai\/dsh-tool-fs/);})

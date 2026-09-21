@@ -337,7 +337,8 @@ export class TaskConsoleService extends TypertRemoteService {
       permission:spec?(spec.tools.some(t=>['bash','fs','str-replace-editor'].includes(t))?'write':Object.values(spec.mcpTools).some(t=>t.length)?'limited-write':'read-only'):null,spec:detail?spec:null}}
     const detailId=q.id==='new'?undefined:q.id??selected[0]?.id, detailPreset=detailId?all.find(p=>p.id===detailId):undefined
     if(q.id&&q.id!=='new'&&!detailPreset)throw Error('没有这个 Agent')
-    return JSON.stringify({page,pages,total,pageSize:10,rows:await Promise.all(selected.map(p=>load(p))),detail:detailPreset?await load(detailPreset,true):null})
+    const detail=detailPreset?{...await load(detailPreset,true),firstUsedAt:firstAgentUse(await this.sessionHeaders()).get(detailPreset.id)??null}:null
+    return JSON.stringify({page,pages,total,pageSize:10,rows:await Promise.all(selected.map(p=>load(p))),detail})
   }
 
   async agents(): Promise<string> {

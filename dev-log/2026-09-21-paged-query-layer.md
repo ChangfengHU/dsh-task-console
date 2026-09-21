@@ -7,7 +7,8 @@ compatibility, but the Board no longer calls it. Bulk selection/cleanup traverse
 pages only after an explicit user action; it does not silently target page one.
 
 Agent management uses agentPage, ten summaries plus the selected full definition.
-Its list no longer scans session history. Existing Agent activity and execution
+Its list no longer scans session history; selected detail retains first-use metadata
+using session headers only, without loading transcripts. Existing Agent activity and execution
 history queries already default to ten rows; full DAG/replay/Trace refactoring is
 still pending and must preserve complete edges and replay prerequisites.
 

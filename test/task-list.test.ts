@@ -41,10 +41,11 @@ test('query cache deduplicates, invalidates stale in-flight writes and bounds en
   assert.equal(cache.peek('a'),undefined);assert.equal(cache.peek('c'),4)
 })
 
-test('agent page is bounded, searches on server and does not scan session history',async()=>{
+test('agent page is bounded and only selected detail reads session header metadata',async()=>{
   const service:any=Object.create(TaskConsoleService.prototype)
   service.ctx={get:()=>({list:async()=>Array.from({length:23},(_,i)=>({id:`a${String(i).padStart(2,'0')}`,name:`Agent ${i}`,trust:'system',path:`/nonexistent-agent-page-fixture/${i}/preset.yml`}))})}
-  service.sessionHeaders=()=>{throw Error('listing must not read session history')}
+  let headersRead=0;service.sessionHeaders=async()=>{headersRead++;return []}
+  await service.agentPage('{"id":"new"}');assert.equal(headersRead,0)
   const a=JSON.parse(await service.agentPage('{}')),b=JSON.parse(await service.agentPage('{"page":2}')),c=JSON.parse(await service.agentPage('{"page":3,"id":"a00"}'))
   assert.equal(a.rows.length,10);assert.equal(c.rows.length,3);assert.equal(a.total,23)
   assert.equal(new Set([...a.rows,...b.rows,...c.rows].map(r=>r.id)).size,23)

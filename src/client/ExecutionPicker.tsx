@@ -6,14 +6,14 @@ import { go } from './Console.tsx'
 
 const outcome = (batch: Batch) => batch.settled ? ({ done: '已结束 · 已通过', failed: '已结束 · 未通过', cancelled: '已取消' }[batch.settled.outcome] ?? batch.settled.outcome) : '未结束'
 
-export function ExecutionPicker({ batches, value, onChange, onArchive }: { batches: Batch[]; value: string; onChange: (id: string) => void; onArchive?: (id: string, archived: boolean) => Promise<void> }) {
+export function ExecutionPicker({ batches, archivedTotal, value, onChange, onArchive }: { batches: Batch[]; archivedTotal?: number; value: string; onChange: (id: string) => void; onArchive?: (id: string, archived: boolean) => Promise<void> }) {
   const [showArchived, setShowArchived] = useState(false)
   const [open, setOpen] = useState<'history' | 'more' | null>(null)
   const [position, setPosition] = useState({ left: 0, top: 0, width: 360, maxHeight: 400 })
   const [busy, setBusy] = useState(false), [error, setError] = useState('')
   const root = useRef<HTMLDivElement>(null), panel = useRef<HTMLDivElement>(null), opener = useRef<HTMLButtonElement | null>(null)
   const selected = batches.find(batch => batch.id === value)
-  const archivedCount = batches.filter(batch => batch.archivedAt).length
+  const archivedCount = archivedTotal ?? batches.filter(batch => batch.archivedAt).length
   const visible = batches.filter(batch => !batch.archivedAt || showArchived || batch.id === value)
   const taskId = selected?.taskId ?? batches[0]?.taskId
   const toggle = (next: 'history' | 'more', button: HTMLButtonElement) => {
@@ -42,12 +42,12 @@ export function ExecutionPicker({ batches, value, onChange, onArchive }: { batch
     {open && container ? createPortal(<div ref={panel} className="dtc-execution-popover" role="dialog" aria-label={open === 'history' ? '执行记录选择' : '执行记录操作'} style={position}>
       {open === 'history' ? <>
         <div className="dtc-execution-pophead"><b>执行记录</b><small>北京时间 · UTC+8</small></div>
-        {archivedCount ? <label className="dtc-execution-filter"><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} />显示归档（{archivedCount}）</label> : null}
+        {archivedCount ? <label className="dtc-execution-filter"><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} />显示归档（共 {archivedCount}）</label> : null}
         <div className="dtc-execution-options">{visible.slice(0, 8).map(batch => <button type="button" key={batch.id} className={batch.id === value ? 'selected' : ''} aria-current={batch.id === value ? 'true' : undefined} title={batch.id} onClick={() => { setOpen(null); onChange(batch.id) }}>
           <span><b>{executionTime(batch.firedAt)}</b><small>{executionCode(batch.id)}{batch.archivedAt ? ' · 已归档' : ''}</small></span><em>{outcome(batch)}</em>
         </button>)}</div>
         {!visible.length ? <p className="dtc-muted">暂无可见执行</p> : null}
-        <button className="dtc-btn sm" onClick={() => { setOpen(null); go(`tasks/executions?task=${encodeURIComponent(taskId)}${showArchived ? '&archived=1' : ''}`) }}>查看全部执行记录 →</button>
+        <button className="dtc-btn sm" onClick={() => { setOpen(null); go(`tasks/executions?task=${encodeURIComponent(taskId)}${showArchived ? '&archived=1' : ''}`) }}>查看全部执行记录（分页） →</button>
       </> : <>
         <button className="dtc-btn sm" onClick={() => go(`tasks/executions?task=${encodeURIComponent(taskId)}`)}>查看执行历史</button>
         {selected && onArchive ? <button className="dtc-btn sm" disabled={busy} onClick={async () => {

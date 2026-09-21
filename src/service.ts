@@ -30,6 +30,7 @@ import { agentHistory, firstAgentUse, historyQuery, type AgentSessionHeader } fr
 import { sortAgents } from './agent-order.ts'
 import { discoverLegacyArtifacts, publishHtml, readArtifact } from './artifacts.ts'
 import { withFinalArtifact } from './artifact-delivery.ts'
+import { taskListIndex } from './task-list.ts'
 import {
   NATIVE_TOOLS, mask, readAgentCreatedAt, readSpec, removePreset, renderComposition, scanSkills, userPresetRoot, validateSpec, writePreset,
   type HostMcp,
@@ -134,7 +135,7 @@ export class TaskConsoleService extends TypertRemoteService {
           workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
           return workflow.complete(input)
         }
-        if (input.card.role === 'notifier') return new TaskNotifications(this.runner.store).complete(input)
+        if (input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId) return new TaskNotifications(this.runner.store).complete(input)
         const proxy = new ProxyWorkflow(this.runner.store)
         if (proxy.pending(input)) throw new Error('代理后台操作仍在运行，继续查询原操作回执')
         const proxyReport = proxy.complete(input)
@@ -180,11 +181,11 @@ export class TaskConsoleService extends TypertRemoteService {
       },
       patrolStatus: async input => {
         const outbox = new TaskNotifications(this.runner.store)
-        return { ...(input.card.role === 'notifier' ? outbox.job(input) : (await this.patrolWorkflow(input)).snapshot(input)), notifications:outbox.rows(input.batch.id), proxy:new ProxyWorkflow(this.runner.store).status(input) }
+        return { ...(input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId ? outbox.job(input) : (await this.patrolWorkflow(input)).snapshot(input)), notifications:outbox.rows(input.batch.id), proxy:new ProxyWorkflow(this.runner.store).status(input) }
       },
       notify: async (input, stage, deliver) => {
         const outbox = new TaskNotifications(this.runner.store)
-        if (input.card.role === 'notifier') return outbox.send(input,stage as NotificationStage,undefined,deliver)
+        if (input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId) return outbox.send(input,stage as NotificationStage,undefined,deliver)
         const report = (await this.patrolWorkflow(input)).snapshot(input)
         return input.task.design?.notifications?.agentId ? outbox.request(input,stage as NotificationStage,report) : outbox.send(input,stage as NotificationStage,report,deliver)
       },
@@ -363,6 +364,20 @@ export class TaskConsoleService extends TypertRemoteService {
       workspaces: this.workspaces(),
     }
     return JSON.stringify(out)
+  }
+
+  async agentPage(payload: string): Promise<string> {
+    const q=JSON.parse(payload)
+    if (!q || typeof q!=='object' || Array.isArray(q) || q.query!==undefined&&typeof q.query!=='string' || q.page!==undefined&&(!Number.isSafeInteger(q.page)||q.page<1)) throw Error('无效 Agent 分页')
+    const presets=(this.ctx as any).get('agentPresets'), all:any[]=presets?await presets.list():[]
+    const created=new Map(await Promise.all(all.map(async p=>[p.id,await readAgentCreatedAt(dirname(String(p.path)))] as const)))
+    const rows=all.filter(p=>!q.query||`${p.name??''} ${p.id}`.toLowerCase().includes(q.query.toLowerCase())).sort((a,b)=>String(created.get(b.id)??'').localeCompare(String(created.get(a.id)??''))||a.id.localeCompare(b.id))
+    const total=rows.length,pages=Math.max(1,Math.ceil(total/10)),page=Math.min(q.page??1,pages),selected=rows.slice((page-1)*10,page*10)
+    const load=async(p:any,detail=false)=>{const dir=dirname(String(p.path)),spec=p.trust==='user'?await readSpec(dir):null;return {id:p.id,name:spec?.name??p.name??p.id,description:spec?.description??p.description??'',trust:p.trust,broken:p.broken,path:dir,createdAt:created.get(p.id),firstUsedAt:null,
+      permission:spec?(spec.tools.some(t=>['bash','fs','fs-text','str-replace-editor'].includes(t))?'write':Object.values(spec.mcpTools).some(t=>t.length)?'limited-write':'read-only'):null,spec:detail?spec:null}}
+    const detailId=q.id==='new'?undefined:q.id??selected[0]?.id, detailPreset=detailId?all.find(p=>p.id===detailId):undefined
+    if(q.id&&q.id!=='new'&&!detailPreset)throw Error('没有这个 Agent')
+    return JSON.stringify({page,pages,total,pageSize:10,rows:await Promise.all(selected.map(p=>load(p))),detail:detailPreset?await load(detailPreset,true):null})
   }
 
   async agents(): Promise<string> {
@@ -888,6 +903,36 @@ export class TaskConsoleService extends TypertRemoteService {
    * Legacy projection for the 0.4 UI: a batch rendered as the old Run
    * with `legs`. Kept until the 0.5 pages land; then removed.
    */
+  private taskPageCache = new Map<string, { stamp: string; at: number; value: string }>()
+
+  async taskPage(payload: string): Promise<string> {
+    await this.ready
+    const input = JSON.parse(payload), store = this.runner.store, st = store.s, db = store.kernel.db
+    const stamp = JSON.stringify([db.prepare('SELECT total_changes() n').get(), db.pragma('data_version')])
+    const key = JSON.stringify(input), cached = this.taskPageCache.get(key)
+    if (cached?.stamp === stamp && Date.now() - cached.at < 2000) return cached.value
+    const presets = (this.ctx as any).get('agentPresets')
+    const labels = new Map<string,string>((presets ? await presets.list() : []).map((p:any)=>[p.id,p.name??p.id]))
+    const index = taskListIndex(store, input, labels)
+    const rows = index.rows.map(({task,batch,state,history}) => {
+      const {id,title,brief,trigger,enabled,createdAt,origin} = task
+      const projected = {id,title,brief:brief.slice(0,240),trigger,enabled,createdAt,origin,participants:task.participants.map(p=>({agentId:p.agentId})),nextFire:this.withNext(task).nextFire}
+      if (!batch) return {task:projected,state,history}
+      const cards = batch.cardIds.map((id:string)=>st.cards.get(id)).filter(Boolean) as Card[]
+      const legs = cards.map(c=>{const r=cardRun(st,c);return {agentId:c.kind==='gate'?'系统闸门':c.agentId,status:c.status==='ready'||c.status==='scheduled'?'queued':c.status,tries:c.runIds.length,
+        question:c.wakeAt?`定时等待，${c.wakeAt} 自动继续：${r?.question??''}`:r?.status==='blocked'?r.question:undefined,error:c.error?.slice(0,400)}})
+      const artifacts=withFinalArtifact([...st.artifacts.values()].filter(a=>a.batchId===batch.id),cards,batch)
+      const final=artifacts.find(a=>a.final), result=final??artifacts.at(-1), rounds=cards.filter(c=>c.kind==='gate').length
+      return {task:projected,state,history,latest:{id:batch.id,taskId:id,firedAt:batch.firedAt,by:batch.by,legs,settled:batch.settled,
+        ...(final?{finalArtifact:this.artifactView(final)}:{}),...(result?{resultArtifact:this.artifactView(result)}:{}),rounds,reworks:Math.max(0,rounds-1)}}
+    })
+    const used=new Set(rows.flatMap(r=>r.task.participants.map(p=>p.agentId)))
+    const value=JSON.stringify({...index,rows,agents:[...used].map(id=>({id,name:labels.get(id)??id}))})
+    if (this.taskPageCache.size>=100) this.taskPageCache.clear()
+    this.taskPageCache.set(key,{stamp,at:Date.now(),value})
+    return value
+  }
+
   async tasks(): Promise<string> {
     await this.ready
     const st = this.runner.store.s

@@ -59,6 +59,7 @@ export class TaskCreator {
         reusableDefinition: '可复用Task只存目标和方法。本次IP、关联Task/Batch及当前状态放在执行输入，不得固化进长期brief/design，也不能把历史受阻原因当作本轮根因。' },
       scheduling: { trigger: { kind: 'cron', expr: '0 * * * *', timeZone: 'Asia/Shanghai' }, approval: '批准后创建暂停的时间表；先手动执行，通过业务和通知验收后才能启用定时。每次复用同一Task、新增Batch。', overlap: '上一轮未结束时跳过并留记录', missed: '重启后漏跑合并为最近一次', waiting: 'task_wait(until,reason) 持久化等待，同一Batch/卡新Run继续；等待不消耗返工轮次，但受总时长限制。', permissions: '定时不增加权限；当前角色配置变化会停止派发并要求重新审查。' },
       evidenceContracts: [{ id: 'browser-patrol-v2', purpose: '周期性浏览器登录巡查：dynamic-rounds 的规划者→Gate→浏览器管理员→只读评估者→规划者。规划者每轮用 task_plan_round(summary,items:[{ip,instance,action:verify|provision|resume,reason}]) 冻结真实目标和动作；未知先验证，有未登录证据才允许 provision。MCP 强制逐目标累计修复预算；无删除重建权限。执行者取得本轮操作终态即 task_complete 交给独立评估者，不等待整个Task ready。仅评估者可 task_wait 对修改过的实例分时独立复验，同一卡新Run；其他角色不能等待下游采样。已健康实例只做当前检查。评估者 task_complete 交接通过/返工结论，不等于业务通过；规划者 task_finalize 由真实工具证据把关。', browserPatrol: { scope: 'fleet-existing-authorized', actions: ['provision','resume'], observationMinutes: 20, minSamples: 4 }, notifications: '需要企微时显式设置 design.notifications={channel:"wecom",chatIds:[已确认群ID]}。有独立通知员时加 agentId:"wecom-notifier"，通知员只配企微MCP，三个主角色不变。规划者 task_notify 冻结报告并创建通知支线；通知员经自己的MCP发送，不阻塞修复，记录独立卡/会话/回执。旧计划没有agentId才由规划者直接发送；先用 vyibc-wecom_list_groups 发现现有订阅群；只有一个群时预填其真实chatId交审查，多个群再询问。禁止索要已有密钥或默认广播。' },
+        { id: 'task-final-handoff-v1', purpose: '通用 static-chain 末尾通知：将 wecom-notifier 作为最后一个参与者，设置 design.notifications={channel:"wecom",chatIds:[已确认群ID],agentId:"wecom-notifier",mode:"final-handoff"}。宿主只从已完成的上游卡冻结摘要，通知员只能 task_notify(completed)；收件群、正文和去重回执由宿主控制，不能直接 send_message。' },
         { id: 'browser-patrol-v1', purpose: '旧版单角色巡查兼容；新定时和动态返工目标使用v2，不为兼容改写历史计划。' }],
       contract: 'Task 是可复用目标/流程，不绑定 IP。task_create_submit 只保存待审查计划，不启动执行；审查入口独立于创建 Agent。每次先提供 design:{scope,branches:[{id,when,action,evidence}],coordination,failurePolicy:{isolateItems,maxAttempts,stopConditions:[]},acceptance:[]}。条件由业务 Agent 根据真实工具证据执行，不能把自然语言条件伪装成内核自动 DAG。static-chain 按所选业务角色交接，也可只选一个业务 Agent 处理多目标分支；dynamic-rounds 仅用于规划者、执行者、评估者三人返工协议。不得改变 Agent 权限。' }
   }
@@ -337,6 +338,12 @@ export class TaskCreator {
           const tools = Object.values(notifier.mcpTools).flat().map(t=>t.replace(/-/g,'_'))
           if (!tools.includes('vyibc_wecom_send_message') || tools.some(t=>!['vyibc_wecom_send_message','vyibc_wecom_list_groups','vyibc_wecom_status','vyibc_wecom_list_messages'].includes(t)) || notifier.tools.length || notifier.skills.length) throw new Error('通知员仅允许企微 MCP，不得包含浏览器、SSH、金库或其他业务工具/技能')
         } else if (task.design.notifications && !Object.values(team[0].mcpTools).flat().some(t => t.replace(/-/g, '_') === 'vyibc_wecom_send_message')) throw new Error('规划者没有配置企业微信发送 MCP，不能承诺通知')
+      }
+      if (task.design?.notifications?.mode === 'final-handoff') {
+        const agentId=task.design.notifications.agentId!
+        if (task.graphMode !== 'static-chain' || task.participants.length < 2 || task.participants.at(-1)?.agentId !== agentId || task.participants.slice(0,-1).some(p=>p.agentId===agentId)) throw new Error('通用末尾通知要求 static-chain，且通知员必须是唯一的最后参与者')
+        const notifier=roster.find(r=>r.id===agentId), tools=Object.values(notifier?.mcpTools ?? {}).flat().map(t=>t.replace(/-/g,'_'))
+        if (!notifier || !tools.includes('vyibc_wecom_send_message') || tools.some(t=>!['vyibc_wecom_send_message','vyibc_wecom_list_groups','vyibc_wecom_status','vyibc_wecom_list_messages'].includes(t)) || notifier.tools.length || notifier.skills.length) throw new Error('通知员仅允许企微 MCP，不得包含业务、SSH、金库或其他工具/技能')
       }
       const hash = digest({ proposal, text: scrub(input.text), cwd, ...(actionInput ? { action: actionInput.snapshot } : {}) })
       if (old && old.payload_hash !== hash) throw new Error('同一提交已被接受；不能替换尚未派发的计划')

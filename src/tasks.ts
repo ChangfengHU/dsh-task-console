@@ -514,13 +514,13 @@ export function taskForBatch(task: TaskSpec, batch: Batch): TaskSpec {
 
 /** The one user message a card's session gets: brief, its part, the upstream handoffs, and the contract. */
 export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstream: { agentName: string; summary: string }[]): string {
-  if (card.role === 'notifier') return [
+  if (card.role === 'notifier' || task.design?.notifications?.mode === 'final-handoff' && card.agentId === task.design.notifications.agentId) return [
     `# 企微通知协作 · Task ${task.id} · 执行 ${batchId}`, card.brief,
-    '你是独立通知员，不执行浏览器检查、登录或修复，也不恢复企业微信服务。',
+    '你是独立通知员，不执行上游业务操作，也不恢复企业微信服务。',
     '调用 task_patrol_status 读取本卡冻结的 stage/report；这是上游在当时提交的事实，不把之后发生的结果冒充该阶段事实。',
     '调用 task_notify(stage) 经你的企微 MCP 发送。收件群和事实正文由已审查契约限定，禁止直接 send_message 绕过发件箱。',
     'sent 表示服务确认发送，不代表已读；failed 仅在明确未发送时可重试最多3次，unknown 禁止重发。',
-    '得到终态回执后调用 task_complete 如实交接；通知失败不能要求重复浏览器操作。没有文件产物，不要创建文件。',
+    '得到终态回执后调用 task_complete 如实交接；通知失败不能要求重复上游业务操作。没有文件产物，不要创建文件。',
   ].join('\n\n')
   const lines = [`# 任务:${task.title} · ${batchId} · 第 ${card.index + 1}/${task.participants.length} 张卡`, '',
     task.origin?.reviewPlanId ? '[ORIGINAL REQUEST — CREATION STAGE ALREADY REVIEWED]' : '[TASK]', task.brief.trim()]

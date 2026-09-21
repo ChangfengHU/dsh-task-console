@@ -10,6 +10,8 @@ import { closeConsole, go, type Api } from './Console.tsx'
 import { AgentHistory, agentTab, agentPage } from './AgentHistory.tsx'
 import { executionTime } from '../execution-label.ts'
 import { ActionEditor } from './AgentActions.tsx'
+import { QueryCache } from './query-cache.ts'
+const agentPages=new WeakMap<Api,QueryCache<Awaited<ReturnType<Api['agentPage']>>>>()
 
 const EMPTY: AgentSpec = { id: '', name: '', description: '', persona: '', model: '', effort: 'medium', permissionPreset: 'workspace-write', tools: ['ask-user'], mcpTools: {}, mcpPolicy: {}, skills: [] }
 const PERM: Record<Preview['permission'], { label: string; cls: string; dot: string }> = {
@@ -30,24 +32,33 @@ let stash: AgentSpec | null = null
 
 export function AgentsPage({ api, catalog, agents, id, onSaved, toast }: { api: Api; catalog: Catalog; agents: AgentRow[]; id: string | null | 'new'; onSaved: () => Promise<void>; toast: (m: string) => void }) {
   const [q, setQ] = useState('')
-  const list = agents.filter(a => !q || a.name.includes(q) || a.id.includes(q))
-  const cur = id === 'new' ? null : (id ?? agents[0]?.id ?? null)
+  const [page,setPage]=useState(1),[revision,setRevision]=useState(0),[error,setError]=useState('')
+  let cache=agentPages.get(api);if(!cache){cache=new QueryCache();agentPages.set(api,cache)}
+  const key=JSON.stringify({page,query:q,id:id??undefined})
+  const [state,setState]=useState<{key:string;data:Awaited<ReturnType<Api['agentPage']>>}|null>(null)
+  const data=state?.key===key?state.data:cache.peek(key)
+  useEffect(()=>{let live=true;const timer=setTimeout(()=>{void cache!.load(key,()=>api.agentPage(JSON.parse(key))).then(data=>{if(live){setState({key,data});setError('')}}).catch(e=>{if(live)setError(String(e.message??e))})},150);return()=>{live=false;clearTimeout(timer)}},[api,key,revision,cache])
+  const saved=async()=>{cache!.clear();setRevision(n=>n+1);await onSaved()}
+  const list=data?.rows??[], cur=id==='new'?null:(id??data?.detail?.id??null)
+  const editorAgents=data?.detail?[...list.filter(a=>a.id!==data.detail!.id),data.detail]:list
   return (
     <div className="dtc-agents">
       <div className="dtc-alist">
-        <div className="search"><input placeholder="搜 Agent" value={q} onChange={e => setQ(e.target.value)} /></div>
+        <div className="search"><input placeholder="搜 Agent" value={q} onChange={e => {setQ(e.target.value);setPage(1)}} /></div>
         <div className="items">
-          {list.map(a => { const perm = a.spec ? derivePerm(a.spec) : null; return (
+          {list.map(a => { const perm = a.spec ? derivePerm(a.spec) : (a as any).permission as Preview['permission'] | null; return (
             <div key={a.id} className={`dtc-aitem ${a.id === cur ? 'on' : ''}`} onClick={() => go(`agents/${a.id}`)}>
               <div className="av" style={{ background: a.trust === 'system' ? 'var(--dtc-faint)' : colorOf(a.id) }}>{a.name[0]}</div>
               <div><div className="nm">{a.name} <span className="dtc-mono dtc-faint" style={{ fontWeight: 400, fontSize: 11 }}>{a.id}</span></div><div className="d">{a.broken ?? a.description}</div></div>
               <span className={`perm ${a.broken ? 'bad' : perm ? PERM[perm].dot : 'sys'}`} title={a.broken ? '坏了' : perm ? PERM[perm].label : '出厂'} />
             </div>) })}
         </div>
+        {error?<div className="dtc-err">{error}</div>:null}
+        <div className="dtc-pagination"><button disabled={!data||data.page<=1} onClick={()=>setPage(p=>p-1)}>上一页</button><span>{data?.page??page} / {data?.pages??1} · {data?.total??0}</span><button disabled={!data||data.page>=data.pages} onClick={()=>setPage(p=>p+1)}>下一页</button></div>
         <button className="dtc-btn newbtn" onClick={() => go('agents/new')}>＋ 新建 Agent</button>
       </div>
       <div className="dtc-adetail">
-        <AgentEditor key={id === 'new' ? 'new' : cur ?? 'none'} api={api} catalog={catalog} agents={agents} id={id === 'new' ? null : cur} onSaved={onSaved} toast={toast} />
+        {data?<AgentEditor key={id === 'new' ? 'new' : cur ?? 'none'} api={api} catalog={catalog} agents={editorAgents} id={id === 'new' ? null : cur} onSaved={saved} toast={toast} />:<div className="dtc-empty">读取 Agent…</div>}
       </div>
     </div>
   )

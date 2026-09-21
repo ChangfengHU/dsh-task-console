@@ -214,6 +214,32 @@ test('delegated notifications are real idempotent side cards with frozen reports
   assert.equal(store.kernel.getTask(first.cardId)?.max_runtime_seconds,300)
 })
 
+test('static workflows send one reviewed final-handoff notification from the frozen upstream completion', async()=>{
+  let outbox:TaskNotifications
+  const delivered:string[]=[]
+  const design:any={scope:'fixture',branches:[{id:'done',when:'worker completes',action:'notify',evidence:'completed run'}],coordination:'worker then notifier',failurePolicy:{isolateItems:true,maxAttempts:1,stopConditions:['no receipt']},acceptance:['sent receipt'],notifications:{channel:'wecom',agentId:'b',chatIds:['fixture-group'],mode:'final-handoff'}}
+  const {host,runner,store}=await setup({participants:[{agentId:'a'},{agentId:'b'}],graphMode:'static-chain',onFail:'stop',maxTries:1,design},{
+    patrolStatus:input=>({ ...outbox.job(input),notifications:outbox.rows(input.batch.id) }),
+    notify:(input,stage)=>outbox.send(input,stage as any,undefined,async args=>{delivered.push(args.markdown);return{sent:1}}),
+    beforeComplete:input=>input.profileId==='b'?outbox.complete(input):undefined,
+  })
+  outbox=new TaskNotifications(store)
+  const batch=await runner.fire('T','manual'), worker=[...host.sessions.keys()].at(-1)!
+  host.consumeFirst(worker);await host.callTool(worker,'task_complete',{summary:'No retirement candidates; no machine changed.'});host.endTurn(worker);await tick()
+  const notifier=[...host.sessions.keys()].at(-1)!
+  assert.notEqual(notifier,worker);host.consumeFirst(notifier)
+  const job=await host.callTool(notifier,'task_patrol_status',{})
+  assert.equal(job.stage,'completed');assert.equal(job.report.summary,'No retirement candidates; no machine changed.')
+  await assert.rejects(host.callTool(notifier,'task_complete',{summary:'sent without evidence'}),/task_notify/)
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  await assert.rejects(host.callTool(notifier,'task_notify',{stage:'findings'}),/completed/)
+  await host.callTool(notifier,'task_notify',{stage:'completed'});await host.callTool(notifier,'task_notify',{stage:'completed'})
+  assert.equal(delivered.length,1);assert.match(delivered[0],/No retirement candidates/)
+  await host.callTool(notifier,'task_complete',{summary:'model cannot replace receipt'});host.endTurn(notifier);await tick()
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'done')
+  assert.equal((outbox.rows(batch.id)[0] as any).state,'sent')
+})
+
 test('a genuine blocked role queues an independent notifier without waiting for the blocked dependency', async()=>{
   let outbox: TaskNotifications, storeRef: EventStore
   const design:any={evidenceContract:'browser-patrol-v2',failurePolicy:{maxAttempts:3},notifications:{agentId:'notifier',chatIds:['fixture']}}

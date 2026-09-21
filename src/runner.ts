@@ -435,14 +435,14 @@ export class TaskRunner {
           flight.terminal = { kind, summary, metadata, reviewer }
         }
         flight.disposeTools = await registerWorkerTools(flight.handle.agent.ctx, {
-          ...(task.design?.notifications && ['planner','notifier'].includes(card.role ?? '') && this.notify ? { notify: (stage: string, exec: any) => this.notify!({ task, batch, card, sessionId, profileId }, stage, async args => {
+          ...(task.design?.notifications && (['planner','notifier'].includes(card.role ?? '') || profileId === task.design.notifications.agentId) && this.notify ? { notify: (stage: string, exec: any) => this.notify!({ task, batch, card, sessionId, profileId }, stage, async args => {
             const runtime = flight.handle.agent.ctx.tools
             const names = Object.entries(spec?.mcpTools ?? {}).flatMap(([server, selected]) => selected.filter(raw => raw.replace(/-/g, '_') === 'vyibc_wecom_send_message').flatMap(raw => [publicToolName(server, raw), publicToolName(`${server}-${profileId}`, raw)]))
             const tool = runtime.schemas(flight.handle.agent).find((s: any) => names.includes(s.name))
             if (!tool) throw new Error('当前通知角色未配置企业微信发送 MCP')
             return dispatchNotification(runtime, flight.handle.agent, tool.name, args, exec)
           }) } : {}),
-          ...(task.design?.evidenceContract === 'browser-patrol-v2' && this.patrolStatus ? { patrolStatus: () => this.patrolStatus!({ task, batch, card, sessionId, profileId }) } : {}),
+          ...((task.design?.evidenceContract === 'browser-patrol-v2' || profileId === task.design?.notifications?.agentId) && this.patrolStatus ? { patrolStatus: () => this.patrolStatus!({ task, batch, card, sessionId, profileId }) } : {}),
           wait: async (until, reason) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
             if (task.design?.evidenceContract === 'browser-patrol-v2' && card.role !== 'reviewer')

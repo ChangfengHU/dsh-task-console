@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { assertBrowserSession, assertToolArguments, bindBrowserSessionDefinition, instanceServerName, publicToolName, resolveSourceConfig } from '../src/filtered-mcp-client.ts'
+import { executeWithTaskScope, taskMediaServer, assertBrowserSession, assertToolArguments, bindBrowserSessionDefinition, instanceServerName, publicToolName, resolveSourceConfig } from '../src/filtered-mcp-client.ts'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -115,4 +115,56 @@ test('native ToolRuntime executes create and purge without model sessionId; poli
     assert.equal(calls.length,2);assert.ok(calls.every(c=>c.args.sessionId===agent.session.id))
     assert.deepEqual(calls[1].args.instances,[3]);assert.equal(calls[1].args.planHash,'real-fixture-plan')
   } finally {disposers.forEach(dispose=>dispose())}
+})
+
+
+test('real renderComposition media names route paid Task calls through the host guard', async () => {
+  let dispatched = 0
+  const guarded: string[] = []
+  const ctx = { get: () => ({ scopedMcp: async (raw: string, args: any, _exec: any, call: any) => { guarded.push(raw); return call({...args,guarded:true}) } }) }
+  for (const kind of ['voice','image']) {
+    const raw = kind === 'voice' ? 'vyibc-voice_synthesize' : 'vyibc-image_generate_image'
+    const identity = {serverName:`vyibc-${kind}-studio-video-producer`,sourceEntryId:`mcp-vyibc-${kind}`,sourceServerName:`vyibc-${kind}`}
+    const result: any = await executeWithTaskScope(ctx,identity,raw,{text:'fixture'}, {agent:{session:{id:'task-real-producer'}}}, args => {dispatched++;return args})
+    assert.equal(result.guarded,true)
+    assert.throws(() => executeWithTaskScope({},identity,raw,{}, {agent:{session:{id:'task-real-producer'}}}, () => {dispatched++}), /scope guard unavailable/)
+  }
+  assert.equal(dispatched,2);assert.deepEqual(guarded,['vyibc-voice_synthesize','vyibc-image_generate_image'])
+  assert.equal(taskMediaServer('renamed-host','mcp-vyibc-image'),true)
+  assert.equal(taskMediaServer('renamed-host',undefined,'vyibc-voice'),true)
+  assert.equal(taskMediaServer('vyibc-voice-studio-video-producer'),true)
+  assert.equal(taskMediaServer('unrelated-voice'),false)
+})
+
+test('ordinary Agent media calls stay direct and existing Task proxy/browser routes stay guarded', async () => {
+  const seen: string[] = []
+  const ctx={get:()=>({scopedMcp:(name:string,args:any)=>{seen.push(name);return args}})}
+  let calls=0
+  await executeWithTaskScope(ctx,{serverName:'vyibc-voice-studio-video-producer'},'vyibc-voice_synthesize',{}, {agent:{session:{id:'agent-chat'}}},()=>{calls++})
+  await executeWithTaskScope(ctx,{serverName:'fleet-proxy-agent'},'proxy_verify',{}, {agent:{session:{id:'task-other'}}},()=>{calls++})
+  await executeWithTaskScope(ctx,{serverName:'fleet-browser-agent'},'browser_login_resume',{}, {agent:{session:{id:'task-other'}}},()=>{calls++})
+  await executeWithTaskScope(ctx,{serverName:'other'},'read',{}, {agent:{session:{id:'task-other'}}},()=>{calls++})
+  assert.equal(calls,2);assert.deepEqual(seen,['proxy_verify','browser_login_resume'])
+})
+
+test('real service scope refreshes studio status budget on success and unknown submission', async t => {
+  const {default: Database}=await import('better-sqlite3')
+  const {StudioOperations}=await import('../src/studio-operations.js')
+  const {StudioWorkflow}=await import('../src/studio-workflow.js')
+  const {TaskConsoleService}=await import('../src/service.js')
+  const db=new Database(':memory:');t.after(()=>db.close())
+  const task:any={id:'studio-task',design:{evidenceContract:'studio-video-v1',studio:{characterId:'character-any',referenceSha256:'b'.repeat(64),referenceUrl:'https://cdn.vyibc.com/approved.mp4'}}}
+  const batch:any={id:'batch'},card:any={id:'card',role:'executor',agentId:'studio-video-producer'}
+  const run={taskId:task.id,batchId:batch.id,cardId:card.id,sessionId:'task-live-producer',status:'running'}
+  const store:any={kernel:{db},tasks:new Map([[task.id,task]]),s:{runs:new Map([['run',run]]),batches:new Map([[batch.id,batch]]),cards:new Map([[card.id,card]])}}
+  const input={task,batch,card,sessionId:run.sessionId},ops=new StudioOperations(store),workflow=new StudioWorkflow(store)
+  ops.configure(input,{imageCalls:6,voiceSegments:80})
+  const service:any=Object.create(TaskConsoleService.prototype);service.runner={store}
+  const exec={agent:{session:{id:run.sessionId}}}
+  const first={segments:[{text:'one'}]}
+  await service.scopedMcp('vyibc-voice_synthesize',first,exec,async()=>({structuredContent:{job_id:'job-1',status:'done'}}))
+  assert.equal(workflow.status(input).budget.used.voiceSegments,1)
+  await assert.rejects(service.scopedMcp('vyibc-voice_synthesize',{segments:[{text:'two'},{text:'three'}]},exec,async()=>{throw Error('timeout')}),/submission-unknown/)
+  assert.equal(workflow.status(input).budget.used.voiceSegments,3)
+  assert.equal(ops.snapshot(input).unknown,true)
 })

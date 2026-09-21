@@ -217,7 +217,15 @@ export class TaskConsoleService extends TypertRemoteService {
     }
     const card=this.runner.store.s.cards.get(run.cardId)!,batch=this.runner.store.s.batches.get(run.batchId)!,base=this.runner.store.tasks.get(run.taskId)!
     const task=taskForBatch(base,batch),input={task,batch,card,sessionId,profileId:run.profileId??card.agentId}
-    if(task.design?.evidenceContract==='studio-video-v1') return new StudioOperations(this.runner.store).invoke(input,raw,args,invoke)
+    if(task.design?.evidenceContract==='studio-video-v1') {
+      const operations=new StudioOperations(this.runner.store),workflow=new StudioWorkflow(this.runner.store)
+      try { return await operations.invoke(input,raw,args,invoke) }
+      finally {
+        // Include retained unknown reservations, not only successful job receipts.
+        const budget=operations.snapshot(input),candidate=workflow.status(input).candidate
+        workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:budget.used,limits:budget.limits,maxRepairRounds:task.design.studio.maxRepairRounds??3,exceeded:false})
+      }
+    }
     if (/^browser_login_(copy|provision|resume)$/.test(raw) && batch.turn?.action) {
       const resumed = raw === 'browser_login_resume' ? await readBrowserAcceptance(args.operationId) : undefined
       assertTaskActionLogin(batch.turn.action, raw, args, resumed)

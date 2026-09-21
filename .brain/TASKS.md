@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [TASK-FLEET-RETIREMENT-036] 0.31.6 新增最小权限「Fleet 节点退役管理员」：仅可读取服务端退役门槛、执行原子退役并核对不可变审计，不具备 SSH、通用金库删除、普通 disable/recycle 或机器清理能力。首个真实验收目标是由用户授权模拟连续离线超过 168 小时的 host-206；必须由同一 Task 协作通知员发送企微，并验证 Fleet 页面、旧接入清单与节点专属金库目录均不再出现该节点。业务验收完成前不标记完成。
+- [ ] [TASK-FLEET-RETIREMENT-036] 0.31.6 新增最小权限「Fleet 节点退役管理员」。2026-09-21 修正 Fleet MCP 原始工具名映射并完成首个真实退役：Task Run `b-muarvddfoe2` 由 Agent 将连续不可达约 378.59 小时的 host-206 原子退役，复读确认 `enabled=false`、旧 `machine_access` 不存在、节点金库键为空、审计 `outcome=changed`；公网 API 与真实 Chrome 均确认 Fleet 页面不再包含该节点。三个节点专属金库键已精确删除，Runner 已停用，未 SSH 或改动目标机器。企微由独立通知员会话真实送达 1 个群；但原 static-chain 通知卡被现有“Task 通知必须经 reviewed outbox”围栏拒绝，故该 Batch 取消、定时仍停用，本项暂不冒充同一 Task 全链路完成。详见 `dev-log/2026-09-21-fleet-node-retirement.md`。
 
 - [x] [TASK-SESSION-RECENT-ALIAS-034] 0.30.30：Recent按原生活动时间跨文件夹显示，10条/更多/收起，保留隐藏规则、Pinned/Favorites及文件夹；dsh.vyibc.com复用原隧道DNS目标和既有Worker，仅新增别名DNS与路由。314测试无跳过；双域名真实浏览器深链、历史、切换、刷新及1440/390列表验收通过，无业务写入。Task/定时/Action哈希不变，见 `dev-log/2026-09-15-recent-sessions-alias.md`。
 

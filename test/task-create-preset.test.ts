@@ -28,6 +28,6 @@ test('creator ships reusable onboarding/login rules but no business execution gr
 test('fleet node retirer gets only the code-enforced retirement surface', async () => {
   const spec = validateSpec(JSON.parse(await readFile(new URL('../presets/fleet-node-retirer/task-console.json', import.meta.url), 'utf8')))
   assert.deepEqual(spec.tools, [])
-  assert.deepEqual(spec.mcpTools, { 'vyibc-fleet': ['retirement_candidates', 'retirement_status', 'retire_due_node', 'node_audit'] })
+  assert.deepEqual(spec.mcpTools, { 'vyibc-fleet': ['vyibc-fleet_status', 'vyibc-fleet_retirement_candidates', 'vyibc-fleet_retirement_status', 'vyibc-fleet_retire_due_node', 'vyibc-fleet_node_audit'] })
   assert.deepEqual(spec.skills, [])
 })

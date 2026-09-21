@@ -23,6 +23,22 @@ test('missing budget does not default to zero',t=>{const {workflow,input}=setup(
 test('executor hands off candidate without pretending review passed',t=>{const {workflow,input}=setup(t);const {candidate}=proof(workflow,input);const producer={...input,card:{role:'executor'},sessionId:'producer'};(workflow as any).db.prepare("DELETE FROM dsh_studio_state WHERE kind='review'").run();assert.equal(workflow.complete(producer).metadata.workflowOutcome,'candidate_handoff');assert.throws(()=>workflow.complete({...producer,sessionId:'other'}),/producer-session-mismatch/)})
 test('negative real review completes handoff but planner acceptance stays blocked',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);const db=(workflow as any).db;const row=db.prepare("SELECT payload FROM dsh_studio_state WHERE kind='review'").get();const review=JSON.parse(row.payload);delete review.reviewerSessionId;review.checks.find((c:any)=>c.dimension==='motion').status='fail';review.issues=[{id:'motion-poor',severity:'major',status:'open'}];workflow.recordReview(reviewer,review);assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_needs_changes');assert.throws(()=>workflow.complete(input),/quality-gate-failed/)})
 test('negative review still requires genuine audio evidence',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);const db=(workflow as any).db;db.prepare("DELETE FROM dsh_studio_receipts WHERE json_extract(payload,'$.kind')='audio'").run();assert.throws(()=>workflow.complete(reviewer),/review-integrity-failed/)})
+
+test('missing audio can be pending on grounded technical rejection, never final acceptance',t=>{
+ const {workflow,input}=setup(t),{reviewer}=proof(workflow,input),review=workflow.status(input).review
+ delete review.reviewerSessionId
+ review.checks.find((c:any)=>c.dimension==='technical').status='fail'
+ review.issues=[{id:'no-audio-stream',severity:'blocker',status:'open'}]
+ for(const c of review.checks.filter((c:any)=>['intelligibility','performance','mix','ending'].includes(c.dimension))){c.status='pending';c.finding='Cannot inspect nonexistent audio; technical probe proves missing stream.';c.evidenceReceiptIds=[]}
+ workflow.recordReview(reviewer,review)
+ assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_needs_changes')
+ assert.throws(()=>workflow.complete(input),/quality-gate-failed/)
+ review.checks.find((c:any)=>c.dimension==='performance').status='pass';workflow.recordReview(reviewer,review);assert.throws(()=>workflow.complete(reviewer),/review-integrity-failed/)
+ review.checks.find((c:any)=>c.dimension==='performance').status='pending'
+ review.checks.find((c:any)=>c.dimension==='technical').status='pending';workflow.recordReview(reviewer,review);assert.throws(()=>workflow.complete(reviewer),/review-integrity-failed/)
+ review.checks.find((c:any)=>c.dimension==='technical').status='fail'
+ review.checks.find((c:any)=>c.dimension==='performance').evidenceReceiptIds=['invented'];workflow.recordReview(reviewer,review);assert.throws(()=>workflow.complete(reviewer),/unknown receipt/)
+})
 test('passing reviewer cannot directly declare final film acceptance',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_complete');assert.equal(workflow.complete(input).metadata.workflowOutcome,'machine_assessed_candidate')})
 test('preflight denial shows sanitized details and actual status',t=>{const {workflow,task}=setup(t);workflow.recordCapability(task,{name:'audio',status:'access_denied',checkedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),reason:'HTTP 403 token=private123 https://service.example/?key=secret'});const r=workflow.preflight(task);assert.match(r.reason??'',/blocked_quality_capability.*audio=access_denied/);assert.ok(!r.reason?.includes('private123'));assert.ok(!r.reason?.includes('service.example'))})
 test('negative issue ID may contain a colon',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);const r=workflow.status(input).review;delete r.reviewerSessionId;r.issues=[{id:'audio:quiet',severity:'major',status:'open'}];workflow.recordReview(reviewer,r);assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_needs_changes')})

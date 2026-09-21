@@ -133,7 +133,15 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     if(role==='reviewer'){
       if(!Array.isArray(review.checks)||review.checks.some((c:any)=>!['pass','fail','pending'].includes(c?.status)))throw Error('studio-review-check-status-invalid')
       // A real, complete negative review must reach the planner. Only integrity failures block handoff.
-      const integrity=result.issues.filter((x:string)=>!/^check\.[^:]+: not passed$/.test(x)&&!/^issue\..+: unresolved (blocker|major|minor|info)$/.test(x)&&!x.startsWith('budget:')&&!x.startsWith('autonomy:')&&!/^candidate: (duration outside policy|width mismatch|height mismatch|fps mismatch)$/.test(x))
+      // Rejection is not approval: an absent audio stream cannot produce an audio
+      // observation. Permit explicitly PENDING dimensions on a grounded rejection,
+      // while retaining identity/hash/range checks and every rule for PASS/FAIL.
+      const groundedFailure=review.checks.some((c:any)=>c.status==='fail'&&Array.isArray(c.evidenceReceiptIds)&&c.evidenceReceiptIds.length>0&&!result.issues.some((x:string)=>x.startsWith(`check.${c.dimension}: `)&&x!==`check.${c.dimension}: not passed`))
+      const rejection=groundedFailure&&review.issues?.some((i:any)=>['blocker','major'].includes(i.severity)&&['open','pending'].includes(i.status))
+      const pendingOmission=(x:string)=>rejection&&review.checks.some((c:any)=>c.status==='pending'&&Array.isArray(c.evidenceReceiptIds)&&(
+        (c.evidenceReceiptIds.length===0&&x===`check.${c.dimension}: missing or duplicate evidence receipts`)||
+        ['audio','frames','probe','source'].some(kind=>x===`check.${c.dimension}: requires ${kind} evidence`)))
+      const integrity=result.issues.filter((x:string)=>!pendingOmission(x)&&!/^check\.[^:]+: not passed$/.test(x)&&!/^issue\..+: unresolved (blocker|major|minor|info)$/.test(x)&&!x.startsWith('budget:')&&!x.startsWith('autonomy:')&&!/^candidate: (duration outside policy|width mismatch|height mismatch|fps mismatch)$/.test(x))
       if(integrity.length)throw Error(`studio-review-integrity-failed: ${integrity.join('; ')}`)
       return {summary:result.ok?'Independent review completed; planner must verify final acceptance.':'Independent review found issues; return to planner for repairs.',metadata:{workflowOutcome:result.ok?'review_complete':'review_needs_changes',...base,reviewerSessionId:review.reviewerSessionId,issues:result.issues}}
     }

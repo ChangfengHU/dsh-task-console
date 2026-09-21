@@ -11,7 +11,7 @@ async function setup(t:any,role='reviewer'){
  const tools:any={},receipts:any[]=[],reviews:any[]=[];let candidate:any={sha256:hash('video'),manifestSha256:hash('{}'),referenceSha256:'a'.repeat(64),durationSeconds:100,revision:1},location:any={path:join(cwd,'film.mp4'),manifestPath:join(cwd,'manifest.json')},active=true
  const workflow={preflight:()=>({ok:true}),status:()=>({candidate:{candidate}}),candidateLocation:()=>location,recordCandidate:(_:any,c:any)=>candidate=c,recordCandidateLocation:(_:any,l:any)=>location=l,recordReceipt:(_:any,r:any)=>{receipts.push(r);return {...r,id:'host-id'}},recordReview:(_:any,r:any)=>reviews.push(r)}
  const input={task:{cwd,design:{studio:{referenceSha256:'a'.repeat(64)}}},card:{role},sessionId:'s'},agentCtx={tools:{register:(s:any)=>{tools[s.name]=s;return()=>delete tools[s.name]}},attachments:{saveImage:async({data}:any)=>({attachmentId:hash(data.toString()),mediaType:'image/jpeg',bytes:data.length,width:540,height:960})}}
- const runCommand=async(file:string,args:string[])=>{if(file.includes('ffprobe'))return {stdout:JSON.stringify({streams:[{codec_type:'video',width:1080,height:1920,avg_frame_rate:'30/1'}],format:{duration:'100'}})};await writeFile(args.at(-1)!,`actual-frame-${args[4]}`);return {stdout:''}}
+ const runCommand=async(file:string,args:string[])=>{if(file.includes('ffprobe'))return {stdout:JSON.stringify({streams:[{codec_type:'video',width:1080,height:1920,avg_frame_rate:'30/1'},{codec_type:'audio'}],format:{duration:'100'}})};if(args.includes('null'))return {stdout:''};await writeFile(args.at(-1)!,`actual-frame-${args[4]}`);return {stdout:''}}
  const dispose=await registerStudioTools(agentCtx,{input,workflow,isActive:()=>active,runCommand,audioObserve:async({wavPath})=>({observation:'actual audio',calibrated:false,input_modality:'input_audio',audio_sha256:await fileSha256(wavPath)})})
  return {cwd,tools,receipts,reviews,dispose,deactivate:()=>active=false,getCandidate:()=>candidate}
 }
@@ -27,7 +27,7 @@ test('disposer removes registered tools',async t=>{const s=await setup(t);s.disp
 test('real FFmpeg MP4 probe and frame extraction integration',async t=>{
  const {execFile}=await import('node:child_process'),{promisify}=await import('node:util'),run=promisify(execFile)
  try{await run('ffmpeg',['-version']);await run('ffprobe',['-version'])}catch{t.skip('FFmpeg/ffprobe unavailable');return}
- const s=await setup(t,'executor');await run('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=108x192:r=30','-t','1','-pix_fmt','yuv420p','-y',join(s.cwd,'film.mp4')])
+ const s=await setup(t,'executor');await run('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=108x192:r=30','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','1','-pix_fmt','yuv420p','-y',join(s.cwd,'film.mp4')])
  let candidate:any,location:any;const receipts:any[]=[],tools:any={};const workflow={status:()=>({candidate:{candidate}}),candidateLocation:()=>location,recordCandidate:(_:any,v:any)=>candidate=v,recordCandidateLocation:(_:any,v:any)=>location=v,recordReceipt:(_:any,v:any)=>{receipts.push(v);return {...v,id:'real-frame-receipt'}}},input={task:{cwd:s.cwd,design:{studio:{referenceSha256:'a'.repeat(64)}}},card:{role:'executor'},sessionId:'s'}
  await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}},attachments:{saveImage:async({data}:any)=>{assert.equal(data[0],255);assert.equal(data[1],216);return {attachmentId:hash(data.toString('base64')),bytes:data.length,mediaType:'image/jpeg',width:540,height:960}}}},{input,workflow,isActive:()=>true})
  await tools.studio_register_candidate.execute({path:'film.mp4',manifestPath:'manifest.json',revision:1});assert.equal(candidate.fps,30);assert.equal(candidate.width,108)
@@ -128,4 +128,16 @@ test('producer visual previews stay scoped and never mint reviewer receipts',asy
  await assert.rejects(tools.studio_preview_image.execute({path:'/etc/hosts'}),/outside-project/);await assert.rejects(tools.studio_preview_frames.execute({path:'film.mp4',start:0,end:3}),/range/)
  input.card.role='reviewer';const other:any={};await registerStudioTools({tools:{register:(v:any)=>{other[v.name]=v;return()=>{}}}},{input,workflow:{},isActive:()=>true});await assert.rejects(other.studio_preview_image.execute({path:'asset.png'}),/role/)
  active=false;await assert.rejects(tools.studio_preview_image.execute({path:'asset.png'}),/stale/)
+})
+
+test('actual silent and black encodes are refused before candidate state mutation',async t=>{
+ const {execFile}=await import('node:child_process'),{promisify}=await import('node:util'),run=promisify(execFile)
+ const s=await setup(t,'executor'),tools:any={};let registered=0
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd:s.cwd,design:{studio:{referenceSha256:'a'.repeat(64)}}},card:{role:'executor'},sessionId:'s'},workflow:{recordCandidate:()=>registered++,recordCandidateLocation:()=>{}},isActive:()=>true})
+ const file=join(s.cwd,'film.mp4'),args={path:'film.mp4',manifestPath:'manifest.json',revision:1}
+ await run('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=108x192:r=30','-t','2','-y',file])
+ await assert.rejects(tools.studio_register_candidate.execute(args),/audio-stream-required/)
+ await run('ffmpeg',['-v','error','-f','lavfi','-i','color=c=black:s=108x192:r=30','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','2','-y',file])
+ await assert.rejects(tools.studio_register_candidate.execute(args),/mostly-black/)
+ assert.equal(registered,0)
 })

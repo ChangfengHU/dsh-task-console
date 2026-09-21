@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wire.ts'
-import { closeConsole, go, type Api } from './Console.tsx'
+import { closeConsole, go, readRouteQuery, type Api } from './Console.tsx'
 import { AgentHistory, agentTab, agentPage } from './AgentHistory.tsx'
 import { executionTime } from '../execution-label.ts'
 import { ActionEditor } from './AgentActions.tsx'
@@ -31,8 +31,8 @@ export function derivePerm(spec: AgentSpec): Preview['permission'] {
 let stash: AgentSpec | null = null
 
 export function AgentsPage({ api, catalog, agents, id, onSaved, toast }: { api: Api; catalog: Catalog; agents: AgentRow[]; id: string | null | 'new'; onSaved: () => Promise<void>; toast: (m: string) => void }) {
-  const [q, setQ] = useState('')
-  const [page,setPage]=useState(1),[revision,setRevision]=useState(0),[error,setError]=useState('')
+  const [q, setQ] = useState(()=>readRouteQuery().get('listQuery')??'')
+  const [page,setPage]=useState(()=>Math.max(1,Math.floor(Number(readRouteQuery().get('listPage')))||1)),[revision,setRevision]=useState(0),[error,setError]=useState('')
   let cache=agentPages.get(api);if(!cache){cache=new QueryCache();agentPages.set(api,cache)}
   const key=JSON.stringify({page,query:q,id:id??undefined})
   const [state,setState]=useState<{key:string;data:Awaited<ReturnType<Api['agentPage']>>}|null>(null)
@@ -47,7 +47,7 @@ export function AgentsPage({ api, catalog, agents, id, onSaved, toast }: { api: 
         <div className="search"><input placeholder="搜 Agent" value={q} onChange={e => {setQ(e.target.value);setPage(1)}} /></div>
         <div className="items">
           {list.map(a => { const perm = a.spec ? derivePerm(a.spec) : (a as any).permission as Preview['permission'] | null; return (
-            <div key={a.id} className={`dtc-aitem ${a.id === cur ? 'on' : ''}`} onClick={() => go(`agents/${a.id}`)}>
+            <div key={a.id} className={`dtc-aitem ${a.id === cur ? 'on' : ''}`} onClick={() => go(`agents/${a.id}?listPage=${page}&listQuery=${encodeURIComponent(q)}`)}>
               <div className="av" style={{ background: a.trust === 'system' ? 'var(--dtc-faint)' : colorOf(a.id) }}>{a.name[0]}</div>
               <div><div className="nm">{a.name} <span className="dtc-mono dtc-faint" style={{ fontWeight: 400, fontSize: 11 }}>{a.id}</span></div><div className="d">{a.broken ?? a.description}</div></div>
               <span className={`perm ${a.broken ? 'bad' : perm ? PERM[perm].dot : 'sys'}`} title={a.broken ? '坏了' : perm ? PERM[perm].label : '出厂'} />

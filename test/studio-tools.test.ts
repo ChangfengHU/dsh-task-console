@@ -35,7 +35,7 @@ test('disposer removes registered tools',async t=>{const s=await setup(t);s.disp
 test('real FFmpeg MP4 probe and frame extraction integration',async t=>{
  const {execFile}=await import('node:child_process'),{promisify}=await import('node:util'),run=promisify(execFile)
  try{await run('ffmpeg',['-version']);await run('ffprobe',['-version'])}catch{t.skip('FFmpeg/ffprobe unavailable');return}
- const s=await setup(t,'executor');await run('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=108x192:r=30','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','1','-pix_fmt','yuv420p','-y',join(s.cwd,'film.mp4')])
+ const s=await setup(t,'executor');await run('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=108x192:r=30','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','1','-pix_fmt','yuv420p','-y',join(s.cwd,'film.mp4')])
  let candidate:any,location:any;const receipts:any[]=[],tools:any={};const workflow={status:()=>({candidate:{candidate}}),candidateLocation:()=>location,recordCandidate:(_:any,v:any)=>candidate=v,recordCandidateLocation:(_:any,v:any)=>location=v,recordReceipt:(_:any,v:any)=>{receipts.push(v);return {...v,id:'real-frame-receipt'}}},input={task:{cwd:s.cwd,design:{studio:{referenceSha256:'a'.repeat(64)}}},card:{role:'executor'},sessionId:'s'}
  await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}},attachments:{saveImage:async({data}:any)=>{assert.equal(data[0],255);assert.equal(data[1],216);return {attachmentId:hash(data.toString('base64')),bytes:data.length,mediaType:'image/jpeg',width:540,height:960}}}},{input,workflow,isActive:()=>true})
  await tools.studio_register_candidate.execute({path:'film.mp4',manifestPath:'manifest.json',revision:1});assert.equal(candidate.fps,30);assert.equal(candidate.width,108)
@@ -147,5 +147,9 @@ test('actual silent and black encodes are refused before candidate state mutatio
  await assert.rejects(tools.studio_register_candidate.execute(args),/audio-stream-required/)
  await run('ffmpeg',['-v','error','-f','lavfi','-i','color=c=black:s=108x192:r=30','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','2','-y',file])
  await assert.rejects(tools.studio_register_candidate.execute(args),/mostly-black/)
+ await run('ffmpeg',['-v','error','-f','lavfi','-i','color=c=0x24354b:s=108x192:r=30','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','2','-y',file])
+ await assert.rejects(tools.studio_register_candidate.execute(args),/mostly-uniform/)
  assert.equal(registered,0)
+ await run('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=108x192:r=30','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','2','-y',file])
+ assert.equal((await tools.studio_register_candidate.execute(args)).qualityApproved,false);assert.equal(registered,1)
 })

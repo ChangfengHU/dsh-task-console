@@ -68,9 +68,14 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   if(!probe.streams?.some((s:any)=>s.codec_type==='audio'))throw Error('studio-candidate-audio-stream-required: rendered file has no audio; repair the composition and mix before registering')
   const [n,d]=String(video.avg_frame_rate??'0/1').split('/').map(Number),candidate={sha256:await fileSha256(path),manifestSha256:await fileSha256(manifestPath),referenceSha256:input.task.design.studio.referenceSha256,revision:args.revision,durationSeconds:Number(probe.format?.duration),width:Number(video.width),height:Number(video.height),fps:n/d}
   if(candidate.sha256!==before)throw Error('studio-candidate-file-changed');if(![candidate.durationSeconds,candidate.width,candidate.height,candidate.fps].every(x=>Number.isFinite(x)&&x>0))throw Error('studio-probe-invalid')
-  const scan=await command(process.env.FFMPEG_PATH??'ffmpeg',['-nostdin','-v','error','-i',path,'-an','-vf','fps=1,scale=160:90,blackframe=amount=98:threshold=32,metadata=print:file=-','-f','null','-'])
+  const scan=await command(process.env.FFMPEG_PATH??'ffmpeg',['-nostdin','-v','error','-i',path,'-an','-vf','fps=1,scale=160:90,blackframe=amount=98:threshold=32,signalstats,metadata=print:file=-','-f','null','-'])
   const blackSamples=[...scan.stdout.matchAll(/lavfi\.blackframe\.pblack=(\d+(?:\.\d+)?)/g)].filter(m=>Number(m[1])>=98).length
   if(blackSamples>=Math.max(1,Math.floor(candidate.durationSeconds)*0.9))throw Error('studio-candidate-mostly-black: at least 90% of one-second samples are black; repair scene loading before registering')
+  const uniformSamples=scan.stdout.split(/frame:\s*\d+/).filter(frame=>['Y','U','V'].every(channel=>{
+    const lo=frame.match(new RegExp(`lavfi\\.signalstats\\.${channel}MIN=(\\d+(?:\\.\\d+)?)`)),hi=frame.match(new RegExp(`lavfi\\.signalstats\\.${channel}MAX=(\\d+(?:\\.\\d+)?)`))
+    return !!lo&&!!hi&&Number(hi[1])-Number(lo[1])<=2
+  })).length
+  if(uniformSamples>=Math.max(1,Math.floor(candidate.durationSeconds)*0.9))throw Error('studio-candidate-mostly-uniform: at least 90% of one-second samples contain only a nearly uniform color; verify mounted visible scenes before registering. This is technical rejection, not aesthetic scoring.')
   if(await fileSha256(path)!==before||await fileSha256(manifestPath)!==candidate.manifestSha256)throw Error('studio-candidate-file-changed')
   check();workflow.recordCandidate(input,candidate);workflow.recordCandidateLocation(input,{path,manifestPath,sha256:candidate.sha256});return {candidate,qualityApproved:false}
  })

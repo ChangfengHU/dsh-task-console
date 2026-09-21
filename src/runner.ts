@@ -1,3 +1,4 @@
+import { recoverStudioFailure, type StudioRecoveryInput } from './studio-recovery.ts'
 /**
  * The dispatcher — the host-resident loop that turns a fired batch into
  * runs. Deterministic: no model decides who goes next.
@@ -806,6 +807,12 @@ export class TaskRunner {
       )
     }
     await this.tick()
+  }
+
+  async recoverStudioCard(input: StudioRecoveryInput) {
+    const result = await recoverStudioFailure(this.store, input)
+    if (!result.replay) void this.tick().catch(error => console.warn('[task-console] studio recovery dispatch failed', String(error)))
+    return { ok: true, ...result }
   }
 
   /** Hermes unblock semantics: a blocked run stays closed and a new run is claimed. */

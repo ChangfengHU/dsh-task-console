@@ -189,6 +189,8 @@ export class EventStore {
         db.prepare('DELETE FROM dsh_task_specs WHERE id = ?').run(e.taskId)
         break
       }
+      case 'batch/studio_recovered':
+        if (db.prepare("UPDATE dsh_batches SET settled_at=NULL,outcome=NULL WHERE id=? AND spec_id=? AND outcome='failed' AND archived_at IS NULL").run(e.batchId,e.taskId).changes !== 1) throw new Error('studio-recovery-batch-changed'); break
       case 'batch/settled':
         db.prepare('UPDATE dsh_batches SET settled_at = ?, outcome = ? WHERE id = ?').run(toEpoch(e.at), e.outcome, e.batchId); break
       case 'batch/archived':

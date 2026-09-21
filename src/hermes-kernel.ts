@@ -727,6 +727,23 @@ export class HermesKernel {
     })
   }
 
+  /** Explicit platform recovery; caller must validate the settled studio graph. */
+  recoverStudioNode(taskId: string, expected: 'triage' | 'archived', recoveryId: string): 'ready' | 'todo' {
+    return this.write(() => {
+      const task = this.taskRow(taskId)
+      if (!task || task.status !== expected || task.current_run_id !== null) throw new Error('studio-recovery-node-changed')
+      if (expected === 'archived') {
+        const last = this.db.prepare("SELECT kind,payload FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 1").get(taskId) as any
+        if (last?.kind !== 'cancelled' || parseJson<any>(last.payload, {}).reason !== '上游失败，任务不可达') throw new Error('studio-recovery-not-dependency-cancel')
+      }
+      const status = this.parentsSatisfied(taskId) && task.assignee ? 'ready' : 'todo'
+      const changed = this.db.prepare("UPDATE tasks SET status=?, consecutive_failures=0,claim_lock=NULL,claim_expires=NULL,worker_pid=NULL WHERE id=? AND status=? AND current_run_id IS NULL").run(status, taskId, expected)
+      if (changed.changes !== 1) throw new Error('studio-recovery-cas-failed')
+      this.appendEvent(taskId, 'studio_recovered', { recoveryId, previous_status: expected, previous_consecutive_failures: task.consecutive_failures, status })
+      return status
+    })
+  }
+
   reclaimTask(taskId: string, reason = 'manual reclaim'): boolean {
     return this.write(() => {
       const task = this.taskRow(taskId)

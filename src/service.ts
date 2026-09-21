@@ -1080,6 +1080,10 @@ export class TaskConsoleService extends TypertRemoteService {
     return JSON.stringify({ ok: true })
   }
 
+  async recoverStudioCard(payload: string): Promise<string> {
+    return JSON.stringify(await this.runner.recoverStudioCard(JSON.parse(payload)))
+  }
+
   async unblockCard(payload: string): Promise<string> {
     const { cardId } = JSON.parse(payload) as { cardId: string }
     if (!cardId?.trim()) throw new Error('缺少 cardId')

@@ -1,0 +1,270 @@
+/**
+ * Agent: a master-detail page. Left, the roster; right, one agent — its
+ * persona, the exact native/MCP tools it may see (the fence), its skills,
+ * what it has been doing, and the preset file the editor writes.
+ */
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { AgentRow, AgentSpec, Catalog, Preview, TryRunResult } from '../wire.ts'
+import { closeConsole, go, type Api } from './Console.tsx'
+import { AgentHistory, agentTab, agentPage } from './AgentHistory.tsx'
+import { executionTime } from '../execution-label.ts'
+import { ActionEditor } from './AgentActions.tsx'
+
+const EMPTY: AgentSpec = { id: '', name: '', description: '', persona: '', model: '', effort: 'medium', permissionPreset: 'workspace-write', tools: ['ask-user'], mcpTools: {}, mcpPolicy: {}, skills: [] }
+const PERM: Record<Preview['permission'], { label: string; cls: string; dot: string }> = {
+  'read-only': { label: '只读', cls: 'dtc-p-ok', dot: 'ro' },
+  'limited-write': { label: '受限可写', cls: 'dtc-p-warn', dot: 'lw' },
+  'write': { label: '可写', cls: 'dtc-p-bad', dot: 'w' },
+}
+const COLORS = ['#1f6f78', '#1f7a4d', '#6b4fbb', '#2563a8', '#b26a00', '#8e5a8a', '#3b6e5a']
+export const colorOf = (id: string) => { let h = 0; for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return COLORS[h % COLORS.length] }
+export function derivePerm(spec: AgentSpec): Preview['permission'] {
+  if (spec.tools.some(t => t === 'bash' || t === 'fs' || t === 'str-replace-editor')) return 'write'
+  if (Object.values(spec.mcpTools).some(tools => tools.length)) return 'limited-write'
+  return 'read-only'
+}
+
+/** Prefill stash for "复制" — survives one navigation. */
+let stash: AgentSpec | null = null
+
+export function AgentsPage({ api, catalog, agents, id, onSaved, toast }: { api: Api; catalog: Catalog; agents: AgentRow[]; id: string | null | 'new'; onSaved: () => Promise<void>; toast: (m: string) => void }) {
+  const [q, setQ] = useState('')
+  const list = agents.filter(a => !q || a.name.includes(q) || a.id.includes(q))
+  const cur = id === 'new' ? null : (id ?? agents[0]?.id ?? null)
+  return (
+    <div className="dtc-agents">
+      <div className="dtc-alist">
+        <div className="search"><input placeholder="搜 Agent" value={q} onChange={e => setQ(e.target.value)} /></div>
+        <div className="items">
+          {list.map(a => { const perm = a.spec ? derivePerm(a.spec) : null; return (
+            <div key={a.id} className={`dtc-aitem ${a.id === cur ? 'on' : ''}`} onClick={() => go(`agents/${a.id}`)}>
+              <div className="av" style={{ background: a.trust === 'system' ? 'var(--dtc-faint)' : colorOf(a.id) }}>{a.name[0]}</div>
+              <div><div className="nm">{a.name} <span className="dtc-mono dtc-faint" style={{ fontWeight: 400, fontSize: 11 }}>{a.id}</span></div><div className="d">{a.broken ?? a.description}</div></div>
+              <span className={`perm ${a.broken ? 'bad' : perm ? PERM[perm].dot : 'sys'}`} title={a.broken ? '坏了' : perm ? PERM[perm].label : '出厂'} />
+            </div>) })}
+        </div>
+        <button className="dtc-btn newbtn" onClick={() => go('agents/new')}>＋ 新建 Agent</button>
+      </div>
+      <div className="dtc-adetail">
+        <AgentEditor key={id === 'new' ? 'new' : cur ?? 'none'} api={api} catalog={catalog} agents={agents} id={id === 'new' ? null : cur} onSaved={onSaved} toast={toast} />
+      </div>
+    </div>
+  )
+}
+
+function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; catalog: Catalog; agents: AgentRow[]; id: string | null; onSaved: () => Promise<void>; toast: (m: string) => void }) {
+  const [tab, setTab] = useState(agentTab)
+  const [actionsOpened, setActionsOpened] = useState(() => agentTab() === 'actions')
+  useEffect(() => { if (tab === 'actions') setActionsOpened(true) }, [tab])
+  const [page, setPage] = useState(agentPage)
+  const [counts, setCounts] = useState<{ sessions: number; tasks: number } | null>(null)
+  useEffect(() => { const on = () => { setTab(agentTab()); setPage(agentPage()) }; window.addEventListener('hashchange', on); return () => window.removeEventListener('hashchange', on) }, [])
+  const row = id ? agents.find(a => a.id === id) : undefined
+  const readOnly = !!row && row.trust === 'system'
+  const initial = useMemo<AgentSpec>(() => {
+    if (!id && stash) { const s = stash; stash = null; return s }
+    if (row?.spec) return row.spec
+    if (row) return { ...EMPTY, id: row.id, name: row.name, description: row.description }
+    return { ...EMPTY, model: catalog.defaultModel }
+  }, [id, row, catalog.defaultModel])
+  const [spec, setSpec] = useState<AgentSpec>(initial)
+  const [preview, setPreview] = useState<Preview | null>(null)
+  const [busy, setBusy] = useState('')
+  const [err, setErr] = useState('')
+  const [run, setRun] = useState<TryRunResult | 'running' | null>(null)
+  const [showYml, setShowYml] = useState(false)
+  const dirty = useRef(false)
+
+  useEffect(() => { if (row && !dirty.current) setSpec(initial) }, [row, initial])
+  useEffect(() => {
+    if (readOnly) return
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(spec.id) || !spec.name.trim()) { setPreview(null); return }
+    const t = window.setTimeout(() => { api.previewAgent(spec).then(setPreview).catch(e => setErr(String(e.message ?? e))) }, 350)
+    return () => window.clearTimeout(t)
+  }, [spec, api, readOnly])
+
+  const set = <K extends keyof AgentSpec>(k: K, v: AgentSpec[K]) => { dirty.current = true; setSpec(s => ({ ...s, [k]: v })) }
+  const toggle = (k: 'tools' | 'skills', v: string) => set(k, spec[k].includes(v) ? spec[k].filter(x => x !== v) : [...spec[k], v])
+  const selectedMcpTools = (server: string, available: string[]) => spec.mcpTools[server]?.includes('*') ? available : (spec.mcpTools[server] ?? [])
+  const setMcpTools = (server: string, tools: string[]) => {
+    const next = { ...spec.mcpTools }
+    if (tools.length) next[server] = [...new Set(tools)]
+    else delete next[server]
+    set('mcpTools', next)
+  }
+  const toggleMcpTool = (server: string, tool: string, available: string[]) => {
+    const selected = selectedMcpTools(server, available)
+    setMcpTools(server, selected.includes(tool) ? selected.filter(x => x !== tool) : [...selected, tool])
+  }
+  const save = async () => {
+    setBusy('save'); setErr('')
+    try { const out = await api.saveAgent(spec); setPreview(out.preview); dirty.current = false; toast(`已写 ${out.path}/agent.cordis.yml`); await onSaved(); if (!id) go(`agents/${spec.id}`) }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)) } finally { setBusy('') }
+  }
+  const del = async () => {
+    if (!row || !window.confirm(`删除 preset 目录 ${row.path}?已跑过的会话不受影响。`)) return
+    setBusy('del')
+    try { await api.deleteAgent(row.id); toast('已删除'); await onSaved(); go('agents') } catch (e) { setErr(String((e as Error).message ?? e)) } finally { setBusy('') }
+  }
+  const copy = () => { stash = { ...spec, id: `${spec.id}-copy`, name: `${spec.name}(副本)` }; go('agents/new') }
+  const tryRun = async () => {
+    if (!row || dirty.current) { setErr('先保存,再试跑 —— 试跑挂的是磁盘上的 preset'); return }
+    setRun('running'); setErr('')
+    try { setRun(await api.tryRun(row.id)) } catch (e) { setRun(null); setErr(String((e as Error).message ?? e)) }
+  }
+  const chat = async () => {
+    if (!row) return
+    try { const { sessionId } = await api.startAgentSession(row.id); toast(`已开 ${row.name} 的会话`); closeConsole(); await api.openSession(sessionId) } catch (e) { setErr(String((e as Error).message ?? e)) }
+  }
+
+  const perm = preview?.permission ?? derivePerm(spec)
+  const groups = [...new Set(catalog.tools.map(t => t.group))]
+  const writes = spec.tools.filter(t => catalog.tools.find(x => x.id === t)?.writes)
+  const selectedMcpCount = catalog.mcp.reduce((n, m) => n + selectedMcpTools(m.serverName, m.tools).length, 0)
+  const missingMcp = Object.entries(spec.mcpTools).flatMap(([server, tools]) => {
+    const found = catalog.mcp.find(m => m.serverName === server)
+    if (!found) return [`${server}/*`]
+    return tools.includes('*') ? [] : tools.filter(tool => !found.tools.includes(tool)).map(tool => `${server}/${tool}`)
+  })
+  const cli = /^(claude|codex)-local/.test(spec.model)
+  const claude = /^claude-local/.test(spec.model)
+
+  return (
+    <>
+      <div className="dtc-ahead">
+        <div className="av" style={{ background: readOnly ? 'var(--dtc-faint)' : colorOf(spec.id || 'new') }}>{(spec.name || '新')[0]}</div>
+        <div style={{ minWidth: 0 }}>
+          <div className="name">{row ? row.name : '新建 Agent'}<span className={`dtc-pill ${PERM[perm].cls}`}>{PERM[perm].label}</span>{readOnly ? <span className="dtc-pill dtc-p-grey">出厂 · 只能复制</span> : null}{row?.broken ? <span className="dtc-pill dtc-p-bad">坏了</span> : null}</div>
+          <div className="desc">{spec.description || (row ? '' : '给建任务的人看的一句话')}</div>
+          <div className="dtc-faint" style={{ fontSize: 12, marginTop: 4 }}>preset · <span className="dtc-mono">{row?.path ?? `${catalog.userRoot ?? '~/.dsh/.agent-presets'}/${spec.id || '<id>'}`}</span>{spec.model ? <> · 模型 <span className="dtc-mono">{spec.model}{spec.effort ? ` · ${spec.effort}` : ''}</span></> : null}</div>
+        </div>
+        <div className="acts">
+          {row && !row.broken ? <button className="dtc-btn pri" onClick={chat}>💬 开新会话</button> : null}
+          {row ? <button className="dtc-btn" onClick={tryRun} disabled={run === 'running'}>{run === 'running' ? <><span className="dtc-spin" /> 试跑中</> : '试跑'}</button> : null}
+          <button className="dtc-btn" onClick={copy}>复制</button>
+          {row && !readOnly ? <button className="dtc-btn danger" onClick={del} disabled={busy === 'del'}>删除</button> : null}
+          {!readOnly && (!row || tab === 'config') ? <button className={`dtc-btn ${row ? '' : 'pri'}`} onClick={save} disabled={busy === 'save'}>{busy === 'save' ? '写入中…' : '保存 → 写 preset'}</button> : null}
+        </div>
+      </div>
+      {err ? <div className="dtc-err">{err}</div> : null}
+      {row ? <>
+        <div className="dtc-agent-tabs" role="tablist" aria-label="Agent 详情">{(['config', 'actions', 'sessions', 'tasks'] as const).map(t => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => go(`agents/${encodeURIComponent(row.id)}?tab=${t}&page=1`)}>{t === 'config' ? '配置' : t === 'actions' ? 'Actions' : `${t === 'sessions' ? '会话' : '任务'}${counts ? `（${counts[t]}）` : ''}`}</button>)}</div>
+        <AgentHistory api={api} id={row.id} tab={tab} page={page} onCounts={setCounts} />
+        {actionsOpened || tab === 'actions' ? <div hidden={tab !== 'actions'}><ActionEditor api={api} agentId={row.id} /></div> : null}
+      </> : null}
+      <div hidden={!!row && tab !== 'config'}>
+      {!row ? <div className="dtc-note">先保存 Agent，即可在 Actions 标签配置可复用的快捷指令。</div> : null}
+      {readOnly ? <div className="dtc-warn">出厂 preset 由部署提供,任务台不改它。点「复制」得到一份可编辑的副本。</div> : null}
+      {claude ? <div className="dtc-warn">claude-local 上 dsh 的工具都是延迟工具:这个 agent 用不了 MCP、问不了人、也交不了卷,<b>不能参与任务</b>。要参与任务请选 codex-local 或 API 型模型。</div> : cli ? <div className="dtc-note">codex-local 自带 shell:dsh 的工具围栏管不到它自己的 bash,只管 MCP / skill / 交卷。</div> : null}
+
+      <div className="dtc-agrid">
+        <div>
+          <div className="dtc-panel"><h3>身份</h3>
+            <div className="dtc-fields">
+              <label>名字<input value={spec.name} disabled={readOnly} onChange={e => set('name', e.target.value)} placeholder="巡检员" /></label>
+              <label>id(目录名)<input className="dtc-mono" value={spec.id} disabled={readOnly || !!row} onChange={e => set('id', e.target.value.toLowerCase())} placeholder="inspector" /></label>
+              <label className="wide">一句话说明<input value={spec.description} disabled={readOnly} onChange={e => set('description', e.target.value)} placeholder="给建任务的人看的" /></label>
+              <label>模型(provider/model)<input list="dtc-models" className="dtc-mono" value={spec.model} disabled={readOnly} onChange={e => set('model', e.target.value)} />
+                <datalist id="dtc-models">{catalog.models.map(m => <option key={m} value={m} />)}</datalist></label>
+              <label>推理强度<select value={spec.effort} disabled={readOnly} onChange={e => set('effort', e.target.value as AgentSpec['effort'])}>
+                <option value="">默认</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></label>
+              <label>会话权限<select value={spec.permissionPreset} disabled={readOnly} onChange={e => set('permissionPreset', e.target.value as AgentSpec['permissionPreset'])}>
+                <option value="workspace-write">工作区写入 · 需审批</option><option value="danger-full-access">完全主机访问 · 无审批</option></select></label>
+            </div>
+            {spec.permissionPreset === 'danger-full-access' ? <div className="dtc-warn">该 Agent 的 bash 可直接访问宿主机，且不会弹出权限确认。仅用于装机等必须控制系统服务的受信角色。</div> : null}
+          </div>
+          <div className="dtc-panel"><h3>人设 <span className="dtc-faint" style={{ fontWeight: 400 }}>→ dsh-persona 行</span></h3>
+            <textarea value={spec.persona} disabled={readOnly} onChange={e => set('persona', e.target.value)} placeholder="职责、边界、交卷格式" style={{ minHeight: 140 }} />
+          </div>
+          <div className="dtc-panel"><h3>工具与权限 <span className="dtc-faint" style={{ fontWeight: 400 }}>按具体工具授权；DSH 运行器的会话内置工具除外</span></h3>
+            {groups.map(g => (
+              <div key={g}>
+                <div className="dtc-tgroup">{g}</div>
+                <div className="dtc-matrix">
+                  {catalog.tools.filter(t => t.group === g).map(t => (
+                    <label key={t.id} className={`dtc-cap ${spec.tools.includes(t.id) ? 'on' : ''}`}>
+                      <input type="checkbox" checked={spec.tools.includes(t.id)} disabled={readOnly} onChange={() => toggle('tools', t.id)} />
+                      <span><span className="nm dtc-mono">{t.label}</span>{t.writes ? <span className="w">可写</span> : null}<span className="d">{t.description}</span></span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {catalog.mcp.map(m => { const selected = selectedMcpTools(m.serverName, m.tools); return (
+              <div key={m.serverName}>
+                <div className="dtc-tgroup" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>MCP · <span className="dtc-mono">{m.serverName}</span>{m.disabled ? ' · 已停' : ''}</span>
+                  {!readOnly && m.tools.length ? <span><button className="dtc-linkbtn" onClick={() => setMcpTools(m.serverName, m.tools)}>全选</button><button className="dtc-linkbtn" onClick={() => setMcpTools(m.serverName, [])}>清空</button></span> : null}
+                </div>
+                <div className="dtc-matrix">
+                  {m.tools.map(tool => { const mutates = /(?:delete|set|register|disable|enable|recycle|heal|capture|write|update|create)/i.test(tool); const constrained = !!spec.mcpPolicy[m.serverName]?.[tool]; return (
+                    <label key={tool} className={`dtc-cap ${selected.includes(tool) ? 'on' : ''}`}>
+                      <input type="checkbox" checked={selected.includes(tool)} disabled={readOnly} onChange={() => toggleMcpTool(m.serverName, tool, m.tools)} />
+                      <span><span className="nm dtc-mono">{tool}</span>{mutates ? <span className="w">可写</span> : null}{constrained ? <span className="w" style={{ color: 'var(--dtc-warn)' }}>参数受限</span> : null}<span className="d">来自 {m.serverName} · 单工具授权</span></span>
+                    </label>
+                  ) })}
+                </div>
+                {!m.tools.length ? <div className="dtc-faint" style={{ fontSize: 12.5 }}>当前没有注册工具。</div> : null}
+              </div>
+            ) })}
+            {!catalog.mcp.length ? <div className="dtc-faint" style={{ fontSize: 12.5 }}>宿主没有 MCP 工具。</div> : null}
+            {missingMcp.length ? <div className="dtc-warn">以下已保存工具当前不存在，将不会挂载：{missingMcp.join('、')}</div> : null}
+            <div className="dtc-note">{writes.length || selectedMcpCount
+              ? <>推出来的权限:<b>{PERM[perm].label}</b>{writes.length ? <> —— 原生可写工具 {writes.map(w => <span key={w} className="dtc-mono">{w} </span>)}</> : null}{selectedMcpCount ? <>；已授权 <b>{selectedMcpCount}</b> 个 MCP 工具</> : null}</>
+              : <>推出来的权限:<b>只读</b> —— 没有任何可写工具,它不可能改任何东西。</>}</div>
+            <div className="dtc-faint" style={{ marginTop: 8, fontSize: 12.5 }}>宿主 schedule_* 和未授权 MCP 会被正向围栏隐藏；任务运行器在子作用域注册的交卷工具仍可用。</div>
+          </div>
+          {preview?.renamed.length ? <div className="dtc-note">宿主 MCP 在此 Agent 内使用独立命名空间；继承的宿主副本已由 preset 围栏隐藏。</div> : null}
+          <div className="dtc-panel"><h3>Skill <span className="dtc-faint" style={{ fontWeight: 400 }}>拷进 preset 的 skills/,随它走</span></h3>
+            <div className="dtc-chips">
+              {spec.skills.map(s => <button key={s} className="dtc-chip on" disabled={readOnly} onClick={() => toggle('skills', s)}>{s}</button>)}
+              {!readOnly ? <select value="" onChange={e => { if (e.target.value) toggle('skills', e.target.value) }}>
+                <option value="">＋ 从技能库添加</option>
+                {catalog.skills.filter(s => !spec.skills.includes(s.name)).map(s => <option key={s.dir} value={s.name}>{s.name} · {s.root}</option>)}
+              </select> : null}
+            </div>
+          </div>
+        </div>
+        <div className="dtc-rail">
+          {row ? <div className="dtc-panel"><h3>创建信息</h3><div className="dtc-note">{row.createdAt ? `创建于 ${executionTime(row.createdAt)}（北京时间）` : row.firstUsedAt ? `历史 Agent 未记录创建时间；首次使用于 ${executionTime(row.firstUsedAt)}（北京时间），列表以此补充排序。` : '历史 Agent 未记录创建时间，暂无使用记录。'}</div></div> : null}
+          <div className="dtc-disc">
+            <button className="sum" onClick={() => setShowYml(v => !v)}>{showYml ? '▾' : '▸'} 生成的 preset 文件 <span className="dtc-mono dtc-faint" style={{ fontWeight: 400, fontSize: 11 }}>agent.cordis.yml</span></button>
+            {showYml ? (readOnly ? <div className="dtc-note" style={{ padding: '0 14px 12px' }}>出厂 preset 的组合文件在 dsh 安装目录里,任务台不展示、不改。</div> : <div className="dtc-yml">{preview?.yml ?? (spec.id && spec.name ? '生成中…' : '填好 id 和名字后生成')}</div>) : null}
+          </div>
+          <p className="dtc-note">保存即写目录;dsh 热读取 preset 根,新会话立刻能选到,不重启。MCP 认证始终由宿主条目保管，preset 只保存条目引用和工具白名单。</p>
+        </div>
+      </div>
+
+      </div>
+
+      {run && run !== 'running' ? <TryRunModal result={run} onClose={() => setRun(null)} /> : null}
+    </>
+  )
+}
+
+function TryRunModal({ result, onClose }: { result: TryRunResult; onClose: () => void }) {
+  const dshTools = result.tools
+  const hasBash = dshTools.includes('bash')
+  const cli = /^(claude|codex)-local$/.test(result.provider)
+  return (
+    <div className="dtc-modal" onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="dtc-mbox dtc-root">
+        <div className="mh">试跑 · 真实会话 <span className="dtc-mono dtc-faint" style={{ fontWeight: 400, fontSize: 12 }}>{result.sessionId}</span><button className="dtc-close" onClick={onClose}>×</button></div>
+        <div className="mb">
+          {result.error ? <div className="dtc-err">{result.error}</div> : null}
+          <div className="dtc-kv">
+            <span className="k">模型</span><span className="dtc-mono">{result.provider}/{result.model}</span>
+            <span className="k">耗时</span><span>{(result.elapsedMs / 1000).toFixed(1)}s</span>
+            <span className="k">dsh 交出的工具</span><span><b>{dshTools.length}</b> 个 · {hasBash ? <span className="dtc-pill dtc-p-bad">含 bash</span> : <span className="dtc-pill dtc-p-ok">不含 bash</span>}</span>
+          </div>
+          <p className="dtc-note">下面这份来自 session 日志的 <span className="dtc-mono">request/header</span>,是 dsh 真正交给模型的 schema 清单——不是模型自述。</p>
+          <div className="dtc-list">{dshTools.map(t => <div key={t} className="dtc-mono">{t}</div>)}</div>
+          {cli ? <div className="dtc-warn">{result.provider} 是 CLI 型 provider,自带 Bash / Edit 等原生工具,dsh 的围栏管不到它们。</div> : null}
+          <p className="dtc-note">模型的回答:</p>
+          <div className="dtc-answer">{result.answer || '(没有文本回复)'}</div>
+        </div>
+      </div>
+    </div>
+  )
+}

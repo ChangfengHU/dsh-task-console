@@ -1,0 +1,118 @@
+{
+  "name": "dsh-task-console",
+  "version": "0.31.6",
+  "description": "Local-first Agent presets and task orchestration for DeepSeek Harness, backed by SQLite.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./typert": {
+      "default": "./lib/typert.host.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./agent-tool-fence": {
+      "default": "./lib/agent-tool-fence.js"
+    },
+    "./filtered-mcp-client": {
+      "default": "./lib/filtered-mcp-client.js"
+    },
+    "./fleet-onboard-tools": {
+      "default": "./lib/fleet-onboard-tools.js"
+    },
+    "./fleet-runner-tools": {
+      "default": "./lib/fleet-runner-tools.js"
+    },
+    "./task-create-tools": {
+      "default": "./lib/task-create-tools.js"
+    },
+    "./proxy-mcp": {
+      "default": "./lib/proxy-mcp.js"
+    },
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "lib",
+    "src",
+    "presets",
+    "docs/proxy-mcp.md",
+    "docs/agent-actions.md",
+    "scripts/preset-skills.mjs",
+    "scripts/install-task-intake.mjs",
+    "scripts/install-task-create.mjs",
+    "scripts/patch-dsh-host.mjs",
+    "scripts/patch-task-mentions.mjs",
+    "scripts/patch-input-menu.mjs",
+    "scripts/patch-session-shortcuts.mjs",
+    "scripts/patch-history-ids.mjs",
+    "scripts/restore-history-tool-ids.mjs",
+    "prototype",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "host:patch": "node scripts/patch-dsh-host.mjs",
+    "preset:skills": "node scripts/preset-skills.mjs",
+    "preset:intake": "node scripts/install-task-intake.mjs",
+    "preset:creator": "node scripts/install-task-create.mjs",
+    "test": "NODE_ENV=test tsx --test test/*.test.ts",
+    "kernel:check": "npm --prefix cloudflare run check"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "agent-preset",
+    "task-console",
+    "agent-task-console"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ChangfengHU/dsh-task-console"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-mcp-client": "0.1.1-rc.2",
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "better-sqlite3": "12.4.1",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "^0.1.1-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "^0.1.1-rc.2"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh-tools": "0.1.1-rc.2",
+    "@deepseek-ai/dsh-typert-protocol": "0.1.1-rc.2",
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@types/better-sqlite3": "7.6.13",
+    "esbuild": "^0.25.12",
+    "tsx": "^4.23.13"
+  }
+}

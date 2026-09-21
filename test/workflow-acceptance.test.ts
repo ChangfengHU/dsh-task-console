@@ -1,0 +1,83 @@
+import assert from 'node:assert/strict'
+import { test } from 'node:test'
+import { createHash } from 'node:crypto'
+import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation, browserOperationOutcome } from '../src/workflow-acceptance.ts'
+
+function fixture() {
+  const now = 2_000_000, sessionId = 'task-example-current-3', requestId = 'accept-current', ip = '192.0.2.10'
+  const id = createHash('sha256').update(JSON.stringify([sessionId, requestId])).digest('hex').slice(0, 32)
+  const rows = [1, 2].map(instance => ({ instance, fingerprint: '1234abcd', firstCheckedAt: new Date(now - 1_200_000).toISOString(), checkedAt: new Date(now).toISOString(), expiresAt: new Date(now + 180_000).toISOString(), observedMs: 1_200_000, samples: 21 }))
+  const job: any = { id, action: 'login-acceptance', phase: 'complete', args: { ip, platform: 'gemini', instances: [1, 2], sessionId, requestId }, result: { stable: true, criterion: 'gemini-background-stability-v1', probeVersion: 3, requiredMs: 1_200_000, startedAt: rows[0].firstCheckedAt, completedAt: rows[0].checkedAt, instances: rows } }
+  const fleet: any = { nodes: [{ id: 'host-192-0-2-10', browsers: rows.map(r => ({ browserNo: r.instance, identities: { gemini: 'in' }, accounts: { gemini: { fingerprint: r.fingerprint, source: 'gemini-account-control' } }, loginVerification: { probeVersion: 3, status: 'verified', checkedAt: r.checkedAt, expiresAt: r.expiresAt } })) }] }
+  const input: any = { task: { workflowRecipe: { id: 'fleet-base-v2', login: 'provision-gemini' } }, batch: { firedAt: new Date(now - 1_300_000).toISOString(), turn: { targets: [{ kind: 'fleet-node', id: ip }] } }, profileId: 'browser-manager', sessionId, metadata: { browserAcceptanceOperationId: id } }
+  const deps = { now: () => now, receipt: async () => job, fleet: async () => fleet }
+  return { job, fleet, input, deps }
+}
+test('only a fresh running operation of this browser session prevents premature task_block', async () => {
+  const f=fixture(),job={id:'1'.repeat(32),args:{sessionId:f.input.sessionId},phase:'running',updatedAt:new Date(f.deps.now()-60000).toISOString()}
+  await assert.rejects(validateWorkflowBlock(f.input,{now:f.deps.now,jobs:async()=>[job]}),/browser_status/)
+  for(const change of [{phase:'blocked'},{phase:'complete'},{args:{sessionId:'other'}},{updatedAt:new Date(f.deps.now()-360001).toISOString()}])
+    await validateWorkflowBlock(f.input,{now:f.deps.now,jobs:async()=>[{...job,...change}]})
+  await validateWorkflowBlock({...f.input,profileId:'fleet-installer'},{jobs:async()=>{throw Error('must not read')}})
+})
+test('managed workflow accepts actual same-session stability and current Fleet readback', async () => {
+  const f = fixture(); await validateWorkflowCompletion(f.input, f.deps)
+})
+
+test('async wake carries fresh scoped terminal facts, not stale running prose or private payloads', async () => {
+  const f=fixture(),job={...f.job,updatedAt:new Date(f.deps.now()).toISOString(),secret:'never-forward',args:{...f.job.args,password:'never-forward'}}
+  const text=(await browserOperationOutcome(f.input,{now:f.deps.now,jobs:async()=>[job]}))!
+  assert.match(text,/BACKGROUND OPERATION UPDATE/); assert.match(text,/"phase":"complete"/)
+  assert.match(text,/"stable":true/); assert.match(text,/browser_status/); assert.match(text,/metadata.browserAcceptanceOperationId/)
+  assert.doesNotMatch(text,/never-forward|password|secret/)
+  for(const change of [{phase:'running'},{args:{sessionId:'other'}},{updatedAt:new Date(f.deps.now()-360001).toISOString()}])
+    assert.equal(await browserOperationOutcome(f.input,{now:f.deps.now,jobs:async()=>[{...job,...change}]}),undefined)
+  const blocked=await browserOperationOutcome(f.input,{now:f.deps.now,jobs:async()=>[{...job,phase:'blocked',error:'interactive-verification-required',result:undefined}]})
+  assert.match(blocked!,/interactive-verification-required/); assert.doesNotMatch(blocked!,/"stable":true/)
+  assert.equal(await browserOperationOutcome({...f.input,profileId:'fleet-installer'},{jobs:async()=>{throw Error('must not read')}}),undefined)
+})
+test('custom browser workflows retain only their own fresh live operation, independent of recipe', async () => {
+  const f=fixture(); delete f.input.task.workflowRecipe
+  const job={id:'b'.repeat(32),args:{sessionId:f.input.sessionId},phase:'running',updatedAt:new Date(f.deps.now()).toISOString()}
+  const deps={now:f.deps.now,jobs:async()=>[job]}
+  assert.match((await pendingBrowserOperation(f.input,deps))!,/running/)
+  await assert.rejects(validateWorkflowBlock(f.input,deps),/browser_status/)
+  for(const change of [{phase:'complete'},{args:{sessionId:'other'}},{updatedAt:new Date(f.deps.now()-360001).toISOString()}])
+    assert.equal(await pendingBrowserOperation(f.input,{...deps,jobs:async()=>[{...job,...change}]}),undefined)
+  assert.equal(await pendingBrowserOperation({...f.input,profileId:'fleet-installer'},{jobs:async()=>{throw Error('must not read')}}),undefined)
+})
+test('a job finishing between poll and task_block supplies its actual reason and input boundary',async()=>{
+  const f=fixture(),job={id:'a'.repeat(32),args:{sessionId:f.input.sessionId},phase:'blocked',error:'interactive-verification-required',updatedAt:new Date(f.deps.now()).toISOString()}
+  const result=await validateWorkflowBlock(f.input,{now:f.deps.now,jobs:async()=>[job]})
+  assert.equal(result?.kind,'needs_input');assert.match(result?.reason||'',/Google/)
+  job.error='login-resumption-not-verified'
+  assert.equal((await validateWorkflowBlock(f.input,{now:f.deps.now,jobs:async()=>[job]}))?.kind,'capability')
+})
+test('a summary or model-authored stable flag cannot replace a host receipt', async () => {
+  const f = fixture(); f.input.metadata = { stable: true, loginVerified: true }
+  await assert.rejects(validateWorkflowCompletion(f.input, f.deps), /缺少/)
+})
+test('wrong session/target, one browser, incomplete window and stale receipts are rejected', async () => {
+  for (const change of [
+    (f: any) => { f.job.args.sessionId = 'task-other' },
+    (f: any) => { f.job.args.ip = '192.0.2.20' },
+    (f: any) => { f.job.phase = 'blocked' },
+    (f: any) => { f.job.args.instances = [1] },
+    (f: any) => { f.job.result.requiredMs = 60_000 },
+    (f: any) => { f.job.result.probeVersion = 2 },
+    (f: any) => { f.job.result.startedAt = 'invalid' },
+    (f: any) => { f.job.result.instances[1].samples = 1 },
+    (f: any) => { f.job.result.instances[1].expiresAt = new Date(0).toISOString() },
+  ]) { const f = fixture(); change(f); await assert.rejects(validateWorkflowCompletion(f.input, f.deps), /验收未通过/) }
+})
+test('current Fleet disagreement blocks completion even after a stable historical receipt', async () => {
+  const f = fixture(); f.fleet.nodes[0].browsers[1].identities.gemini = 'out'
+  await assert.rejects(validateWorkflowCompletion(f.input, f.deps), /Fleet 当前/)
+})
+test('legacy, preserve and non-browser roles do not inherit Gemini business logic', async () => {
+  for (const change of [
+    (f: any) => { f.input.task.workflowRecipe.id = 'fleet-base-v1' },
+    (f: any) => { f.input.task.workflowRecipe.login = 'preserve' },
+    (f: any) => { f.input.profileId = 'fleet-installer' },
+  ]) { const f = fixture(); change(f); f.deps.receipt = async () => { throw Error('must not read') }; await validateWorkflowCompletion(f.input, f.deps) }
+})

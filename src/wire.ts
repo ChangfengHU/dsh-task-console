@@ -1,0 +1,248 @@
+/**
+ * Wire contract for the `taskConsole` Remote namespace — one frozen
+ * descriptor list shared by the host TYPERT manifest and the client Remote
+ * contribution, so the two faces cannot drift.
+ *
+ * Every method is string-in / string-out carrying JSON (Typert's only codec
+ * mode is `strict`, and a JSON string keeps that to one `z.string()` per
+ * side while the surface is still moving).
+ *
+ * @module dsh-task-console/wire
+ */
+
+import { z } from 'zod'
+
+// This key is part of DSH's persisted Typert remote registry. Keep it stable
+// across the product rename so an installed console can still reach its host.
+export const PKG = 'dsh-task-console'
+export const NAMESPACE = 'taskConsole'
+
+function jsonParam(name: string) {
+  return Object.freeze({
+    name,
+    wire: name,
+    source: 'json',
+    codec: Object.freeze({ mode: 'strict', typeSymbol: `${PKG}/types#Json`, schema: z.string() }),
+  })
+}
+
+const JSON_RESULT = Object.freeze({ mode: 'strict', typeSymbol: `${PKG}/types#Json`, schema: z.string() })
+
+function descriptor(method: string, argc: 0 | 1) {
+  return Object.freeze({
+    id: `${PKG}#${NAMESPACE}/${method}`,
+    service: NAMESPACE,
+    namespace: NAMESPACE,
+    method,
+    invocation: Object.freeze({ kind: 'direct' }),
+    parameters: Object.freeze(argc === 1 ? [jsonParam('payload')] : []),
+    result: JSON_RESULT,
+    sourceLocation: Object.freeze({ file: 'src/wire.ts', line: 1, column: 1 }),
+  })
+}
+
+/** Every method the console calls, in the order the service defines them. */
+export const METHODS = [
+  ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
+  ['startAgentSession', 1], ['sessionTurns', 1], ['agentHistory', 1],
+  ['sessionShortcuts', 0], ['setSessionShortcut', 1],
+  ['sessionCapabilities', 1],
+  ['exportConfig', 0], ['createConfigBootstrap', 1], ['previewConfigImport', 1], ['applyConfigImport', 1], ['installConfigRuntime', 1], ['configRuntimeStatus', 1],
+  ['agentActions', 1], ['saveAgentActions', 1], ['prepareAgentAction', 1], ['agentActionOptions', 1],
+  ['workflowCatalog', 0], ['launchWorkflow', 1],
+  ['taskActions', 1], ['saveTaskActions', 1], ['launchTaskAction', 1],
+  ['taskPlans', 1], ['taskPlan', 1], ['reviewTaskPlan', 1],
+  ['taskSchedule', 1], ['executionHistory', 1],
+  ['setTasksArchived', 1], ['setBatchArchived', 1],
+  ['submitTaskSignal', 1], ['taskSignal', 1], ['taskSignals', 1],
+  ['board', 0], ['tasks', 0], ['createTask', 1], ['setTaskEnabled', 1], ['deleteTask', 1], ['deleteTasks', 1], ['fireTask', 1], ['cancelRun', 1], ['taskEvents', 1],
+  ['taskSnapshot', 1], ['taskGraph', 1], ['taskArtifacts', 1], ['artifactContent', 1], ['publishArtifact', 1], ['reviewCard', 1], ['unblockCard', 1], ['agentActivity', 1],
+] as const
+
+export const CONSOLE_INVOCATIONS = Object.freeze(METHODS.map(([method, argc]) => descriptor(method, argc)))
+
+// ── shapes both faces read ─────────────────────────────────────────────
+
+/** One native tool the editor can put in a preset. */
+export interface NativeTool {
+  id: string
+  label: string
+  group: string
+  description: string
+  /** Whether the tool can change anything — drives the derived permission. */
+  writes: boolean
+}
+
+/** One MCP server the host composition currently runs. */
+export interface McpServer {
+  entryId: string
+  serverName: string
+  /** URL or command line, credentials hidden. */
+  target: string
+  /** Tools it registered right now (public `mcp__<server>__<tool>` names, prefix stripped). */
+  tools: string[]
+  disabled: boolean
+}
+
+/** One skill directory the editor can copy into a preset. */
+export interface SkillEntry {
+  name: string
+  dir: string
+  description: string
+  root: string
+}
+
+export interface Catalog {
+  tools: NativeTool[]
+  mcp: McpServer[]
+  skills: SkillEntry[]
+  models: string[]
+  defaultModel: string
+  /** Where authored presets land; null when no root accepts writes. */
+  userRoot: string | null
+  /** Registered workspaces, in sidebar order — where a task's sessions land. */
+  workspaces: { id: string; path: string; title: string }[]
+}
+
+/** What the editor authors; persisted beside the composition as task-console.json. */
+export interface AgentSpec {
+  id: string
+  name: string
+  description: string
+  persona: string
+  /** `provider/model`. */
+  model: string
+  effort: 'low' | 'medium' | 'high' | ''
+  /** DSH sandbox + approval bundle pinned before this Agent receives its first message. */
+  permissionPreset: 'workspace-write' | 'danger-full-access'
+  tools: string[]
+  /** Executor tool contracts this preset is authored to plan/review; grants no tools. */
+  taskExpertise?: string[]
+  /** Exact raw MCP tool names selected under each server. `*` reads legacy whole-server specs. */
+  mcpTools: Record<string, string[]>
+  /** Optional host-enforced argument constraints for selected MCP tools. */
+  mcpPolicy: Record<string, Record<string, McpToolPolicy>>
+  skills: string[]
+}
+
+export interface McpToolPolicy {
+  /** These arguments must be present before any value/pattern checks run. */
+  requiredArguments?: string[]
+  /** Argument must equal one of these values or start with one of these prefixes. */
+  valuesOrPrefixes?: Record<string, string[]>
+  /** Argument must match this regular expression when present. */
+  patterns?: Record<string, string>
+}
+
+/** One roster row, enriched with our spec when we authored it. */
+export interface AgentRow {
+  actionCount?: number
+  id: string
+  name: string
+  description: string
+  trust: 'system' | 'user'
+  broken?: string
+  path: string
+  spec: AgentSpec | null
+  /** Fixed authoring timestamp; absent for legacy presets, never inferred from mtime. */
+  createdAt?: string | null
+  firstUsedAt?: string | null
+}
+
+export interface AgentHistoryQuery {
+  agentId: string
+  kind: 'sessions' | 'tasks'
+  page?: number
+  pageSize?: number
+}
+
+export interface AgentSessionRow {
+  id: string
+  title: string
+  createdAt: string
+  status: string
+  kind: 'direct' | 'task'
+  available: boolean
+  tasks: { id: string; title: string; batchId?: string }[]
+}
+
+export interface AgentTaskRow {
+  id: string
+  title: string
+  createdAt: string
+  latestAt: string
+  batchId?: string
+  status: string
+  relations: ('creator' | 'participant')[]
+  executions: number
+}
+
+export interface AgentHistoryPage {
+  kind: AgentHistoryQuery['kind']
+  sessions: AgentSessionRow[]
+  tasks: AgentTaskRow[]
+  counts: { sessions: number; tasks: number }
+  total: number
+  page: number
+  pageSize: number
+  pages: number
+}
+
+export interface Preview {
+  yml: string
+  /** MCP servers renamed because the host still runs one with the same name. */
+  renamed: { from: string; to: string }[]
+  permission: 'read-only' | 'limited-write' | 'write'
+}
+
+export interface TryRunResult {
+  sessionId: string
+  provider: string
+  model: string
+  elapsedMs: number
+  /** Exactly what dsh handed the model on the first request. */
+  tools: string[]
+  answer: string
+  error?: string
+}
+
+// ── tasks (types live beside the fold; type-only import keeps node out of the client) ──
+export type { Artifact, Batch, BlockKind, Card, CardStatus, Event as TaskEvent, Participant, Run, RunOutcome, RunStatus, TaskOrigin, TaskSpec, TaskTarget, TaskTurn, Trigger, TurnLedger, TurnRow, StepRow, ToolRow } from './fold.ts'
+export type { TaskSignal, TaskSignalStatus, TaskSignalView, TaskIntakeDecision } from './task-intake.ts'
+export type { GraphEventRow, GraphFrame, GraphLinkRow, GraphRunRow, GraphSnapshot, GraphTaskRow } from './graph-data.ts'
+import type { Artifact as FoldArtifact } from './fold.ts'
+
+/** Browser-safe artifact row; the immutable host snapshot path never crosses the wire. */
+export type ArtifactView = Omit<FoldArtifact, 'storagePath'>
+
+/** One task detail read, avoiding a browser-side events → batch → artifacts waterfall. */
+export interface TaskSnapshot {
+  events: import('./fold.ts').Event[]
+  artifacts: ArtifactView[]
+  batchId: string | null
+}
+
+/** The board payload: every map as arrays, plus next cron fire per task. */
+export interface BoardView {
+  tasks: (TaskSpec & { nextFire: string | null })[]
+  batches: Batch[]
+  cards: Card[]
+  runs: Run[]
+}
+
+
+/** Legacy 0.4 projection served by `tasks()` until the 0.5 pages land. */
+export interface LegacyLeg { agentId: string; status: string; tries: number; sessionId?: string; startedAt?: string; endedAt?: string; handoff?: string; question?: string; error?: string }
+export interface LegacyRun {
+  id: string
+  taskId: string
+  firedAt: string
+  by: 'cron' | 'manual' | 'retry'
+  legs: LegacyLeg[]
+  settled?: { at: string; outcome: 'done' | 'failed' | 'cancelled' }
+  finalArtifact?: ArtifactView
+  /** Most recent registered delivery, even when it is not an HTML file. */
+  resultArtifact?: ArtifactView
+  rounds?: number
+  reworks?: number
+}

@@ -1,0 +1,809 @@
+/**
+ * The dispatcher — the host-resident loop that turns a fired batch into
+ * runs. Deterministic: no model decides who goes next.
+ *
+ * One tick (hermes' `_dispatch_once`): reap runs whose session is gone →
+ * promote cards whose deps are done → claim ready cards up to the
+ * concurrency cap → start a root session on the card's agent preset with
+ * the three terminator tools → watchdog. Every transition is an event.
+ *
+ * @module dsh-task-console/runner
+ */
+
+import type { Context } from '@deepseek-ai/cordis'
+import { randomUUID } from 'node:crypto'
+import { realpath } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
+import { applyAgentPermission } from './agent-session.ts'
+import { captureArtifacts } from './artifacts.ts'
+import { readSpec } from './presets.ts'
+import { EventStore, NUDGE, cardMessage, cronMatches, parseCron, taskForBatch, taskForTurn, type Batch, type BlockKind, type Card, type TaskSpec, type TaskTurn } from './tasks.ts'
+import { registerWorkerTools } from './worker-tools.ts'
+import { taskAgentIds } from './task-design.ts'
+import { ScheduleLedger, type ScheduleClaim } from './scheduler.ts'
+import { publicToolName } from './filtered-mcp-client.ts'
+import { dispatchNotification } from './notification-dispatch.ts'
+import { readBrowserAcceptance } from './workflow-acceptance.ts'
+
+interface Flight {
+  runId: string
+  cardId: string
+  taskId: string
+  sessionId: string
+  messageId: string
+  consumed: boolean
+  handle: any
+  disposeTools?: () => void
+  lastText: string
+  coreRunId: number
+  claimLock: string
+  profileId: string
+  /** Set by a terminator tool; the turn's end then finalizes the run. */
+  terminal?: { kind: 'completed' | 'review' | 'changes' | 'blocked' | 'deferred'; summary?: string; reason?: string; blockKind?: BlockKind; metadata?: Record<string, unknown>; reviewer?: string }
+  pendingAsk?: string
+  timer?: ReturnType<typeof setTimeout>
+  heartbeatTimer?: ReturnType<typeof setInterval>
+  idleTimer?: ReturnType<typeof setTimeout>
+  waitedForOperation?: boolean
+  timeoutSec: number
+  deadline?: number
+}
+
+export interface RunnerOptions {
+  maxInProgress?: number
+  now?: () => number
+  onBatchSettled?: (batch: Batch) => void | Promise<void>
+  onSessionCreated?: (sessionId: string) => void | Promise<void>
+  beforeComplete?: (input: CompletionCheck) => CompletionDecision | void | Promise<CompletionDecision | void>
+  beforeBlock?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
+  afterBlock?: (input: CompletionCheck) => Promise<void>
+  pendingOperation?: (input: CompletionCheck) => Promise<string | undefined>
+  operationOutcome?: (input: CompletionCheck) => Promise<string | undefined>
+  scheduledTurn?: (task: TaskSpec, occurrenceId: string) => Promise<TaskTurn | undefined>
+  beforePlanRound?: (input: CompletionCheck, items: unknown, proxyItems?: unknown) => Promise<{ items: unknown; commit: () => void } | undefined>
+  patrolStatus?: (input: CompletionCheck) => Promise<unknown>
+  notify?: (input: CompletionCheck, stage: string, deliver: (args: any) => Promise<any>) => Promise<unknown>
+}
+
+export interface BlockDecision { reason: string; kind: BlockKind }
+export interface CompletionDecision { summary: string; metadata: Record<string, unknown> }
+export interface CompletionCheck { task: TaskSpec; batch: Batch; card: Card; sessionId: string; profileId: string; metadata?: Record<string, unknown> }
+
+export interface FireOptions {
+  /** Stable IDs let an external signal resume safely after a host restart. */
+  batchId?: string
+  /** Signal-specific objective and dynamically selected Agent team. */
+  turn?: TaskTurn
+  scheduleClaim?: ScheduleClaim
+}
+
+export class TaskRunner {
+  private readonly ctx: Context
+  readonly store: EventStore
+  private flights = new Map<string, Flight>()
+  private ticker?: ReturnType<typeof setInterval>
+  schedule!: ScheduleLedger
+  private disposeListener?: () => void
+  private ticking = false
+  private dispatchSuspended = 0
+  readonly maxInProgress: number
+  private readonly clock: () => number
+  private readonly onBatchSettled?: (batch: Batch) => void | Promise<void>
+  private readonly onSessionCreated?: (sessionId: string) => void | Promise<void>
+  private readonly beforeComplete?: RunnerOptions['beforeComplete']
+  private readonly beforeBlock?: RunnerOptions['beforeBlock']
+  private readonly afterBlock?: RunnerOptions['afterBlock']
+  private readonly pendingOperation?: RunnerOptions['pendingOperation']
+  private readonly operationOutcome?: RunnerOptions['operationOutcome']
+  private readonly scheduledTurn?: RunnerOptions['scheduledTurn']
+  private readonly beforePlanRound?: RunnerOptions['beforePlanRound']
+  private readonly patrolStatus?: RunnerOptions['patrolStatus']
+  private readonly notify?: RunnerOptions['notify']
+
+  constructor(ctx: Context, store: EventStore, opts: RunnerOptions = {}) {
+    this.ctx = ctx; this.store = store
+    this.maxInProgress = opts.maxInProgress ?? 3
+    this.clock = opts.now ?? (() => Date.now())
+    this.onBatchSettled = opts.onBatchSettled
+    this.onSessionCreated = opts.onSessionCreated
+    this.beforeComplete = opts.beforeComplete
+    this.beforeBlock = opts.beforeBlock
+    this.afterBlock = opts.afterBlock
+    this.pendingOperation = opts.pendingOperation
+    this.operationOutcome = opts.operationOutcome
+    this.scheduledTurn = opts.scheduledTurn
+    this.beforePlanRound = opts.beforePlanRound
+    this.patrolStatus = opts.patrolStatus
+    this.notify = opts.notify
+  }
+
+  async start(): Promise<void> {
+    await this.store.load()
+    this.schedule = new ScheduleLedger(this.store)
+    // Runs still live in the projection belonged to a previous host process.
+    // Close the normalized core run first; the UI event is only its projection.
+    for (const r of this.store.s.runs.values()) {
+      if (r.status !== 'running' && r.status !== 'blocked') continue
+      const coreRunId = this.store.coreRunId(r.id)
+      if (coreRunId === undefined) continue
+      await this.store.transition(
+        () => this.store.kernel.failRun(r.cardId, { expectedRunId: coreRunId, outcome: 'crashed', error: '宿主重启,会话不在了' }),
+        result => result.ok ? { t: 'run/crashed', at: this.now(), taskId: r.taskId, runId: r.id, error: '宿主重启,会话不在了' } : undefined,
+      )
+    }
+    await this.settleBatches()
+    this.disposeListener = (this.ctx as any).on('session/event', (session: any, event: any) => this.onSessionEvent(session, event))
+    this.ticker = setInterval(() => { void this.tick() }, 60_000)
+    ;(this.ticker as any).unref?.()
+    ;(this.ctx as any).effect?.(() => () => this.stop(), 'task-console: runner')
+    await this.tick()
+  }
+
+  stop(): void {
+    if (this.ticker) clearInterval(this.ticker)
+    this.disposeListener?.()
+    for (const f of this.flights.values()) { this.disarm(f); this.stopHeartbeat(f); f.disposeTools?.() }
+  }
+
+  private now(): string { return new Date(this.clock()).toISOString() }
+  private append(e: any): Promise<void> { return this.store.append({ at: this.now(), ...e }) }
+
+  private async settleBatch(batch: Batch, outcome: 'done' | 'failed' | 'cancelled'): Promise<void> {
+    if (this.store.s.batches.get(batch.id)?.settled) return
+    await this.append({ t: 'batch/settled', taskId: batch.taskId, batchId: batch.id, outcome })
+    try { await this.onBatchSettled?.(this.store.s.batches.get(batch.id) ?? batch) }
+    catch (error) { console.warn(`[task-console] session archive failed for batch ${batch.id}:`, error) }
+  }
+
+  // ── the tick ──────────────────────────────────────────────────────────
+
+  async tick(): Promise<void> {
+    if (this.ticking || this.dispatchSuspended > 0) return
+    this.ticking = true
+    try {
+      await this.expireBlockedPatrols()
+      await this.wakeDueCards()
+      await this.fireDueCron()
+      await this.dispatch()
+    } finally { this.ticking = false }
+  }
+
+  /** A parked hourly patrol cannot suppress every future occurrence forever. */
+  private async expireBlockedPatrols(): Promise<void> {
+    for (const batch of this.store.s.batches.values()) {
+      const template = this.store.tasks.get(batch.taskId)
+      if (!template || template.archivedAt || batch.by !== 'cron' || batch.settled || batch.archivedAt) continue
+      const task = taskForBatch(template, batch)
+      if (task.design?.evidenceContract !== 'browser-patrol-v2') continue
+      const cards = batch.cardIds.map(id => this.store.s.cards.get(id)!).filter(Boolean)
+      if (cards.some(c => ['running','scheduled'].includes(c.status) || this.store.kernel.getTask(c.id)?.block_kind === 'needs_input')) continue
+      const expired = cards.filter(c => c.status === 'blocked' && c.startedAt && this.clock() >= Date.parse(c.startedAt) + task.timeoutSec * 1000)
+      if (!expired.length) continue
+      const db = this.store.kernel.db
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_proxy_calls'").get() &&
+        db.prepare("SELECT 1 FROM dsh_proxy_calls WHERE batch_id=? AND state IN ('running','unknown') LIMIT 1").get(batch.id)) continue
+      let pending = false
+      if (db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_browser_operations'").get()) {
+        const operations = db.prepare('SELECT operation_id FROM dsh_browser_operations WHERE batch_id=?').all(batch.id) as { operation_id:string }[]
+        for (const row of operations) {
+          try {
+            const receipt = await readBrowserAcceptance(row.operation_id)
+            if (!['complete','blocked'].includes(receipt.phase)) pending = true
+          } catch { pending = true }
+        }
+      }
+      for (const card of cards) {
+        const run = this.store.s.runs.get(card.runIds.at(-1) ?? '')
+        if (!run) continue
+        try {
+          if (await this.pendingOperation?.({ task, batch, card, sessionId: run.sessionId, profileId: run.profileId ?? card.agentId })) pending = true
+        } catch { pending = true } // Missing/ambiguous receipts never release the overlap fence.
+      }
+      if (pending) continue
+      for (const card of expired) await this.store.transition(
+        () => this.store.kernel.giveUpTask(card.id, '定时巡查阻塞超过本卡总时间预算；本次未通过，保留历史与修复预算，下次整点重新检查'),
+        ok => ok ? { t:'card/gave_up', at:this.now(), taskId:task.id, cardId:card.id, error:'定时巡查阻塞超时，非业务成功' } : undefined,
+      )
+      await this.settleBatches()
+    }
+  }
+
+  private async wakeDueCards(): Promise<void> {
+    const rows = this.store.kernel.db.prepare("SELECT w.card_id FROM dsh_task_wakeups w JOIN tasks t ON t.id=w.card_id WHERE w.state='pending' AND w.wake_at<=? AND t.status='scheduled'").all(this.clock()) as { card_id: string }[]
+    for (const row of rows) {
+      const card = this.store.s.cards.get(row.card_id)
+      if (!card || this.store.tasks.get(card.taskId)?.archivedAt || this.store.s.batches.get(card.batchId)?.archivedAt) continue
+      await this.store.transition(() => {
+        const ok = this.store.kernel.unblockTask(card.id)
+        if (ok) this.store.kernel.db.prepare("UPDATE dsh_task_wakeups SET state='resumed' WHERE card_id=?").run(card.id)
+        return ok
+      }, ok => ok ? { t: 'card/ready', at: this.now(), taskId: card.taskId, cardId: card.id } : undefined)
+    }
+  }
+
+  private async fireDueCron(): Promise<void> {
+    for (const task of this.store.tasks.values()) {
+      const claim = this.schedule.claim(task, this.clock())
+      if (!claim) continue
+      try { await this.fire(task.id, 'cron', { batchId: claim.batchId, scheduleClaim: claim }) }
+      catch (error) { this.schedule.failed(claim, this.clock(), error instanceof Error ? error.message : '定时派发失败') }
+    }
+  }
+
+  /** Promote, claim, spawn — bounded by the in-progress cap. */
+  private async dispatch(): Promise<void> {
+    await this.store.openReadyGates()
+    const s = this.store.s
+    this.store.kernel.promoteReadyTasks()
+    const core = this.store.kernel.listTasks()
+    for (const task of core.filter(row => row.status === 'ready')) {
+      const card = s.cards.get(task.id)
+      if (card?.status === 'todo') await this.append({ t: 'card/ready', taskId: card.taskId, cardId: card.id })
+    }
+    let inProgress = core.filter(row => row.status === 'running').length
+    const automatedReview = (cardId: string) => {
+      const event = this.store.kernel.listEvents(cardId).filter(row => row.kind === 'review_requested').at(-1)
+      if (!event?.payload) return false
+      try { return !!JSON.parse(event.payload).reviewer } catch { return false }
+    }
+    const ready = core.filter(row => row.status === 'ready' || (row.status === 'review' && automatedReview(row.id)))
+      .map(row => s.cards.get(row.id)).filter(Boolean) as Card[]
+    ready.sort((a, b) => a.batchId.localeCompare(b.batchId) || Number(a.role === 'notifier') - Number(b.role === 'notifier') || a.index - b.index)
+    for (const c of ready) {
+      if (inProgress >= this.maxInProgress) break
+      const template = this.store.tasks.get(c.taskId); if (!template || template.archivedAt) continue
+      const batch = this.store.s.batches.get(c.batchId); if (!batch || batch.settled || batch.archivedAt) continue
+      const task = taskForBatch(template, batch)
+      if (c.consecutiveFailures > 0 && (c.role === 'notifier' || task.onFail !== 'retry' || c.consecutiveFailures >= task.maxTries)) {
+        const failure = c.error ?? `连续失败 ${c.consecutiveFailures} 次`
+        await this.store.transition(
+          () => this.store.kernel.giveUpTask(c.id, failure),
+          ok => ok ? { t: 'card/gave_up', at: this.now(), taskId: c.taskId, cardId: c.id, error: failure } : undefined,
+        )
+        await this.settleBatches(); continue
+      }
+      await this.startRun(task, batch, c)
+      inProgress++
+    }
+    await this.settleBatches()
+  }
+
+  /** Close batches whose cards are all terminal; cancel cards a failure made unreachable. */
+  private async settleBatches(): Promise<void> {
+    for (const b of this.store.s.batches.values()) {
+      if (b.settled || b.archivedAt || this.store.tasks.get(b.taskId)?.archivedAt) continue
+      const cards = b.cardIds.map(id => this.store.s.cards.get(id)).filter(Boolean) as Card[]
+      if (!cards.length) continue
+      const dead = cards.filter(c => c.status === 'failed' || c.status === 'cancelled')
+      if (dead.length) {
+        if (dead.every(c => c.role === 'notifier')) {
+          if (cards.every(c => ['done','failed','cancelled'].includes(c.status))) await this.settleBatch(b,'failed')
+          continue
+        }
+        for (const c of cards) if (c.status === 'todo' || c.status === 'ready') {
+          await this.store.transition(
+            () => this.store.kernel.cancelTask(c.id, '上游失败，任务不可达'),
+            ok => ok ? { t: 'card/cancelled', at: this.now(), taskId: b.taskId, cardId: c.id } : undefined,
+          )
+        }
+        const stillLive = cards.some(c => c.status === 'running' || c.status === 'blocked')
+        if (!stillLive) await this.settleBatch(b, dead.some(c => c.status === 'failed') ? 'failed' : 'cancelled')
+        continue
+      }
+      if (cards.every(c => c.status === 'done')) {
+        const unresolved = cards.some(c => c.runIds.some(id => this.store.s.runs.get(id)?.metadata?.workflowOutcome === 'unresolved'))
+        await this.settleBatch(b, unresolved ? 'failed' : 'done')
+      }
+    }
+  }
+
+  // ── firing ────────────────────────────────────────────────────────────
+
+  /** Create a batch (one card per participant, chained) and dispatch. */
+  async fire(taskId: string, by: Batch['by'], options: FireOptions = {}): Promise<Batch> {
+    const template = this.store.tasks.get(taskId)
+    if (!template) throw new Error('没有这个任务')
+    if (template.archivedAt) throw new Error('任务已归档，请先恢复')
+    const batchId = options.batchId ?? `b-${this.clock().toString(36)}${Math.random().toString(36).slice(2, 5)}`
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(batchId)) throw new Error('batchId 不合法')
+    const existing = this.store.s.batches.get(batchId)
+    if (existing) {
+      if (existing.taskId !== taskId) throw new Error('batchId 已被其他任务使用')
+      return existing
+    }
+    if (template.trigger.kind === 'cron' && !options.turn && this.scheduledTurn) options = { ...options, turn: await this.scheduledTurn(template, batchId) }
+    const task = taskForTurn(template, options.turn)
+    if (!options.turn && (template.origin?.signalId || [...this.store.s.batches.values()].some(b => b.taskId === taskId && b.turn?.origin?.signalId))) {
+      throw new Error('外部 Signal 任务请从来源系统重新提交，由 Task Agent 重新核对目标与角色；不能重跑旧模板。')
+    }
+    if (task.graphMode === 'dynamic-rounds' && task.participants.length !== 3) throw new Error('动态回合必须有规划者、执行者、评估者')
+    const cards = task.graphMode === 'dynamic-rounds'
+      ? [{ id: `${batchId}#p1`, agentId: task.participants[0].agentId, ...(task.participants[0].brief ? { brief: task.participants[0].brief } : {}), deps: [], kind: 'agent' as const, role: 'planner' as const, round: 1 }]
+      : task.participants.map((p, i) => ({ id: `${batchId}#${i}`, agentId: p.agentId, ...(p.brief ? { brief: p.brief } : {}), deps: i ? [`${batchId}#${i - 1}`] : [] }))
+    await this.store.createBatch(template, { t: 'batch/fired', at: this.now(), taskId, batch: { id: batchId, by, cards, ...(options.turn ? { turn: options.turn } : {}) } }, options.scheduleClaim)
+    const problem = await this.preflight(task)
+    if (problem) {
+      const first = cards[0]
+      const runId = `${first.id}#1`
+      const failure = `预检不过:${problem}`
+      const claim = await this.store.claimCard(first.id, runId, '', 1)
+      if (claim) {
+        await this.store.transition(
+          () => this.store.kernel.failRun(first.id, { expectedRunId: claim.run.id, outcome: 'failed', error: failure }),
+          result => result.ok ? { t: 'run/failed', at: this.now(), taskId, runId, outcome: 'failed', error: failure } : undefined,
+        )
+        await this.store.transition(
+          () => this.store.kernel.giveUpTask(first.id, failure),
+          ok => ok ? { t: 'card/gave_up', at: this.now(), taskId, cardId: first.id, error: failure } : undefined,
+        )
+      }
+      await this.settleBatches()
+    } else {
+      await this.tick()
+    }
+    return this.store.s.batches.get(batchId)!
+  }
+
+  private async preflight(task: TaskSpec): Promise<string | null> {
+    const presets = (this.ctx as any).get('agentPresets')
+    if (!presets) return '这个部署没有 preset 服务'
+    for (const id of taskAgentIds(task)) {
+      try { const r = await presets.resolve(id); if (r.broken) return `preset ${id} 坏了:${r.broken}` } catch { return `preset ${id} 不在名册上` }
+    }
+    try { const { stat } = await import('node:fs/promises'); if (!(await stat(task.cwd)).isDirectory()) return `工作目录不存在:${task.cwd}` } catch { return `工作目录不存在:${task.cwd}` }
+    return null
+  }
+
+  // ── one run ───────────────────────────────────────────────────────────
+
+  private async startRun(task: TaskSpec, batch: Batch, card: Card): Promise<void> {
+    const presets = (this.ctx as any).get('agentPresets')
+    const coreTask = this.store.kernel.getTask(card.id)
+    if (!coreTask || !['ready', 'review'].includes(coreTask.status)) return
+    const fromReview = coreTask.status === 'review'
+    const profileId = coreTask.assignee ?? card.agentId
+    const preset = await presets.resolve(profileId)
+    const spec = await readSpec(dirname(String(preset.path)))
+    const agentName = spec?.name ?? preset.name ?? preset.id
+    let selection: any = (() => { try { return (this.ctx as any).get('agentDefaultModel')?.currentSelection?.() } catch { return undefined } })()
+    if (spec?.model?.includes('/')) { const [provider, ...rest] = spec.model.split('/'); selection = { provider, model: rest.join('/'), ...(spec.effort ? { reasoningEffort: spec.effort } : {}) } }
+
+    const attempt = this.store.kernel.listRuns(card.id).length + 1
+    const runId = `${card.id}#${attempt}`
+    const sessionId = `task-${task.id}-${batch.id}-${card.index + 1}${attempt > 1 ? `-t${attempt}` : ''}`.toLowerCase().replace(/[^a-z0-9-]/g, '-')
+    this.nameCache.set(profileId, agentName)
+    const upstream: { agentName: string; summary: string }[] = []
+    const prior = new Map<string, Card>()
+    const collect = (id: string) => {
+      const d = this.store.s.cards.get(id)
+      if (!d || prior.has(id) || !batch.cardIds.includes(id)) return
+      prior.set(id, d)
+      // A reusable workflow's final role needs original ancestor receipts, not only a rewritten immediate handoff.
+      if (d.kind === 'gate' || task.origin?.source === 'task-chat' && task.graphMode !== 'dynamic-rounds') d.deps.forEach(collect)
+    }
+    card.deps.forEach(collect)
+    for (const d of [...prior.values()].sort((a, b) => a.index - b.index)) upstream.push({ agentName: await this.displayName(d.agentId), summary: d.summary ?? '' })
+    const previousWait = this.store.kernel.db.prepare('SELECT reason,wake_at FROM dsh_task_wakeups WHERE card_id=?').get(card.id) as any
+    const resumeFacts = card.runIds.length ? await this.operationOutcome?.({task,batch,card,sessionId,profileId}) : undefined
+    const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}${resumeFacts ? '\n[RESUME FACTS]\n'+resumeFacts : ''}${previousWait ? `\n[RESUMED DURABLE WAIT]\nDue: ${new Date(previousWait.wake_at).toISOString()}\n${previousWait.reason}\nContinue verification; do not repeat completed side effects.` : ''}`
+    const messageId = randomUUID()
+    const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview)
+    if (!claim) return
+    const flight: Flight = {
+      runId, cardId: card.id, taskId: task.id, sessionId, messageId, consumed: false,
+      handle: undefined, lastText: '', timeoutSec: card.role === 'notifier' ? 300 : task.timeoutSec,
+      coreRunId: claim.run.id, claimLock: claim.lock, profileId,
+      ...(previousWait ? { deadline: Date.parse(card.startedAt ?? this.now()) + task.timeoutSec * 1000 } : {}),
+    }
+    this.flights.set(sessionId, flight)
+    this.startHeartbeat(flight)
+    try {
+      // The normalized CAS claim is durable before a DSH session is created.
+      flight.handle = await (this.ctx as any).agents.create({
+        sessionId,
+        ...(selection ? { agentOptions: selection } : {}),
+        meta: { cwd: task.cwd, agentPreset: preset.id },
+        setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
+      })
+      applyAgentPermission(this.ctx, spec, flight.handle.agent.session)
+      await this.onSessionCreated?.(sessionId)
+      this.store.kernel.recordEvent(card.id, 'session_created', { session_id: sessionId }, flight.coreRunId)
+      await this.append({ t: 'run/session_created', taskId: task.id, runId, sessionId })
+      // The terminators live on this agent's scope only.
+      try {
+        const submit = async (kind: 'completed' | 'review', summary: string, paths: string[], metadata?: Record<string, unknown>, reviewer?: string) => {
+          if (flight.terminal) throw new Error('这次运行已经提交了终态')
+          const pending = await this.pendingOperation?.({ task, batch, card, sessionId, profileId })
+          if (pending) throw new Error(`后台操作仍在运行，继续读取终态回执，不能提前提交验收：${pending}`)
+          if (kind === 'completed' || task.design?.evidenceContract === 'browser-patrol-v1') {
+            const observed = await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata })
+            if (observed) { summary = observed.summary; metadata = observed.metadata }
+          }
+          const at = this.now()
+          const captured = await captureArtifacts({ root: this.store.root, task, batchId: batch.id, cardId: card.id, runId, sessionId, at }, paths)
+          for (const artifact of captured) await this.append({ t: 'artifact/registered', at, taskId: task.id, artifact })
+          flight.terminal = { kind, summary, metadata, reviewer }
+        }
+        flight.disposeTools = await registerWorkerTools(flight.handle.agent.ctx, {
+          ...(task.design?.notifications && ['planner','notifier'].includes(card.role ?? '') && this.notify ? { notify: (stage: string, exec: any) => this.notify!({ task, batch, card, sessionId, profileId }, stage, async args => {
+            const runtime = flight.handle.agent.ctx.tools
+            const names = Object.entries(spec?.mcpTools ?? {}).flatMap(([server, selected]) => selected.filter(raw => raw.replace(/-/g, '_') === 'vyibc_wecom_send_message').flatMap(raw => [publicToolName(server, raw), publicToolName(`${server}-${profileId}`, raw)]))
+            const tool = runtime.schemas(flight.handle.agent).find((s: any) => names.includes(s.name))
+            if (!tool) throw new Error('当前通知角色未配置企业微信发送 MCP')
+            return dispatchNotification(runtime, flight.handle.agent, tool.name, args, exec)
+          }) } : {}),
+          ...(task.design?.evidenceContract === 'browser-patrol-v2' && this.patrolStatus ? { patrolStatus: () => this.patrolStatus!({ task, batch, card, sessionId, profileId }) } : {}),
+          wait: async (until, reason) => {
+            if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            if (task.design?.evidenceContract === 'browser-patrol-v2' && card.role !== 'reviewer')
+              throw new Error('巡查v2的分时独立复验由下游评估者负责，当前角色不能 task_wait 等待评估者采样。执行者完成本轮动作并取得后台终态后调用 task_complete 交接；规划者根据证据创建下一轮或收口。ready=false 不代表执行者不能交接。')
+            const wakeAt = Date.parse(until), deadline = Date.parse(card.startedAt ?? this.now()) + task.timeoutSec * 1000
+            if (!/(Z|[+-]\d\d:\d\d)$/.test(until) || !Number.isFinite(wakeAt) || wakeAt < this.clock() + 60_000 || wakeAt > deadline || !reason.trim() || reason.length > 4000) throw new Error('等待需要带时区、至少一分钟且不超过本卡总时间预算的时间及简短理由')
+            if (await this.pendingOperation?.({ task, batch, card, sessionId, profileId })) throw new Error('后台操作仍在运行，先继续查询原操作回执')
+            if (task.design?.evidenceContract === 'browser-patrol-v2') await this.patrolStatus?.({ task, batch, card, sessionId, profileId })
+            const ok = await this.store.transition(() => this.store.kernel.deferTask(card.id, flight.coreRunId, wakeAt, reason.trim()), changed => changed ? { t: 'run/deferred', at: this.now(), taskId: task.id, runId: flight.runId, wakeAt: new Date(wakeAt).toISOString(), reason: reason.trim() } : undefined)
+            if (!ok) throw new Error('等待被拒绝，当前 Run 已变化')
+            flight.terminal = { kind: 'deferred' }
+          },
+          complete: async (summary, artifacts, metadata) => submit('completed', summary, artifacts, metadata),
+          requestReview: async (summary, artifacts, metadata, reviewer) => {
+            if (task.graphMode === 'dynamic-rounds') throw new Error('动态 DAG 使用独立评估卡，调用 task_complete 交给下游')
+            await submit('review', summary, artifacts, metadata, reviewer)
+          },
+          requestChanges: async (reason) => {
+            if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            const claim = this.store.kernel.listEvents(flight.cardId).findLast(e => e.run_id === flight.coreRunId && e.kind === 'claimed')
+            if (task.graphMode === 'dynamic-rounds' || JSON.parse(claim?.payload || '{}').source_status !== 'review') throw new Error('不是同卡评审；通过 task_complete 将返工结论交给规划者')
+            flight.terminal = { kind: 'changes', reason }
+          },
+          block: async (reason, kind) => {
+            if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            if (kind === 'dependency' && card.role === 'planner' && task.design?.notifications?.agentId) {
+              const notice = this.store.kernel.db.prepare(`SELECT t.id FROM tasks t JOIN task_links l ON l.child_id=t.id
+                WHERE l.parent_id=? AND t.role='notifier' AND t.status='todo' LIMIT 1`).get(card.id)
+              if (notice) throw new Error('通知员依赖当前规划者先交接，不能反向等待 sent。已排队后根据真实证据 task_plan_round 或 task_finalize；宿主仍等待通知员结束才结算整次执行。')
+            }
+            if (card.role === 'notifier') {
+              this.store.kernel.recordEvent(card.id,'notification_blocked',{reason,kind},flight.coreRunId)
+              flight.terminal = {kind:'completed',summary:`通知未完成：${reason}`,metadata:{workflowOutcome:'unresolved',notificationBlocked:true}}
+              return
+            }
+            const observed = await this.beforeBlock?.({ task, batch, card, sessionId, profileId, metadata:{requestedBlock:{reason,kind}} })
+            flight.terminal = { kind: 'blocked', reason: observed?.reason ?? reason, blockKind: observed?.kind ?? kind }
+          },
+          planRound: async (summary, items, proxyItems) => {
+            if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            const plan = await this.beforePlanRound?.({ task, batch, card, sessionId, profileId }, items, proxyItems)
+            if (plan) summary += `\n[FROZEN ROUND ITEMS]\n${JSON.stringify(plan.items)}`
+            await this.store.expandRound(task, batch, card, summary, plan?.commit)
+            flight.terminal = { kind: 'completed', summary, metadata: { decision: card.round === 1 ? 'planned' : 'rework', round: card.round } }
+          },
+          finalize: async (summary, artifactPath, disposition = 'passed') => {
+            if (flight.terminal) throw new Error('这次运行已经提交了终态')
+            if (disposition === 'unresolved' && task.design?.evidenceContract !== 'browser-patrol-v2') throw new Error('仅巡查v2允许明确的未解决收口')
+            const verified = await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata: { patrolDisposition: disposition } })
+            if (disposition === 'unresolved' && verified?.metadata.workflowOutcome !== 'unresolved') throw new Error('未通过宿主未解决收口检查')
+            if (verified) summary = verified.summary
+            let finalArtifactId: string | undefined
+            if (artifactPath) {
+              let originalPath: string
+              try { originalPath = await realpath(resolve(task.cwd, artifactPath)) } catch { throw new Error(`最终产物不存在:${artifactPath}`) }
+              const candidates = [...this.store.s.artifacts.values()].filter(row => row.batchId === batch.id && row.originalPath === originalPath)
+              const selected = candidates.sort((a, b) => {
+                const ac = this.store.s.cards.get(a.cardId); const bc = this.store.s.cards.get(b.cardId)
+                const executor = Number(ac?.role === 'executor') - Number(bc?.role === 'executor')
+                return executor || (ac?.round ?? 0) - (bc?.round ?? 0) || a.createdAt.localeCompare(b.createdAt)
+              }).at(-1)
+              if (!selected) throw new Error(`最终产物尚未通过 task_complete 登记:${artifactPath}`)
+              finalArtifactId = selected.id
+            }
+            flight.terminal = { kind: 'completed', summary, metadata: { ...verified?.metadata, decision: 'approved', round: card.round, ...(finalArtifactId ? { finalArtifactId } : {}) } }
+          },
+        }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner', dynamicRounds: task.graphMode === 'dynamic-rounds', nativeEvidence: task.design?.evidenceContract === 'browser-patrol-v2' })
+      } catch (error) { console.warn('[task-console] worker tools not registered:', error) }
+      try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }
+      try {
+        const registry = (this.ctx as any).get('workspaceRegistry')
+        const ws = registry ? (await registry.resolveByPath(task.cwd).catch(() => undefined)) ?? (await registry.create(task.cwd).catch(() => undefined)) : undefined
+        await ws?.attachSession?.(sessionId)
+      } catch { /* cosmetic */ }
+      flight.handle.agent.followup({ id: messageId, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
+      this.store.kernel.recordEvent(card.id, 'prompt_dispatched', { message_id: messageId }, flight.coreRunId)
+      await this.append({ t: 'run/prompt_dispatched', taskId: task.id, runId, messageId })
+      this.arm(flight)
+    } catch (error) {
+      try { await flight.handle?.dispose?.() } catch { /* original startup error wins */ }
+      this.flights.delete(sessionId)
+      this.stopHeartbeat(flight)
+      this.store.kernel.failRun(card.id, { expectedRunId: flight.coreRunId, outcome: 'failed', error: error instanceof Error ? error.message : String(error) })
+      await this.append({ t: 'run/failed', taskId: task.id, runId, error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  /** The watchdog counts working time only: it pauses while a person is being waited on. */
+  private arm(f: Flight): void {
+    if (f.timer) clearTimeout(f.timer)
+    f.timer = setTimeout(() => { void this.finish(f, 'run/timed_out', 'timed_out', `${f.timeoutSec} 秒没交卷`) }, f.deadline ? Math.max(0, f.deadline - this.clock()) : f.timeoutSec * 1000)
+    ;(f.timer as any).unref?.()
+  }
+  private disarm(f: Flight): void { if (f.timer) { clearTimeout(f.timer); f.timer = undefined } }
+
+  private startHeartbeat(f: Flight): void {
+    this.stopHeartbeat(f)
+    f.heartbeatTimer = setInterval(() => {
+      if (!this.store.kernel.heartbeat(f.cardId, f.coreRunId, f.claimLock, undefined, `session=${f.sessionId}`)) {
+        console.warn(`[task-console] heartbeat refused: ${f.cardId} core run ${f.coreRunId}`)
+      }
+    }, 60_000)
+    ;(f.heartbeatTimer as any).unref?.()
+  }
+
+  private stopHeartbeat(f: Flight): void {
+    if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
+    if (f.heartbeatTimer) { clearInterval(f.heartbeatTimer); f.heartbeatTimer = undefined }
+  }
+
+  private nameCache = new Map<string, string>()
+  private async displayName(id: string): Promise<string> {
+    const hit = this.nameCache.get(id); if (hit) return hit
+    try { const p = await (this.ctx as any).get('agentPresets').resolve(id); const spec = await readSpec(dirname(String(p.path))); const name = spec?.name ?? p.name ?? id; this.nameCache.set(id, name); return name } catch { return id }
+  }
+
+  // ── session events ────────────────────────────────────────────────────
+
+  private onSessionEvent(session: any, event: any): void {
+    const f = this.flights.get(session?.id); if (!f) return
+    const run = this.store.s.runs.get(f.runId)
+    switch (event.type) {
+      case 'user/message':
+        if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
+        if (event.data?.id === f.messageId) f.consumed = true
+        else if (run?.status === 'blocked' && event.data?.source?.kind === 'user' && f.terminal?.kind === 'blocked') {
+          // A person answered in the session: the block is over, the run continues.
+          f.terminal = undefined
+          this.arm(f)
+          void this.append({ t: 'run/resumed', taskId: f.taskId, runId: f.runId })
+        }
+        break
+      case 'tool/call':
+        if (String(event.data?.name ?? '').endsWith('ask_user_question')) {
+          let q = ''
+          try { const a = JSON.parse(event.data.arguments ?? '{}'); q = a.questions?.[0]?.question ?? a.question ?? JSON.stringify(a).slice(0, 200) } catch { q = String(event.data.arguments ?? '').slice(0, 200) }
+          f.pendingAsk = event.data.callId
+          this.disarm(f)
+          void this.append({ t: 'run/blocked', taskId: f.taskId, runId: f.runId, kind: 'needs_input', reason: q })
+        }
+        break
+      case 'tool/result':
+        if (f.pendingAsk && event.data?.message?.source?.callId === f.pendingAsk) {
+          f.pendingAsk = undefined
+          this.arm(f)
+          void this.append({ t: 'run/resumed', taskId: f.taskId, runId: f.runId })
+        }
+        break
+      case 'assistant/message': {
+        const blocks = event.data?.message?.content
+        if (Array.isArray(blocks)) { const t = blocks.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n').trim(); if (t) f.lastText = t }
+        break
+      }
+      case 'turn/end':
+        if (!f.consumed) break
+        void this.onTurnEnd(f, event.data?.reason)
+        break
+    }
+  }
+
+  private async onTurnEnd(f: Flight, reason: any): Promise<void> {
+    if (!this.flights.has(f.sessionId)) return
+    if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
+    if (reason && reason.kind !== 'completed') { await this.finish(f, 'run/failed', 'failed', JSON.stringify(reason)); return }
+    const t = f.terminal
+    if (t?.kind === 'deferred') {
+      this.flights.delete(f.sessionId); this.disarm(f); this.stopHeartbeat(f); f.disposeTools?.()
+      try { await f.handle?.dispose?.() } catch { /* already closed */ }
+      await this.tick(); return
+    }
+    if (t?.kind === 'completed') { await this.finish(f, 'run/completed', 'completed', undefined, t.summary, false, t.metadata); return }
+    if (t?.kind === 'review') { await this.finish(f, 'run/review_requested', 'review', undefined, t.summary, false, t.metadata, t.reviewer); return }
+    if (t?.kind === 'changes') { await this.finishChanges(f, t.reason ?? 'changes requested'); return }
+    if (t?.kind === 'blocked') { await this.finishBlocked(f, t.reason ?? 'blocked', t.blockKind ?? 'needs_input'); return }
+    const run = this.store.s.runs.get(f.runId)
+    if (run?.status === 'blocked') return   // ask_user_question in flight
+    const card = this.store.s.cards.get(f.cardId), batch = card && this.store.s.batches.get(card.batchId)
+    const base = this.store.tasks.get(f.taskId)
+    let outcomeNotice: string | undefined
+    if (card && batch && base && this.pendingOperation) {
+      try {
+        const pending = await this.pendingOperation({ task: taskForBatch(base, batch), batch, card, sessionId: f.sessionId, profileId: f.profileId })
+        if (!this.flights.has(f.sessionId)) return
+        if (pending) {
+          f.waitedForOperation = true
+          // An async operation outlives a model turn. Retain its live Run/CAS
+          // binding; poll receipts without LLM calls, without extending timeout.
+          f.idleTimer = setTimeout(() => { void this.onTurnEnd(f, reason) }, 30_000)
+          ;(f.idleTimer as any).unref?.()
+          return
+        }
+        if (f.waitedForOperation) {
+          outcomeNotice = await this.operationOutcome?.({ task: taskForBatch(base, batch), batch, card, sessionId: f.sessionId, profileId: f.profileId })
+          f.waitedForOperation = false
+        }
+      } catch { await this.finish(f, 'run/failed', 'failed', '无法核验后台操作状态，未宣称完成'); return }
+    }
+    const nativeEvidence = !!base && !!batch && taskForBatch(base,batch).design?.evidenceContract === 'browser-patrol-v2' && card?.role !== 'planner'
+    const maxNudges = nativeEvidence ? 2 : 1
+    if ((run?.nudges ?? 0) < maxNudges) {
+      await this.append({ t: 'run/nudged', taskId: f.taskId, runId: f.runId })
+      const correction = nativeEvidence ? `${(run?.nudges ?? 0) > 0 ? '最后一次协议纠正。' : ''}上次只有普通文本，没有执行交卷工具。现在请实际调用 task_complete，仅传 JSON 对象 {"summary":"简短如实交接"}，省略 metadata 和 artifacts；或实际调用 task_block 说明阻塞。宿主自动读取证据，不接受你口述成功。不要复查或重发业务操作，不要再次只输出“我将调用”的文字。` : NUDGE
+      f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: outcomeNotice ? `${outcomeNotice}\n\n${correction}` : correction }], source: { kind: 'user' } })
+      return
+    }
+    await this.finish(f, 'run/failed', 'protocol_violation', `经过 ${maxNudges} 次协议纠正仍未调用 task_complete / task_block`)
+  }
+
+  private async finish(f: Flight, t: 'run/completed' | 'run/review_requested' | 'run/failed' | 'run/timed_out' | 'run/cancelled', outcome: string, error?: string, summary?: string, giveUpNow = false, metadata?: Record<string, unknown>, reviewer?: string): Promise<void> {
+    if (!this.flights.has(f.sessionId)) return
+    this.flights.delete(f.sessionId)
+    if (f.timer) clearTimeout(f.timer)
+    this.stopHeartbeat(f)
+    f.disposeTools?.()
+    try { await f.handle?.dispose?.() } catch { /* already gone */ }
+    let changed = false
+    if (t === 'run/completed') {
+      changed = await this.store.transition(
+        () => this.store.kernel.completeTask(f.cardId, { expectedRunId: f.coreRunId, summary: summary ?? f.lastText, metadata }),
+        ok => ok ? { t, at: this.now(), taskId: f.taskId, runId: f.runId, summary: summary ?? f.lastText, ...(metadata ? { metadata } : {}) } : undefined,
+      )
+    } else if (t === 'run/review_requested') {
+      changed = await this.store.transition(
+        () => this.store.kernel.requestReview(f.cardId, { expectedRunId: f.coreRunId, summary: summary ?? f.lastText, metadata, reviewer }),
+        ok => ok ? { t, at: this.now(), taskId: f.taskId, runId: f.runId, summary: summary ?? f.lastText, ...(metadata ? { metadata } : {}), ...(reviewer ? { reviewer } : {}) } : undefined,
+      )
+    } else {
+      const mapped = outcome === 'timed_out' ? 'timed_out' : outcome === 'cancelled' ? 'cancelled' : outcome === 'protocol_violation' ? 'protocol_violation' : 'failed'
+      const result = await this.store.transition(
+        () => {
+          const failed = this.store.kernel.failRun(f.cardId, { expectedRunId: f.coreRunId, outcome: mapped, error })
+          if (failed.ok && mapped === 'cancelled' && !this.store.kernel.cancelTask(f.cardId, error ?? '人工取消')) throw new Error(`无法归档已取消任务 ${f.cardId}`)
+          return failed
+        },
+        value => value.ok ? { t, at: this.now(), taskId: f.taskId, runId: f.runId, outcome: outcome as any, error } : undefined,
+      )
+      changed = result.ok
+    }
+    if (!changed) {
+      console.warn(`[task-console] stale terminal transition refused: ${f.cardId} core run ${f.coreRunId}`)
+      await this.tick(); return
+    }
+    if (t === 'run/completed' && metadata?.decision === 'approved' && typeof metadata.finalArtifactId === 'string') {
+      const artifact = this.store.s.artifacts.get(metadata.finalArtifactId)
+      const card = this.store.s.cards.get(f.cardId)
+      if (artifact && card?.role === 'planner' && artifact.batchId === card.batchId) {
+        await this.append({ t: 'artifact/finalized', taskId: f.taskId, batchId: artifact.batchId, artifactId: artifact.id, artifactCardId: artifact.cardId, cardId: f.cardId, runId: f.runId, sha256: artifact.sha256 })
+      }
+    }
+    if (giveUpNow) {
+      const c = this.store.s.cards.get(f.cardId)
+      if (c && c.status !== 'failed') await this.store.transition(
+        () => this.store.kernel.giveUpTask(f.cardId, error ?? outcome),
+        ok => ok ? { t: 'card/gave_up', at: this.now(), taskId: f.taskId, cardId: f.cardId, error: error ?? outcome } : undefined,
+      )
+    }
+    await this.tick()
+  }
+
+  private async finishBlocked(f: Flight, reason: string, kind: BlockKind): Promise<void> {
+    if (!this.flights.has(f.sessionId)) return
+    this.flights.delete(f.sessionId)
+    if (f.timer) clearTimeout(f.timer)
+    this.stopHeartbeat(f)
+    f.disposeTools?.()
+    try { await f.handle?.dispose?.() } catch { /* already gone */ }
+    const ok = await this.store.transition(
+      () => this.store.kernel.blockTask(f.cardId, { expectedRunId: f.coreRunId, reason, kind }),
+      changed => changed ? { t: 'run/blocked', at: this.now(), taskId: f.taskId, runId: f.runId, kind, reason, terminal: true } : undefined,
+    )
+    if (!ok) console.warn(`[task-console] stale block refused: ${f.cardId} core run ${f.coreRunId}`)
+    if (ok && this.afterBlock) {
+      const card=this.store.s.cards.get(f.cardId)!,batch=this.store.s.batches.get(card.batchId)!,base=this.store.tasks.get(f.taskId)!
+      try { await this.afterBlock({task:taskForBatch(base,batch),batch,card,sessionId:f.sessionId,profileId:f.profileId}) }
+      catch { console.warn('[task-console] blocked notification could not be queued; original block retained') }
+    }
+    await this.tick()
+  }
+
+  private async finishChanges(f: Flight, reason: string): Promise<void> {
+    if (!this.flights.has(f.sessionId)) return
+    this.flights.delete(f.sessionId)
+    if (f.timer) clearTimeout(f.timer)
+    this.stopHeartbeat(f)
+    f.disposeTools?.()
+    try { await f.handle?.dispose?.() } catch { /* already gone */ }
+    const result = await this.store.transition(
+      () => this.store.kernel.requestChanges(f.cardId, { expectedRunId: f.coreRunId, reason }),
+      value => value.ok ? { t: 'card/changes_requested', at: this.now(), taskId: f.taskId, cardId: f.cardId, runId: f.runId, note: reason, targetCardId: f.cardId, reviewer: f.profileId } : undefined,
+    )
+    if (!result.ok) console.warn(`[task-console] request_changes refused: ${result.error}`)
+    await this.tick()
+  }
+
+  async cancelBatch(batchId: string): Promise<void> {
+    const b = this.store.s.batches.get(batchId); if (!b) return
+    if (b.archivedAt) throw new Error('执行记录已归档，历史状态保持不变')
+    this.dispatchSuspended++
+    try {
+      for (const f of [...this.flights.values()]) { const r = this.store.s.runs.get(f.runId); if (r?.batchId === batchId) await this.finish(f, 'run/cancelled', 'cancelled', '人工取消') }
+      for (const id of b.cardIds) {
+        // A previous failed terminal transition can leave a claimed run without a Flight.
+        const core = this.store.kernel.getTask(id)
+        if (core?.current_run_id) {
+          const run = [...this.store.s.runs.values()].find(r => r.cardId === id && r.status === 'running')
+          if (run) await this.store.transition(
+            () => this.store.kernel.failRun(id, { expectedRunId: core.current_run_id!, outcome: 'cancelled', error: '人工取消批次：清理遗留运行' }),
+            result => result.ok ? { t: 'run/cancelled', at: this.now(), taskId: b.taskId, runId: run.id, outcome: 'cancelled', error: '人工取消批次：清理遗留运行' } : undefined,
+          )
+        }
+        const c = this.store.s.cards.get(id)
+        const remaining = this.store.kernel.getTask(id)
+        if (c && remaining && remaining.current_run_id === null && !['done', 'archived'].includes(remaining.status)) await this.store.transition(
+          () => this.store.kernel.cancelTask(id, '人工取消批次'),
+          ok => ok ? { t: 'card/cancelled', at: this.now(), taskId: b.taskId, cardId: id } : undefined,
+        )
+      }
+      if (!this.store.s.batches.get(batchId)?.settled) await this.settleBatch(b, 'cancelled')
+    } finally {
+      this.dispatchSuspended--
+    }
+    await this.tick()
+  }
+
+  /** Resolve the explicit human review gate for one card. */
+  async reviewCard(cardId: string, decision: 'approve' | 'changes', note = '', targetCardId?: string): Promise<void> {
+    const card = this.store.s.cards.get(cardId)
+    if (card && this.store.s.batches.get(card.batchId)?.archivedAt) throw new Error('执行记录已归档，历史状态保持不变')
+    if (!card || card.status !== 'review' || !card.currentRunId && !card.runIds.length) throw new Error('这张卡不在待验收状态')
+    const runId = card.runIds[card.runIds.length - 1]
+    if (decision === 'approve') {
+      const ok = await this.store.transition(
+        () => this.store.kernel.completeTask(cardId, { summary: note.trim() || 'Human review approved.', metadata: { approval: 'human' } }),
+        changed => changed ? { t: 'card/review_approved', at: this.now(), taskId: card.taskId, cardId, runId, ...(note.trim() ? { note: note.trim() } : {}) } : undefined,
+      )
+      if (!ok) throw new Error('核心任务状态已经变化，无法批准')
+    } else {
+      if (!note.trim()) throw new Error('退回修改时必须写明原因')
+      const target = this.store.s.cards.get(targetCardId ?? card.deps[0] ?? card.id)
+      if (!target || target.batchId !== card.batchId || target.index > card.index) throw new Error('返工目标必须是同一运行中当前角色或它的上游')
+      const affected = [...this.store.s.cards.values()].filter(row => row.batchId === card.batchId && row.index >= target.index && row.index <= card.index).sort((a, b) => a.index - b.index)
+      await this.store.transition(
+        () => {
+          for (const row of affected) {
+            const ok = this.store.kernel.reopenForChanges(row.id, {
+              reason: note.trim(), assignee: row.agentId, forceTodo: row.id !== target.id, sourceTaskId: card.id,
+            })
+            if (!ok) throw new Error(`无法重开核心任务 ${row.id}`)
+          }
+          return true
+        },
+        () => ({ t: 'card/changes_requested', at: this.now(), taskId: card.taskId, cardId, runId, note: note.trim(), targetCardId: target.id }),
+      )
+    }
+    await this.tick()
+  }
+
+  /** Hermes unblock semantics: a blocked run stays closed and a new run is claimed. */
+  async unblockCard(cardId: string): Promise<void> {
+    const card = this.store.s.cards.get(cardId)
+    if (card && this.store.s.batches.get(card.batchId)?.archivedAt) throw new Error('执行记录已归档；请新建执行重新检查，不改写历史阻塞')
+    if (!card || card.status !== 'blocked') throw new Error('这张卡不在阻塞状态')
+    if (card.wakeAt && Date.parse(card.wakeAt) > this.clock()) throw new Error('定时等待尚未到期，不能提前当作复验完成')
+    const ok = await this.store.transition(
+      () => this.store.kernel.unblockTask(cardId),
+      changed => changed && this.store.kernel.getTask(cardId)?.status === 'ready' ? { t: 'card/ready', at: this.now(), taskId: card.taskId, cardId } : undefined,
+    )
+    if (!ok) throw new Error('核心任务状态已经变化，无法解除阻塞')
+    await this.tick()
+  }
+
+  /** Remember display names so upstream handoffs read "from 巡检员", not "from inspector". */
+  rememberName(id: string, name: string): void { this.nameCache.set(id, name) }
+}

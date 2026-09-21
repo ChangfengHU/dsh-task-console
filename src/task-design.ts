@@ -2,7 +2,7 @@
 export interface TaskDesign {
   evidenceContract?: 'browser-patrol-v1' | 'browser-patrol-v2'
   browserPatrol?: { scope: 'fleet-existing-authorized'; actions: ('provision' | 'resume' | 'recover')[]; observationMinutes: number; minSamples: number; excludedNodeIds?: string[]; scheduleActivation?: 'completed-patrol'; resumeAfterCopyLimit?: 1 }
-  notifications?: { channel: 'wecom'; chatIds: string[]; agentId?: string }
+  notifications?: { channel: 'wecom'; chatIds: string[]; agentId?: string; mode?: 'final-handoff' }
   proxy?: { agentId: string; lineId: string; maxAttempts: number }
   scope: string
   branches: { id: string; when: string; action: string; evidence: string }[]
@@ -37,9 +37,11 @@ export function validateDesign(value: unknown): TaskDesign {
   }
   if (d.notifications !== undefined) {
     const n = d.notifications
-    if (d.evidenceContract !== 'browser-patrol-v2' || n.channel !== 'wecom' || !Array.isArray(n.chatIds) || !n.chatIds.length || n.chatIds.length > 5 || n.chatIds.some(id => typeof id !== 'string' || !/^[A-Za-z0-9@_.:-]{1,200}$/.test(id))) throw new Error('通知需要明确的企业微信群 chatIds；不能默认发送给全部群')
+    if (!n || Object.keys(n).some(k=>!['channel','chatIds','agentId','mode'].includes(k)) || n.channel !== 'wecom' || !Array.isArray(n.chatIds) || !n.chatIds.length || n.chatIds.length > 5 || n.chatIds.some(id => typeof id !== 'string' || !/^[A-Za-z0-9@_.:-]{1,200}$/.test(id))) throw new Error('通知需要明确的企业微信群 chatIds；不能默认发送给全部群')
     if (n.agentId !== undefined && (typeof n.agentId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(n.agentId))) throw new Error('通知员 agentId 不合法')
-    notifications = { channel: 'wecom', chatIds: [...new Set(n.chatIds)], ...(n.agentId ? { agentId: n.agentId } : {}) }
+    if (n.mode !== undefined && n.mode !== 'final-handoff') throw new Error('未知通知模式')
+    if (d.evidenceContract !== 'browser-patrol-v2' && (n.mode !== 'final-handoff' || !n.agentId)) throw new Error('通用任务通知必须使用 final-handoff 模式并明确通知员')
+    notifications = { channel: 'wecom', chatIds: [...new Set(n.chatIds)], ...(n.agentId ? { agentId: n.agentId } : {}), ...(n.mode ? { mode:n.mode } : {}) }
   }
   if (d.evidenceContract === 'browser-patrol-v2') {
     const p = d.browserPatrol

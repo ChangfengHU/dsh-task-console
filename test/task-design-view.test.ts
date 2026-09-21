@@ -15,5 +15,5 @@ test('shared design view renders delegated notifications without a review-page p
   assert.match(JSON.stringify(TaskDesignView({design})),/fixture scope/)
   design.notifications={channel:'wecom',chatIds:['fixture-group'],agentId:'wecom-notifier'}
   const tree=JSON.stringify(TaskDesignView({design}))
-  assert.match(tree,/wecom-notifier/);assert.match(tree,/通知失败不重跑浏览器/)
+  assert.match(tree,/wecom-notifier/);assert.match(tree,/通知失败不重跑上游业务/)
 })

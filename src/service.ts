@@ -104,7 +104,7 @@ export class TaskConsoleService extends TypertRemoteService {
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
       beforeComplete: async input => {
-        if (input.card.role === 'notifier') return new TaskNotifications(this.runner.store).complete(input)
+        if (input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId) return new TaskNotifications(this.runner.store).complete(input)
         const proxy = new ProxyWorkflow(this.runner.store)
         if (proxy.pending(input)) throw new Error('代理后台操作仍在运行，继续查询原操作回执')
         const proxyReport = proxy.complete(input)
@@ -149,11 +149,11 @@ export class TaskConsoleService extends TypertRemoteService {
       },
       patrolStatus: async input => {
         const outbox = new TaskNotifications(this.runner.store)
-        return { ...(input.card.role === 'notifier' ? outbox.job(input) : (await this.patrolWorkflow(input)).snapshot(input)), notifications:outbox.rows(input.batch.id), proxy:new ProxyWorkflow(this.runner.store).status(input) }
+        return { ...(input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId ? outbox.job(input) : (await this.patrolWorkflow(input)).snapshot(input)), notifications:outbox.rows(input.batch.id), proxy:new ProxyWorkflow(this.runner.store).status(input) }
       },
       notify: async (input, stage, deliver) => {
         const outbox = new TaskNotifications(this.runner.store)
-        if (input.card.role === 'notifier') return outbox.send(input,stage as NotificationStage,undefined,deliver)
+        if (input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId) return outbox.send(input,stage as NotificationStage,undefined,deliver)
         const report = (await this.patrolWorkflow(input)).snapshot(input)
         return input.task.design?.notifications?.agentId ? outbox.request(input,stage as NotificationStage,report) : outbox.send(input,stage as NotificationStage,report,deliver)
       },

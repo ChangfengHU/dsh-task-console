@@ -1,6 +1,6 @@
 import { registerStudioSpeechTools } from './studio-speech-tools.js'
 import { StudioOperations } from './studio-operations.js'
-import { refreshStudioCapabilities, observeStudioAudio, checkStudioSpeech } from './studio-host.js'
+import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech } from './studio-host.js'
 import { registerStudioTools } from './studio-tools.js'
 import { StudioWorkflow } from './studio-workflow.js'
 /**
@@ -111,7 +111,7 @@ export class TaskConsoleService extends TypertRemoteService {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
       registerStudioTools: async (agentCtx,input,isActive) => {
         const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
-        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,...locks,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
+        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,...locks,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
         try { const speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});return ()=>{speech();media()} } catch(e){media();throw e}
       },
       beforeStart: async input => {
@@ -374,7 +374,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const rows=all.filter(p=>!q.query||`${p.name??''} ${p.id}`.toLowerCase().includes(q.query.toLowerCase())).sort((a,b)=>String(created.get(b.id)??'').localeCompare(String(created.get(a.id)??''))||a.id.localeCompare(b.id))
     const total=rows.length,pages=Math.max(1,Math.ceil(total/10)),page=Math.min(q.page??1,pages),selected=rows.slice((page-1)*10,page*10)
     const load=async(p:any,detail=false)=>{const dir=dirname(String(p.path)),spec=p.trust==='user'?await readSpec(dir):null;return {id:p.id,name:spec?.name??p.name??p.id,description:spec?.description??p.description??'',trust:p.trust,broken:p.broken,path:dir,createdAt:created.get(p.id),firstUsedAt:null,
-      permission:spec?(spec.tools.some(t=>['bash','fs','str-replace-editor'].includes(t))?'write':Object.values(spec.mcpTools).some(t=>t.length)?'limited-write':'read-only'):null,spec:detail?spec:null}}
+      permission:spec?(spec.tools.some(t=>['bash','fs','fs-text','str-replace-editor'].includes(t))?'write':Object.values(spec.mcpTools).some(t=>t.length)?'limited-write':'read-only'):null,spec:detail?spec:null}}
     const detailId=q.id==='new'?undefined:q.id??selected[0]?.id, detailPreset=detailId?all.find(p=>p.id===detailId):undefined
     if(q.id&&q.id!=='new'&&!detailPreset)throw Error('没有这个 Agent')
     const detail=detailPreset?{...await load(detailPreset,true),firstUsedAt:firstAgentUse(await this.sessionHeaders()).get(detailPreset.id)??null}:null

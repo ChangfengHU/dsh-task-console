@@ -1,6 +1,9 @@
+import { validateStudioPolicy, type StudioPolicy } from './studio-policy.js'
+
 /** An explicit, reviewable Agent decision contract; not executable JavaScript. */
 export interface TaskDesign {
-  evidenceContract?: 'browser-patrol-v1' | 'browser-patrol-v2'
+  evidenceContract?: 'browser-patrol-v1' | 'browser-patrol-v2' | 'studio-video-v1'
+  studio?: StudioPolicy
   browserPatrol?: { scope: 'fleet-existing-authorized'; actions: ('provision' | 'resume' | 'recover')[]; observationMinutes: number; minSamples: number; excludedNodeIds?: string[]; scheduleActivation?: 'completed-patrol'; resumeAfterCopyLimit?: 1 }
   notifications?: { channel: 'wecom'; chatIds: string[]; agentId?: string }
   proxy?: { agentId: string; lineId: string; maxAttempts: number }
@@ -13,7 +16,7 @@ export interface TaskDesign {
 
 export function validateDesign(value: unknown): TaskDesign {
   const d = value as TaskDesign
-  if (d && Object.keys(d).some(key => !['evidenceContract','browserPatrol','notifications','proxy','scope','branches','coordination','failurePolicy','acceptance'].includes(key)))
+  if (d && Object.keys(d).some(key => !['evidenceContract','studio','browserPatrol','notifications','proxy','scope','branches','coordination','failurePolicy','acceptance'].includes(key)))
     throw new Error('计划包含当前插件不支持的设计字段；不能将未实现的代理支线或跨任务 Gate 当成可执行能力')
   const text = (v: unknown, name: string) => {
     if (typeof v !== 'string' || !v.trim() || v.length > 4000) throw new Error(`计划 ${name} 必须是非空文本（最多4000字符）`)
@@ -24,7 +27,11 @@ export function validateDesign(value: unknown): TaskDesign {
     return v.map(x => text(x, name))
   }
   if (!d || !Array.isArray(d.branches) || !d.branches.length || d.branches.length > 16) throw new Error('计划 design.branches 需要1至16个有证据要求的条件分支')
-  if (d.evidenceContract !== undefined && !['browser-patrol-v1', 'browser-patrol-v2'].includes(d.evidenceContract)) throw new Error('未知 evidenceContract')
+  if (d.evidenceContract !== undefined && !['browser-patrol-v1', 'browser-patrol-v2', 'studio-video-v1'].includes(d.evidenceContract)) throw new Error('未知 evidenceContract')
+  const isStudio = d.evidenceContract === 'studio-video-v1'
+  if (d.studio !== undefined && !isStudio) throw Error('studio 字段仅适用于 studio-video-v1')
+  if (isStudio && (d.browserPatrol !== undefined || d.notifications !== undefined || d.proxy !== undefined)) throw Error('studio-video-v1 不支持巡查、代理或通知支线')
+  const studio = isStudio ? validateStudioPolicy(d.studio) : undefined
   let browserPatrol: TaskDesign['browserPatrol']
   let notifications: TaskDesign['notifications']
   let proxy: TaskDesign['proxy']
@@ -37,6 +44,7 @@ export function validateDesign(value: unknown): TaskDesign {
   }
   if (d.notifications !== undefined) {
     const n = d.notifications
+    if (!n || Object.keys(n).some(k => !['channel','chatIds','agentId'].includes(k))) throw Error('notifications 包含未知字段')
     if (d.evidenceContract !== 'browser-patrol-v2' || n.channel !== 'wecom' || !Array.isArray(n.chatIds) || !n.chatIds.length || n.chatIds.length > 5 || n.chatIds.some(id => typeof id !== 'string' || !/^[A-Za-z0-9@_.:-]{1,200}$/.test(id))) throw new Error('通知需要明确的企业微信群 chatIds；不能默认发送给全部群')
     if (n.agentId !== undefined && (typeof n.agentId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(n.agentId))) throw new Error('通知员 agentId 不合法')
     notifications = { channel: 'wecom', chatIds: [...new Set(n.chatIds)], ...(n.agentId ? { agentId: n.agentId } : {}) }
@@ -61,13 +69,16 @@ export function validateDesign(value: unknown): TaskDesign {
     }
   }
   const branches = d.branches.map(b => {
+    if (!b || Object.keys(b).some(k => !['id','when','action','evidence'].includes(k))) throw Error('branch 包含未知字段')
     if (!/^[a-z][a-z0-9-]{0,47}$/.test(b?.id)) throw new Error('分支 id 需使用短英文编码')
     return { id: b.id, when: text(b.when, 'when'), action: text(b.action, 'action'), evidence: text(b.evidence, 'evidence') }
   })
   if (new Set(branches.map(b => b.id)).size !== branches.length) throw new Error('分支 id 不能重复')
-  if (typeof d.failurePolicy?.isolateItems !== 'boolean' || !Number.isInteger(d.failurePolicy.maxAttempts) || d.failurePolicy.maxAttempts < 1 || d.failurePolicy.maxAttempts > 3)
-    throw new Error('failurePolicy 需要 isolateItems 和 1至3 的 maxAttempts；它不授权重复有副作用的操作')
-  return { ...(d.evidenceContract ? { evidenceContract: d.evidenceContract } : {}), ...(browserPatrol ? { browserPatrol } : {}), ...(notifications ? { notifications } : {}), ...(proxy ? {proxy} : {}), scope: text(d.scope, 'scope'), branches, coordination: text(d.coordination, 'coordination'),
+  if (d.failurePolicy && Object.keys(d.failurePolicy).some(k => !['isolateItems','maxAttempts','stopConditions'].includes(k))) throw Error('failurePolicy 包含未知字段')
+  const maxAttempts = isStudio ? 8 : 3
+  if (typeof d.failurePolicy?.isolateItems !== 'boolean' || !Number.isInteger(d.failurePolicy.maxAttempts) || d.failurePolicy.maxAttempts < 1 || d.failurePolicy.maxAttempts > maxAttempts)
+    throw new Error(`failurePolicy 需要 isolateItems 和 1至${maxAttempts} 的 maxAttempts；它不授权重复有副作用的操作`)
+  return { ...(studio ? {studio} : {}), ...(d.evidenceContract ? { evidenceContract: d.evidenceContract } : {}), ...(browserPatrol ? { browserPatrol } : {}), ...(notifications ? { notifications } : {}), ...(proxy ? {proxy} : {}), scope: text(d.scope, 'scope'), branches, coordination: text(d.coordination, 'coordination'),
     failurePolicy: { isolateItems: d.failurePolicy.isolateItems, maxAttempts: d.failurePolicy.maxAttempts, stopConditions: list(d.failurePolicy.stopConditions, 'stopConditions') },
     acceptance: list(d.acceptance, 'acceptance') }
 }

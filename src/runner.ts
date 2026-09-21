@@ -54,6 +54,8 @@ export interface RunnerOptions {
   now?: () => number
   onBatchSettled?: (batch: Batch) => void | Promise<void>
   onSessionCreated?: (sessionId: string) => void | Promise<void>
+  registerStudioTools?: (agentCtx: any, input: CompletionCheck, isActive: () => boolean) => Promise<() => void>
+  beforeStart?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
   beforeComplete?: (input: CompletionCheck) => CompletionDecision | void | Promise<CompletionDecision | void>
   beforeBlock?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
   afterBlock?: (input: CompletionCheck) => Promise<void>
@@ -90,6 +92,8 @@ export class TaskRunner {
   private readonly clock: () => number
   private readonly onBatchSettled?: (batch: Batch) => void | Promise<void>
   private readonly onSessionCreated?: (sessionId: string) => void | Promise<void>
+  private readonly registerStudioTools?: RunnerOptions['registerStudioTools']
+  private readonly beforeStart?: RunnerOptions['beforeStart']
   private readonly beforeComplete?: RunnerOptions['beforeComplete']
   private readonly beforeBlock?: RunnerOptions['beforeBlock']
   private readonly afterBlock?: RunnerOptions['afterBlock']
@@ -106,6 +110,8 @@ export class TaskRunner {
     this.clock = opts.now ?? (() => Date.now())
     this.onBatchSettled = opts.onBatchSettled
     this.onSessionCreated = opts.onSessionCreated
+    this.registerStudioTools = opts.registerStudioTools
+    this.beforeStart = opts.beforeStart
     this.beforeComplete = opts.beforeComplete
     this.beforeBlock = opts.beforeBlock
     this.afterBlock = opts.afterBlock
@@ -398,6 +404,9 @@ export class TaskRunner {
     this.flights.set(sessionId, flight)
     this.startHeartbeat(flight)
     try {
+      // Host preflight runs after a durable claim, before any model or paid work.
+      const blocked = await this.beforeStart?.({ task, batch, card, sessionId, profileId })
+      if (blocked) { await this.finishBlocked(flight, blocked.reason, blocked.kind); return }
       // The normalized CAS claim is durable before a DSH session is created.
       flight.handle = await (this.ctx as any).agents.create({
         sessionId,
@@ -499,8 +508,17 @@ export class TaskRunner {
             }
             flight.terminal = { kind: 'completed', summary, metadata: { ...verified?.metadata, decision: 'approved', round: card.round, ...(finalArtifactId ? { finalArtifactId } : {}) } }
           },
-        }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner', dynamicRounds: task.graphMode === 'dynamic-rounds', nativeEvidence: task.design?.evidenceContract === 'browser-patrol-v2' })
-      } catch (error) { console.warn('[task-console] worker tools not registered:', error) }
+        }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner', dynamicRounds: task.graphMode === 'dynamic-rounds', nativeEvidence: ['browser-patrol-v2','studio-video-v1'].includes(task.design?.evidenceContract ?? '') })
+      } catch (error) {
+        if (task.design?.evidenceContract === 'studio-video-v1') throw error
+        console.warn('[task-console] worker tools not registered:', error)
+      }
+      if (task.design?.evidenceContract === 'studio-video-v1') {
+        if (!this.registerStudioTools) throw Error('studio-runtime-tools-unavailable')
+        const disposeWorker = flight.disposeTools
+        const disposeStudio = await this.registerStudioTools(flight.handle.agent.ctx, {task,batch,card,sessionId,profileId}, () => this.flights.get(sessionId) === flight && !flight.terminal)
+        flight.disposeTools = () => { disposeStudio(); disposeWorker?.() }
+      }
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }
       try {
         const registry = (this.ctx as any).get('workspaceRegistry')

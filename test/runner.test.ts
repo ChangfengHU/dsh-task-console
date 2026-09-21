@@ -1131,3 +1131,14 @@ test('runner: concurrency cap holds across batches; restart marks live runs cras
   assert.equal([...store2.s.runs.values()].filter(r => r.outcome === 'crashed').length, 2, 'the two live runs crashed on restart')
   runner2.stop()
 })
+
+
+test('host preflight blocks a durable run before creating any agent or dispatching prompt', async () => {
+  const { runner, store, host } = await setup({}, {beforeStart: () => ({kind:'capability',reason:'blocked_quality_capability: actual audio unavailable'})})
+  const batch = await runner.fire('T','manual')
+  assert.equal(host.sessions.size, 0)
+  const cards = [...store.s.cards.values()].filter(c => c.batchId === batch.id)
+  assert.ok(cards.some(c => c.status === 'blocked'))
+  assert.ok([...store.s.runs.values()].some(r => r.status === 'blocked'))
+  assert.ok(!store.all().some(e => e.t === 'run/prompt_dispatched'))
+})

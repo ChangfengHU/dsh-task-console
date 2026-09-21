@@ -1,3 +1,6 @@
+import { refreshStudioCapabilities, observeStudioAudio } from './studio-host.js'
+import { registerStudioTools } from './studio-tools.js'
+import { StudioWorkflow } from './studio-workflow.js'
 /**
  * The `taskConsole` Remote service.
  *
@@ -103,7 +106,16 @@ export class TaskConsoleService extends TypertRemoteService {
     super(ctx, NAMESPACE)
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
+      registerStudioTools: (agentCtx,input,isActive) => registerStudioTools(agentCtx,{input,workflow:new StudioWorkflow(this.runner.store),isActive,audioObserve:args=>observeStudioAudio(input.task,args)}),
+      beforeStart: async input => {
+        if (input.task.design?.evidenceContract !== 'studio-video-v1') return
+        const workflow = new StudioWorkflow(this.runner.store)
+        await refreshStudioCapabilities(workflow,input.task)
+        const result = workflow.preflight(input.task)
+        if (!result.ok) return { kind: 'capability', reason: result.reason ?? 'blocked_quality_capability' }
+      },
       beforeComplete: async input => {
+        if (input.task.design?.evidenceContract === 'studio-video-v1') return new StudioWorkflow(this.runner.store).complete(input)
         if (input.card.role === 'notifier') return new TaskNotifications(this.runner.store).complete(input)
         const proxy = new ProxyWorkflow(this.runner.store)
         if (proxy.pending(input)) throw new Error('代理后台操作仍在运行，继续查询原操作回执')
@@ -140,6 +152,7 @@ export class TaskConsoleService extends TypertRemoteService {
       operationOutcome: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? (input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input)),
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
       beforePlanRound: async (input, items, proxyItems) => {
+        if (input.task.design?.evidenceContract === 'studio-video-v1') { new StudioWorkflow(this.runner.store).plan(input); return }
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2') return
         const patrol = await this.patrolWorkflow(input); patrol.snapshot(input)
         new TaskNotifications(this.runner.store).requireStage(input,input.card.round === 1 ? 'started' : 'rework')

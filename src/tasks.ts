@@ -1,3 +1,4 @@
+import { validateDesign } from './task-design.js'
 /**
  * Store, validation, and the message a card receives. The model itself
  * lives in ./fold.ts (pure, shared with the browser).
@@ -618,7 +619,10 @@ export function validateTask(raw: unknown, agentIds: Set<string>): TaskSpec {
   const onFail = s.onFail === 'retry' ? 'retry' : 'stop'
   const graphMode = s.graphMode === 'dynamic-rounds' ? 'dynamic-rounds' : 'static-chain'
   if (graphMode === 'dynamic-rounds' && participants.length !== 3) throw new Error('动态回合必须依次选择 3 位参与者:规划者、执行者、评估者')
+  const design = s.design === undefined ? undefined : validateDesign(s.design)
+  if (design?.evidenceContract === 'studio-video-v1' && (graphMode !== 'dynamic-rounds' || new Set(participants.map(p => p.agentId)).size !== 3)) throw Error('studio-video-v1 需要三个不同的规划、制作、审查 Agent')
   return {
+    ...(design ? {design} : {}),
     id: String(s.id ?? '') || `T-${Date.now().toString(36)}`,
     title, brief, trigger, participants,
     graphMode,

@@ -1,0 +1,59 @@
+/** Run-scoped media tools. Paths and evidence hashes are host-derived, never model claims. */
+import {createHash} from 'node:crypto'
+import {createReadStream} from 'node:fs'
+import {realpath,readFile,stat,mkdir,mkdtemp} from 'node:fs/promises'
+import {resolve,relative,sep,basename,extname,join} from 'node:path'
+import {execFile} from 'node:child_process'
+import {promisify} from 'node:util'
+const run=promisify(execFile)
+export const STUDIO_TOOL_NAMES=['studio_status','studio_register_candidate','studio_read_text','studio_inspect_frames','studio_inspect_probe','studio_inspect_audio','studio_submit_review'] as const
+const hash=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex')
+export async function fileSha256(path:string){const h=createHash('sha256');for await(const b of createReadStream(path))h.update(b);return h.digest('hex')}
+export async function studioPath(cwd:string,value:string,text=false){
+ if(typeof value!=='string'||!value||value.includes('\0'))throw Error('studio-invalid-path')
+ const root=await realpath(cwd),p=await realpath(resolve(root,value)),rel=relative(root,p)
+ if(!rel||rel==='..'||rel.startsWith(`..${sep}`)||resolve(root,rel)!==p)throw Error('studio-path-outside-project')
+ if(text&&rel.split(sep).some(s=>s.startsWith('.')||/credential|secret|token|password|private.?key/i.test(s)))throw Error('studio-sensitive-path')
+ if(!(await stat(p)).isFile())throw Error('studio-file-required')
+ return p
+}
+export interface StudioToolOptions {input:any;workflow:any;isActive:()=>boolean;audioObserve?:(value:{wavPath:string;start:number;end:number})=>Promise<any>;runCommand?:(file:string,args:string[])=>Promise<{stdout:string}>}
+export async function registerStudioTools(agentCtx:any,options:StudioToolOptions):Promise<()=>void>{
+ const {input,workflow,isActive}=options,role=input.card?.role,disposers:(()=>void)[]=[]
+ const defineTool=process.env.NODE_ENV==='test'?(s:any)=>s:(await import('@deepseek-ai/dsh-tools')).defineTool
+ const command=options.runCommand??((file,args)=>run(file,args,{timeout:60000,maxBuffer:1024*1024}).then(r=>({stdout:String(r.stdout)})))
+ const check=(exec?:any)=>{if(!isActive())throw Error('studio-stale-run');const id=exec?.agent?.session?.id;if(id&&id!==input.sessionId)throw Error('studio-session-mismatch')}
+ const requireRole=(roles:string[])=>{if(!roles.includes(role))throw Error('studio-role-denied')}
+ const register=(name:string,description:string,parameters:any,execute:(args:any)=>Promise<any>,images=false)=>{
+  disposers.push(agentCtx.tools.register(defineTool({name,description,parameters,output:{schema:{type:'object',additionalProperties:true},render:(_:any,v:any)=>[{type:'text',text:JSON.stringify(images?{...v,images:undefined}:v)},...(images?(v.images??[]).map((attachment:any)=>({type:'image',attachment})):[])]},async execute(args:any,exec:any){check(exec);return execute(args)}})))
+ }
+ const current=async()=>{const location=workflow.candidateLocation(input),state=workflow.status(input),saved=state.candidate,candidate=saved?.candidate??saved;if(!location||!candidate)throw Error('studio-candidate-required');const path=await studioPath(input.task.cwd,location.path);if(await fileSha256(path)!==candidate.sha256)throw Error('studio-candidate-file-changed');check();return {path,candidate}}
+ const directory=async()=>{const root=await realpath(input.task.cwd),base=join(root,'.studio-review');await mkdir(base,{recursive:true,mode:0o700});if(await realpath(base)!==base)throw Error('studio-review-directory-symlink');return mkdtemp(join(base,'sample-'))}
+ const interval=(args:any,duration:number,max:number)=>{const {start,end}=args;if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>duration||end-start>max)throw Error('studio-invalid-sample-range');return [start,end]}
+ register('studio_status','Read host preflight and current version-bound workflow state; not aesthetic approval.',{},async()=>({preflight:workflow.preflight(input.task),state:workflow.status(input)}))
+ register('studio_register_candidate','Producer only: register actual project MP4 and manifest after host probing and hashing.',{path:{type:'string',required:true},manifestPath:{type:'string',required:true},revision:{type:'number',required:true}},async args=>{
+  requireRole(['executor']);if(!Number.isInteger(args.revision)||args.revision<1)throw Error('studio-invalid-revision')
+  const path=await studioPath(input.task.cwd,args.path),manifestPath=await studioPath(input.task.cwd,args.manifestPath)
+  if(extname(path).toLowerCase()!=='.mp4')throw Error('studio-mp4-required')
+  const before=await fileSha256(path),probe=JSON.parse((await command(process.env.FFPROBE_PATH??'ffprobe',['-v','error','-show_streams','-show_format','-of','json',path])).stdout),video=probe.streams?.find((s:any)=>s.codec_type==='video')
+  if(!video)throw Error('studio-video-stream-required')
+  const [n,d]=String(video.avg_frame_rate??'0/1').split('/').map(Number),candidate={sha256:await fileSha256(path),manifestSha256:await fileSha256(manifestPath),referenceSha256:input.task.design.studio.referenceSha256,revision:args.revision,durationSeconds:Number(probe.format?.duration),width:Number(video.width),height:Number(video.height),fps:n/d}
+  if(candidate.sha256!==before)throw Error('studio-candidate-file-changed');if(![candidate.durationSeconds,candidate.width,candidate.height,candidate.fps].every(x=>Number.isFinite(x)&&x>0))throw Error('studio-probe-invalid')
+  check();workflow.recordCandidate(input,candidate);workflow.recordCandidateLocation(input,{path,manifestPath,sha256:candidate.sha256});return {candidate,qualityApproved:false}
+ })
+ register('studio_read_text','Planner/reviewer only: read project text up to 64 KiB, excluding hidden and sensitive paths.',{path:{type:'string',required:true}},async args=>{requireRole(['planner','reviewer']);const path=await studioPath(input.task.cwd,args.path,true);if((await stat(path)).size>65536)throw Error('studio-text-too-large');const data=await readFile(path);if(data.length>65536||data.includes(0))throw Error('studio-text-invalid');check();let receipt:any
+  if(role==='reviewer'&&workflow.status(input).candidate){const location=workflow.candidateLocation(input);if(location?.manifestPath&&path===location.manifestPath){const {candidate}=await current();if(hash(data)!==candidate.manifestSha256)throw Error('studio-manifest-file-changed');receipt=workflow.recordReceipt(input,{candidateSha256:candidate.sha256,kind:'source',ranges:[[0,candidate.durationSeconds]],sha256:hash(data)})}}
+  return {path:relative(input.task.cwd,path),text:data.toString('utf8'),...(receipt?{receipt,scope:'Manifest read only; source rights and claims still require review.'}:{})}})
+ register('studio_inspect_probe','Reviewer only: actual ffprobe metadata bound to the current file, not aesthetic approval.',{},async()=>{requireRole(['reviewer']);const {path,candidate}=await current(),raw=(await command(process.env.FFPROBE_PATH??'ffprobe',['-v','error','-show_streams','-show_format','-of','json',path])).stdout,probe=JSON.parse(raw);if(await fileSha256(path)!==candidate.sha256)throw Error('studio-candidate-file-changed');check();const receipt=workflow.recordReceipt(input,{candidateSha256:candidate.sha256,kind:'probe',ranges:[[0,candidate.durationSeconds]],sha256:hash(raw)});return {probe,receipt,qualityApproved:false}})
+
+ register('studio_inspect_frames','Reviewer only: inspect 8 ordered actual frames across up to 2 seconds. Sparse sampling is not full-frame coverage.',{start:{type:'number',required:true},end:{type:'number',required:true}},async args=>{
+  requireRole(['reviewer']);if(!agentCtx.attachments?.saveImage)throw Error('studio-image-attachment-capability-required');const {path,candidate}=await current(),[start,end]=interval(args,candidate.durationSeconds,2),dir=await directory(),images:any[]=[],frames:any[]=[]
+  for(let i=0;i<8;i++){check();const time=start+(end-start)*i/8,p=join(dir,`${i}.jpg`);await command(process.env.FFMPEG_PATH??'ffmpeg',['-nostdin','-v','error','-ss',String(time),'-i',path,'-frames:v','1','-vf','scale=540:-2','-y',p]);const bytes=await readFile(p);if(bytes.length>4*1024*1024)throw Error('studio-frame-too-large');const attachment=await agentCtx.attachments.saveImage({data:bytes,mediaType:'image/jpeg',name:basename(p)});images.push(attachment);frames.push({time,sha256:hash(bytes)})}
+  if(await fileSha256(path)!==candidate.sha256)throw Error('studio-candidate-file-changed');check();const receipt=workflow.recordReceipt(input,{candidateSha256:candidate.sha256,kind:'frames',ranges:[[start,end]],sha256:hash(JSON.stringify(frames))});return {receipt,frames,images,sampling:'8 ordered samples; frames between sample points remain unchecked'}
+ },true)
+ register('studio_inspect_audio','Reviewer only: actual audio perception of at most 8 seconds; no ASR-only substitution.',{start:{type:'number',required:true},end:{type:'number',required:true}},async args=>{
+  requireRole(['reviewer']);if(!options.audioObserve)throw Error('studio-audio-capability-required');const {path,candidate}=await current(),[start,end]=interval(args,candidate.durationSeconds,8),wavPath=join(await directory(),'audio.wav');await command(process.env.FFMPEG_PATH??'ffmpeg',['-nostdin','-v','error','-ss',String(start),'-i',path,'-t',String(end-start),'-vn','-ac','1','-ar','16000','-c:a','pcm_s16le','-y',wavPath]);const digest=await fileSha256(wavPath);check();const observation=await options.audioObserve({wavPath,start,end});if(!observation||typeof observation!=='object'||observation.isError||observation.error)throw Error('studio-audio-observation-failed');if(await fileSha256(wavPath)!==digest||await fileSha256(path)!==candidate.sha256)throw Error('studio-candidate-file-changed');check();const receipt=workflow.recordReceipt(input,{candidateSha256:candidate.sha256,kind:'audio',ranges:[[start,end]],sha256:digest});return {observation,receipt,qualityApproved:false}
+ })
+ register('studio_submit_review','Reviewer only: submit findings bound to current host candidate. This does not approve the film.',{checks:{type:'array',required:true,items:{type:'object',additionalProperties:true}},issues:{type:'array',required:true,items:{type:'object',additionalProperties:true}}},async args=>{requireRole(['reviewer']);const {candidate}=await current();check();workflow.recordReview(input,{candidateSha256:candidate.sha256,referenceSha256:candidate.referenceSha256,revision:candidate.revision,checks:args.checks,issues:args.issues});return {recorded:true,qualityApproved:false}})
+ return ()=>{for(const d of disposers.splice(0)){try{d()}catch{}}}
+}

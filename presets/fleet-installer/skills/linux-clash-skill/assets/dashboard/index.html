@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Linux 代理诊断与控制台</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">LINUX CLASH SKILL · MACHINE DASHBOARD</p>
+      <h1>代理诊断与控制台</h1>
+      <p class="subtitle">这台 Linux 的独立页面；每台机器使用自己的唯一公网域名</p>
+    </div>
+    <div class="header-actions">
+      <button id="refresh" class="secondary">刷新状态</button>
+      <button id="admin" class="ghost">进入管理模式</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="summary" aria-label="节点摘要">
+      <article><span>节点</span><strong id="node-count">—</strong></article>
+      <article><span>代理开启</span><strong id="enabled-count">—</strong></article>
+      <article><span>无法连接</span><strong id="offline-count">—</strong></article>
+      <article><span>刷新时间</span><strong id="updated-at">—</strong></article>
+    </section>
+
+    <section class="section-head">
+      <div><p class="eyebrow">BROWSER ENVIRONMENT</p><h2>当前浏览器环境</h2></div>
+      <span class="section-note">这里检测打开页面的设备；节点自身 UDP 出口在每张机器卡片中单独显示。</span>
+    </section>
+    <section class="browser-panel">
+      <article><span>WebRTC UDP</span><strong id="browser-webrtc-status">检测中…</strong><small id="browser-webrtc-ip">—</small></article>
+      <article><span>浏览器时区</span><strong id="browser-timezone">—</strong><small id="browser-offset">—</small></article>
+      <article><span>浏览器语言</span><strong id="browser-language">—</strong><small>与 Claude 出口所在地常用语言比较</small></article>
+    </section>
+
+    <section class="section-head">
+      <div><p class="eyebrow">THIS MACHINE</p><h2>本机出口与 Claude 环境</h2></div>
+      <span id="global-message" role="status"></span>
+    </section>
+    <p id="readonly-note" class="readonly-note">当前为公开只读诊断。开关代理、重新验证和替换代理源需要进入管理模式。</p>
+    <section id="nodes" class="node-grid" aria-live="polite"></section>
+
+    <section id="audit-section" hidden>
+      <section class="section-head audit-head">
+        <div><p class="eyebrow">LOCAL AUDIT</p><h2>最近操作</h2></div>
+      </section>
+      <section class="audit-wrap">
+        <table>
+          <thead><tr><th>时间</th><th>机器</th><th>操作</th><th>状态</th><th>说明</th></tr></thead>
+          <tbody id="audit"></tbody>
+        </table>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="replace-dialog">
+    <form id="replace-form">
+      <div class="dialog-head"><div><p class="eyebrow">TRANSACTIONAL REPLACE</p><h2>替换代理源</h2></div><button type="button" id="close-dialog" class="icon">×</button></div>
+      <p class="dialog-note">新地址必须通过 SOCKS5 TCP、UDP 与出口一致性预检。系统会自动锁定本次验证的入口与出口、对齐出口时区，并在网络切换后重连 Dashboard；失败会恢复旧代理。</p>
+      <input id="replace-node" type="hidden">
+      <label>Clash YAML HTTPS 地址<input id="config-url" name="config_url" type="url" autocomplete="off" required placeholder="https://resource.example/proxy.yaml"></label>
+      <label>期望出口 IPv4（可选）<input id="expected-ip" name="expected_ip" inputmode="decimal" autocomplete="off" placeholder="203.0.113.10"></label>
+      <label>代理名称（多节点 YAML 时可选）<input id="proxy-name" name="proxy_name" autocomplete="off" placeholder="miyaip-socks5"></label>
+      <label>固定服务器 IPv4（高级选项，通常留空）<input id="server-ip" name="server_ip" inputmode="decimal" autocomplete="off" placeholder="198.51.100.10"></label>
+      <div class="dialog-actions"><button type="button" id="cancel-dialog" class="secondary">取消</button><button type="submit">预检并替换</button></div>
+    </form>
+  </dialog>
+
+  <template id="node-template">
+    <article class="node-card">
+      <div class="node-head">
+        <div><span class="status-dot"></span><h3 class="node-name"></h3><p class="node-id"></p></div>
+        <label class="switch" title="代理总开关"><input class="toggle" type="checkbox"><span></span></label>
+      </div>
+      <div class="state-line"><span class="state-badge"></span><span class="checked-at"></span></div>
+
+      <section class="diagnostic-block">
+        <div class="block-head"><h4>三路出口 IP</h4><span class="path-consistency">—</span></div>
+        <div class="ip-triad">
+          <div><span>中国站点</span><strong class="china-ip">—</strong></div>
+          <div><span>Cloudflare</span><strong class="cloudflare-ip">—</strong></div>
+          <div><span>Claude AI</span><strong class="claude-ip">—</strong></div>
+        </div>
+      </section>
+
+      <section class="diagnostic-block trust-block">
+        <div class="score-card">
+          <span>Claude AI Trust Score</span>
+          <strong class="trust-score">—</strong>
+          <small class="score-label">等待 IP 情报</small>
+          <a href="https://ip.net.coffee/claude/" target="_blank" rel="noopener noreferrer">Net.Coffee 参考评分</a>
+        </div>
+        <dl class="risk-fields">
+          <div><dt>地区 / 城市</dt><dd class="risk-location">—</dd></div>
+          <div><dt>IP 属性</dt><dd class="risk-property">—</dd></div>
+          <div><dt>ASN / 运营商</dt><dd class="risk-asn">—</dd></div>
+          <div><dt>安全属性</dt><dd class="risk-security">—</dd></div>
+        </dl>
+      </section>
+
+      <section class="diagnostic-block">
+        <div class="block-head"><h4>系统资源</h4><span>节点实时采集</span></div>
+        <div class="resource-grid">
+          <div class="resource-item">
+            <span>内存</span><strong class="memory-resource">未采集</strong>
+            <div class="resource-track"><i class="memory-bar"></i></div>
+          </div>
+          <div class="resource-item">
+            <span>根磁盘 /</span><strong class="disk-resource">未采集</strong>
+            <div class="resource-track"><i class="disk-bar"></i></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="diagnostic-block">
+        <div class="block-head"><h4>UDP 与环境一致性</h4><span class="webrtc-verdict">—</span></div>
+        <dl>
+          <div><dt>节点 UDP · Cloudflare</dt><dd class="udp-cloudflare-ip">—</dd></div>
+          <div><dt>节点 UDP · Google</dt><dd class="udp-google-ip">—</dd></div>
+          <div><dt>浏览器 WebRTC UDP</dt><dd class="browser-udp-ip">—</dd></div>
+          <div><dt>节点时区</dt><dd class="node-timezone">—</dd></div>
+          <div><dt>浏览器 ↔ 出口时区</dt><dd class="timezone-verdict">等待 IP 情报</dd></div>
+          <div><dt>浏览器 ↔ 出口语言</dt><dd class="language-verdict">等待 IP 情报</dd></div>
+        </dl>
+      </section>
+
+      <dl class="node-meta admin-detail">
+        <div><dt>期望出口</dt><dd class="expected-ip">—</dd></div>
+        <div><dt>固定入口</dt><dd class="server-ip">自动选择</dd></div>
+        <div><dt>配置来源</dt><dd class="config-source">—</dd></div>
+      </dl>
+      <p class="operation admin-detail"></p>
+      <section class="line-block" hidden>
+        <div class="block-head"><h4>线路切换</h4><span class="line-hint">切换会短暂断网,并改变出口 IP</span></div>
+        <div class="line-row"></div>
+      </section>
+      <div class="card-actions"><button class="verify secondary">重新验证</button><button class="replace ghost">替换代理源</button></div>
+    </article>
+  </template>
+
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

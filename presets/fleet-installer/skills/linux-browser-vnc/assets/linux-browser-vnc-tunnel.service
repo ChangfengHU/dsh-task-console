@@ -1,0 +1,56 @@
+[Unit]
+Description=Cloudflare named tunnel for one linux-browser-vnc desktop
+After=network-online.target linux-browser-vnc-novnc.service
+Wants=network-online.target
+Requires=linux-browser-vnc-novnc.service
+
+[Service]
+Type=notify
+NotifyAccess=all
+WatchdogSec=120s
+TimeoutStartSec=120s
+# The connector runs as the Clash tunnel account because that UID is already in
+# Mihomo tun.exclude-uid. Do not change this to root: root is not excluded, so
+# the control path would start following the proxy default route.
+User=linux-clash-tunnel
+Group=linux-clash-tunnel
+Environment=HOME=/var/lib/linux-browser-vnc/tunnel
+EnvironmentFile=/etc/linux-browser-vnc/tunnel.env
+WorkingDirectory=/var/lib/linux-browser-vnc/tunnel
+ExecStart=/usr/local/lib/linux-browser-vnc/scripts/browser_vnc_tunnel.sh
+Restart=always
+RestartSec=5s
+TimeoutStopSec=20s
+KillMode=control-group
+
+MemoryHigh=192M
+MemoryMax=256M
+TasksMax=64
+
+# The connector must not resolve through Mihomo's fake-IP DNS. Its UID is
+# excluded from TUN, so a fake 198.18.0.0/16 answer for region1.v2.argotunnel.com
+# is unroutable for this process and every edge dial times out. A private
+# resolv.conf fixes it inside this unit alone, instead of editing the live
+# mihomo fake-ip-filter and restarting the proxy.
+BindReadOnlyPaths=/etc/linux-browser-vnc/tunnel-resolv.conf:/etc/resolv.conf
+
+UMask=0077
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+NoNewPrivileges=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/var/lib/linux-browser-vnc/tunnel
+
+[Install]
+WantedBy=multi-user.target

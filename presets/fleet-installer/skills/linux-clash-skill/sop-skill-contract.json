@@ -1,0 +1,285 @@
+{
+  "schema": "sop-skill-contract/v1",
+  "skill": {
+    "id": "linux-clash-skill",
+    "title": "Linux Clash Skill",
+    "version": "1.5.0",
+    "description": "Safely deploy and control a recoverable system-wide Mihomo transparent TUN proxy with matching TCP/UDP exits, persisted endpoint selection, automatic exit-timezone alignment, per-machine public Dashboards, and management-tunnel reconnection."
+  },
+  "compatibility": {
+    "sidecar": true,
+    "required_by_skill_runtime": false,
+    "consumed_by": [
+      "sop-node-builder",
+      "sop-a2a-runtime"
+    ]
+  },
+  "public_interface": {
+    "input_model": "instruction+materials",
+    "instruction_required": true,
+    "materials_required": false,
+    "accepted_materials": [
+      "text",
+      "url",
+      "file",
+      "json"
+    ]
+  },
+  "invoke": {
+    "type": "agent_skill",
+    "entrypoint_hint": "scripts/linux-clash-skill.sh",
+    "execution_mode": "agent_interpreted",
+    "output_dir_env": "SOP_OUTPUT_DIR"
+  },
+  "adapter_hints": {
+    "extraction": [
+      {
+        "name": "config_url",
+        "kind": "url",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "description": "HTTPS Clash YAML URL supplied in the natural-language instruction or URL material.",
+        "evidence": [
+          "scripts/linux-clash-skill.sh"
+        ]
+      },
+      {
+        "name": "exclude_address",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "description": "Internal route exclusion used to preserve an administrative peer outside the TUN.",
+        "evidence": [
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "expected_ip",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "description": "Required stable exit IPv4 address when the caller asks for fail-closed identity pinning.",
+        "evidence": [
+          "scripts/linux-clash-skill.sh"
+        ]
+      },
+      {
+        "name": "field",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "hostname",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "ip",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "mihomo_uid",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "output",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "path",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "proxy_name",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "description": "Optional SOCKS5 node name when the source contains multiple proxies.",
+        "evidence": [
+          "scripts/linux-clash-skill.sh",
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "rollback_seconds",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/linux-clash-skill.sh"
+        ]
+      },
+      {
+        "name": "server_ip",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/linux-clash-skill.sh",
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "source",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "target_host",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "target_port",
+        "kind": "text",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/config_tool.py"
+        ]
+      },
+      {
+        "name": "timeout",
+        "kind": "number",
+        "source": "instruction_or_materials",
+        "required_for_direct_cli": false,
+        "expose_to_node_user": false,
+        "evidence": [
+          "scripts/config_tool.py"
+        ]
+      }
+    ],
+    "notes": [
+      "Hints are internal adapter facts and must not be rendered as public Node inputs.",
+      "The public Node interface remains instruction + materials."
+    ]
+  },
+  "outputs": {
+    "mode": "manifest_artifacts",
+    "root_env": "SOP_OUTPUT_DIR",
+    "manifest": "manifest.json",
+    "minimum_success": {
+      "agent_task_completed": true,
+      "output_dir_scanned": true,
+      "manifest_written": true,
+      "declared_artifacts_required": false
+    },
+    "declared_artifacts": [
+      {
+        "name": "manifest.json",
+        "kind": "json",
+        "path_hint": "manifest.json",
+        "source": "skill_source",
+        "evidence": [
+          "SKILL.md"
+        ],
+        "required": false,
+        "validation_role": "candidate",
+        "confidence": "static_source_mention",
+        "relayable": true
+      },
+      {
+        "name": "result.json",
+        "kind": "json",
+        "path_hint": "result.json",
+        "source": "skill_source",
+        "evidence": [
+          "SKILL.md",
+          "scripts/linux-clash-skill.sh"
+        ],
+        "required": false,
+        "validation_role": "candidate",
+        "confidence": "static_source_mention",
+        "relayable": true
+      }
+    ],
+    "discovered_outputs": []
+  },
+  "probe": {
+    "instruction": "只执行只读 plan：检查给定 Clash YAML 的 SOCKS5 节点、可用端点和出口 IP；不得安装服务、修改路由或输出用户名密码。",
+    "materials": [
+      {
+        "type": "url",
+        "url": "https://resource.vyibc.com/miyaip-socks5.yaml"
+      }
+    ],
+    "requires_user_confirmation": true,
+    "source": "skill_documentation"
+  },
+  "security": {
+    "secret_values_embedded": false,
+    "required_env": [],
+    "required_secrets": []
+  },
+  "generation": {
+    "method": "deterministic-source-analysis",
+    "source_files": [
+      "SKILL.md",
+      "scripts/linux-clash-skill.sh",
+      "scripts/config_tool.py",
+      "scripts/rollback.sh",
+      "scripts/control_plane.sh",
+      "scripts/machine_identity.py",
+      "scripts/environment_tool.py",
+      "scripts/dashboard_public_tunnel.sh",
+      "scripts/node_controller.py",
+      "scripts/dashboard.py"
+    ],
+    "llm_notes": [
+      "Probe is intentionally plan-only because installation changes host routing and requires explicit authorization.",
+      "The public Node interface remains instruction plus materials; CLI flags are adapter hints only.",
+      "Version 1.5 persists the successful server/exit selection, aligns the exit timezone with rollback, and health-checks/reconnects each machine's public Dashboard with anonymous-name conflict recovery after route changes."
+    ]
+  }
+}

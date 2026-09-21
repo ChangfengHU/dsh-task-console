@@ -1,0 +1,31 @@
+[Unit]
+Description=Mihomo transparent proxy service
+Documentation=https://wiki.metacubex.one/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=mihomo
+Group=mihomo
+WorkingDirectory=/var/lib/mihomo
+ExecStartPre=/usr/local/bin/mihomo -t -d /var/lib/mihomo -f /etc/mihomo/config.yaml
+ExecStart=/usr/local/bin/mihomo -d /var/lib/mihomo -f /etc/mihomo/config.yaml
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=1048576
+UMask=0027
+NoNewPrivileges=true
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+StateDirectory=mihomo
+
+[Install]
+WantedBy=multi-user.target

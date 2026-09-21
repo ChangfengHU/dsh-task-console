@@ -1,0 +1,6 @@
+# dsh-task-console bundle patch: mount the console's host service.
+# `insert` is required — a bare `- id:` row patches an EXISTING entry and is
+# silently skipped when nothing matches.
+- insert:
+    - id: task-console
+      name: dsh-task-console

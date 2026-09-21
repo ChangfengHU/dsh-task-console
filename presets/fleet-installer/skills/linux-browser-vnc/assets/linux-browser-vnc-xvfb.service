@@ -1,0 +1,39 @@
+[Unit]
+Description=Virtual X display for the linux-browser-vnc desktop
+After=network.target
+
+[Service]
+Type=simple
+User=linux-browser-vnc
+Group=linux-browser-vnc
+EnvironmentFile=/etc/linux-browser-vnc/desktop.env
+# Only the local unix socket is served. -nolisten tcp keeps X off the network;
+# remote viewing is the job of x11vnc, which itself binds to loopback.
+ExecStart=/usr/bin/Xvfb ${VNC_DISPLAY} -screen 0 ${VNC_GEOMETRY} -nolisten tcp -noreset
+Restart=always
+RestartSec=2s
+TimeoutStopSec=15s
+KillMode=control-group
+
+MemoryHigh=384M
+MemoryMax=512M
+TasksMax=64
+
+UMask=0022
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+NoNewPrivileges=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/var/lib/linux-browser-vnc
+
+[Install]
+WantedBy=multi-user.target

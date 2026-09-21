@@ -1,0 +1,48 @@
+[Unit]
+Description=Loopback health service for linux-browser-vnc
+After=linux-browser-vnc-novnc.service
+Requires=linux-browser-vnc-novnc.service
+PartOf=linux-browser-vnc-xvfb.service
+
+[Service]
+Type=simple
+User=linux-browser-vnc
+Group=linux-browser-vnc
+EnvironmentFile=/etc/linux-browser-vnc/desktop.env
+ExecStart=/usr/bin/env python3 /usr/local/lib/linux-browser-vnc/scripts/browser_vnc_health.py \
+  --display ${VNC_DISPLAY} \
+  --rfb-port ${VNC_RFB_PORT} \
+  --novnc-port ${VNC_NOVNC_PORT} \
+  --debug-port ${BROWSER_DEBUG_PORT} \
+  --instances ${VNC_INSTANCES} \
+  --health-port ${VNC_HEALTH_PORT} \
+  --state-root /var/lib/linux-browser-vnc \
+  --web-root ${VNC_WEB_ROOT} \
+  --max-browser-processes ${VNC_MAX_BROWSER_PROCESSES}
+Restart=always
+RestartSec=5s
+TimeoutStopSec=10s
+KillMode=control-group
+
+MemoryHigh=96M
+MemoryMax=128M
+TasksMax=32
+
+UMask=0022
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+NoNewPrivileges=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_UNIX
+ReadWritePaths=/var/lib/linux-browser-vnc
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Linux Clash Control"
+  short_description: "Deploy safe Linux TUN proxy and a per-machine dashboard"
+  default_prompt: "Use $linux-clash-skill to preflight and safely deploy a transparent Linux proxy from my Clash YAML URL, with an isolated public Dashboard for this machine."

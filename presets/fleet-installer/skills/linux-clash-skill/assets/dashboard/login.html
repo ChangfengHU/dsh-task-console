@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>登录 · Linux 代理控制台</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <p class="eyebrow">ADMIN MODE</p>
+    <h1>进入管理模式</h1>
+    <p>公开页面无需令牌即可查看出口和环境诊断。只有开关代理、重新验证或替换代理源时才需要管理令牌；令牌不会发送到节点。</p>
+    <form method="post" action="/login">
+      <label>管理令牌<input name="token" type="password" autocomplete="current-password" required autofocus></label>
+      <button type="submit">进入管理模式</button>
+    </form>
+    <small>控制接口仍通过 Secure Cookie 与 CSRF 防护；节点 Controller 令牌始终保留在服务端。</small>
+  </main>
+</body>
+</html>

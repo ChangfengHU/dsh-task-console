@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "repository": "https://github.com/ChangfengHU/linux-clash-skill",
+  "revision": "34382eae0b8c15677b8377b72357781eac5f7732",
+  "skills": [
+    {
+      "name": "fleet-node-onboard",
+      "path": "skills/fleet-node-onboard"
+    },
+    {
+      "name": "linux-browser-vnc",
+      "path": "skills/linux-browser-vnc"
+    },
+    {
+      "name": "linux-clash-skill",
+      "path": "skills/linux-clash-skill"
+    }
+  ]
+}

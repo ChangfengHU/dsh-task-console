@@ -24,3 +24,10 @@ test('creator ships reusable onboarding/login rules but no business execution gr
   assert.match(spec.persona, /不承诺其他平台/)
   assert.doesNotMatch(spec.persona, /152\.70\.155\.63/)
 })
+
+test('fleet node retirer gets only the code-enforced retirement surface', async () => {
+  const spec = validateSpec(JSON.parse(await readFile(new URL('../presets/fleet-node-retirer/task-console.json', import.meta.url), 'utf8')))
+  assert.deepEqual(spec.tools, [])
+  assert.deepEqual(spec.mcpTools, { 'vyibc-fleet': ['retirement_status', 'retire_due_node', 'node_audit'] })
+  assert.deepEqual(spec.skills, [])
+})

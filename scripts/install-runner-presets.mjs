@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readSpec,userPresetRoot,validateSpec,writePreset } from '../lib/index.js';
-for(const id of ['fleet-runner-planner','fleet-runner-operator','fleet-runner-reviewer','fleet-ops-planner','fleet-ops-reviewer']) {
+for(const id of ['fleet-runner-planner','fleet-runner-operator','fleet-runner-reviewer','fleet-ops-planner','fleet-ops-reviewer','fleet-node-retirer']) {
   const spec=validateSpec(JSON.parse(await readFile(new URL('../presets/'+id+'/task-console.json',import.meta.url),'utf8')));
   const current=await readSpec(join(userPresetRoot(),id));
   const comparable={...spec};if(current?.taskExpertise===undefined)delete comparable.taskExpertise;

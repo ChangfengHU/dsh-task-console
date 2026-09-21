@@ -85,8 +85,8 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   enforceRuntime(input:any){this.write(input,'runtime_enforcement',true)}
   recordReferenceReceipt(input:any,receipt:any){
     this.key(input);const policy=this.policy(input.task)
-    if(!['planner','reviewer'].includes(input.card?.role)||receipt.referenceSha256!==policy.referenceSha256||!HASH.test(receipt.sha256??'')||!['frames','audio','image'].includes(receipt.kind))throw Error('studio-reference-receipt-invalid')
-    const stored={...receipt,id:randomUUID(),sessionId:input.sessionId,policyHash:sha(policy)}
+    if(!['planner','executor','reviewer'].includes(input.card?.role)||receipt.referenceSha256!==policy.referenceSha256||!HASH.test(receipt.sha256??'')||!['frames','audio','image'].includes(receipt.kind))throw Error('studio-reference-receipt-invalid')
+    const stored={...receipt,id:randomUUID(),sessionId:input.sessionId,role:input.card.role,policyHash:sha(policy)}
     this.write(input,'reference_receipts',[...(this.read(input,'reference_receipts')??[]),stored]);return stored
   }
   script(input:any){return this.read(input,'script')??null}

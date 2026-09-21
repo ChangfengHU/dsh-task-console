@@ -121,6 +121,27 @@ export function bindBrowserSessionDefinition<T extends { description?: string; p
   }
 }
 
+/** Host source identity survives renderComposition's `${serverName}-${spec.id}` rename. */
+export function taskMediaServer(serverName: string, sourceEntryId?: string, sourceServerName?: string): boolean {
+  return /^mcp-vyibc-(image|voice)$/.test(sourceEntryId ?? '')
+    || /^vyibc-(image|voice)$/.test(sourceServerName ?? '')
+    || /^vyibc-(image|voice)(?:-|$)/.test(serverName)
+}
+
+/** Route using trusted run identity; absence of the Task guard must fail before dispatch. */
+export function executeWithTaskScope(ctx: any, identity: { serverName: string; sourceEntryId?: string; sourceServerName?: string }, rawName: string, args: unknown, exec: any, execute: (args: unknown, exec: any) => unknown): unknown {
+  const sessionId = String(exec?.agent?.session?.id ?? exec?.agent?.session?.header?.id ?? '')
+  const taskSession = sessionId.startsWith('task-')
+  if ((taskSession && taskMediaServer(identity.serverName, identity.sourceEntryId, identity.sourceServerName))
+    || (/^fleet-proxy(?:-|$)/.test(identity.serverName) && rawName.startsWith('proxy_'))
+    || /^browser_login_(copy|provision|resume)$/.test(rawName)) {
+    const service = ctx.get?.('taskConsole')
+    if (service?.scopedMcp) return service.scopedMcp(rawName, args, exec, (next: unknown) => execute(next, exec))
+    if (taskSession) throw new Error('Task MCP scope guard unavailable')
+  }
+  return execute(args, exec)
+}
+
 export async function apply(ctx: Context, config: Config): Promise<void> {
   const { allowedTools: rawAllowed, toolRules = {}, sourceEntryId, ...inlineMcp } = config
   if (!Array.isArray(rawAllowed) || rawAllowed.some(tool => typeof tool !== 'string' || !tool.trim())) {
@@ -152,12 +173,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
               assertToolArguments(rawName, toolRules[rawName], args)
               assertBrowserSession(rawName, args, exec)
               if (rawName.replace(/-/g, '_') === 'vyibc_wecom_send_message' && String((exec as any)?.agent?.session?.id ?? '').startsWith('task-') && !isTaskNotification(exec)) throw new Error('Task notifications must use task_notify with reviewed recipients and durable deduplication')
-              if ((String((exec as any)?.agent?.session?.id ?? '').startsWith('task-') && /^vyibc-(image|voice)$/.test(stableServerName)) || (/^fleet-proxy(?:-|$)/.test(stableServerName) && rawName.startsWith('proxy_')) || /^browser_login_(copy|provision|resume)$/.test(rawName)) {
-                const console = (ctx as any).get?.('taskConsole')
-                if (console?.scopedMcp) return console.scopedMcp(rawName, args, exec, (next: unknown) => execute(next,exec))
-                if (String((exec as any)?.agent?.session?.id ?? '').startsWith('task-')) throw new Error('Task MCP scope guard unavailable')
-              }
-              return execute(args, exec)
+              return executeWithTaskScope(ctx, {serverName:stableServerName,sourceEntryId,sourceServerName:sourceMcp.serverName}, rawName, args, exec, execute)
             },
           }) as never)
         }

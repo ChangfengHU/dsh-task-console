@@ -61,7 +61,7 @@ test('character image is locked by host id and content hash, never caller path',
  const s=await setup(t),tools:any={},path=join(s.cwd,'character.png');await writeFile(path,Buffer.from([137,80,78,71,13,10,26,10,0]));const sha256=await fileSha256(path)
  const make=async(role:string,referenceSha256=sha256)=>registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}},attachments:{saveImage:async()=>({attachmentId:'real-image'})}},{input:{task:{cwd:s.cwd},card:{role},sessionId:'s'},workflow:{},isActive:()=>true,characterReferences:[{id:'approved',path,sha256:referenceSha256}]})
  await make('planner');const r=await tools.studio_character_image.execute({id:'approved',path:'/etc/hosts'});assert.equal(r.sha256,sha256);assert.equal(r.images.length,1);await assert.rejects(tools.studio_character_image.execute({id:'../../etc/hosts'}),/lock-required/)
- await make('executor');await assert.rejects(tools.studio_character_image.execute({id:'approved'}),/role/);await make('reviewer','f'.repeat(64));await assert.rejects(tools.studio_character_image.execute({id:'approved'}),/file-changed/)
+ await make('executor');assert.equal((await tools.studio_character_image.execute({id:'approved'})).images.length,1);await make('notifier');await assert.rejects(tools.studio_character_image.execute({id:'approved'}),/role/);await make('reviewer','f'.repeat(64));await assert.rejects(tools.studio_character_image.execute({id:'approved'}),/file-changed/)
 })
 
 test('Cordis optional attachment service is resolved through ctx.get, never uninjected property',async t=>{
@@ -70,4 +70,43 @@ test('Cordis optional attachment service is resolved through ctx.get, never unin
  const ctx=new Proxy({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}},get:(name:string)=>{assert.equal(name,'attachments');gets++;return mounted?service:undefined}}, {get(target,key,receiver){if(key==='attachments')throw Error('cannot get property "attachments" without inject');return Reflect.get(target,key,receiver)}})
  await registerStudioTools(ctx,{input:{task:{cwd:s.cwd},card:{role:'reviewer'},sessionId:'s'},workflow:{candidateLocation:()=>({path:join(s.cwd,'film.mp4')}),status:()=>({candidate:s.getCandidate()}),recordReceipt:(_:any,v:any)=>v},isActive:()=>true,characterReferences:[{id:'locked',path,sha256}],runCommand:async(_,args)=>{await writeFile(args.at(-1)!,'frame');return {stdout:''}}})
  assert.equal((await tools.studio_character_image.execute({id:'locked'})).images.length,1);assert.equal((await tools.studio_inspect_frames.execute({start:0,end:1})).images.length,8);assert.equal(saves,9);assert.equal(gets,2);mounted=false;await assert.rejects(tools.studio_character_image.execute({id:'locked'}),/attachment-capability-required/)
+})
+
+test('producer previews project mix with host hashes and no independent receipts; traversal and wrong role denied',async t=>{
+ const s=await setup(t,'executor'),tools:any={};let active=true,wrongHash=false;const receipts:any[]=[]
+ const input={task:{cwd:s.cwd},card:{role:'executor'},sessionId:'producer'}
+ const register=async()=>registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input,workflow:{recordReceipt:(...a:any[])=>receipts.push(a)},isActive:()=>active,runCommand:async(file,args)=>{if(file.includes('ffprobe'))return {stdout:JSON.stringify({streams:[{codec_type:'audio'}],format:{duration:12}})};await writeFile(args.at(-1)!,'preview audio');return {stdout:''}},audioObserve:async({wavPath})=>({input_modality:'input_audio',audio_sha256:wrongHash?'bad':await fileSha256(wavPath)})})
+ await register();const out=await tools.studio_preview_audio.execute({path:'film.mp4',start:1,end:3});assert.equal(out.sourceSha256,hash('video'));assert.equal(out.audioSha256,hash('preview audio'));assert.equal(out.independentReview,false);assert.equal(out.receipt,undefined);assert.equal(receipts.length,0)
+ await assert.rejects(tools.studio_preview_audio.execute({path:'/etc/hosts',start:0,end:1}),/outside-project/);await assert.rejects(tools.studio_preview_audio.execute({path:'film.mp4',start:0,end:9}),/range/);await assert.rejects(tools.studio_preview_audio.execute({path:'film.mp4',start:11,end:13}),/range/);await assert.rejects(tools.studio_inspect_audio.execute({start:0,end:1}),/role/)
+ wrongHash=true;await assert.rejects(tools.studio_preview_audio.execute({path:'film.mp4',start:0,end:1}),/observation-failed/);wrongHash=false;active=false;await assert.rejects(tools.studio_preview_audio.execute({path:'film.mp4',start:0,end:1}),/stale/);active=true;for(const deniedRole of ['planner','reviewer','notifier']){input.card.role=deniedRole;await register();await assert.rejects(tools.studio_preview_audio.execute({path:'film.mp4',start:0,end:1}),/role/)}
+})
+
+test('producer can observe locked reference frames and audio without reviewer candidate access',async t=>{
+ const s=await setup(t,'executor'),tools:any={},refs:any[]=[],input={task:{cwd:s.cwd,design:{studio:{referenceSha256:hash('video')}}},card:{role:'executor'},sessionId:'producer'}
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}},get:()=>({saveImage:async()=>({attachmentId:'frame'})})},{input,workflow:{},isActive:()=>true,reference:{path:join(s.cwd,'film.mp4'),sha256:hash('video')},referenceReceipt:v=>{refs.push(v);return v},runCommand:async(file,args)=>{if(file.includes('ffprobe'))return {stdout:JSON.stringify({format:{duration:100}})};await writeFile(args.at(-1)!,'sample');return {stdout:''}},audioObserve:async({wavPath})=>({input_modality:'input_audio',audio_sha256:await fileSha256(wavPath)})})
+ assert.equal((await tools.studio_reference_frames.execute({start:0,end:1})).images.length,8);assert.equal((await tools.studio_reference_audio.execute({start:0,end:2})).scope,'reference-only');assert.equal(refs.length,2);assert.equal(refs.some(v=>v.candidateSha256),false);await assert.rejects(tools.studio_submit_review.execute({checks:[],issues:[]}),/role/)
+})
+
+test('status renews expired host proof once and returns one coherent preflight snapshot',async t=>{
+ const s=await setup(t),tools:any={};let status='expired',calls=0,reads=0
+ const preflight=()=>({ok:status==='passed',status:status==='passed'?'ready':'blocked_quality_capability',checks:[{name:'audio',status}]})
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd:s.cwd},card:{role:'executor'},sessionId:'s'},workflow:{preflight,status:()=>{reads++;return {candidate:null,preflight:preflight()}}},isActive:()=>true,refreshPreflight:async()=>{calls++;status='passed';return {reference:{path:'locked-reference',sha256:'a'.repeat(64)},characterReferences:[{id:'character',path:'locked-image',sha256:'b'.repeat(64)}]}}})
+ const result=await tools.studio_status.execute({});assert.equal(calls,1);assert.equal(result.preflight.ok,true);assert.deepEqual(result.preflight,result.state.preflight);assert.equal(result.characterReferences[0].id,'character');assert.equal(reads,1)
+ await tools.studio_status.execute({});assert.equal(calls,1,'unexpired successful proofs do not rerun dependency checks')
+})
+
+test('status failed revalidation stays blocked and callback errors cannot become a pass',async t=>{
+ const s=await setup(t),tools:any={};let status='missing',calls=0
+ const preflight=()=>({ok:false,status:'blocked_quality_capability',checks:[{name:'render',status}]})
+ const input={task:{cwd:s.cwd},card:{role:'executor'},sessionId:'s'},workflow={preflight,status:()=>({candidate:null,preflight:preflight()})},ctx={tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}}
+ await registerStudioTools(ctx,{input,workflow,isActive:()=>true,refreshPreflight:async()=>{calls++;status='failed'}})
+ const result=await tools.studio_status.execute({});assert.equal(result.preflight.ok,false);assert.equal(result.preflight.checks[0].status,'failed');await tools.studio_status.execute({});assert.equal(calls,1)
+ status='expired';await registerStudioTools(ctx,{input,workflow,isActive:()=>true,refreshPreflight:async()=>{throw Error('actual host unavailable')}});await assert.rejects(tools.studio_status.execute({}),/host unavailable/)
+})
+
+test('status refresh is single-flight and rejects a session becoming inactive during revalidation',async t=>{
+ const s=await setup(t),tools:any={};let active=true,calls=0,release!:()=>void
+ const waiting=new Promise<void>(r=>release=r),preflight=()=>({ok:false,checks:[{name:'character',status:'expired'}]})
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd:s.cwd},card:{role:'executor'},sessionId:'s'},workflow:{preflight,status:()=>({preflight:preflight()})},isActive:()=>active,refreshPreflight:async()=>{calls++;await waiting}})
+ const first=tools.studio_status.execute({}),second=tools.studio_status.execute({});assert.equal(calls,1);active=false;release();await assert.rejects(first,/stale/);await assert.rejects(second,/stale/)
 })

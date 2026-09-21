@@ -11,6 +11,7 @@ import { ConfigMigration } from './ConfigMigration.tsx'
 import { ActionEditor } from './AgentActions.tsx'
 
 export interface Api extends TasksApi {
+  agentPage: (query:{page:number;query:string;id?:string})=>Promise<{page:number;pages:number;total:number;rows:AgentRow[];detail:AgentRow|null}>
   taskActions: (taskId: string) => Promise<import('../agent-actions.ts').ActionCatalog>
   saveTaskActions: (taskId: string, actions: import('../agent-actions.ts').AgentAction[], revision: string) => Promise<import('../agent-actions.ts').ActionCatalog>
   launchTaskAction: (query: import('../task-actions.ts').TaskActionInput) => Promise<{ taskId: string; batchId: string; path: string }>
@@ -140,12 +141,12 @@ export function Console({ api }: { api: Api }) {
   const report = executionPage && route[2] === 'runs' && route[4] === 'report'
   const needsCatalog = section === 'agents' || route[1] === 'new'
   const reload = useCallback(async () => { await Promise.all([loadCatalog(), loadAgents()]) }, [loadCatalog, loadAgents])
-  useEffect(() => { void loadAgents(); if (needsCatalog) void loadCatalog() }, [loadAgents, loadCatalog, needsCatalog])
+  useEffect(() => { if (needsCatalog) { if(section!=='agents')void loadAgents(); void loadCatalog() } }, [loadAgents, loadCatalog, needsCatalog, section])
   const url = `${HASH_PREFIX}/${route.join('/')}`
   const loading = <div className="dtc-empty" style={{ padding: 60 }}><span className="dtc-spin" /> 读取…</div>
 
   let page: JSX.Element
-  if (section === 'agents') page = !agents || !catalog ? loading : <AgentsPage api={api} catalog={catalog} agents={agents} id={route[1] === 'new' ? 'new' : (route[1] ?? null)} onSaved={reload} toast={showToast} />
+  if (section === 'agents') page = !catalog ? loading : <AgentsPage api={api} catalog={catalog} agents={[]} id={route[1] === 'new' ? 'new' : (route[1] ?? null)} onSaved={loadCatalog} toast={showToast} />
   else if (route[1] === 'new') page = !agents || !catalog ? loading : <div className="dtc-body"><NewTask api={api} agents={agents} toast={showToast} workspaces={catalog.workspaces} /></div>
   else if (route[1] === 'plans') page = <div className="dtc-body"><TaskPlanReview api={api} id={route[2]} /></div>
   else if (route[1] === 'executions') page = <div className="dtc-body"><TaskExecutions api={api} query={query} /></div>

@@ -1168,3 +1168,39 @@ test('host preflight blocks a durable run before creating any agent or dispatchi
   assert.ok([...store.s.runs.values()].some(r => r.status === 'blocked'))
   assert.ok(!store.all().some(e => e.t === 'run/prompt_dispatched'))
 })
+
+test('Studio unblock acknowledges durable ready without waiting for suspended media preflight and claims once', async () => {
+  let calls = 0, release!: () => void, entered!: () => void
+  const suspended = new Promise<void>(resolve => { release = resolve })
+  const preflightEntered = new Promise<void>(resolve => { entered = resolve })
+  const {runner,store,host} = await setup({participants:[{agentId:'a'}],design:{evidenceContract:'studio-video-v1'} as any}, {
+    beforeStart: async () => {calls++;if(calls===1)return {kind:'capability',reason:'fixture preflight unavailable'};entered();await suspended},
+  })
+  const batch = await runner.fire('T','manual'), cardId=batch.cardIds[0]
+  assert.equal(store.s.cards.get(cardId)!.status,'blocked')
+  let acknowledged=false
+  const acknowledgement=runner.unblockCard(cardId).then(()=>{acknowledged=true})
+  await Promise.race([acknowledgement,new Promise((_,reject)=>setTimeout(()=>reject(Error('unblock waited for preflight')),500))])
+  assert.equal(acknowledged,true)
+  assert.ok(store.all().some(e=>e.t==='card/ready'&&e.cardId===cardId))
+  await preflightEntered
+  assert.equal(host.sessions.size,0,'preflight is actually still suspended')
+  await runner.tick();await runner.tick()
+  assert.equal(calls,2,'concurrent ticks do not claim a duplicate run')
+  release();await tick()
+  assert.equal(host.sessions.size,1)
+  assert.equal(store.kernel.listRuns(cardId).length,2,'one prior blocked run and exactly one resumed run')
+  runner.stop()
+})
+
+test('Studio background unblock scheduling failure is durable telemetry, not an unhandled rejection', async () => {
+  const {runner,store}=await setup({participants:[{agentId:'a'}],design:{evidenceContract:'studio-video-v1'} as any},{beforeStart:()=>({kind:'capability',reason:'fixture blocked'})})
+  const batch=await runner.fire('T','manual'),cardId=batch.cardIds[0]
+  runner.tick=async()=>{throw Error('fixture dispatcher failure')}
+  await runner.unblockCard(cardId);await tick()
+  assert.equal(store.s.cards.get(cardId)!.status,'ready')
+  const failure=store.kernel.listEvents(cardId).find(e=>e.kind==='studio_unblock_dispatch_failed')
+  assert.ok(failure)
+  assert.match(failure.payload??'',/fixture dispatcher failure/)
+  runner.stop()
+})

@@ -150,3 +150,16 @@ test('managed Skill copies and hashes ignore interpreter cache files', async () 
   await writeFile(join(source, '__pycache__', 'demo.cpython-39.pyc'), 'changed-cache')
   assert.equal((await verifyPresetSkills(spec, [{ name: 'demo', description: '', dir: source, root: 'test' }], preset))[0].status, 'in-sync')
 })
+
+
+test('Studio web search has a bounded 120-second budget while ordinary Agents and fetch retain defaults', async () => {
+  const {parse} = await import('yaml')
+  const spec={...base,tools:['web','studio-runtime'],mcpTools:{},mcpPolicy:{},skills:[]}
+  const studio=parse(renderComposition(spec,[]).yml).find((row:any)=>row.id==='tool-web')
+  assert.equal(studio.name,'@deepseek-ai/dsh-tool-web')
+  assert.deepEqual(studio.config,{searchTimeoutMs:120000})
+  const ordinary=parse(renderComposition({...spec,tools:['web']},[]).yml).find((row:any)=>row.id==='tool-web')
+  assert.equal(ordinary.config,undefined)
+  const absent=parse(renderComposition({...spec,tools:['studio-runtime']},[]).yml)
+  assert.equal(absent.some((row:any)=>row.id==='tool-web'),false)
+})

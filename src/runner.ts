@@ -55,7 +55,7 @@ export interface RunnerOptions {
   now?: () => number
   onBatchSettled?: (batch: Batch) => void | Promise<void>
   onSessionCreated?: (sessionId: string) => void | Promise<void>
-  registerStudioTools?: (agentCtx: any, input: CompletionCheck, isActive: () => boolean) => Promise<() => void>
+  registerStudioTools?: (agentCtx: any, input: CompletionCheck, isActive: () => boolean, submitReview: () => Promise<void>) => Promise<() => void>
   beforeStart?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
   beforeComplete?: (input: CompletionCheck) => CompletionDecision | void | Promise<CompletionDecision | void>
   beforeBlock?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
@@ -420,6 +420,7 @@ export class TaskRunner {
       this.store.kernel.recordEvent(card.id, 'session_created', { session_id: sessionId }, flight.coreRunId)
       await this.append({ t: 'run/session_created', taskId: task.id, runId, sessionId })
       // The terminators live on this agent's scope only.
+      let submitStudioReview: (() => Promise<void>) | undefined
       try {
         const submit = async (kind: 'completed' | 'review', summary: string, paths: string[], metadata?: Record<string, unknown>, reviewer?: string) => {
           if (flight.terminal) throw new Error('这次运行已经提交了终态')
@@ -429,10 +430,15 @@ export class TaskRunner {
             const observed = await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata })
             if (observed) { summary = observed.summary; metadata = observed.metadata }
           }
+          if(this.flights.get(sessionId)!==flight||flight.terminal)throw new Error('task-run-no-longer-active')
           const at = this.now()
           const captured = await captureArtifacts({ root: this.store.root, task, batchId: batch.id, cardId: card.id, runId, sessionId, at }, paths)
           for (const artifact of captured) await this.append({ t: 'artifact/registered', at, taskId: task.id, artifact })
           flight.terminal = { kind, summary, metadata, reviewer }
+        }
+        submitStudioReview=async()=>{
+          if(card.role!=='reviewer'||task.design?.evidenceContract!=='studio-video-v1')throw new Error('studio-reviewer-required')
+          await submit('completed','Independent studio review submitted.',[])
         }
         flight.disposeTools = await registerWorkerTools(flight.handle.agent.ctx, {
           ...(task.design?.notifications && (['planner','notifier'].includes(card.role ?? '') || profileId === task.design.notifications.agentId) && this.notify ? { notify: (stage: string, exec: any) => this.notify!({ task, batch, card, sessionId, profileId }, stage, async args => {
@@ -517,7 +523,7 @@ export class TaskRunner {
       if (task.design?.evidenceContract === 'studio-video-v1') {
         if (!this.registerStudioTools) throw Error('studio-runtime-tools-unavailable')
         const disposeWorker = flight.disposeTools
-        const disposeStudio = await this.registerStudioTools(flight.handle.agent.ctx, {task,batch,card,sessionId,profileId}, () => this.flights.get(sessionId) === flight && !flight.terminal)
+        const disposeStudio = await this.registerStudioTools(flight.handle.agent.ctx, {task,batch,card,sessionId,profileId}, () => this.flights.get(sessionId) === flight && !flight.terminal, submitStudioReview!)
         flight.disposeTools = () => { disposeStudio(); disposeWorker?.() }
       }
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }
@@ -649,11 +655,12 @@ export class TaskRunner {
         }
       } catch { await this.finish(f, 'run/failed', 'failed', '无法核验后台操作状态，未宣称完成'); return }
     }
-    const nativeEvidence = !!base && !!batch && taskForBatch(base,batch).design?.evidenceContract === 'browser-patrol-v2' && card?.role !== 'planner'
-    const maxNudges = nativeEvidence ? 2 : 1
+    const nativeEvidence = !!base && !!batch && ['browser-patrol-v2','studio-video-v1'].includes(taskForBatch(base,batch).design?.evidenceContract??'') && card?.role !== 'planner'
+    const studioPlanner = !!base && !!batch && taskForBatch(base,batch).design?.evidenceContract === 'studio-video-v1' && card?.role === 'planner'
+    const maxNudges = nativeEvidence || studioPlanner ? 2 : 1
     if ((run?.nudges ?? 0) < maxNudges) {
       await this.append({ t: 'run/nudged', taskId: f.taskId, runId: f.runId })
-      const correction = nativeEvidence ? `${(run?.nudges ?? 0) > 0 ? '最后一次协议纠正。' : ''}上次只有普通文本，没有执行交卷工具。现在请实际调用 task_complete，仅传 JSON 对象 {"summary":"简短如实交接"}，省略 metadata 和 artifacts；或实际调用 task_block 说明阻塞。宿主自动读取证据，不接受你口述成功。不要复查或重发业务操作，不要再次只输出“我将调用”的文字。` : NUDGE
+      const correction = studioPlanner ? '上次只有普通文本，没有执行规划交接工具。请依据真实证据，实际调用 task_plan_round 安排继续制作或返修；全部验收通过才实际调用 task_finalize；无法继续则调用 task_block。参数使用工具定义的 JSON 对象，不要在普通文字中写函数调用，也不要重复已完成的外部操作。' : nativeEvidence ? `${(run?.nudges ?? 0) > 0 ? '最后一次协议纠正。' : ''}上次只有普通文本，没有执行交卷工具。现在请实际调用 task_complete，仅传 JSON 对象 {"summary":"简短如实交接"}，省略 metadata 和 artifacts；或实际调用 task_block 说明阻塞。宿主自动读取证据，不接受你口述成功。不要复查或重发业务操作，不要再次只输出“我将调用”的文字。` : NUDGE
       f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: outcomeNotice ? `${outcomeNotice}\n\n${correction}` : correction }], source: { kind: 'user' } })
       return
     }

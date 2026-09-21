@@ -109,9 +109,9 @@ export class TaskConsoleService extends TypertRemoteService {
     super(ctx, NAMESPACE)
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
-      registerStudioTools: async (agentCtx,input,isActive) => {
+      registerStudioTools: async (agentCtx,input,isActive,submitReview) => {
         const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
-        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,...locks,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
+        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
         try { const speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});return ()=>{speech();media()} } catch(e){media();throw e}
       },
       beforeStart: async input => {

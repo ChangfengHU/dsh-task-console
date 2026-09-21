@@ -22,6 +22,14 @@ test('read text is bounded and binaries rejected',async t=>{const s=await setup(
 test('ordered actual frames return durable image blocks and trusted receipt',async t=>{const s=await setup(t),tool=s.tools.studio_inspect_frames,result=await tool.execute({start:0,end:2}),content=tool.output.render({},result);assert.equal(content.filter((b:any)=>b.type==='image').length,8);assert.equal(result.frames.length,8);assert.equal(s.receipts[0].kind,'frames');assert.equal(s.receipts[0].candidateSha256,hash('video'));assert.match(s.receipts[0].sha256,/^[a-f0-9]{64}$/);await assert.rejects(tool.execute({start:0,end:4}),/range/)})
 test('changed candidate refused and no receipt minted',async t=>{const s=await setup(t);await writeFile(join(s.cwd,'film.mp4'),'altered');await assert.rejects(s.tools.studio_inspect_frames.execute({start:0,end:1}),/changed/);assert.equal(s.receipts.length,0)})
 test('review identity and version supplied by host; not acceptance',async t=>{const s=await setup(t),r=await s.tools.studio_submit_review.execute({checks:[],issues:[],candidateSha256:'fake',revision:900});assert.equal(s.reviews[0].candidateSha256,hash('video'));assert.equal(s.reviews[0].revision,1);assert.equal(r.qualityApproved,false)})
+test('structured review invokes guarded handoff; rejected evidence remains editable',async t=>{
+ const s=await setup(t),tools:any={};let active=true,valid=false,submissions=0
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd:s.cwd},card:{role:'reviewer'},sessionId:'s'},workflow:{candidateLocation:()=>({path:join(s.cwd,'film.mp4')}),status:()=>({candidate:s.getCandidate()}),recordReview:()=>{}},isActive:()=>active,submitReview:async()=>{submissions++;if(!valid)throw Error('host-evidence-invalid');active=false}})
+ await assert.rejects(tools.studio_submit_review.execute({checks:[],issues:[]}),/host-evidence-invalid/)
+ assert.equal(active,true);valid=true
+ const r=await tools.studio_submit_review.execute({checks:[],issues:[]});assert.equal(r.taskHandoff,true);assert.equal(r.qualityApproved,false);assert.equal(submissions,2)
+ await assert.rejects(tools.studio_submit_review.execute({checks:[],issues:[]}),/stale-run/)
+})
 test('audio actual host wav hash recorded with calibration result intact',async t=>{const s=await setup(t),r=await s.tools.studio_inspect_audio.execute({start:1,end:3});assert.equal(r.observation.calibrated,false);assert.equal(r.receipt.kind,'audio');assert.equal(r.qualityApproved,false);await assert.rejects(s.tools.studio_inspect_audio.execute({start:0,end:9}),/range/)})
 test('disposer removes registered tools',async t=>{const s=await setup(t);s.dispose();assert.equal(Object.keys(s.tools).length,0)})
 test('real FFmpeg MP4 probe and frame extraction integration',async t=>{

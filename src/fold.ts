@@ -542,7 +542,13 @@ export function foldTurns(sessionId: string, events: any[], agentPreset?: string
         const parts = (d.message?.content ?? []).flatMap((c: any) => c.type === 'tool-result' ? (c.content ?? []) : [c])
         const txt = parts.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
         row.result = preview(txt, 400); row.ms = e.time - (row._t ?? e.time); delete row._t
-        row.ok = !/"ok":\s*false|^error|exit code [1-9]|Traceback|failed/i.test(txt.slice(0, 200))
+        const explicitError=(d.message?.content??[]).some((c:any)=>c.type==='tool-result'&&c.isError===true)
+        try {
+          const value=JSON.parse(txt)
+          // A status response with `failed: 0` is not a failed tool invocation.
+          // This badge describes the call, never approval of generated media.
+          row.ok=!explicitError&&!(value?.ok===false||value?.isError===true||value?.error||['failed','error'].includes(value?.status)||Number(value?.exitCode)>0)
+        } catch { row.ok = !explicitError&&!/"ok":\s*false|^error|exit code [1-9]|Traceback|failed/i.test(txt.slice(0, 200)) }
         break
       }
       case 'step/end': if (step && !step.ms) step.ms = e.time - +new Date(step.at); step = undefined; break

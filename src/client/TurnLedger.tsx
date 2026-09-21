@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import { serialPoll } from './poll.ts'
 import type { StepRow, ToolRow, TurnLedger as Ledger } from '../wire.ts'
 
 export interface LedgerApi { sessionTurns: (sessionId: string) => Promise<Ledger> }
@@ -23,10 +24,13 @@ export function useLedger(api: LedgerApi, sessionId: string | undefined, live: b
   useEffect(() => {
     if (!sessionId) { setLedger(null); return }
     let stop = false
-    const load = () => api.sessionTurns(sessionId).then(l => { if (!stop) { setLedger(l); setError('') } }).catch(e => { if (!stop) setError(String((e as Error).message ?? e)) })
-    void load()
-    const t = live ? window.setInterval(load, 4000) : undefined
-    return () => { stop = true; if (t) window.clearInterval(t) }
+    setLedger(null); setError('')
+    const cancel = serialPoll(async () => {
+      try { const l = await api.sessionTurns(sessionId); if (!stop) { setLedger(l); setError('') } }
+      catch (e) { if (!stop) setError(String((e as Error).message ?? e)) }
+      return live
+    }, 4000)
+    return () => { stop = true; cancel() }
   }, [api, sessionId, live])
   return { ledger, error }
 }

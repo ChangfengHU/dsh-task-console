@@ -457,8 +457,15 @@ export class EventStore {
     const eventRows = db.prepare(`SELECT id,graph_id,task_id,run_id,kind,payload,created_at FROM task_events WHERE graph_id=? ORDER BY id`).all(batchId) as { id: number; graph_id: string; task_id: string; run_id: number | null; kind: string; payload: string | null; created_at: number }[]
     const events: GraphEventRow[] = eventRows.map(row => ({ ...row, payload: (() => { try { return row.payload ? JSON.parse(row.payload) : {} } catch { return {} } })() }))
     const phaseByKind: Partial<Record<string, GraphRunRow['phase']>> = { claimed: 'claimed', run_bound: 'bound', session_created: 'session_created', prompt_dispatched: 'prompt_dispatched', heartbeat: 'heartbeat', completed: 'completed' }
+    const evidenceByRun = new Map<number, GraphRunRow['evidence']>()
+    for (const event of events) {
+      const phase = phaseByKind[event.kind]
+      if (event.run_id === null || !phase) continue
+      const evidence = evidenceByRun.get(event.run_id) ?? []
+      evidence.push(phase); evidenceByRun.set(event.run_id, evidence)
+    }
     const runs = rawRuns.map(run => {
-      const evidence = events.filter(event => event.run_id === run.id).map(event => phaseByKind[event.kind]).filter(Boolean) as GraphRunRow['evidence']
+      const evidence = evidenceByRun.get(run.id) ?? []
       return { ...run, phase: evidence.at(-1) ?? 'claimed', evidence: [...new Set(evidence)] }
     })
     return { graphId: batchId, taskId, batch: { id: batch.id, firedAt: batch.fired_at, settledAt: batch.settled_at, outcome: batch.outcome }, live: { tasks, links, runs }, events }

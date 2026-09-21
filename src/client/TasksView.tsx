@@ -4,14 +4,16 @@
  * stream, polled while the console is open.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { cronHuman, nextFire, parseCron, validTimeZone } from '../cron.ts'
 import type { AgentRow, ArtifactView, GraphSnapshot, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
 import { ArtifactResultAction, canPreviewArtifact } from './ArtifactDelivery.tsx'
 import { TaskRunAction } from './TaskRunAction.tsx'
+import { useTaskPage } from './use-task-page.ts'
 
 export interface TasksApi {
+  taskPage: (query: import('../task-list.ts').TaskListQuery) => Promise<TaskPage>
   exportConfig: () => Promise<ConfigExportResult>
   createConfigBootstrap: (url: string) => Promise<ConfigBootstrapResult>
   previewConfigImport: (url: string) => Promise<ConfigImportPreview>
@@ -50,6 +52,7 @@ export interface ConfigImportResult { importedAgents: string[]; skippedAgents: {
 export interface ConfigRuntimeJob { jobId: string; state: 'running' | 'complete' | 'failed'; message?: string }
 
 type TaskRow = TaskSpec & { nextFire: string | null }
+export interface TaskPage { page:number; pageSize:number; pages:number; total:number; metrics:{total:number;active:number;attention:number;schedules:number;ended:number}; rows:{task:TaskRow;latest?:Run;history:number;state:ReturnType<typeof taskState>}[]; agents:AgentRow[] }
 
 const fmt = (iso?: string) => iso ? new Date(iso).toTimeString().slice(0, 8) : ''
 const dur = (a?: string, b?: string) => { if (!a) return ''; const s = Math.max(0, Math.round(((b ? +new Date(b) : Date.now()) - +new Date(a)) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` }
@@ -66,15 +69,6 @@ export function runStatus(r: Run): 'run' | 'park' | 'review' | 'done' | 'bad' {
   return 'run'
 }
 
-/** Poll the board while mounted; 2.5s is fast enough to feel live. */
-export function useTasks(api: TasksApi): { tasks: TaskRow[]; runs: Run[]; reload: () => Promise<void>; error: string; loaded: boolean } {
-  const [data, setData] = useState<{ tasks: TaskRow[]; runs: Run[] }>({ tasks: [], runs: [] })
-  const [loaded, setLoaded] = useState(false)
-  const [error, setError] = useState('')
-  const reload = async () => { try { setData(await api.tasks()); setError(''); setLoaded(true) } catch (e) { setError(String((e as Error).message ?? e)) } }
-  useEffect(() => { void reload(); const t = window.setInterval(() => { void reload() }, 2500); return () => window.clearInterval(t) }, [api])
-  return { ...data, reload, error, loaded }
-}
 
 const agentName = (agents: AgentRow[], id: string) => agents.find(a => a.id === id)?.name ?? id
 
@@ -87,17 +81,15 @@ function taskState(task: TaskRow, latest?: Run): ReturnType<typeof runStatus> | 
   return task.trigger.kind === 'cron' ? 'schedule' : 'idle'
 }
 
-const STATE_ORDER: Record<ReturnType<typeof taskState>, number> = { park: 0, review: 1, bad: 2, run: 3, schedule: 4, idle: 5, done: 6 }
 const FILTERS: { id: TaskFilter; label: string }[] = [
   { id: 'all', label: '全部' }, { id: 'active', label: '进行中' }, { id: 'attention', label: '需要处理' }, { id: 'done', label: '已完成' }, { id: 'schedule', label: '时间表' },
 ]
 
 export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: AgentRow[]; toast: (m: string) => void }) {
-  const { tasks, runs, reload, error, loaded } = useTasks(api)
   const [filter, setFilter] = useState<TaskFilter>('all')
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(1)
-  const [pageSize, setPageSize] = useState(8)
+  const [pageSize, setPageSize] = useState(10)
   const [manageOpen, setManageOpen] = useState(false)
   const [confirmText, setConfirmText] = useState('')
   const [clearing, setClearing] = useState<'ended' | 'all' | ''>('')
@@ -105,41 +97,21 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [deleteSelectedOpen, setDeleteSelectedOpen] = useState(false)
   const [deletingSelected, setDeletingSelected] = useState(false)
-  const rows = useMemo(() => {
-    const history = new Map<string, Run[]>()
-    for (const run of runs) history.set(run.taskId, [...(history.get(run.taskId) ?? []), run])
-    return tasks.map(task => {
-      const taskRuns = (history.get(task.id) ?? []).sort((a, b) => b.firedAt.localeCompare(a.firedAt))
-      const latest = taskRuns[0]
-      return { task, latest, history: taskRuns.length, state: taskState(task, latest) }
-    }).sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || (b.latest?.firedAt ?? b.task.createdAt).localeCompare(a.latest?.firedAt ?? a.task.createdAt))
-  }, [tasks, runs, agents])
-  const visible = rows.filter(row => {
-    const q = query.trim().toLowerCase()
-    if (q && !`${row.task.title} ${row.task.brief} ${row.task.participants.map(p => agentName(agents, p.agentId)).join(' ')}`.toLowerCase().includes(q)) return false
-    if (filter === 'active') return row.state === 'run'
-    if (filter === 'attention') return row.state === 'park' || row.state === 'review' || row.state === 'bad'
-    if (filter === 'done') return row.state === 'done'
-    if (filter === 'schedule') return row.task.trigger.kind === 'cron'
-    return true
-  })
-  const active = rows.filter(row => row.state === 'run').length
-  const attention = rows.filter(row => row.state === 'park' || row.state === 'review' || row.state === 'bad').length
-  const schedules = tasks.filter(task => task.trigger.kind === 'cron' && task.enabled).length
-  const ended = rows.filter(row => row.state === 'done' || row.state === 'bad')
-  const pages = Math.max(1, Math.ceil(visible.length / pageSize))
-  const currentPage = Math.min(page, pages)
-  const pageRows = visible.slice((currentPage - 1) * pageSize, currentPage * pageSize)
-  const from = visible.length ? (currentPage - 1) * pageSize + 1 : 0
-  const to = Math.min(currentPage * pageSize, visible.length)
+  const {data,error,reload}=useTaskPage(api,{page,pageSize,query,filter})
+  const loaded=!!data, rows=data?.rows??[], pageRows=rows
+  const total=data?.total??0, totalTasks=data?.metrics.total??0
+  const active=data?.metrics.active??0, attention=data?.metrics.attention??0, schedules=data?.metrics.schedules??0, ended=data?.metrics.ended??0
+  const pages=data?.pages??1, currentPage=data?.page??page
+  const from=total?(currentPage-1)*pageSize+1:0, to=Math.min(currentPage*pageSize,total)
+  const pageAgents=data?.agents??agents
   useEffect(() => setPage(1), [filter, query, pageSize])
-  useEffect(() => setSelected(previous => {
-    const known = new Set(rows.map(row => row.task.id))
-    const next = new Set([...previous].filter(id => known.has(id)))
-    return next.size === previous.size ? previous : next
-  }), [rows])
   const pageIds = pageRows.map(row => row.task.id)
-  const visibleIds = visible.map(row => row.task.id)
+  const collectIds=async (requested:import('../task-list.ts').TaskListQuery)=>{
+    const ids=new Set<string>()
+    for(let page=1;;page++){const result=await api.taskPage({...requested,page,pageSize:10});for(const row of result.rows)ids.add(row.task.id);if(page>=result.pages)break}
+    return [...ids]
+  }
+  const selectAll=async()=>{try{setManySelected(await collectIds({query,filter}),true)}catch(e){setClearError(String(e))}}
   const setManySelected = (ids: string[], checked: boolean) => setSelected(previous => {
     const next = new Set(previous)
     for (const id of ids) checked ? next.add(id) : next.delete(id)
@@ -147,11 +119,11 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
   })
   const toggleSelected = (id: string) => setManySelected([id], !selected.has(id))
   const clearTasks = async (scope: 'ended' | 'all') => {
-    const target = scope === 'ended' ? ended : rows
-    if (!target.length || clearing) return
+    if (clearing) return
     setClearing(scope); setClearError('')
     try {
-      await api.deleteTasks(target.map(row => row.task.id))
+      const target=await collectIds({filter:scope==='ended'?'ended':'all'})
+      await api.deleteTasks(target)
       toast(`已删除 ${target.length} 个任务记录；会话和工作区文件未改动`)
       setManageOpen(false); setConfirmText(''); setPage(1)
       await reload()
@@ -179,7 +151,7 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
         <div className="dtc-storage"><span className="db">▤</span><div><b>本地 SQLite</b><span>任务数据保存在这台 DSH</span></div><i>已连接</i></div>
       </section>
       <section className="dtc-taskmetrics">
-        <div><span>任务组</span><b>{tasks.length}</b><small>可重复运行的目标</small></div>
+        <div><span>任务组</span><b>{totalTasks}</b><small>可重复运行的目标</small></div>
         <div><span>正在执行</span><b className="acc">{active}</b><small>当前活跃任务</small></div>
         <div><span>需要处理</span><b className={attention ? 'warn' : ''}>{attention}</b><small>等待回答、验收或重试</small></div>
         <div><span>已启用时间表</span><b>{schedules}</b><small>按计划自动触发</small></div>
@@ -188,15 +160,15 @@ export function TaskBoard({ api, agents, toast }: { api: TasksApi; agents: Agent
         <div className="dtc-taskfilters">{FILTERS.map(item => <button key={item.id} className={filter === item.id ? 'on' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>)}</div>
         <div className="dtc-tasktool-actions"><label className="dtc-tasksearch"><span>⌕</span><input value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索任务或 Agent" /></label><button className="dtc-btn" onClick={() => { setManageOpen(true); setClearError(''); setConfirmText('') }}>管理任务</button></div>
       </div>
-      {selected.size ? <div className="dtc-taskbulk" aria-label="已选择任务操作"><b>已选 {selected.size} 个任务</b><span>只删除任务台记录；不会删除 DSH 会话或工作区文件。</span><div><button className="dtc-btn sm" onClick={() => setManySelected(pageIds, true)}>选择本页</button><button className="dtc-btn sm" onClick={() => setManySelected(visibleIds, true)}>选择筛选结果 ({visibleIds.length})</button><button className="dtc-btn sm" onClick={() => setSelected(new Set())}>取消选择</button><button className="dtc-btn sm danger" onClick={() => { setClearError(''); setDeleteSelectedOpen(true) }}>删除所选</button></div></div> : null}
+      {selected.size ? <div className="dtc-taskbulk" aria-label="已选择任务操作"><b>已选 {selected.size} 个任务</b><span>只删除任务台记录；不会删除 DSH 会话或工作区文件。</span><div><button className="dtc-btn sm" onClick={() => setManySelected(pageIds, true)}>选择本页</button><button className="dtc-btn sm" onClick={() => void selectAll()}>选择筛选结果 ({total})</button><button className="dtc-btn sm" onClick={() => setSelected(new Set())}>取消选择</button><button className="dtc-btn sm danger" onClick={() => { setClearError(''); setDeleteSelectedOpen(true) }}>删除所选</button></div></div> : null}
       {error ? <div className="dtc-err">{error}</div> : null}
-      {!loaded ? <div className="dtc-empty"><span className="dtc-spin" /> 读取任务…</div> : visible.length ? <><div className="dtc-selectline"><label><input type="checkbox" checked={pageIds.length > 0 && pageIds.every(id => selected.has(id))} onChange={event => setManySelected(pageIds, event.target.checked)} /> 选择本页 {pageIds.length} 个</label><button onClick={() => setManySelected(visibleIds, true)}>选择全部筛选结果 ({visibleIds.length})</button></div><div className="dtc-taskgrid">{pageRows.map(row => <TaskGroupCard key={row.task.id} {...row} selected={selected.has(row.task.id)} onSelect={() => toggleSelected(row.task.id)} agents={agents} api={api} reload={reload} toast={toast} />)}</div><div className="dtc-pagination"><span>第 {from}–{to} 条，共 {visible.length} 条</span><label>每页<select value={pageSize} onChange={event => setPageSize(Number(event.target.value))}><option value={8}>8</option><option value={16}>16</option><option value={32}>32</option></select></label><div><button className="dtc-btn sm" disabled={currentPage <= 1} onClick={() => setPage(1)}>首页</button><button className="dtc-btn sm" disabled={currentPage <= 1} onClick={() => setPage(value => Math.max(1, value - 1))}>上一页</button><b>{currentPage} / {pages}</b><button className="dtc-btn sm" disabled={currentPage >= pages} onClick={() => setPage(value => Math.min(pages, value + 1))}>下一页</button></div></div></> : <div className="dtc-taskempty"><span>▦</span><b>{query ? '没有匹配的任务' : '这个视图还没有任务'}</b><p>{query ? '换一个关键词试试。' : '新建任务后，角色、依赖和运行状态会显示在这里。'}</p>{!query ? <button className="dtc-btn pri" onClick={() => go('tasks/new')}>＋ 新建任务</button> : null}</div>}
+      {!loaded ? <div className="dtc-empty"><span className="dtc-spin" /> 读取任务…</div> : total ? <><div className="dtc-selectline"><label><input type="checkbox" checked={pageIds.length > 0 && pageIds.every(id => selected.has(id))} onChange={event => setManySelected(pageIds, event.target.checked)} /> 选择本页 {pageIds.length} 个</label><button onClick={() => void selectAll()}>选择全部筛选结果 ({total})</button></div><div className="dtc-taskgrid">{pageRows.map(row => <TaskGroupCard key={row.task.id} {...row} selected={selected.has(row.task.id)} onSelect={() => toggleSelected(row.task.id)} agents={pageAgents} api={api} reload={reload} toast={toast} />)}</div><div className="dtc-pagination"><span>第 {from}–{to} 条，共 {total} 条</span><label>每页<select value={pageSize} onChange={event => setPageSize(Number(event.target.value))}><option value={5}>5</option><option value={10}>10</option></select></label><div><button className="dtc-btn sm" disabled={currentPage <= 1} onClick={() => setPage(1)}>首页</button><button className="dtc-btn sm" disabled={currentPage <= 1} onClick={() => setPage(value => Math.max(1, value - 1))}>上一页</button><b>{currentPage} / {pages}</b><button className="dtc-btn sm" disabled={currentPage >= pages} onClick={() => setPage(value => Math.min(pages, value + 1))}>下一页</button></div></div></> : <div className="dtc-taskempty"><span>▦</span><b>{query ? '没有匹配的任务' : '这个视图还没有任务'}</b><p>{query ? '换一个关键词试试。' : '新建任务后，角色、依赖和运行状态会显示在这里。'}</p>{!query ? <button className="dtc-btn pri" onClick={() => go('tasks/new')}>＋ 新建任务</button> : null}</div>}
       {manageOpen ? <div className="dtc-modal" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !clearing) setManageOpen(false) }}><section className="dtc-mbox dtc-cleanbox" role="dialog" aria-modal="true" aria-labelledby="dtc-clean-title">
         <header className="mh"><div><b id="dtc-clean-title">管理任务记录</b><small>只处理任务台数据，不删除 DSH 会话或工作区文件</small></div><button className="dtc-close" aria-label="关闭" disabled={!!clearing} onClick={() => setManageOpen(false)}>×</button></header>
         <div className="mb">
           {clearError ? <div className="dtc-err">{clearError}</div> : null}
-          <div className="dtc-clean-option"><div><b>清理已结束任务</b><p>删除已完成与执行失败的任务及运行记录，共 {ended.length} 个。进行中、待回答和待验收任务会保留。</p></div><button className="dtc-btn danger" disabled={!ended.length || !!clearing} onClick={() => void clearTasks('ended')}>{clearing === 'ended' ? '清理中…' : `清理 ${ended.length} 个`}</button></div>
-          <div className="dtc-clean-option danger"><div><b>清空全部任务</b><p>包括当前活跃任务；正在执行的运行会先取消。此操作无法从任务台撤销。</p><label>输入“清空全部”确认<input value={confirmText} onChange={event => setConfirmText(event.target.value)} placeholder="清空全部" disabled={!!clearing} /></label></div><button className="dtc-btn danger" disabled={!rows.length || confirmText !== '清空全部' || !!clearing} onClick={() => void clearTasks('all')}>{clearing === 'all' ? '清空中…' : `清空 ${rows.length} 个`}</button></div>
+          <div className="dtc-clean-option"><div><b>清理已结束任务</b><p>删除已完成与执行失败的任务及运行记录，共 {ended} 个。进行中、待回答和待验收任务会保留。</p></div><button className="dtc-btn danger" disabled={!ended || !!clearing} onClick={() => void clearTasks('ended')}>{clearing === 'ended' ? '清理中…' : `清理 ${ended} 个`}</button></div>
+          <div className="dtc-clean-option danger"><div><b>清空全部任务</b><p>包括当前活跃任务；正在执行的运行会先取消。此操作无法从任务台撤销。</p><label>输入“清空全部”确认<input value={confirmText} onChange={event => setConfirmText(event.target.value)} placeholder="清空全部" disabled={!!clearing} /></label></div><button className="dtc-btn danger" disabled={!totalTasks || confirmText !== '清空全部' || !!clearing} onClick={() => void clearTasks('all')}>{clearing === 'all' ? '清空中…' : `清空 ${totalTasks} 个`}</button></div>
         </div>
       </section></div> : null}
       {deleteSelectedOpen ? <div className="dtc-modal" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget && !deletingSelected) setDeleteSelectedOpen(false) }}><section className="dtc-mbox dtc-cleanbox" role="dialog" aria-modal="true" aria-labelledby="dtc-delete-selected-title"><header className="mh"><div><b id="dtc-delete-selected-title">删除所选任务</b><small>将删除 {selected.size} 个任务及其运行记录</small></div><button className="dtc-close" aria-label="关闭" disabled={deletingSelected} onClick={() => setDeleteSelectedOpen(false)}>×</button></header><div className="mb"><p>此操作只影响任务台 SQLite 数据。DSH 会话、Agent 配置和工作区文件不会被删除。</p>{clearError ? <div className="dtc-err">{clearError}</div> : null}<div className="dtc-modal-actions"><button className="dtc-btn" disabled={deletingSelected} onClick={() => setDeleteSelectedOpen(false)}>取消</button><button className="dtc-btn danger" disabled={deletingSelected} onClick={() => void deleteSelection()}>{deletingSelected ? '删除中…' : `确认删除 ${selected.size} 个`}</button></div></div></section></div> : null}

@@ -43,6 +43,8 @@ function descriptor(method: string, argc: 0 | 1) {
 
 /** Every method the console calls, in the order the service defines them. */
 export const METHODS = [
+  ['taskPage', 1],
+  ['agentPage', 1],
   ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
   ['startAgentSession', 1], ['sessionTurns', 1], ['agentHistory', 1],
   ['sessionShortcuts', 0], ['setSessionShortcut', 1],

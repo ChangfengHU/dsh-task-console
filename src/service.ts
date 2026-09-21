@@ -129,7 +129,7 @@ export class TaskConsoleService extends TypertRemoteService {
       beforeComplete: async input => {
         if (input.task.design?.evidenceContract === 'studio-video-v1') {
           const workflow=new StudioWorkflow(this.runner.store),operations=new StudioOperations(this.runner.store).snapshot(input)
-          await refreshStudioCapabilities(workflow,input.task)
+          if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task)
           if(operations.unknown||operations.operations.some((o:any)=>o.state==='submitted'))throw Error('studio-generation-reconcile-required: query original jobs before handoff')
           const candidate=workflow.status(input).candidate
           workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})

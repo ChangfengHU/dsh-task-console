@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     this.db.prepare('INSERT INTO dsh_studio_preflight VALUES(?,?,?) ON CONFLICT(task_id) DO UPDATE SET policy_hash=excluded.policy_hash,payload=excluded.payload').run(task.id,ph,JSON.stringify(result))
     return result
   }
-  private requirePreflight(task:any){const row=this.db.prepare('SELECT * FROM dsh_studio_preflight WHERE task_id=?').get(task.id);if(!row||row.policy_hash!==sha(this.policy(task))||!JSON.parse(row.payload).ok)throw Error('blocked_quality_capability: studio-preflight-required');const current=this.preflight(task);if(!current.ok)throw Error(`blocked_quality_capability: ${current.reason}`)}
+  private requirePreflight(task:any){const row=this.db.prepare('SELECT * FROM dsh_studio_preflight WHERE task_id=?').get(task.id);if(!row||row.policy_hash!==sha(this.policy(task)))throw Error('blocked_quality_capability: studio-preflight-required');const current=this.preflight(task);if(!current.ok)throw Error(`blocked_quality_capability: ${current.reason}`)}
   plan(input:any){this.key(input);if(input.card?.role!=='planner')throw Error('studio-planner-required');this.requirePreflight(input.task);if(this.read(input,'runtime_enforcement')===true){const refs=(this.read(input,'reference_receipts')??[]).filter((r:any)=>r.sessionId===input.sessionId);if(!this.script(input)||!refs.some((r:any)=>r.kind==='frames')||!refs.some((r:any)=>r.kind==='audio'))throw Error('studio-plan-requires-script-and-direct-reference')}return {ok:true,status:'ready' as const}}
   recordCandidate(input:any,candidate:any){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
@@ -111,8 +111,16 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     if(!plan||!line||value.candidateSha256!==plan.candidateSha256||value.planSha256!==plan.planSha256||!['source','final'].includes(value.stage)||!HASH.test(value.audioSha256??'')||value.result?.audio_sha256!==value.audioSha256)throw Error('studio-speech-check-invalid')
     const stored={...value,sessionId:input.sessionId};const checks=(this.read(input,'speech_checks')??[]).filter((x:any)=>!(x.lineId===value.lineId&&x.stage===value.stage&&x.sessionId===input.sessionId));this.write(input,'speech_checks',[...checks,stored])
   }
+  hasRejection(input:any){
+    if(input.card?.role!=='reviewer')return false
+    const review=this.read(input,'review'),candidate=this.read(input,'candidate')?.candidate
+    return !!review&&review.reviewerSessionId===input.sessionId&&review.candidateSha256===candidate?.sha256&&review.checks?.some((c:any)=>c.status==='fail')&&review.issues?.some((i:any)=>['major','blocker'].includes(i.severity)&&['open','pending'].includes(i.status))
+  }
   complete(input:any){
-    this.key(input);this.requirePreflight(input.task)
+    this.key(input)
+    // A grounded rejection can be handed back during an unrelated dependency
+    // outage. Full evidence validation below still applies; no success shortcut.
+    if(!this.hasRejection(input))this.requirePreflight(input.task)
     const saved=this.read(input,'candidate'),review=this.read(input,'review'),budget=this.read(input,'budget')
     const policy=this.policy(input.task),role=input.card?.role
     if(!saved||!budget||saved.policyHash!==sha(policy))throw Error('studio-version-bound-trusted-review-required')

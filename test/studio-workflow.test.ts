@@ -34,3 +34,12 @@ test('enforced runtime cannot plan without frozen script and actual reference sa
 test('runtime requires complete speech plan and forbids arbitrary script replacement',t=>{const {workflow,input}=setup(t);proof(workflow,input);workflow.enforceRuntime(input);workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'完整台词。'}]});assert.throws(()=>workflow.recordScript(input,{sha256:h('d'),lines:[{id:'1',text:'删去台词。'}]}),/independent-review/);assert.throws(()=>workflow.complete({...input,card:{role:'executor'},sessionId:'producer'}),/speech-plan-required/)})
 
 test('capability refresh invalidates snapshot; rebuild before planning gate',t=>{const {workflow,input}=setup(t);capabilities(workflow,input.task);workflow.preflight(input.task);capabilities(workflow,input.task);assert.throws(()=>workflow.plan(input),/preflight-required/);workflow.preflight(input.task);assert.equal(workflow.plan(input).ok,true)})
+
+test('producer reference observations are role stamped and cannot substitute independent candidate receipts',t=>{
+ const {workflow,input}=setup(t),{reviewer,candidate}=proof(workflow,input),producer={...input,card:{role:'executor'},sessionId:'producer'}
+ const ref=workflow.recordReferenceReceipt(producer,{referenceSha256:h('b'),sha256:h('d'),kind:'audio',ranges:[[0,8]],sessionId:'reviewer',role:'reviewer'})
+ assert.equal(ref.sessionId,'producer');assert.equal(ref.role,'executor')
+ assert.throws(()=>workflow.recordReceipt(producer,{candidateSha256:candidate.sha256,sha256:h('d'),kind:'audio',ranges:[[0,8]]}),/reviewer-required/)
+ workflow.recordReview(reviewer,{candidateSha256:candidate.sha256,referenceSha256:h('b'),revision:1,checks:DEFAULT_DIMENSIONS.map((dimension:string)=>({dimension,status:'pass',finding:'Cannot borrow producer reference.',ranges:[[0,100]],evidenceReceiptIds:[ref.id]})),issues:[]})
+ assert.throws(()=>workflow.complete(input),/quality-gate-failed/)
+})

@@ -58,3 +58,12 @@ export async function checkStudioSpeech(task:any,args:{wavPath:string,start:numb
  const config=deps.config??await configuration();if(!config.speechScript||!config.vaultTokenFile)throw Error('studio-speech-host-not-configured');const result=await(deps.execute??execute)(config.speechScript,[args.wavPath,'--expected-text',args.expectedText,'--stage',args.stage,'--start-seconds',String(args.start),'--end-seconds',String(args.end)],task,config)
  audioFailure(result,'studio-speech');if(result.audio_sha256!==await fileSha256(args.wavPath)||result.expected_text_sha256!==hash(args.expectedText)||!['pass','blocked'].includes(result.content_gate))throw Error('studio-speech-observation-invalid');return result
 }
+
+/** Actual Qwen VL observations; the language planner cannot self-attest seeing an image. */
+export async function observeStudioVision(task:any,args:import('./studio-tools.js').VisionInput,deps:HostDeps={}){
+ const config=deps.config??await configuration();if(!config.visionScript||!config.vaultTokenFile)throw Error('studio-vision-host-not-configured')
+ const result=await(deps.execute??execute)(config.visionScript,[],task,config,JSON.stringify(args));audioFailure(result,'studio-vision')
+ if(result.input_modality!=='input_image'||result.finish_reason!=='stop'||!result.observation||!Array.isArray(result.images)||result.images.length!==args.images.length)throw Error('studio-vision-observation-invalid')
+ for(let i=0;i<args.images.length;i++){const expected=args.images[i];if(result.images[i].sha256!==expected.sha256||result.images[i].time!==expected.time||await fileSha256(expected.path)!==expected.sha256)throw Error('studio-vision-observation-invalid')}
+ return result
+}

@@ -110,3 +110,22 @@ test('status refresh is single-flight and rejects a session becoming inactive du
  await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd:s.cwd},card:{role:'executor'},sessionId:'s'},workflow:{preflight,status:()=>({preflight:preflight()})},isActive:()=>active,refreshPreflight:async()=>{calls++;await waiting}})
  const first=tools.studio_status.execute({}),second=tools.studio_status.execute({});assert.equal(calls,1);active=false;release();await assert.rejects(first,/stale/);await assert.rejects(second,/stale/)
 })
+
+test('text-only model receives actual visual observations; failures never create receipts',async t=>{
+ const s=await setup(t),tools:any={},receipts:any[]=[];let mode='ok',active=true
+ const input={task:{cwd:s.cwd},card:{role:'reviewer'},sessionId:'s'}
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}},get:()=>({saveImage:async()=>({attachmentId:'sample'})})},{input,workflow:{candidateLocation:()=>({path:join(s.cwd,'film.mp4')}),status:()=>({candidate:s.getCandidate()}),recordReceipt:(_:any,r:any)=>{receipts.push(r);return r}},isActive:()=>active,runCommand:async(_,args)=>{await writeFile(args.at(-1)!,'frame');return {stdout:''}},visionObserve:async({images})=>{if(mode==='error')throw Error('provider unavailable');if(mode==='stale')active=false;if(mode==='changed')await writeFile(images[0].path,'changed');return {ok:true,input_modality:mode==='text'?'text':'input_image',finish_reason:'stop',images:images.map(({path,...f})=>({...f,sha256:mode==='hash'?'bad':f.sha256})),observation:'Observed visual details'}}})
+ const tool=tools.studio_inspect_frames,r=await tool.execute({start:0,end:1});assert.equal(r.observation.input_modality,'input_image');assert.equal(tool.output.render({},r).some((b:any)=>b.type==='image'),false);assert.equal(receipts.length,1)
+ for(const value of ['error','text','hash','changed','stale']){mode=value;await assert.rejects(tool.execute({start:0,end:1}));assert.equal(receipts.length,1)}
+})
+
+test('producer visual previews stay scoped and never mint reviewer receipts',async t=>{
+ const s=await setup(t,'executor'),tools:any={};let active=true;const input={task:{cwd:s.cwd},card:{role:'executor'},sessionId:'s'}
+ await writeFile(join(s.cwd,'asset.png'),'image')
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input,workflow:{recordReceipt:()=>{throw Error('must not mint receipt')}},isActive:()=>active,runCommand:async(file,args)=>{if(file.includes('ffprobe'))return {stdout:JSON.stringify({streams:[{codec_type:'video'}],format:{duration:5}})};await writeFile(args.at(-1)!,'frame');return {stdout:''}},visionObserve:async({images,purpose})=>{assert.equal(purpose,'preview');return {ok:true,input_modality:'input_image',finish_reason:'stop',images:images.map(({path,...f})=>f),observation:'observed'}}})
+ const r=await tools.studio_preview_image.execute({path:'asset.png'});assert.equal(r.independentReview,false);assert.equal(r.receipt,undefined)
+ const frames=await tools.studio_preview_frames.execute({path:'film.mp4',start:0,end:1});assert.equal(frames.frames.length,8);assert.equal(frames.independentReview,false)
+ await assert.rejects(tools.studio_preview_image.execute({path:'/etc/hosts'}),/outside-project/);await assert.rejects(tools.studio_preview_frames.execute({path:'film.mp4',start:0,end:3}),/range/)
+ input.card.role='reviewer';const other:any={};await registerStudioTools({tools:{register:(v:any)=>{other[v.name]=v;return()=>{}}}},{input,workflow:{},isActive:()=>true});await assert.rejects(other.studio_preview_image.execute({path:'asset.png'}),/role/)
+ active=false;await assert.rejects(tools.studio_preview_image.execute({path:'asset.png'}),/stale/)
+})

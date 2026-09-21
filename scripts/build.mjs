@@ -34,6 +34,7 @@ await build({
   entryPoints: [
     join(root, 'src/index.ts'),
     join(root, 'src/typert.host.ts'),
+    join(root, 'src/studio-schema.ts'),
     join(root, 'src/agent-tool-fence.ts'),
     join(root, 'src/filtered-mcp-client.ts'),
     join(root, 'src/fleet-onboard-tools.ts'),

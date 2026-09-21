@@ -230,6 +230,8 @@ test('static workflows send one reviewed final-handoff notification from the fro
   assert.notEqual(notifier,worker);host.consumeFirst(notifier)
   const job=await host.callTool(notifier,'task_patrol_status',{})
   assert.equal(job.stage,'completed');assert.equal(job.report.summary,'No retirement candidates; no machine changed.')
+  await assert.rejects(host.callTool(notifier,'task_complete',{summary:'sent without evidence'}),/task_notify/)
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
   await assert.rejects(host.callTool(notifier,'task_notify',{stage:'findings'}),/completed/)
   await host.callTool(notifier,'task_notify',{stage:'completed'});await host.callTool(notifier,'task_notify',{stage:'completed'})
   assert.equal(delivered.length,1);assert.match(delivered[0],/No retirement candidates/)

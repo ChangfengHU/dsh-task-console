@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { cronHuman } from '../cron.ts'
 import { actorOf, batchStatus, cardRun, describe, fold, type Batch, type Card, type Event, type Run, type State, type TaskSpec } from '../fold.ts'
 import { buildTaskGraph, layoutTaskGraph, type PositionedTaskGraph, type TaskGraphNode } from '../task-graph.ts'
-import type { AgentRow, ArtifactView } from '../wire.ts'
+import type { AgentRow, ArtifactView, TaskSnapshot } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
 import type { TasksApi } from './TasksView.tsx'
 import { TurnLedgerView, useLedger, type LedgerApi } from './TurnLedger.tsx'
@@ -13,6 +13,14 @@ import { ArtifactDelivery } from './ArtifactDelivery.tsx'
 import { ExecutionPicker } from './ExecutionPicker.tsx'
 import { WorkflowPlan } from './WorkflowPlan.tsx'
 import { TaskRunAction } from './TaskRunAction.tsx'
+import { QueryCache } from './query-cache.ts'
+
+const detailCaches = new WeakMap<TasksApi, QueryCache<TaskSnapshot>>()
+function detailCache(api: TasksApi) {
+  let cache = detailCaches.get(api)
+  if (!cache) { cache = new QueryCache<TaskSnapshot>(15000, 20); detailCaches.set(api, cache) }
+  return cache
+}
 
 const fmt = (iso?: string) => iso ? new Date(iso).toLocaleTimeString('zh-CN', { hour12: false }) : ''
 const dur = (a?: string, b?: string) => { if (!a) return ''; const s = Math.max(0, Math.round(((b ? +new Date(b) : Date.now()) - +new Date(a)) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` }
@@ -142,6 +150,7 @@ function TaskDag({ graph, cards, selected, onSelect }: { graph: PositionedTaskGr
 
 export function TaskReplay({ api, agents, id, runId, sessionId, report = false, toast }: { api: TasksApi & LedgerApi; agents: AgentRow[]; id: string; runId?: string; sessionId?: string; report?: boolean; toast: (m: string) => void }) {
   const [events, setEvents] = useState<Event[]>([])
+  const [detail, setDetail] = useState<TaskSnapshot['detail']>()
   const [artifacts, setArtifacts] = useState<ArtifactView[]>([])
   const [artifactBatch, setArtifactBatch] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -155,6 +164,13 @@ export function TaskReplay({ api, agents, id, runId, sessionId, report = false, 
 
   useEffect(() => {
     let stop = false
+    setDetail(undefined); setEvents([]); setError('')
+    const cache = detailCache(api), cacheKey = JSON.stringify([id, runId ?? null])
+    const showSnapshot = (next: TaskSnapshot) => {
+      setDetail(next.detail); setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId); setError('')
+    }
+    const cached = cache.peek(cacheKey)
+    if (cached) showSnapshot(cached)
     let poll: number | undefined
     const loadEvents = async () => {
       try {
@@ -169,9 +185,9 @@ export function TaskReplay({ api, agents, id, runId, sessionId, report = false, 
     }
     const loadSnapshot = async () => {
       try {
-        const next = await api.taskSnapshot(id, runId)
+        const next = await cache.load(cacheKey, () => api.taskSnapshot(id, runId))
         if (!stop) {
-          setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId); setError('')
+          showSnapshot(next)
           const state = fold(next.events as Event[])
           const spec = state.tasks.get(id)
           const selected = next.batchId ? state.batches.get(next.batchId) : undefined
@@ -186,10 +202,10 @@ export function TaskReplay({ api, agents, id, runId, sessionId, report = false, 
   const upto = cursor === null ? events.length : Math.min(cursor, events.length)
   const full = useMemo(() => fold(events), [events])
   const now = useMemo(() => cursor === null ? full : fold(events.slice(0, upto)), [events, upto, cursor, full])
-  const task: TaskSpec | undefined = full.tasks.get(id)
-  const batches = [...full.batches.values()].filter(b => b.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))
-  const selId = runId ?? batches.find(batch => !batch.archivedAt)?.id
-  const batchFull: Batch | undefined = selId ? full.batches.get(selId) : undefined
+  const task: TaskSpec | undefined = detail?.task ?? full.tasks.get(id)
+  const batches = detail?.batches ?? [...full.batches.values()].filter(b => b.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))
+  const selId = runId ?? (detail ? artifactBatch ?? undefined : batches.find(batch => !batch.archivedAt)?.id)
+  const batchFull: Batch | undefined = batches.find(batch => batch.id === selId)
   const batchNow: Batch | undefined = selId ? now.batches.get(selId) : undefined
   const batchEvents = useMemo(() => batchFull ? events.map((e, index) => ({ e, index })).filter(x => belongsToBatch(x.e, batchFull.id)) : [], [events, batchFull?.id])
   const eventStep = batchEvents.filter(({ index }) => index < upto).length
@@ -225,15 +241,16 @@ export function TaskReplay({ api, agents, id, runId, sessionId, report = false, 
   const agentName = (aid: string) => agents.find(a => a.id === aid)?.name ?? aid
   const archiveBatch = async (batchId: string, archived: boolean) => {
     await api.setBatchArchived(id, batchId, archived)
+    detailCache(api).clear()
     const next = await api.taskSnapshot(id)
-    setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId)
+    setDetail(next.detail); setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId)
     toast(archived ? '执行已归档，原始历史与会话保留' : '已恢复显示，不会自动重跑')
     go(`tasks/${id}`)
   }
   if (!task) return <div className="dtc-empty">{error || (events.length ? '没有这个任务' : <><span className="dtc-spin" /> 读取事件流…</>)}</div>
-  if ((task.graphMode === 'dynamic-rounds' || task.origin?.source === 'task-chat') && selId) return <DynamicTaskReplay key={selId} report={report} api={api} agents={agents} task={task} batches={batches} batchId={selId} sessionId={sessionId} toast={toast} onBatchArchive={archiveBatch} />
+  if ((task.graphMode === 'dynamic-rounds' || task.origin?.source === 'task-chat') && selId) return <DynamicTaskReplay key={selId} report={report} api={api} agents={agents} task={task} batches={batches} archivedTotal={detail?.archived} batchId={selId} sessionId={sessionId} toast={toast} onBatchArchive={archiveBatch} />
   if (!selId && task.origin) return <section className="dtc-workflow">
-    <header><div><h2>{task.title}</h2><p>{batches.length ? `没有当前执行 · ${batches.length} 条历史已归档` : '已创建 · 尚未执行 · 0 次执行记录'}</p></div><ExecutionPicker batches={batches} value="" onChange={bid => go(`tasks/${id}/runs/${bid}`)} onArchive={archiveBatch} /><TaskRunAction task={task} api={api} toast={toast} /></header>
+    <header><div><h2>{task.title}</h2><p>{batches.length ? `没有当前执行 · ${detail?.total ?? batches.length} 条历史已归档` : '已创建 · 尚未执行 · 0 次执行记录'}</p></div><ExecutionPicker batches={batches} archivedTotal={detail?.archived} value="" onChange={bid => go(`tasks/${id}/runs/${bid}`)} onArchive={archiveBatch} /><TaskRunAction task={task} api={api} toast={toast} /></header>
     <p>{task.trigger.kind === 'cron' ? `时间表：${task.trigger.expr} · ${task.trigger.timeZone || '宿主时区'} · ${task.enabled ? '已启用' : '未启用，等待手动验收'}` : '等待首次手动执行。'}运行前没有角色、闸门或依赖行，不展示虚构 DAG。</p>
     <WorkflowPlan task={task} nameOf={agentName} openSession={sid=>void api.openSession(sid).catch(e=>toast(String(e.message||e)))} trace={sid=>void api.openSession(sid).catch(e=>toast(String(e.message||e)))} />
   </section>

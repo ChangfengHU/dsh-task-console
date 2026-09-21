@@ -1048,7 +1048,17 @@ export class TaskConsoleService extends TypertRemoteService {
 
   /** Initial detail payload in one round trip; live polling stays event-only afterwards. */
   async taskSnapshot(payload: string): Promise<string> {
-    const { id, batchId } = JSON.parse(payload) as { id: string; batchId?: string }
+    const { id, batchId, summary } = JSON.parse(payload) as { id: string; batchId?: string; summary?: boolean }
+    const task = this.runner.store.s.tasks.get(id)
+    if (summary && task && (task.graphMode === 'dynamic-rounds' || task.origin?.source === 'task-chat')) {
+      const all = [...this.runner.store.s.batches.values()].filter(b => b.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))
+      const selected = batchId ? all.find(b => b.id === batchId) : all.find(b => !b.archivedAt)
+      if (batchId && !selected) throw new Error('执行记录不属于这个任务')
+      const recent = all.slice(0, 10)
+      if (selected && !recent.some(b => b.id === selected.id)) recent.splice(9, 1, selected)
+      const batches = recent.map(b => b.id === selected?.id ? b : { ...b, turn: undefined, cardIds: [] })
+      return JSON.stringify({ events: [], artifacts: [], batchId: selected?.id ?? null, detail: { task, batches, total: all.length, archived: all.filter(b => b.archivedAt).length } })
+    }
     const events = this.runner.store.all().filter((e: any) => e.taskId === id).map((e: any) => e.t === 'artifact/registered' ? { ...e, artifact: this.artifactView(e.artifact) } : e)
     if (!this.runner.store.s.tasks.has(id)) return JSON.stringify({ events, artifacts: [], batchId: null })
     const selected = batchId ?? [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === id && !batch.archivedAt).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]?.id

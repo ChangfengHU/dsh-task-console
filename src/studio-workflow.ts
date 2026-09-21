@@ -63,11 +63,16 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     this.write(input,'review',{...review,reviewerSessionId:input.sessionId})
   }
   recordBudget(input:any,budget:any){strict(budget,['repairRounds','used','limits','exceeded','maxRepairRounds'],'budget');this.write(input,'budget',budget)}
+  recordSkillLoad(input:any,receipt:any){
+    if(input.card?.role!=='executor'||!HASH.test(receipt.sha256??'')||typeof receipt.name!=='string'||typeof receipt.callId!=='string'||!Number.isInteger(receipt.bytes)||receipt.bytes<1)throw Error('studio-skill-load-invalid')
+    const rows=(this.read(input,'skill_loads')??[]).filter((r:any)=>r.sessionId!==input.sessionId||r.name!==receipt.name)
+    this.write(input,'skill_loads',[...rows,{...receipt,sessionId:input.sessionId,policyHash:sha(this.policy(input.task)),at:new Date().toISOString()}])
+  }
   recordIntervention(input:any,reason:string){if(typeof reason!=='string'||!reason.trim())throw Error('studio-intervention-reason');this.write(input,'interventions',[...(this.read(input,'interventions')??[]),{reason,at:new Date().toISOString()}])}
   status(input:any){
     this.key(input)
     const current=this.read(input,'candidate'),ph=sha(this.policy(input.task))
-    return {candidate:current?.policyHash===ph?current.candidate:null,review:current?.policyHash===ph?(this.read(input,'review')??null):null,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight:this.preflight(input.task),script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[]}
+    return {candidate:current?.policyHash===ph?current.candidate:null,review:current?.policyHash===ph?(this.read(input,'review')??null):null,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight:this.preflight(input.task),script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
   }
   recordCandidateLocation(input:any,location:{path:string;manifestPath:string;sha256:string}){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')

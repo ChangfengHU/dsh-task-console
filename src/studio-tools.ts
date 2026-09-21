@@ -17,7 +17,7 @@ export async function studioPath(cwd:string,value:string,text=false){
  if(!(await stat(p)).isFile())throw Error('studio-file-required')
  return p
 }
-export interface StudioToolOptions {input:any;workflow:any;isActive:()=>boolean;audioObserve?:(value:{wavPath:string;start:number;end:number})=>Promise<any>;runCommand?:(file:string,args:string[])=>Promise<{stdout:string}>;reference?:{path:string;sha256:string};characterReferences?:{id:string;path:string;sha256:string}[];referenceReceipt?:(value:{referenceSha256:string;kind:'frames'|'audio';ranges:number[][];sha256:string})=>any}
+export interface StudioToolOptions {input:any;workflow:any;isActive:()=>boolean;refreshPreflight?:()=>Promise<{reference?:{path:string;sha256:string};characterReferences?:{id:string;path:string;sha256:string}[]}|void>;audioObserve?:(value:{wavPath:string;start:number;end:number})=>Promise<any>;runCommand?:(file:string,args:string[])=>Promise<{stdout:string}>;reference?:{path:string;sha256:string};characterReferences?:{id:string;path:string;sha256:string}[];referenceReceipt?:(value:{referenceSha256:string;kind:'frames'|'audio';ranges:number[][];sha256:string})=>any}
 export async function registerStudioTools(agentCtx:any,options:StudioToolOptions):Promise<()=>void>{
  const {input,workflow,isActive}=options,role=input.card?.role,disposers:(()=>void)[]=[]
  const defineTool=process.env.NODE_ENV==='test'?(s:any)=>s:(await import('@deepseek-ai/dsh-tools')).defineTool
@@ -28,12 +28,29 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
  const attachmentStore=()=>{const store=typeof agentCtx.get==='function'?agentCtx.get('attachments'):agentCtx.attachments;if(typeof store?.saveImage!=='function')throw Error('studio-image-attachment-capability-required');return store}
  const requireRole=(roles:string[])=>{if(!roles.includes(role))throw Error('studio-role-denied')}
  const register=(name:string,description:string,parameters:any,execute:(args:any)=>Promise<any>,images=false)=>{
-  disposers.push(agentCtx.tools.register(defineTool({name,description,parameters,output:{schema:{type:'object',additionalProperties:true},render:(_:any,v:any)=>[{type:'text',text:JSON.stringify(images?{...v,images:undefined}:v)},...(images?(v.images??[]).map((attachment:any)=>({type:'image',attachment})):[])]},async execute(args:any,exec:any){check(exec);return JSON.parse(JSON.stringify(await execute(args)))}})))
+  disposers.push(agentCtx.tools.register(defineTool({name,description,parameters,output:{schema:{type:'object',additionalProperties:true},render:(_:any,v:any)=>[{type:'text',text:JSON.stringify(images?{...v,images:undefined}:v)},...(images?(v.images??[]).map((attachment:any)=>({type:'image',attachment})):[])]},async execute(args:any,exec:any){check(exec);const result=await execute(args);check(exec);return JSON.parse(JSON.stringify(result))}})))
  }
  const current=async()=>{const location=workflow.candidateLocation(input),state=workflow.status(input),saved=state.candidate,candidate=saved?.candidate??saved;if(!location||!candidate)throw Error('studio-candidate-required');const path=await studioPath(input.task.cwd,location.path);if(await fileSha256(path)!==candidate.sha256)throw Error('studio-candidate-file-changed');check();return {path,candidate}}
  const directory=async()=>{const root=await realpath(input.task.cwd),base=join(root,'.studio-review');await mkdir(base,{recursive:true,mode:0o700});if(await realpath(base)!==base)throw Error('studio-review-directory-symlink');return mkdtemp(join(base,'sample-'))}
  const interval=(args:any,duration:number,max:number)=>{const {start,end}=args;if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>duration||end-start>max)throw Error('studio-invalid-sample-range');return [start,end]}
- register('studio_status','Read host preflight and current version-bound workflow state; not aesthetic approval.',{},async()=>({preflight:workflow.preflight(input.task),state:workflow.status(input),artifacts:workflow.status(input).candidate?(()=>{const loc=workflow.candidateLocation(input);return {manifestPath:relative(input.task.cwd,loc.manifestPath),videoPath:relative(input.task.cwd,loc.path)}})():null,reference:options.reference?{sha256:options.reference.sha256}:null,characterReferences:(options.characterReferences??[]).map(({id,sha256})=>({id,sha256}))}))
+ let refreshingPreflight:Promise<void>|undefined,lastRefreshAttempt=0
+ register('studio_status','Read host preflight and current version-bound state. Expired/missing host proofs trigger actual dependency revalidation; never aesthetic approval.',{},async()=>{
+  let preflight=workflow.preflight(input.task)
+  const needsRefresh=preflight.ok!==true&&preflight.checks?.some((c:any)=>['expired','missing','policy_mismatch','unknown'].includes(c.status))
+  if(needsRefresh&&options.refreshPreflight){
+   if(!refreshingPreflight&&Date.now()-lastRefreshAttempt>=60000){
+    lastRefreshAttempt=Date.now()
+    refreshingPreflight=(async()=>{check();const locks=await options.refreshPreflight!();check();if(locks){options.reference=locks.reference;options.characterReferences=locks.characterReferences}})().finally(()=>{refreshingPreflight=undefined})
+   }
+   if(refreshingPreflight)await refreshingPreflight
+  }
+  check();const state=workflow.status(input)
+  // status() performs the authoritative fresh preflight once; expose that exact
+  // snapshot at both levels, avoiding split results at an expiration boundary.
+  preflight=state.preflight??workflow.preflight(input.task)
+  const artifacts=state.candidate?(()=>{const loc=workflow.candidateLocation(input);return {manifestPath:relative(input.task.cwd,loc.manifestPath),videoPath:relative(input.task.cwd,loc.path)}})():null
+  return {preflight,state:{...state,preflight},artifacts,reference:options.reference?{sha256:options.reference.sha256}:null,characterReferences:(options.characterReferences??[]).map(({id,sha256})=>({id,sha256}))}
+ })
  register('studio_register_candidate','Producer only: register actual project MP4 and manifest after host probing and hashing.',{path:{type:'string',required:true},manifestPath:{type:'string',required:true},revision:{type:'number',required:true}},async args=>{
   requireRole(['executor']);if(!Number.isInteger(args.revision)||args.revision<1)throw Error('studio-invalid-revision')
   const path=await studioPath(input.task.cwd,args.path),manifestPath=await studioPath(input.task.cwd,args.manifestPath)

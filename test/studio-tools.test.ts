@@ -86,3 +86,27 @@ test('producer can observe locked reference frames and audio without reviewer ca
  await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}},get:()=>({saveImage:async()=>({attachmentId:'frame'})})},{input,workflow:{},isActive:()=>true,reference:{path:join(s.cwd,'film.mp4'),sha256:hash('video')},referenceReceipt:v=>{refs.push(v);return v},runCommand:async(file,args)=>{if(file.includes('ffprobe'))return {stdout:JSON.stringify({format:{duration:100}})};await writeFile(args.at(-1)!,'sample');return {stdout:''}},audioObserve:async({wavPath})=>({input_modality:'input_audio',audio_sha256:await fileSha256(wavPath)})})
  assert.equal((await tools.studio_reference_frames.execute({start:0,end:1})).images.length,8);assert.equal((await tools.studio_reference_audio.execute({start:0,end:2})).scope,'reference-only');assert.equal(refs.length,2);assert.equal(refs.some(v=>v.candidateSha256),false);await assert.rejects(tools.studio_submit_review.execute({checks:[],issues:[]}),/role/)
 })
+
+test('status renews expired host proof once and returns one coherent preflight snapshot',async t=>{
+ const s=await setup(t),tools:any={};let status='expired',calls=0,reads=0
+ const preflight=()=>({ok:status==='passed',status:status==='passed'?'ready':'blocked_quality_capability',checks:[{name:'audio',status}]})
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd:s.cwd},card:{role:'executor'},sessionId:'s'},workflow:{preflight,status:()=>{reads++;return {candidate:null,preflight:preflight()}}},isActive:()=>true,refreshPreflight:async()=>{calls++;status='passed';return {reference:{path:'locked-reference',sha256:'a'.repeat(64)},characterReferences:[{id:'character',path:'locked-image',sha256:'b'.repeat(64)}]}}})
+ const result=await tools.studio_status.execute({});assert.equal(calls,1);assert.equal(result.preflight.ok,true);assert.deepEqual(result.preflight,result.state.preflight);assert.equal(result.characterReferences[0].id,'character');assert.equal(reads,1)
+ await tools.studio_status.execute({});assert.equal(calls,1,'unexpired successful proofs do not rerun dependency checks')
+})
+
+test('status failed revalidation stays blocked and callback errors cannot become a pass',async t=>{
+ const s=await setup(t),tools:any={};let status='missing',calls=0
+ const preflight=()=>({ok:false,status:'blocked_quality_capability',checks:[{name:'render',status}]})
+ const input={task:{cwd:s.cwd},card:{role:'executor'},sessionId:'s'},workflow={preflight,status:()=>({candidate:null,preflight:preflight()})},ctx={tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}}
+ await registerStudioTools(ctx,{input,workflow,isActive:()=>true,refreshPreflight:async()=>{calls++;status='failed'}})
+ const result=await tools.studio_status.execute({});assert.equal(result.preflight.ok,false);assert.equal(result.preflight.checks[0].status,'failed');await tools.studio_status.execute({});assert.equal(calls,1)
+ status='expired';await registerStudioTools(ctx,{input,workflow,isActive:()=>true,refreshPreflight:async()=>{throw Error('actual host unavailable')}});await assert.rejects(tools.studio_status.execute({}),/host unavailable/)
+})
+
+test('status refresh is single-flight and rejects a session becoming inactive during revalidation',async t=>{
+ const s=await setup(t),tools:any={};let active=true,calls=0,release!:()=>void
+ const waiting=new Promise<void>(r=>release=r),preflight=()=>({ok:false,checks:[{name:'character',status:'expired'}]})
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd:s.cwd},card:{role:'executor'},sessionId:'s'},workflow:{preflight,status:()=>({preflight:preflight()})},isActive:()=>active,refreshPreflight:async()=>{calls++;await waiting}})
+ const first=tools.studio_status.execute({}),second=tools.studio_status.execute({});assert.equal(calls,1);active=false;release();await assert.rejects(first,/stale/);await assert.rejects(second,/stale/)
+})

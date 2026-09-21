@@ -3,13 +3,15 @@
 ## Scope
 
 Added the `fleet-node-retirer` preset for one reusable retirement workflow. It
-has no native tool or Skill inheritance and receives only three Fleet MCP
-tools: read the code-enforced eligibility gate, retire one eligible node and
-read lifecycle audit. It cannot SSH, call generic Vault deletion, disable a
+has no native tool or Skill inheritance and receives only four Fleet MCP
+tools: discover due nodes, read one code-enforced eligibility gate, retire one
+eligible node and read lifecycle audit. The read-only discovery call lets one
+reusable schedule avoid hard-coded IPs. It cannot SSH, call generic Vault deletion, disable a
 healthy node or erase a remote machine.
 
 The reusable Task is intentionally not tied to an IP. The first production
-acceptance will use the owner's explicit host-206 eligibility override, then
+acceptance will use host-206 only if live patrol evidence still satisfies the
+gate (the owner-authorized override is a fallback, not fabricated history), then
 hand the final receipt to the existing WeCom notifier. Future runs must rely on
 the same server-side 168-hour gate and fresh-unreachable verification.
 

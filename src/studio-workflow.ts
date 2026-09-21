@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     return result
   }
   private requirePreflight(task:any){const row=this.db.prepare('SELECT * FROM dsh_studio_preflight WHERE task_id=?').get(task.id);if(!row||row.policy_hash!==sha(this.policy(task))||!JSON.parse(row.payload).ok)throw Error('blocked_quality_capability: studio-preflight-required');const current=this.preflight(task);if(!current.ok)throw Error(`blocked_quality_capability: ${current.reason}`)}
-  plan(input:any){this.key(input);if(input.card?.role!=='planner')throw Error('studio-planner-required');this.requirePreflight(input.task);return {ok:true,status:'ready' as const}}
+  plan(input:any){this.key(input);if(input.card?.role!=='planner')throw Error('studio-planner-required');this.requirePreflight(input.task);if(this.read(input,'runtime_enforcement')===true){const refs=(this.read(input,'reference_receipts')??[]).filter((r:any)=>r.sessionId===input.sessionId);if(!this.script(input)||!refs.some((r:any)=>r.kind==='frames')||!refs.some((r:any)=>r.kind==='audio'))throw Error('studio-plan-requires-script-and-direct-reference')}return {ok:true,status:'ready' as const}}
   recordCandidate(input:any,candidate:any){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
     strict(candidate,['sha256','manifestSha256','referenceSha256','revision','durationSeconds','width','height','fps'],'candidate')
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   status(input:any){
     this.key(input)
     const current=this.read(input,'candidate'),ph=sha(this.policy(input.task))
-    return {candidate:current?.policyHash===ph?current.candidate:null,review:current?.policyHash===ph?(this.read(input,'review')??null):null,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight:this.preflight(input.task)}
+    return {candidate:current?.policyHash===ph?current.candidate:null,review:current?.policyHash===ph?(this.read(input,'review')??null):null,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight:this.preflight(input.task),script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[]}
   }
   recordCandidateLocation(input:any,location:{path:string;manifestPath:string;sha256:string}){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
@@ -82,6 +82,35 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     if(!current||!location||current.policyHash!==ph||location.policyHash!==ph||location.sha256!==current.candidate.sha256)throw Error('studio-candidate-location-mismatch')
     return {path:location.path,manifestPath:location.manifestPath,sha256:location.sha256}
   }
+  enforceRuntime(input:any){this.write(input,'runtime_enforcement',true)}
+  recordReferenceReceipt(input:any,receipt:any){
+    this.key(input);const policy=this.policy(input.task)
+    if(!['planner','reviewer'].includes(input.card?.role)||receipt.referenceSha256!==policy.referenceSha256||!HASH.test(receipt.sha256??'')||!['frames','audio','image'].includes(receipt.kind))throw Error('studio-reference-receipt-invalid')
+    const stored={...receipt,id:randomUUID(),sessionId:input.sessionId,policyHash:sha(policy)}
+    this.write(input,'reference_receipts',[...(this.read(input,'reference_receipts')??[]),stored]);return stored
+  }
+  script(input:any){return this.read(input,'script')??null}
+  recordScript(input:any,value:any){
+    if(input.card?.role!=='planner'||!HASH.test(value.sha256??'')||!Array.isArray(value.lines)||!value.lines.length||value.lines.length>80)throw Error('studio-script-invalid')
+    const ids=new Set();for(const line of value.lines){if(typeof line.id!=='string'||!line.id||ids.has(line.id)||typeof line.text!=='string'||!line.text.trim()||line.text.length>300)throw Error('studio-script-lines-invalid');ids.add(line.id)}
+    const previous=this.script(input),review=this.read(input,'review'),candidate=this.read(input,'candidate')?.candidate
+    if(previous&&previous.sha256!==value.sha256&&(!review||review.candidateSha256!==candidate?.sha256||!review.issues?.some((i:any)=>['major','blocker'].includes(i.severity))))throw Error('studio-script-change-requires-independent-review')
+    this.write(input,'script',value)
+  }
+  speechPlan(input:any){const plan=this.read(input,'speech_plan'),current=this.read(input,'candidate');return plan&&plan.candidateSha256===current?.candidate.sha256&&plan.scriptSha256===this.script(input)?.sha256?plan:null}
+  recordSpeechPlan(input:any,plan:any){
+    if(input.card?.role!=='executor')throw Error('studio-producer-required')
+    const candidate=this.read(input,'candidate')?.candidate,script=this.script(input)
+    if(!candidate||!script||plan.candidateSha256!==candidate.sha256||plan.scriptSha256!==script.sha256||!HASH.test(plan.planSha256??'')||!Array.isArray(plan.lines)||plan.lines.length!==script.lines.length)throw Error('studio-speech-plan-invalid')
+    const seen=new Set();for(const line of plan.lines){const original=script.lines.find((x:any)=>x.id===line.id);if(!original||original.text!==line.text||seen.has(line.id))throw Error('studio-speech-plan-script-mismatch');seen.add(line.id)}
+    this.write(input,'speech_plan',plan);this.write(input,'speech_checks',[])
+  }
+  recordSpeechCheck(input:any,value:any){
+    if(input.card?.role!=='reviewer')throw Error('studio-reviewer-required')
+    const plan=this.speechPlan(input),line=plan?.lines.find((x:any)=>x.id===value.lineId)
+    if(!plan||!line||value.candidateSha256!==plan.candidateSha256||value.planSha256!==plan.planSha256||!['source','final'].includes(value.stage)||!HASH.test(value.audioSha256??'')||value.result?.audio_sha256!==value.audioSha256)throw Error('studio-speech-check-invalid')
+    const stored={...value,sessionId:input.sessionId};const checks=(this.read(input,'speech_checks')??[]).filter((x:any)=>!(x.lineId===value.lineId&&x.stage===value.stage&&x.sessionId===input.sessionId));this.write(input,'speech_checks',[...checks,stored])
+  }
   complete(input:any){
     this.key(input);this.requirePreflight(input.task)
     const saved=this.read(input,'candidate'),review=this.read(input,'review'),budget=this.read(input,'budget')
@@ -89,6 +118,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     if(!saved||!budget||saved.policyHash!==sha(policy))throw Error('studio-version-bound-trusted-review-required')
     const base={candidateSha256:saved.candidate.sha256,revision:saved.candidate.revision}
     if(role==='executor'){
+      if(this.read(input,'runtime_enforcement')===true&&!this.speechPlan(input))throw Error('studio-speech-plan-required')
       if(saved.producerSessionId!==input.sessionId)throw Error('studio-producer-session-mismatch')
       const validation=evaluateStudioReview({policy,candidate:saved.candidate,review:{},producerSessionId:input.sessionId,reviewerSessionId:'host-review-pending',receipts:[],budget})
       const budgetErrors=validation.issues.filter((x:string)=>x.startsWith('budget:'))
@@ -106,6 +136,15 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
       const integrity=result.issues.filter((x:string)=>!/^check\.[^:]+: not passed$/.test(x)&&!/^issue\..+: unresolved (blocker|major|minor|info)$/.test(x)&&!x.startsWith('budget:')&&!x.startsWith('autonomy:')&&!/^candidate: (duration outside policy|width mismatch|height mismatch|fps mismatch)$/.test(x))
       if(integrity.length)throw Error(`studio-review-integrity-failed: ${integrity.join('; ')}`)
       return {summary:result.ok?'Independent review completed; planner must verify final acceptance.':'Independent review found issues; return to planner for repairs.',metadata:{workflowOutcome:result.ok?'review_complete':'review_needs_changes',...base,reviewerSessionId:review.reviewerSessionId,issues:result.issues}}
+    }
+    if(this.read(input,'runtime_enforcement')===true){
+      const audioRanges=receipts.filter((r:any)=>r.sessionId===review.reviewerSessionId&&r.candidateSha256===saved.candidate.sha256&&r.kind==='audio').flatMap((r:any)=>r.ranges).sort((a:any,b:any)=>a[0]-b[0]);let covered=0
+      for(const range of audioRanges){if(range[0]>covered+0.04)throw Error('studio-entire-film-audio-review-required');covered=Math.max(covered,range[1])}
+      if(covered<saved.candidate.durationSeconds-0.04)throw Error('studio-entire-film-audio-review-required')
+      const reference=(this.read(input,'reference_receipts')??[]).filter((r:any)=>r.sessionId===review.reviewerSessionId&&r.referenceSha256===policy.referenceSha256)
+      if(!reference.some((r:any)=>r.kind==='frames')||!reference.some((r:any)=>r.kind==='audio'))throw Error('studio-reference-direct-review-required')
+      const plan=this.speechPlan(input),checks=this.read(input,'speech_checks')??[]
+      if(!plan||plan.lines.some((line:any)=>['source','final'].some(stage=>!checks.some((c:any)=>c.lineId===line.id&&c.stage===stage&&c.sessionId===review.reviewerSessionId&&c.candidateSha256===saved.candidate.sha256&&c.result?.content_gate==='pass'))))throw Error('studio-speech-coverage-not-passed')
     }
     if(!result.ok)throw Error(`studio-quality-gate-failed: ${result.issues.join('; ')}`)
     return {summary:'Machine-assessed candidate; not human aesthetic approval.',metadata:{workflowOutcome:'machine_assessed_candidate',...base,reviewerSessionId:review.reviewerSessionId}}

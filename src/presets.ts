@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url'
+import { STUDIO_SPEECH_TOOL_NAMES } from './studio-speech-tools.js'
 import { STUDIO_TOOL_NAMES } from './studio-tools.js'
 /**
  * Agent specs ⇄ preset directories.
@@ -33,7 +35,7 @@ export const ID_RE = /^[a-z0-9][a-z0-9-]*$/
 export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: string[] })[] = [
   { id: 'studio-runtime', label: 'Studio Task evidence', group: '视频工作室', writes: false,
     description: '仅 studio-video-v1 Task 内注册，按运行角色限制候选登记、只读取证及提交审查；普通会话不可用。',
-    schemaNames: [...STUDIO_TOOL_NAMES], rows: '# Studio tools are registered by the active Task runner, never by standalone chat.' },
+    schemaNames: [...STUDIO_TOOL_NAMES,...STUDIO_SPEECH_TOOL_NAMES], rows: '# Studio tools are registered by the active Task runner, never by standalone chat.' },
   { id: 'task-create-runtime', label: 'Task creation', group: '任务', writes: true,
     description: '读取真实角色，生成待审查计划并查询审查与执行；不提供放行或业务运维工具，不提升参与者权限。',
     schemaNames: ['task_create_context', 'task_create_submit', 'task_create_plan_status', 'task_create_status'],
@@ -208,7 +210,7 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
       ? { sourceEntryId: host.sourceEntryId, serverName: name, allowedTools, ...(Object.keys(toolRules).length ? { toolRules } : {}) }
       : { ...host.config, serverName: name, allowedTools, ...(Object.keys(toolRules).length ? { toolRules } : {}) }
     const body = toYaml(config, { lineWidth: 0 }).trimEnd()
-    parts.push(`${host.live ? `# 宿主层仍有同名 ${serverName},preset 围栏会隐藏宿主副本\n` : ''}- id: mcp-${name}\n  name: 'dsh-task-console/filtered-mcp-client'\n  config:\n${indent(body, 4)}`)
+    parts.push(`${host.live ? `# 宿主层仍有同名 ${serverName},preset 围栏会隐藏宿主副本\n` : ''}- id: mcp-${name}\n  name: '${spec.tools.includes('studio-runtime') ? fileURLToPath(new URL('./filtered-mcp-client.js',import.meta.url)) : 'dsh-task-console/filtered-mcp-client'}'\n  config:\n${indent(body, 4)}`)
   }
 
   if (spec.skills.length) {

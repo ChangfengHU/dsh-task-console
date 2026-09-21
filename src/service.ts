@@ -1,4 +1,6 @@
-import { refreshStudioCapabilities, observeStudioAudio } from './studio-host.js'
+import { registerStudioSpeechTools } from './studio-speech-tools.js'
+import { StudioOperations } from './studio-operations.js'
+import { refreshStudioCapabilities, observeStudioAudio, checkStudioSpeech } from './studio-host.js'
 import { registerStudioTools } from './studio-tools.js'
 import { StudioWorkflow } from './studio-workflow.js'
 /**
@@ -106,16 +108,29 @@ export class TaskConsoleService extends TypertRemoteService {
     super(ctx, NAMESPACE)
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
-      registerStudioTools: (agentCtx,input,isActive) => registerStudioTools(agentCtx,{input,workflow:new StudioWorkflow(this.runner.store),isActive,audioObserve:args=>observeStudioAudio(input.task,args)}),
+      registerStudioTools: async (agentCtx,input,isActive) => {
+        const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
+        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,...locks,audioObserve:args=>observeStudioAudio(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
+        try { const speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});return ()=>{speech();media()} } catch(e){media();throw e}
+      },
       beforeStart: async input => {
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return
         const workflow = new StudioWorkflow(this.runner.store)
+        workflow.enforceRuntime(input)
+        new StudioOperations(this.runner.store).configure(input,{imageCalls:6,voiceSegments:80})
         await refreshStudioCapabilities(workflow,input.task)
         const result = workflow.preflight(input.task)
         if (!result.ok) return { kind: 'capability', reason: result.reason ?? 'blocked_quality_capability' }
       },
       beforeComplete: async input => {
-        if (input.task.design?.evidenceContract === 'studio-video-v1') return new StudioWorkflow(this.runner.store).complete(input)
+        if (input.task.design?.evidenceContract === 'studio-video-v1') {
+          const workflow=new StudioWorkflow(this.runner.store),operations=new StudioOperations(this.runner.store).snapshot(input)
+          await refreshStudioCapabilities(workflow,input.task)
+          if(operations.unknown||operations.operations.some((o:any)=>o.state==='submitted'))throw Error('studio-generation-reconcile-required: query original jobs before handoff')
+          const candidate=workflow.status(input).candidate
+          workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
+          return workflow.complete(input)
+        }
         if (input.card.role === 'notifier') return new TaskNotifications(this.runner.store).complete(input)
         const proxy = new ProxyWorkflow(this.runner.store)
         if (proxy.pending(input)) throw new Error('代理后台操作仍在运行，继续查询原操作回执')
@@ -152,7 +167,7 @@ export class TaskConsoleService extends TypertRemoteService {
       operationOutcome: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? (input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input)),
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
       beforePlanRound: async (input, items, proxyItems) => {
-        if (input.task.design?.evidenceContract === 'studio-video-v1') { new StudioWorkflow(this.runner.store).plan(input); return }
+        if (input.task.design?.evidenceContract === 'studio-video-v1') { const w=new StudioWorkflow(this.runner.store);await refreshStudioCapabilities(w,input.task);w.plan(input);return }
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2') return
         const patrol = await this.patrolWorkflow(input); patrol.snapshot(input)
         new TaskNotifications(this.runner.store).requireStage(input,input.card.round === 1 ? 'started' : 'rework')
@@ -199,6 +214,7 @@ export class TaskConsoleService extends TypertRemoteService {
     }
     const card=this.runner.store.s.cards.get(run.cardId)!,batch=this.runner.store.s.batches.get(run.batchId)!,base=this.runner.store.tasks.get(run.taskId)!
     const task=taskForBatch(base,batch),input={task,batch,card,sessionId,profileId:run.profileId??card.agentId}
+    if(task.design?.evidenceContract==='studio-video-v1') return new StudioOperations(this.runner.store).invoke(input,raw,args,invoke)
     if (/^browser_login_(copy|provision|resume)$/.test(raw) && batch.turn?.action) {
       const resumed = raw === 'browser_login_resume' ? await readBrowserAcceptance(args.operationId) : undefined
       assertTaskActionLogin(batch.turn.action, raw, args, resumed)

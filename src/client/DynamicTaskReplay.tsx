@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { serialPoll } from './poll.ts'
 import { graphEventLabel, replayGraph, type GraphEventRow, type GraphFrame, type GraphRunPhase, type GraphSnapshot, type GraphTaskRow } from '../graph-data.ts'
 import type { AgentRow, ArtifactView, Batch, TaskSpec } from '../wire.ts'
 import { finalArtifact, groupArtifacts, type ArtifactActor } from '../artifact-delivery.ts'
@@ -158,18 +159,18 @@ export function DynamicTaskReplay({ api, agents, task, batches, batchId, session
   const timer = useRef<number | undefined>(undefined)
   useEffect(() => {
     let stop = false
-    let poll: number | undefined
+    setData(null); setArtifacts([]); setError(''); setCursor(null); setPlaying(false)
     const load = async () => {
       try {
         const [next, nextArtifacts] = await Promise.all([api.taskGraph(task.id, batchId), api.taskArtifacts(task.id, batchId)])
         if (stop) return
         setData(next); setArtifacts(nextArtifacts); setError('')
         setSelected(cur => cur && next.live.tasks.some(row => row.id === cur) ? cur : next.live.tasks.find(row => ['running', 'blocked', 'ready'].includes(row.status))?.id ?? next.live.tasks.at(-1)?.id ?? null)
-        if (!next.batch.outcome && !archivedAt) poll = window.setTimeout(load, 4000)
+        return !next.batch.outcome && !archivedAt
       } catch (e) { if (!stop) setError(String((e as Error).message ?? e)) }
     }
-    void load()
-    return () => { stop = true; window.clearTimeout(poll) }
+    const cancel = serialPoll(load, 4000)
+    return () => { stop = true; cancel() }
   }, [api, task.id, batchId, archivedAt])
   useEffect(() => {
     if (!sessionId || !data) return

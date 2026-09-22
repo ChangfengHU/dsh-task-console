@@ -30,3 +30,13 @@ test('host never accepts a compiler quality approval or untyped success',async t
  const f=await fixture(t)
  for(const result of [{ok:true,qualityApproved:true},{ok:'true',qualityApproved:false},null])await assert.rejects(compileStudioStoryboard({cwd:f.cwd},{boardPath:'b.json',outputDirectory:'r1'},{config:f.config,execute:async()=>result}),/host-result-invalid/)
 })
+test('actual nonzero Python exit cannot report success but preserves explicit rejection',async t=>{
+ const f=await fixture(t),args={boardPath:'b.json',outputDirectory:'r1'}
+ for(const ok of [true,false]){
+  const body=`import json,sys\nprint(json.dumps({"ok":${ok?'True':'False'},"qualityApproved":False,"reason":"fixture-rejection"}))\nsys.exit(1)\n`
+  await writeFile(f.script,body)
+  const config={...f.config,storyboardCompilerSha256:createHash('sha256').update(body).digest('hex')}
+  if(ok)await assert.rejects(compileStudioStoryboard({cwd:f.cwd},args,{config}),/subprocess-failed/)
+  else assert.equal((await compileStudioStoryboard({cwd:f.cwd},args,{config})).ok,false)
+ }
+})

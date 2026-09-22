@@ -13,7 +13,7 @@ async function execute(script:string,args:string[],task:any,config:any,stdin?:st
  const finish=(err?:Error,result?:any)=>{if(done)return;done=true;clearTimeout(timer);if(err)reject(err);else resolve(result)}
  const timer=setTimeout(()=>{child.kill('SIGKILL');finish(Error('studio-host-subprocess-timeout'))},420000)
  child.stdout.on('data',b=>{output+=b.toString();if(output.length>2_000_000){overflow=true;child.kill('SIGKILL')}});child.on('error',()=>finish(Error('studio-host-subprocess-unavailable')));child.stdin.on('error',()=>{});child.stdin.end(stdin??'')
- child.on('close',()=>{if(overflow)return finish(Error('studio-host-output-too-large'));try{finish(undefined,JSON.parse(output))}catch{finish(Error('studio-host-output-invalid'))}})
+ child.on('close',(code,signal)=>{if(overflow)return finish(Error('studio-host-output-too-large'));try{const result=JSON.parse(output);if(signal||code!==0&&result?.ok!==false)return finish(Error('studio-host-subprocess-failed'));finish(undefined,result)}catch{finish(Error('studio-host-output-invalid'))}})
  })
 }
 const cache=new Map<string,{at:number,value:any}>()

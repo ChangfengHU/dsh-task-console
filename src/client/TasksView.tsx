@@ -34,7 +34,7 @@ export interface TasksApi {
   taskSchedule: (id: string, page: number) => Promise<any>
   cancelRun: (runId: string) => Promise<void>
   taskSnapshot: (id: string, batchId?: string) => Promise<TaskSnapshot>
-  taskGraph: (id: string, batchId?: string) => Promise<GraphSnapshot>
+  taskGraph: (id: string, batchId?: string, after?: number) => Promise<GraphSnapshot>
   taskEvents: (id: string) => Promise<TaskEvent[]>
   taskArtifacts: (id: string, batchId?: string) => Promise<ArtifactView[]>
   artifactContent: (id: string, artifactId: string, batchId?: string) => Promise<{ artifact: ArtifactView; base64: string }>

@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 import { serialPoll } from './poll.ts'
 import type { StepRow, ToolRow, TurnLedger as Ledger } from '../wire.ts'
 
-export interface LedgerApi { sessionTurns: (sessionId: string) => Promise<Ledger> }
+export interface LedgerApi { sessionTurns: (sessionId: string, page?: number) => Promise<Ledger> }
 
 const fmt = (iso?: string) => iso ? new Date(iso).toTimeString().slice(0, 8) : ''
 const ms = (n: number) => n < 1000 ? `${n}ms` : n < 60000 ? `${(n / 1000).toFixed(1)}s` : `${Math.floor(n / 60000)}m${String(Math.round((n % 60000) / 1000)).padStart(2, '0')}s`
@@ -18,21 +18,23 @@ const KIND: Record<ToolRow['kind'], { label: string; cls: string }> = {
 }
 
 /** Fetch + poll a session's ledger; `live` keeps polling. */
-export function useLedger(api: LedgerApi, sessionId: string | undefined, live: boolean): { ledger: Ledger | null; error: string } {
+export function useLedger(api: LedgerApi, sessionId: string | undefined, live: boolean) {
   const [ledger, setLedger] = useState<Ledger | null>(null)
   const [error, setError] = useState('')
+  const [page, setPage] = useState(1)
+  useEffect(() => { setPage(1) }, [sessionId])
   useEffect(() => {
     if (!sessionId) { setLedger(null); return }
     let stop = false
     setLedger(null); setError('')
     const cancel = serialPoll(async () => {
-      try { const l = await api.sessionTurns(sessionId); if (!stop) { setLedger(l); setError('') } }
+      try { const l = await api.sessionTurns(sessionId, page); if (!stop) { setLedger(l); setError('') } }
       catch (e) { if (!stop) setError(String((e as Error).message ?? e)) }
       return live
     }, 4000)
     return () => { stop = true; cancel() }
-  }, [api, sessionId, live])
-  return { ledger, error }
+  }, [api, sessionId, live, page])
+  return { ledger, error, setPage }
 }
 
 export function LedgerTotals({ ledger }: { ledger: Ledger }) {
@@ -104,12 +106,13 @@ function Step({ s, filter }: { s: StepRow; filter: AuditFilter }) {
   )
 }
 
-export function TurnLedgerView({ ledger, compact }: { ledger: Ledger; compact?: boolean }) {
+export function TurnLedgerView({ ledger, compact, onPage }: { ledger: Ledger; compact?: boolean; onPage?: (page: number) => void }) {
   const [filter, setFilter] = useState<AuditFilter>('all')
   const filters: { id: AuditFilter; label: string }[] = [{ id: 'all', label: '全部' }, { id: 'llm', label: 'LLM' }, { id: 'skill', label: 'Skills' }, { id: 'mcp', label: 'MCP' }, { id: 'tools', label: 'Tools' }]
   return (
     <div className="dtc-ledger">
       <LedgerTotals ledger={ledger} />
+      {ledger.pagination && onPage ? <nav aria-label="Trace 分页"><button className="dtc-btn sm" disabled={ledger.pagination.page <= 1} onClick={() => onPage(ledger.pagination!.page - 1)}>上一页</button><span> {ledger.pagination.page} / {ledger.pagination.pages} · 共 {ledger.pagination.total} 步 · 汇总为全会话 </span><button className="dtc-btn sm" disabled={ledger.pagination.page >= ledger.pagination.pages} onClick={() => onPage(ledger.pagination!.page + 1)}>下一页</button></nav> : null}
       <div className="dtc-audit-head"><div><b>运行审计</b><small>LLM 请求/响应、Skill、MCP 与 Tool 调用</small></div><div className="dtc-audit-filters">{filters.map(item => <button key={item.id} className={filter === item.id ? 'on' : ''} onClick={() => setFilter(item.id)}>{item.label}</button>)}</div></div>
       {ledger.turns.length === 0 ? <div className="dtc-empty">No turns in this session yet.</div> : null}
       {ledger.turns.map(t => (
@@ -131,11 +134,11 @@ export function TurnLedgerView({ ledger, compact }: { ledger: Ledger; compact?: 
 
 /** The `conversation.view` tab body: the current session's ledger, live. */
 export function SessionLedgerTab({ api, sessionId }: { api: LedgerApi; sessionId: string }) {
-  const { ledger, error } = useLedger(api, sessionId, true)
+  const { ledger, error, setPage } = useLedger(api, sessionId, true)
   return (
     <div className="dtc-root dtc-tab">
       {error ? <div className="dtc-err">{error}</div> : null}
-      {ledger ? <TurnLedgerView ledger={ledger} /> : <div className="dtc-empty"><span className="dtc-spin" /> 折叠会话日志…</div>}
+      {ledger ? <TurnLedgerView ledger={ledger} onPage={setPage} /> : <div className="dtc-empty"><span className="dtc-spin" /> 折叠会话日志…</div>}
     </div>
   )
 }

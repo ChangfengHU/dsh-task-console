@@ -38,6 +38,7 @@ import { TaskCreator } from './task-create.ts'
 import { assertTaskActionLogin } from './task-actions.ts'
 import { readBrowserAcceptance } from './workflow-acceptance.ts'
 import { executionHistory } from './execution-history.ts'
+import { ledgerPage } from './ledger-page.ts'
 import { browserPatrolEvidence } from './browser-patrol-evidence.ts'
 import { BrowserPatrolWorkflow } from './browser-patrol-workflow.ts'
 import { ProxyWorkflow, proxyRequestId } from './proxy-workflow.ts'
@@ -749,7 +750,7 @@ export class TaskConsoleService extends TypertRemoteService {
 
   /** Fold one session's own log into turns → steps → tool calls (live or cold). */
   async sessionTurns(payload: string): Promise<string> {
-    const { sessionId } = JSON.parse(payload) as { sessionId: string }
+    const { sessionId, page } = JSON.parse(payload) as { sessionId: string; page?: number }
     const persistence = (this.ctx as any).get('sessionPersistence')
     let events: any[] = []; let agentPreset: string | undefined
     if (persistence?.inspect) {
@@ -759,7 +760,8 @@ export class TaskConsoleService extends TypertRemoteService {
       const live = (this.ctx as any).get('sessions')?.get?.(sessionId)
       events = live?.events ?? []; agentPreset = live?.header?.agentPreset
     }
-    return JSON.stringify(foldTurns(sessionId, events, agentPreset))
+    const ledger = foldTurns(sessionId, events, agentPreset)
+    return JSON.stringify(page === undefined ? ledger : ledgerPage(ledger, page))
   }
 
   // ── tasks ──────────────────────────────────────────────────────────────
@@ -1026,11 +1028,11 @@ export class TaskConsoleService extends TypertRemoteService {
 
   /** Raw normalized rows plus the canonical event log for DB-faithful replay. */
   async taskGraph(payload: string): Promise<string> {
-    const { id, batchId } = JSON.parse(payload) as { id: string; batchId?: string }
+    const { id, batchId, after } = JSON.parse(payload) as { id: string; batchId?: string; after?: number }
     if (!this.runner.store.s.tasks.has(id)) throw new Error('没有这个任务')
     const selected = batchId ?? [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === id && !batch.archivedAt).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]?.id
     if (!selected) throw new Error('这个任务还没有运行')
-    return JSON.stringify(this.runner.store.graphSnapshot(id, selected))
+    return JSON.stringify(this.runner.store.graphSnapshot(id, selected, after))
   }
 
   private artifactView(a: Artifact): ArtifactView {

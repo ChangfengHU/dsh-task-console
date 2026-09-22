@@ -61,6 +61,7 @@ export interface GraphFrame {
 }
 
 export interface GraphSnapshot {
+  eventPage?: { after: number; next: number; hasMore: boolean }
   graphId: string
   taskId: string
   batch: { id: string; firedAt: number; settledAt: number | null; outcome: string | null }

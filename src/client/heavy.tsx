@@ -50,11 +50,11 @@ export function activate(ctx: any): Promise<Api> {
       setTaskEnabled: async (id: string, enabled: boolean) => { await call('setTaskEnabled', { id, enabled }) }, deleteTask: async (id: string) => { await call('deleteTask', { id }) }, deleteTasks: async (ids: string[]) => { await call('deleteTasks', { ids }) },
       setBatchArchived: async (taskId: string, batchId: string, archived: boolean) => { await call('setBatchArchived', { taskId, batchId, archived }) },
       fireTask: (id: string, by?: 'manual' | 'retry') => call<{ runId: string }>('fireTask', { id, by }), cancelRun: async (runId: string) => { await call('cancelRun', { runId }) },
-      taskSnapshot: (id: string, batchId?: string) => call<TaskSnapshot>('taskSnapshot', { id, batchId, summary: true }), taskGraph: (id: string, batchId?: string) => call<GraphSnapshot>('taskGraph', { id, batchId }), taskEvents: (id: string) => call<TaskEvent[]>('taskEvents', { id }),
+      taskSnapshot: (id: string, batchId?: string) => call<TaskSnapshot>('taskSnapshot', { id, batchId, summary: true }), taskGraph: (id: string, batchId?: string, after?: number) => call<GraphSnapshot>('taskGraph', { id, batchId, after }), taskEvents: (id: string) => call<TaskEvent[]>('taskEvents', { id }),
       taskArtifacts: (id: string, batchId?: string) => call<ArtifactView[]>('taskArtifacts', { id, batchId }), artifactContent: (id: string, artifactId: string, batchId?: string) => call<{ artifact: ArtifactView; base64: string }>('artifactContent', { id, artifactId, batchId }), publishArtifact: (id: string, artifactId: string) => call<{ publicUrl: string }>('publishArtifact', { id, artifactId }),
       reviewCard: async (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => { await call('reviewCard', { cardId, decision, note, targetCardId }) }, unblockCard: async (cardId: string) => { await call('unblockCard', { cardId }) },
       startAgentSession: (agentId: string, text?: string, cwd?: string) => call<{ sessionId: string; name: string }>('startAgentSession', { agentId, text, cwd }), openSession: (sessionId: string) => openWhenListed(ctx, sessionId),
-      sessionTurns: (sessionId: string) => call<TurnLedger>('sessionTurns', { sessionId }), agentActivity: (agentId: string) => call<any>('agentActivity', { agentId }),
+      sessionTurns: (sessionId: string, page?: number) => call<TurnLedger>('sessionTurns', { sessionId, page }), agentActivity: (agentId: string) => call<any>('agentActivity', { agentId }),
     }
   })().catch(error => { activation = undefined; throw error })
   return activation

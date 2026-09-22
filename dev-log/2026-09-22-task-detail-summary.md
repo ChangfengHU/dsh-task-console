@@ -33,3 +33,21 @@ Canonical graph events still load for the selected execution; cursor pagination,
 incremental graph transport, Trace pagination and optional plugin boot isolation
 are not implemented by this change. Do not claim the whole performance program
 complete or infer a public loading-time improvement from unit tests.
+
+## Follow-up: bounded graph transport and Trace
+
+Graph RPC now accepts an event cursor, reads up to 200 canonical events per page
+and sends only new events on subsequent polls. Run evidence uses narrow metadata
+queries rather than parsing every historical payload. The UI renders the current
+graph immediately and disables historical playback until the complete prefix is
+loaded; it rejects mismatched graphs/cursors and never invents missing events.
+Older hosts/clients retain the full-response contract.
+
+Trace RPC optionally pages by ten model steps, including within a single long
+turn, retaining full-session totals. All three Trace entry points expose paging.
+This bounds transfer/rendering, not native persistence's session log inspection.
+
+Ten targeted tests pass, including 431-event page reconstruction, incremental
+tail, zero-frame replay, stale cursor rejection and 23-step single-turn paging.
+Build passes. Deployment/browser evidence is still pending; boot isolation remains
+a separate uncompleted native-host change.

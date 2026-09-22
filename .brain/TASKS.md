@@ -1,5 +1,7 @@
 # 后续优化
 
+- [ ] [TASK-DETAIL-QUERY-038] 2026-09-22 详情摘要、最多10条执行头、内存缓存、当前回放会话计数、DAG游标分页/增量轮询及Trace十步分页已合入Studio并零活跃窗口部署。线上摘要33KB；Chrome本机1.97秒、公网静态缓存48 HIT时20.67秒，回放/Trace通过。全局插件故障隔离、进一步冷启动优化及真正按需历史加载尚未完成。部署和测试边界见 `dev-log/2026-09-22-task-detail-summary.md`。
+
 - [ ] [TASK-QUERY-PAGING-037] 0.31.7 已部署 Task/Agent 列表后端分页与摘要缓存；旧任务列表 3.21 MB 降至 8.7 KB，真实浏览器本机首显 3.33 秒、返回列表 0.03 秒，无旧全量 tasks 调用。保留批量操作、详情、Actions。剩余 DAG/事件/Trace 增量分页、全名册选择器及公网启动资源传输慢未完成。证据：`dev-log/2026-09-21-paged-query-layer.md`。
 
 - [ ] [TASK-FLEET-RETIREMENT-036] 0.31.6 新增最小权限「Fleet 节点退役管理员」。2026-09-21 修正 Fleet MCP 原始工具名映射并完成首个真实退役：Task Run `b-muarvddfoe2` 由 Agent 将连续不可达约 378.59 小时的 host-206 原子退役，复读确认 `enabled=false`、旧 `machine_access` 不存在、节点金库键为空、审计 `outcome=changed`；公网 API 与真实 Chrome 均确认 Fleet 页面不再包含该节点。三个节点专属金库键已精确删除，Runner 已停用，未 SSH 或改动目标机器。企微由独立通知员会话真实送达 1 个群；但原 static-chain 通知卡被现有“Task 通知必须经 reviewed outbox”围栏拒绝，故该 Batch 取消、定时仍停用，本项暂不冒充同一 Task 全链路完成。详见 `dev-log/2026-09-21-fleet-node-retirement.md`。

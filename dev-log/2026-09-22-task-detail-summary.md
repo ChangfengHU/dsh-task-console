@@ -71,3 +71,50 @@ one additional non-reproducing failure; no blanket full-suite-green claim.
 Added a bounded graph cache so opening Trace/returning to a recently visited run
 reuses its canonical prefix and requests only the tail. Cache is memory-only,
 15 seconds, ten graphs; current live rows are revalidated, never persisted.
+
+## Deployed and public acceptance
+
+Integrated source `1a9701dda6ee66def21bdad27adc06bc3ceb3ecf` is pushed to
+`fix/retirement-studio-integration-20260921`. Active host is
+`/home/claude/dsh-studio-migration/task-console-detail-d0ff651/lib/index.js`;
+SOURCE_REVISION/source.bundle/DEPLOY_MANIFEST identify the actual integrated
+commit. Existing Studio audio/proofs/config and node_modules are reused. The
+frontend package remains `studio-task-console-ui-paged-0317`, preserving its
+module ID. Heavy SHA256 is
+`32f4281df8c880a2dca387659e3b93a2abdc6920ab1666762d829953cdd7a11d`.
+
+Deployment checked both running Task Runs and native sessions equal zero, stopped
+the service, switched only the two host/schema paths and paired frontend entry,
+then started it successfully. Existing Studio Runs 1085/1086 had already become
+blocked before restart; they were not cancelled/interrupted to deploy.
+Live summary envelope is 33,131 bytes, ten headers and zero historical events.
+Real Chrome on the deployed local origin passed at 1.97 seconds. Public Chrome
+passed replay zero/next/auto/live, session drawer and Trace pagination with zero
+page errors, but cold startup was 65.59 seconds. Slow resource evidence identified
+plugin script transfers of 20–32 seconds, separate from Task RPC payload size.
+
+### Static asset transport
+
+Vault `service:cloudflare` forwarding account was verified through the account API.
+The existing `dsh-loopback-proxy` Worker source was compared before update; original
+source is `deployment/dsh-loopback-proxy.before-cache.mjs`. Route/domain/bindings,
+loopback rewriting and non-asset forwarding are unchanged. No credentials appear
+in either source. The new source caches only GET public plugin `client.js` with
+exact 12-hex revision, no extra query keys or Authorization header, verified
+original SHA-1 and matching module registration. HTML/RPC/session/error responses
+are not cached. Two focused Worker tests passed. CF API upload succeeded.
+
+A workspace bundle probe returned MISS then HIT with identical bytes (10.07s then
+3.20s). Subsequent public Chrome acceptance reported 48 HITs, zero page errors and
+20.67-second detail visibility; replay and Trace tests passed. First-fill public
+run was 46.74 seconds. These are observed samples, not a latency guarantee.
+
+Remaining: native plugin failure isolation and further bootstrap latency reduction
+are NOT complete. Graph event history is loaded in bounded pages in the background,
+not only on explicit replay click. Native Trace log inspection still folds the
+session before projecting a page. Do not claim every performance concern solved.
+
+Read-only preview service stopped; temporary calibration symlink/directories and
+170,516-byte debug screenshot removed. Browser acceptance screenshot retained at
+`/tmp/dtc-detail-paged-browser.png`; deployment/rollback builds are runtime and
+recovery assets, not disposable test dependencies. No dependencies were installed.

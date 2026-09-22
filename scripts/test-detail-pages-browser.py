@@ -12,8 +12,9 @@ TASK = 'T-chat-bbb714b2ba8439b69178'
 with sync_playwright() as p:
     browser = p.chromium.launch(executable_path='/usr/bin/google-chrome', headless=True, args=['--no-sandbox'])
     page = browser.new_page(viewport={'width':1440,'height':1000})
-    errors, sizes = [], []
+    errors, sizes, cache_status = [], [], []
     page.on('pageerror', lambda e: errors.append(str(e)))
+    page.on('response', lambda r: cache_status.append(r.headers.get('x-dsh-asset-cache','NONE')) if '/plugins/' in r.url and 'client.js' in r.url else None)
     def guard(route):
         req = route.request
         method = req.url.split('/api/')[-1].split('?')[0]
@@ -51,5 +52,5 @@ with sync_playwright() as p:
     page.keyboard.press('Escape')
     page.screenshot(path='/tmp/dtc-detail-paged-browser.png',animations='disabled')
     assert not errors,errors
-    print(json.dumps({'result':'passed','rpc_sizes':sizes,'page_errors':errors}),flush=True)
+    print(json.dumps({'result':'passed','rpc_sizes':sizes,'page_errors':errors,'plugin_cache':{k:cache_status.count(k) for k in set(cache_status)}}),flush=True)
     browser.close()

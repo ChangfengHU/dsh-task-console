@@ -10,14 +10,17 @@ export const STUDIO_SPEECH_TOOL_NAMES=['studio_probe_audio_sources','studio_free
 export interface StudioSpeechOptions {input:any;workflow:any;isActive:()=>boolean;speechCheck:(v:{wavPath:string;start:number;end:number;expectedText:string;stage:'source'|'final'})=>Promise<any>;runCommand?:(file:string,args:string[])=>Promise<{stdout:string}>}
 export async function registerStudioSpeechTools(ctx:any,o:StudioSpeechOptions){
  const {input,workflow}=o,role=input.card?.role,disposers:(()=>void)[]=[]
- const defineTool=process.env.NODE_ENV==='test'?(v:any)=>v:(await import('@deepseek-ai/dsh-tools')).defineTool
+ // Compile with the real host DSL in tests too: JSON Schema keywords are not
+ // necessarily accepted by DSH's authoring format.
+ const {defineTool}=await import('@deepseek-ai/dsh-tools')
  const command=o.runCommand??((file,args)=>run(file,args,{timeout:60000,maxBuffer:1024*1024}).then(r=>({stdout:String(r.stdout)})))
  const check=(e?:any)=>{if(!o.isActive())throw Error('studio-stale-run');if(e?.agent?.session?.id&&e.agent.session.id!==input.sessionId)throw Error('studio-session-mismatch')}
  const requireRole=(r:string)=>{if(role!==r)throw Error('studio-role-denied')}
  const register=(name:string,description:string,parameters:any,f:(a:any)=>Promise<any>)=>disposers.push(ctx.tools.register(defineTool({name,description,parameters,output:{schema:{type:'object',additionalProperties:true},render:(_:any,v:any)=>[{type:'text',text:JSON.stringify(v)}]},execute:async(a:any,e:any)=>{check(e);return JSON.parse(JSON.stringify(await f(a)))}})))
  const candidate=async()=>{const saved=workflow.status(input).candidate,c=saved?.candidate??saved,l=workflow.candidateLocation(input);if(!c||!l)throw Error('studio-candidate-required');const path=await studioPath(input.task.cwd,l.path);if(await fileSha256(path)!==c.sha256)throw Error('studio-candidate-file-changed');check();return {c,path}}
  const lines=(v:any)=>{if(!Array.isArray(v)||!v.length||v.length>300)throw Error('studio-script-invalid');const ids=new Set();return v.map((l:any)=>{if(!l||typeof l.id!=='string'||!l.id||l.id.length>100||ids.has(l.id)||typeof l.text!=='string'||!l.text.trim()||l.text.length>2000)throw Error('studio-script-invalid');ids.add(l.id);return {id:l.id,text:l.text}})}
- const sourcesParameter={type:'array',maxItems:80,items:{type:'object',properties:{id:{type:'string'},path:{type:'string'}},required:['id','path'],additionalProperties:false}}
+ // Keep the 80-source bound in audioSources; maxItems is not in the DSH DSL.
+ const sourcesParameter={type:'array',items:{type:'object',properties:{id:{type:'string',required:true},path:{type:'string',required:true}},additionalProperties:false}}
  const audioSources=(v:any)=>{if(!Array.isArray(v)||!v.length||v.length>80)throw Error('studio-audio-sources-invalid');const ids=new Set();return v.map((source:any)=>{if(!source||typeof source.id!=='string'||!source.id||source.id.length>100||ids.has(source.id)||typeof source.path!=='string'||!source.path.trim())throw Error('studio-audio-sources-invalid');ids.add(source.id);return {id:source.id,path:source.path}})}
  const probeSources=async(sources:{id:string;path:string}[])=>{
   const durationMax=input.task.design?.studio?.durationMax

@@ -18,6 +18,14 @@ async function setup(t:any,options:any={}){
 }
 const sources=[{id:'a',path:'one.wav'},{id:'b',path:'two.wav'}],lines=[{id:'a',text:'一句'},{id:'b',text:'两句'}]
 
+test('actual DSH DSL compiles required source properties before a session starts',async t=>{
+ const s=await setup(t),schema=s.tools.studio_probe_audio_sources.parameters
+ assert.equal(schema.type,'object');assert.deepEqual(schema.required,['sources'])
+ assert.deepEqual(schema.properties.sources.items.required,['id','path'])
+ await assert.rejects(s.tools.studio_probe_audio_sources.execute({sources:[{id:'a'}]}),/path/)
+ assert.equal(s.calls(),0)
+})
+
 test('real WAV ffprobe reports hashes, durations and technical fit without recording',async t=>{
  const s=await setup(t,{real:true,durationMax:3});const out=await s.tools.studio_probe_audio_sources.execute({sources})
  assert.deepEqual(out.sources.map((x:any)=>x.durationSeconds),[1,2]);assert.equal(out.totalDurationSeconds,3);assert.equal(out.durationMax,3);assert.equal(out.fits,true);assert.equal(out.qualityApproved,false);assert.equal(out.sources[0].sha256,await fileSha256(join(s.cwd,'one.wav')));assert.equal(s.records.length,0)

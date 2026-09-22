@@ -1,5 +1,7 @@
 # 后续优化
 
+- [x] [RETIREMENT-ONLINE-REPORT-20260922] Existing retirement Task now includes all returned online/unreachable/unknown nodes in its frozen WeCom summary, without authorizing operations on deferred nodes. Final public-page manual run `b-mucl5nq6lxq`: six fresh reachable nodes, zero candidates, both roles done, sent once; persisted observations and notification body independently matched. Preset and Task revisions applied through normal APIs/review, no host restart or machine writes. Schedule remains disabled; report-only page still lacks text summaries and friendly timestamp formatting remains pending. See `dev-log/2026-09-22-retirement-online-report.md`.
+
 - [ ] [TASK-DETAIL-QUERY-038] 2026-09-22 详情摘要、最多10条执行头、内存缓存、当前回放会话计数、DAG游标分页/增量轮询及Trace十步分页已合入Studio并零活跃窗口部署。线上摘要33KB；Chrome本机1.97秒、公网静态缓存48 HIT时20.67秒，回放/Trace通过。全局插件故障隔离、进一步冷启动优化及真正按需历史加载尚未完成。部署和测试边界见 `dev-log/2026-09-22-task-detail-summary.md`。
 
 - [ ] [TASK-QUERY-PAGING-037] 0.31.7 已部署 Task/Agent 列表后端分页与摘要缓存；旧任务列表 3.21 MB 降至 8.7 KB，真实浏览器本机首显 3.33 秒、返回列表 0.03 秒，无旧全量 tasks 调用。保留批量操作、详情、Actions。剩余 DAG/事件/Trace 增量分页、全名册选择器及公网启动资源传输慢未完成。证据：`dev-log/2026-09-21-paged-query-layer.md`。

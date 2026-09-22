@@ -23,3 +23,11 @@ for(const referenceUrl of ['http://cdn.vyibc.com/a.mp4','https://user:pass@cdn.v
 import {validateTask} from '../src/tasks.ts'
 test('createTask preserves and validates studio contract instead of silently dropping it',()=>{const d=design();const task=validateTask({brief:'test studio task',participants:[{agentId:'p'},{agentId:'e'},{agentId:'r'}],graphMode:'dynamic-rounds',design:d},new Set(['p','e','r']));assert.equal(task.design?.evidenceContract,'studio-video-v1');assert.equal(task.design?.studio?.characterId,'xuman-campus-v1')})
 test('studio rejects static or duplicate-role setup',()=>{for(const change of [{graphMode:'static-chain'},{participants:[{agentId:'p'},{agentId:'p'},{agentId:'r'}]}])assert.throws(()=>validateTask({brief:'test studio task',participants:[{agentId:'p'},{agentId:'e'},{agentId:'r'}],graphMode:'dynamic-rounds',design:design(),...change},new Set(['p','e','r'])),/三个不同/)})
+
+test('studio recovery can freeze zero additional generation without increasing default ceilings',()=>{
+ const base=design().studio
+ assert.deepEqual(validateStudioPolicy({...base,generationLimits:{imageCalls:0,voiceSegments:0}}).generationLimits,{imageCalls:0,voiceSegments:0})
+ for(const limits of [{imageCalls:7,voiceSegments:80},{imageCalls:0,voiceSegments:81},{imageCalls:-1,voiceSegments:0},{imageCalls:0},{imageCalls:0,voiceSegments:0,extra:1}])
+  assert.throws(()=>validateStudioPolicy({...base,generationLimits:limits}),/generationLimits/)
+ assert.equal(validateStudioPolicy(base).generationLimits,undefined)
+})

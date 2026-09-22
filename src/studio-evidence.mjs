@@ -19,6 +19,13 @@ export function validateStudioPolicy(value) {
   if (!Number.isInteger(policy.width) || !Number.isInteger(policy.height)) issues.push('policy: dimensions must be integers');
   if (!finite(policy.durationMin) || !finite(policy.durationMax) || policy.durationMin <= 0 || policy.durationMax < policy.durationMin) issues.push('policy: invalid duration bounds');
   if (!Number.isInteger(policy.maxRepairRounds) || policy.maxRepairRounds < 0 || policy.maxRepairRounds > 3) issues.push('policy.maxRepairRounds: expected integer 0..3');
+  if (policy.generationLimits !== undefined) {
+    const limits=policy.generationLimits;
+    if (!object(limits) || Object.keys(limits).sort().join(',') !== 'imageCalls,voiceSegments' ||
+      !Number.isInteger(limits.imageCalls) || limits.imageCalls<0 || limits.imageCalls>6 ||
+      !Number.isInteger(limits.voiceSegments) || limits.voiceSegments<0 || limits.voiceSegments>80)
+      issues.push('policy.generationLimits: expected bounded imageCalls 0..6 and voiceSegments 0..80');
+  }
   const dims = policy.requiredDimensions;
   if (!Array.isArray(dims) || dims.some(d => !nonempty(d)) || new Set(dims).size !== dims.length || DEFAULT_DIMENSIONS.some(d => !dims.includes(d))) issues.push('policy.requiredDimensions: must include every baseline dimension once');
   return {ok:issues.length === 0, issues, policy};

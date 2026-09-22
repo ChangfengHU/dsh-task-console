@@ -121,7 +121,7 @@ export class TaskConsoleService extends TypertRemoteService {
         const workflow = new StudioWorkflow(this.runner.store)
         workflow.enforceRuntime(input)
         const operations=new StudioOperations(this.runner.store)
-        operations.configure(input,{imageCalls:6,voiceSegments:80})
+        operations.configure(input,input.task.design.studio.generationLimits??{imageCalls:6,voiceSegments:80})
         const budget=operations.snapshot(input)
         workflow.recordBudget(input,{repairRounds:Math.max(0,(workflow.status(input).candidate?.revision??1)-1),used:budget.used,limits:budget.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
         await refreshStudioCapabilities(workflow,input.task)

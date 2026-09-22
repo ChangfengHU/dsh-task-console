@@ -74,17 +74,17 @@ function Tool({ r }: { r: ToolRow }) {
   const [open, setOpen] = useState(false)
   const k = KIND[r.kind] ?? KIND.native
   return (
-    <div className={`dtc-toolrow ${r.ok ? '' : 'bad'}`}>
+    <div className={`dtc-toolrow ${r.ok === false ? 'bad' : ''}`}>
       <div className="dtc-toolhead" onClick={() => setOpen(o => !o)}>
         <span className={`dtc-pill ${k.cls}`}>{k.label}</span>
         <span className="dtc-mono name">{r.server ? <span className="dtc-faint">{r.server} / </span> : null}{r.name}</span>
         <span className="dtc-faint args">{r.args}</span>
         <span className="sp" />
-        {!r.ok ? <span className="dtc-pill dtc-p-bad">失败</span> : null}
+        {r.ok === false ? <span className="dtc-pill dtc-p-bad">失败</span> : r.state === 'running' ? <span className="dtc-pill">等待工具返回</span> : r.state === 'no_result' ? <span className="dtc-pill">无返回记录</span> : null}
         <span className="dtc-mono dtc-faint">{r.ms ? ms(r.ms) : '…'}</span>
         <span className="dtc-faint">{open ? '▾' : '▸'}</span>
       </div>
-      {open ? <div className="dtc-toolbody"><div className="dtc-faint" style={{ fontSize: 11.5 }}>入参</div><pre>{r.args || '(无)'}</pre><div className="dtc-faint" style={{ fontSize: 11.5 }}>返回(前 400 字)</div><pre>{r.result || '(还没返回)'}</pre></div> : null}
+      {open ? <div className="dtc-toolbody"><div className="dtc-faint" style={{ fontSize: 11.5 }}>入参</div><pre>{r.args || '(无)'}</pre><div className="dtc-faint" style={{ fontSize: 11.5 }}>返回(前 400 字)</div><pre>{r.result || (r.state === 'returned' ? '(已返回，无文本)' : r.state === 'no_result' ? '(回合已结束，没有工具返回记录)' : '(还没返回)')}</pre></div> : null}
     </div>
   )
 }

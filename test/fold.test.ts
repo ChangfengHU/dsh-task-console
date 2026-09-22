@@ -156,3 +156,14 @@ test('foldTurns distinguishes running job counters from actual tool errors',()=>
  assert.equal(ledger('{"status":"running"}',true).ok,false)
  assert.equal(ledger('Error: connection failed').ok,false)
 })
+
+test('tool call is pending until an actual result, including empty results and failed turns',()=>{
+ const events=[{type:'turn/start',time:1000,data:{turn:1}},{type:'step/start',time:1100,data:{step:1}},{type:'tool/call',time:1200,data:{callId:'c',name:'studio_character_image',arguments:'{}'}}]
+ const tool=(extra:any[]=[])=>foldTurns('s',[...events,...extra]).turns[0].steps[0].tools[0]
+ assert.equal(tool().state,'running');assert.equal(tool().ok,undefined)
+ const result={type:'tool/result',time:1300,data:{message:{source:{callId:'c'},content:[]}}}
+ assert.equal(tool([result]).state,'returned');assert.equal(tool([result]).ok,true)
+ const end={type:'turn/end',time:1400,data:{reason:{kind:'error'}}}
+ assert.equal(tool([end]).state,'no_result');assert.equal(tool([end]).ok,undefined)
+ assert.equal(tool([result,end]).state,'returned');assert.equal(tool([result,end]).ok,true)
+})

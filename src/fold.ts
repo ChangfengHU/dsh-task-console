@@ -500,7 +500,7 @@ export function migrate(events: LegacyEvent[]): Event[] {
 
 // ── turn ledger (folded from a session's own log) ────────────────────────
 
-export interface ToolRow { callId: string; name: string; kind: 'mcp' | 'skill' | 'native' | 'ask' | 'task'; server?: string; args: string; result: string; ok: boolean; ms: number; at: string }
+export interface ToolRow { callId: string; name: string; kind: 'mcp' | 'skill' | 'native' | 'ask' | 'task'; server?: string; args: string; result: string; ok?: boolean; state?: 'running' | 'returned' | 'no_result'; ms: number; at: string }
 export interface StepRow { step: number; provider?: string; model?: string; at: string; ms: number; usage: { input: number; output: number; reasoning: number; cacheRead: number }; tools: ToolRow[]; text: string }
 export interface TurnRow { turn: number; at: string; endedAt?: string; reason?: string; user: string; steps: StepRow[]; connection?: ModelConnection }
 export interface TurnLedger { pagination?: { page: number; pages: number; total: number }; sessionId: string; agentPreset?: string; turns: TurnRow[]; connection?: ModelConnection; totals: { turns: number; steps: number; mcp: number; skill: number; native: number; ask: number; task: number; input: number; output: number; ms: number; byServer: Record<string, number>; skills: string[] } }
@@ -542,7 +542,7 @@ export function foldTurns(sessionId: string, events: any[], agentPreset?: string
         const name = String(d.name ?? '')
         const m = /^mcp__(.+?)__(.+)$/.exec(name)
         const kind: ToolRow['kind'] = name.endsWith('ask_user_question') ? 'ask' : /^task_(complete|block|request_review)$/.test(name) ? 'task' : m ? 'mcp' : name === 'skill' ? 'skill' : 'native'
-        const row: ToolRow & { _t?: number } = { callId: d.callId, name: m ? m[2] : name, kind, server: m?.[1], args: preview(d.arguments, 240), result: '', ok: true, ms: 0, at: iso(e.time), _t: e.time }
+        const row: ToolRow & { _t?: number } = { callId: d.callId, name: m ? m[2] : name, kind, server: m?.[1], args: preview(d.arguments, 240), result: '', state: 'running', ms: 0, at: iso(e.time), _t: e.time }
         byCall.set(d.callId, row); step?.tools.push(row)
         totals[kind]++
         if (m) totals.byServer[m[1]] = (totals.byServer[m[1]] ?? 0) + 1
@@ -553,7 +553,7 @@ export function foldTurns(sessionId: string, events: any[], agentPreset?: string
         const id = d.message?.source?.callId; const row = id && byCall.get(id); if (!row) break
         const parts = (d.message?.content ?? []).flatMap((c: any) => c.type === 'tool-result' ? (c.content ?? []) : [c])
         const txt = parts.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
-        row.result = preview(txt, 400); row.ms = e.time - (row._t ?? e.time); delete row._t
+        row.result = preview(txt, 400); row.state = 'returned'; row.ms = e.time - (row._t ?? e.time); delete row._t
         const explicitError=(d.message?.content??[]).some((c:any)=>c.type==='tool-result'&&c.isError===true)
         try {
           const value=JSON.parse(txt)
@@ -564,7 +564,7 @@ export function foldTurns(sessionId: string, events: any[], agentPreset?: string
         break
       }
       case 'step/end': if (step && !step.ms) step.ms = e.time - +new Date(step.at); step = undefined; break
-      case 'turn/end': if (cur) { cur.endedAt = iso(e.time); cur.reason = d.reason?.kind; totals.ms += e.time - +new Date(cur.at) } cur = undefined; break
+      case 'turn/end': if (cur) { cur.endedAt = iso(e.time); cur.reason = d.reason?.kind; totals.ms += e.time - +new Date(cur.at); for (const s of cur.steps) for (const r of s.tools) if (r.state === 'running') r.state = 'no_result' } cur = undefined; break
     }
   }
   return { sessionId, agentPreset, turns, totals, connection }

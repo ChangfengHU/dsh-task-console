@@ -10,6 +10,9 @@ import { TurnLedgerView, useLedger } from './TurnLedger.tsx'
 import { TaskRunAction } from './TaskRunAction.tsx'
 import { ExecutionPicker } from './ExecutionPicker.tsx'
 import { appendGraphPage } from './graph-stream.ts'
+import { QueryCache } from './query-cache.ts'
+
+const graphCaches = new WeakMap<TasksApi, QueryCache<GraphSnapshot>>()
 import { executionLabel } from '../execution-label.ts'
 import { workflowView } from '../workflow-plan.ts'
 import { WorkflowPlan } from './WorkflowPlan.tsx'
@@ -161,8 +164,12 @@ export function DynamicTaskReplay({ api, agents, task, batches, archivedTotal, b
   const timer = useRef<number | undefined>(undefined)
   useEffect(() => {
     let stop = false
-    let accumulated: GraphSnapshot | null = null
+    const cache = graphCaches.get(api) ?? new QueryCache<GraphSnapshot>(15000, 10)
+    graphCaches.set(api, cache)
+    const cacheKey = JSON.stringify([task.id, batchId])
+    let accumulated: GraphSnapshot | null = cache.peek(cacheKey) ?? null
     setData(null); setArtifacts([]); setError(''); setCursor(null); setPlaying(false); setEventsReady(false)
+    if (accumulated) { setData(accumulated); setEventsReady(true) }
     const load = async () => {
       try {
         let next = await api.taskGraph(task.id, batchId, accumulated?.events.at(-1)?.id ?? 0)
@@ -176,6 +183,7 @@ export function DynamicTaskReplay({ api, agents, task, batches, archivedTotal, b
           setData(accumulated)
         }
         setEventsReady(true)
+        cache.put(cacheKey, accumulated)
         const nextArtifacts = await api.taskArtifacts(task.id, batchId)
         if (stop) return
         setArtifacts(nextArtifacts)

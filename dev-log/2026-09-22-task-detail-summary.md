@@ -51,3 +51,23 @@ Ten targeted tests pass, including 431-event page reconstruction, incremental
 tail, zero-frame replay, stale cursor rejection and 23-step single-turn paging.
 Build passes. Deployment/browser evidence is still pending; boot isolation remains
 a separate uncompleted native-host change.
+
+## Candidate browser verification
+
+Read-only preview uses production SQLite with `readonly:true`, no TaskRunner and
+an allowlist of snapshot/graph/Trace reads. Chrome verified zero sessions at replay
+step zero, next-step/automatic replay, return to live, the session drawer and Trace
+pagination. Local initial detail took 1.55–2.60 seconds; summary envelope 33,149
+bytes, Trace page 14,779 bytes. Public candidate interactions passed but cold
+startup took 43.73 seconds: not claimed fixed by this detail optimization.
+
+Full integrated Studio suite: 469 passed, one failed, three skipped on the second
+run. The failure requires an external speech calibration fixture missing from the
+merge worktree's expected sibling directory. All seven studio-host tests passed
+when run with the existing deployment's proof files at that expected test path;
+no Studio business logic or calibration evidence was changed. First full run had
+one additional non-reproducing failure; no blanket full-suite-green claim.
+
+Added a bounded graph cache so opening Trace/returning to a recently visited run
+reuses its canonical prefix and requests only the tail. Cache is memory-only,
+15 seconds, ten graphs; current live rows are revalidated, never persisted.

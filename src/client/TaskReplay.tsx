@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { cronHuman } from '../cron.ts'
 import { actorOf, batchStatus, cardRun, describe, fold, type Batch, type Card, type Event, type Run, type State, type TaskSpec } from '../fold.ts'
 import { buildTaskGraph, layoutTaskGraph, type PositionedTaskGraph, type TaskGraphNode } from '../task-graph.ts'
-import type { AgentRow, ArtifactView } from '../wire.ts'
+import type { AgentRow, ArtifactView, TaskSnapshot } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
 import type { TasksApi } from './TasksView.tsx'
 import { TurnLedgerView, useLedger, type LedgerApi } from './TurnLedger.tsx'
@@ -13,6 +13,14 @@ import { ArtifactDelivery } from './ArtifactDelivery.tsx'
 import { ExecutionPicker } from './ExecutionPicker.tsx'
 import { WorkflowPlan } from './WorkflowPlan.tsx'
 import { TaskRunAction } from './TaskRunAction.tsx'
+import { QueryCache } from './query-cache.ts'
+
+const detailCaches = new WeakMap<TasksApi, QueryCache<TaskSnapshot>>()
+function detailCache(api: TasksApi) {
+  let cache = detailCaches.get(api)
+  if (!cache) { cache = new QueryCache<TaskSnapshot>(15000, 20); detailCaches.set(api, cache) }
+  return cache
+}
 
 const fmt = (iso?: string) => iso ? new Date(iso).toLocaleTimeString('zh-CN', { hour12: false }) : ''
 const dur = (a?: string, b?: string) => { if (!a) return ''; const s = Math.max(0, Math.round(((b ? +new Date(b) : Date.now()) - +new Date(a)) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` }
@@ -142,6 +150,7 @@ function TaskDag({ graph, cards, selected, onSelect }: { graph: PositionedTaskGr
 
 export function TaskReplay({ api, agents, id, runId, sessionId, report = false, toast }: { api: TasksApi & LedgerApi; agents: AgentRow[]; id: string; runId?: string; sessionId?: string; report?: boolean; toast: (m: string) => void }) {
   const [events, setEvents] = useState<Event[]>([])
+  const [detail, setDetail] = useState<TaskSnapshot['detail']>()
   const [artifacts, setArtifacts] = useState<ArtifactView[]>([])
   const [artifactBatch, setArtifactBatch] = useState<string | null>(null)
   const [error, setError] = useState('')
@@ -155,6 +164,13 @@ export function TaskReplay({ api, agents, id, runId, sessionId, report = false, 
 
   useEffect(() => {
     let stop = false
+    setDetail(undefined); setEvents([]); setError('')
+    const cache = detailCache(api), cacheKey = JSON.stringify([id, runId ?? null])
+    const showSnapshot = (next: TaskSnapshot) => {
+      setDetail(next.detail); setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId); setError('')
+    }
+    const cached = cache.peek(cacheKey)
+    if (cached) showSnapshot(cached)
     let poll: number | undefined
     const loadEvents = async () => {
       try {
@@ -169,9 +185,9 @@ export function TaskReplay({ api, agents, id, runId, sessionId, report = false, 
     }
     const loadSnapshot = async () => {
       try {
-        const next = await api.taskSnapshot(id, runId)
+        const next = await cache.load(cacheKey, () => api.taskSnapshot(id, runId))
         if (!stop) {
-          setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId); setError('')
+          showSnapshot(next)
           const state = fold(next.events as Event[])
           const spec = state.tasks.get(id)
           const selected = next.batchId ? state.batches.get(next.batchId) : undefined
@@ -186,10 +202,10 @@ export function TaskReplay({ api, agents, id, runId, sessionId, report = false, 
   const upto = cursor === null ? events.length : Math.min(cursor, events.length)
   const full = useMemo(() => fold(events), [events])
   const now = useMemo(() => cursor === null ? full : fold(events.slice(0, upto)), [events, upto, cursor, full])
-  const task: TaskSpec | undefined = full.tasks.get(id)
-  const batches = [...full.batches.values()].filter(b => b.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))
-  const selId = runId ?? batches.find(batch => !batch.archivedAt)?.id
-  const batchFull: Batch | undefined = selId ? full.batches.get(selId) : undefined
+  const task: TaskSpec | undefined = detail?.task ?? full.tasks.get(id)
+  const batches = detail?.batches ?? [...full.batches.values()].filter(b => b.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))
+  const selId = runId ?? (detail ? artifactBatch ?? undefined : batches.find(batch => !batch.archivedAt)?.id)
+  const batchFull: Batch | undefined = batches.find(batch => batch.id === selId)
   const batchNow: Batch | undefined = selId ? now.batches.get(selId) : undefined
   const batchEvents = useMemo(() => batchFull ? events.map((e, index) => ({ e, index })).filter(x => belongsToBatch(x.e, batchFull.id)) : [], [events, batchFull?.id])
   const eventStep = batchEvents.filter(({ index }) => index < upto).length
@@ -225,15 +241,16 @@ export function TaskReplay({ api, agents, id, runId, sessionId, report = false, 
   const agentName = (aid: string) => agents.find(a => a.id === aid)?.name ?? aid
   const archiveBatch = async (batchId: string, archived: boolean) => {
     await api.setBatchArchived(id, batchId, archived)
+    detailCache(api).clear()
     const next = await api.taskSnapshot(id)
-    setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId)
+    setDetail(next.detail); setEvents(next.events as Event[]); setArtifacts(next.artifacts); setArtifactBatch(next.batchId)
     toast(archived ? '执行已归档，原始历史与会话保留' : '已恢复显示，不会自动重跑')
     go(`tasks/${id}`)
   }
   if (!task) return <div className="dtc-empty">{error || (events.length ? '没有这个任务' : <><span className="dtc-spin" /> 读取事件流…</>)}</div>
-  if ((task.graphMode === 'dynamic-rounds' || task.origin?.source === 'task-chat') && selId) return <DynamicTaskReplay key={selId} report={report} api={api} agents={agents} task={task} batches={batches} batchId={selId} sessionId={sessionId} toast={toast} onBatchArchive={archiveBatch} />
+  if ((task.graphMode === 'dynamic-rounds' || task.origin?.source === 'task-chat') && selId) return <DynamicTaskReplay key={selId} report={report} api={api} agents={agents} task={task} batches={batches} archivedTotal={detail?.archived} batchId={selId} sessionId={sessionId} toast={toast} onBatchArchive={archiveBatch} />
   if (!selId && task.origin) return <section className="dtc-workflow">
-    <header><div><h2>{task.title}</h2><p>{batches.length ? `没有当前执行 · ${batches.length} 条历史已归档` : '已创建 · 尚未执行 · 0 次执行记录'}</p></div><ExecutionPicker batches={batches} value="" onChange={bid => go(`tasks/${id}/runs/${bid}`)} onArchive={archiveBatch} /><TaskRunAction task={task} api={api} toast={toast} /></header>
+    <header><div><h2>{task.title}</h2><p>{batches.length ? `没有当前执行 · ${detail?.total ?? batches.length} 条历史已归档` : '已创建 · 尚未执行 · 0 次执行记录'}</p></div><ExecutionPicker batches={batches} archivedTotal={detail?.archived} value="" onChange={bid => go(`tasks/${id}/runs/${bid}`)} onArchive={archiveBatch} /><TaskRunAction task={task} api={api} toast={toast} /></header>
     <p>{task.trigger.kind === 'cron' ? `时间表：${task.trigger.expr} · ${task.trigger.timeZone || '宿主时区'} · ${task.enabled ? '已启用' : '未启用，等待手动验收'}` : '等待首次手动执行。'}运行前没有角色、闸门或依赖行，不展示虚构 DAG。</p>
     <WorkflowPlan task={task} nameOf={agentName} openSession={sid=>void api.openSession(sid).catch(e=>toast(String(e.message||e)))} trace={sid=>void api.openSession(sid).catch(e=>toast(String(e.message||e)))} />
   </section>
@@ -362,7 +379,7 @@ function CardEvidence({ api, taskId, batchId, card, parents, reworkTargets, gate
   useEffect(() => { setRunId(latest?.id) }, [card.id, runs.length, preferredProfileId, preferredRunId])
   useEffect(() => { setTab(focus) }, [card.id, focus])
   useEffect(() => { setReworkTarget(card.deps[0] ?? card.id) }, [card.id])
-  const { ledger, error } = useLedger(api, tab === 'ledger' ? run?.sessionId : undefined, run?.status === 'running' || run?.status === 'blocked')
+  const { ledger, error, setPage } = useLedger(api, tab === 'ledger' ? run?.sessionId : undefined, run?.status === 'running' || run?.status === 'blocked')
   const decide = async (decision: 'approve' | 'changes') => {
     setBusy(true)
     try { await api.reviewCard(card.id, decision, reviewNote, decision === 'changes' ? reworkTarget : undefined); toast(decision === 'approve' ? '已验收通过' : `已退回 ${labelOf(reworkTargets.find(target => target.id === reworkTarget)?.agentId ?? '')}`); setReviewNote('') }
@@ -386,7 +403,7 @@ function CardEvidence({ api, taskId, batchId, card, parents, reworkTargets, gate
       {run?.status === 'blocked' ? <div className="dtc-ask"><b>? {run.question}</b>{run.terminalBlock ? <><div className="dtc-note">这个 Run 已经关闭。解除阻塞后会重新领取，并创建新的 Run 和 Session。</div><button className="dtc-btn pri" disabled={busy} onClick={unblock}>解除阻塞并新建 Run</button></> : <div className="dtc-note">这是会话内提问；在该 Session 回答后会继续同一个 Run。</div>}</div> : null}
     </div> : null}
     {tab === 'claim' ? <div className="dtc-tabbody"><div className="dtc-cartoon-note"><h4>🔐 真实领取记录</h4><p>Hermes 兼容内核使用 SQLite 事务和 CAS claim；每次执行、评审和返工都有独立 Run，并保留锁与 Session 的绑定。</p></div><div className="dtc-kv dtc-runfacts"><span className="k">Run</span><span className="dtc-mono">{run?.id || '—'}</span><span className="k">执行 Preset</span><span>{run ? labelOf(run.profileId ?? card.agentId) : '—'}</span><span className="k">尝试</span><span>{run?.attempt ?? 0} / {card.runIds.length || 1}</span><span className="k">领取</span><span>{fmt(run?.startedAt) || '—'}</span><span className="k">会话创建</span><span>{fmt(run?.sessionCreatedAt) || '等待中'}</span><span className="k">提示词发送</span><span>{fmt(run?.promptDispatchedAt) || '等待中'}</span><span className="k">Session</span><span className="dtc-mono">{run?.sessionId || '—'}</span></div></div> : null}
-    {tab === 'ledger' ? <div className="dtc-tabbody">{error ? <div className="dtc-err">{error}</div> : ledger ? <TurnLedgerView ledger={ledger} compact /> : run?.sessionId ? <div className="dtc-empty"><span className="dtc-spin" /> 折叠会话日志…</div> : <div className="dtc-empty">没有会话。</div>}</div> : null}
+    {tab === 'ledger' ? <div className="dtc-tabbody">{error ? <div className="dtc-err">{error}</div> : ledger ? <TurnLedgerView ledger={ledger} compact onPage={setPage} /> : run?.sessionId ? <div className="dtc-empty"><span className="dtc-spin" /> 折叠会话日志…</div> : <div className="dtc-empty">没有会话。</div>}</div> : null}
     {tab === 'gate' ? <div className="dtc-tabbody">
       {gateType === 'release' ? <div className={`dtc-cartoon-gate ${run?.status === 'done' && run.outcome === 'completed' ? 'approved' : 'pending'}`}><span>{run?.status === 'done' && run.outcome === 'completed' ? '🔓' : '🔒'}</span><div><b>第 {preferredGateRound ?? 1} 轮执行闸门{run?.status === 'done' && run.outcome === 'completed' ? '已放开' : '正在等待规划者'}</b><p>{run?.status === 'done' && run.outcome === 'completed' ? '规划 Run 已完成并写入 Handoff，执行者依赖满足后才能 CAS 领取。' : '规划者完成本轮计划前，执行者和评估者都保持等待，不会提前领取。'}</p></div></div> : <div className={`dtc-cartoon-gate ${latestGate?.status ?? 'pending'}`}><span>{latestGate?.status === 'pending' ? '🚪' : latestGate?.status === 'approved' ? '✅' : latestGate?.status === 'changes' ? '↩' : '🪁'}</span><div><b>{humanReviewPending ? '正在等待人工验收' : latestGate?.status === 'pending' && latestGate.mode === 'agent' ? `等待 ${labelOf(latestGate.reviewerId ?? '')} 评审` : latestGate?.status === 'approved' ? `${latestGate.mode === 'agent' ? 'Agent 评审' : '人工闸门'}已批准` : latestGate?.status === 'changes' ? `已退回 ${labelOf(reworkTargets.find(target => target.id === latestGate.targetCardId)?.agentId ?? '')}` : '这个角色还没有创建评审闸门'}</b><p>{humanReviewPending ? '批准前不会放行下游，也不会结算整个任务组。退回时可选择从哪个上游角色重新开始。' : latestGate?.status === 'pending' && latestGate.mode === 'agent' ? '评估者将通过 CAS 领取同一张卡；通过或退回都会写入独立 Run。' : latestGate?.status === 'approved' ? '评审事件已写入事件流，下游可以继续。' : latestGate?.status === 'changes' ? latestGate.note : 'Agent 调用 task_request_review 后才会创建控制节点。'}</p></div></div>}
       {gates.length ? <div className="dtc-gate-history"><h4>闸门历史</h4>{gates.map(gate => <div key={gate.runId}><span>Gate #{gate.round} · {gate.mode === 'agent' ? labelOf(gate.reviewerId ?? '') : '人工'}</span><b>{gate.status === 'pending' ? '等待决策' : gate.status === 'approved' ? '通过' : `退回 ${labelOf(reworkTargets.find(target => target.id === gate.targetCardId)?.agentId ?? '')}`}</b><small>{fmt(gate.requestedAt)}{gate.note ? ` · ${gate.note}` : ''}</small></div>)}</div> : null}

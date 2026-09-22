@@ -503,7 +503,7 @@ export function migrate(events: LegacyEvent[]): Event[] {
 export interface ToolRow { callId: string; name: string; kind: 'mcp' | 'skill' | 'native' | 'ask' | 'task'; server?: string; args: string; result: string; ok: boolean; ms: number; at: string }
 export interface StepRow { step: number; provider?: string; model?: string; at: string; ms: number; usage: { input: number; output: number; reasoning: number; cacheRead: number }; tools: ToolRow[]; text: string }
 export interface TurnRow { turn: number; at: string; endedAt?: string; reason?: string; user: string; steps: StepRow[]; connection?: ModelConnection }
-export interface TurnLedger { sessionId: string; agentPreset?: string; turns: TurnRow[]; connection?: ModelConnection; totals: { turns: number; steps: number; mcp: number; skill: number; native: number; ask: number; task: number; input: number; output: number; ms: number; byServer: Record<string, number>; skills: string[] } }
+export interface TurnLedger { pagination?: { page: number; pages: number; total: number }; sessionId: string; agentPreset?: string; turns: TurnRow[]; connection?: ModelConnection; totals: { turns: number; steps: number; mcp: number; skill: number; native: number; ask: number; task: number; input: number; output: number; ms: number; byServer: Record<string, number>; skills: string[] } }
 
 const preview = (s: unknown, n: number) => { const t = typeof s === 'string' ? s : JSON.stringify(s ?? ''); return t.length > n ? t.slice(0, n) + '…' : t }
 

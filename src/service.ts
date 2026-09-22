@@ -44,6 +44,7 @@ import { TaskCreator } from './task-create.ts'
 import { assertTaskActionLogin } from './task-actions.ts'
 import { readBrowserAcceptance } from './workflow-acceptance.ts'
 import { executionHistory } from './execution-history.ts'
+import { ledgerPage } from './ledger-page.ts'
 import { browserPatrolEvidence } from './browser-patrol-evidence.ts'
 import { BrowserPatrolWorkflow } from './browser-patrol-workflow.ts'
 import { ProxyWorkflow, proxyRequestId } from './proxy-workflow.ts'
@@ -379,7 +380,8 @@ export class TaskConsoleService extends TypertRemoteService {
       permission:spec?(spec.tools.some(t=>['bash','fs','fs-text','str-replace-editor'].includes(t))?'write':Object.values(spec.mcpTools).some(t=>t.length)?'limited-write':'read-only'):null,spec:detail?spec:null}}
     const detailId=q.id==='new'?undefined:q.id??selected[0]?.id, detailPreset=detailId?all.find(p=>p.id===detailId):undefined
     if(q.id&&q.id!=='new'&&!detailPreset)throw Error('没有这个 Agent')
-    return JSON.stringify({page,pages,total,pageSize:10,rows:await Promise.all(selected.map(p=>load(p))),detail:detailPreset?await load(detailPreset,true):null})
+    const detail=detailPreset?{...await load(detailPreset,true),firstUsedAt:firstAgentUse(await this.sessionHeaders()).get(detailPreset.id)??null}:null
+    return JSON.stringify({page,pages,total,pageSize:10,rows:await Promise.all(selected.map(p=>load(p))),detail})
   }
 
   async agents(): Promise<string> {
@@ -790,7 +792,7 @@ export class TaskConsoleService extends TypertRemoteService {
 
   /** Fold one session's own log into turns → steps → tool calls (live or cold). */
   async sessionTurns(payload: string): Promise<string> {
-    const { sessionId } = JSON.parse(payload) as { sessionId: string }
+    const { sessionId, page } = JSON.parse(payload) as { sessionId: string; page?: number }
     const persistence = (this.ctx as any).get('sessionPersistence')
     let events: any[] = []; let agentPreset: string | undefined
     if (persistence?.inspect) {
@@ -800,7 +802,8 @@ export class TaskConsoleService extends TypertRemoteService {
       const live = (this.ctx as any).get('sessions')?.get?.(sessionId)
       events = live?.events ?? []; agentPreset = live?.header?.agentPreset
     }
-    return JSON.stringify(foldTurns(sessionId, events, agentPreset))
+    const ledger = foldTurns(sessionId, events, agentPreset)
+    return JSON.stringify(page === undefined ? ledger : ledgerPage(ledger, page))
   }
 
   // ── tasks ──────────────────────────────────────────────────────────────
@@ -1047,7 +1050,17 @@ export class TaskConsoleService extends TypertRemoteService {
 
   /** Initial detail payload in one round trip; live polling stays event-only afterwards. */
   async taskSnapshot(payload: string): Promise<string> {
-    const { id, batchId } = JSON.parse(payload) as { id: string; batchId?: string }
+    const { id, batchId, summary } = JSON.parse(payload) as { id: string; batchId?: string; summary?: boolean }
+    const task = this.runner.store.s.tasks.get(id)
+    if (summary && task && (task.graphMode === 'dynamic-rounds' || task.origin?.source === 'task-chat')) {
+      const all = [...this.runner.store.s.batches.values()].filter(b => b.taskId === id).sort((a, b) => b.firedAt.localeCompare(a.firedAt))
+      const selected = batchId ? all.find(b => b.id === batchId) : all.find(b => !b.archivedAt)
+      if (batchId && !selected) throw new Error('执行记录不属于这个任务')
+      const recent = all.slice(0, 10)
+      if (selected && !recent.some(b => b.id === selected.id)) recent.splice(9, 1, selected)
+      const batches = recent.map(b => b.id === selected?.id ? b : { ...b, turn: undefined, cardIds: [] })
+      return JSON.stringify({ events: [], artifacts: [], batchId: selected?.id ?? null, detail: { task, batches, total: all.length, archived: all.filter(b => b.archivedAt).length } })
+    }
     const events = this.runner.store.all().filter((e: any) => e.taskId === id).map((e: any) => e.t === 'artifact/registered' ? { ...e, artifact: this.artifactView(e.artifact) } : e)
     if (!this.runner.store.s.tasks.has(id)) return JSON.stringify({ events, artifacts: [], batchId: null })
     const selected = batchId ?? [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === id && !batch.archivedAt).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]?.id
@@ -1057,11 +1070,11 @@ export class TaskConsoleService extends TypertRemoteService {
 
   /** Raw normalized rows plus the canonical event log for DB-faithful replay. */
   async taskGraph(payload: string): Promise<string> {
-    const { id, batchId } = JSON.parse(payload) as { id: string; batchId?: string }
+    const { id, batchId, after } = JSON.parse(payload) as { id: string; batchId?: string; after?: number }
     if (!this.runner.store.s.tasks.has(id)) throw new Error('没有这个任务')
     const selected = batchId ?? [...this.runner.store.s.batches.values()].filter(batch => batch.taskId === id && !batch.archivedAt).sort((a, b) => b.firedAt.localeCompare(a.firedAt))[0]?.id
     if (!selected) throw new Error('这个任务还没有运行')
-    return JSON.stringify(this.runner.store.graphSnapshot(id, selected))
+    return JSON.stringify(this.runner.store.graphSnapshot(id, selected, after))
   }
 
   private artifactView(a: Artifact): ArtifactView {

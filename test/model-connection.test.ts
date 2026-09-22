@@ -74,3 +74,18 @@ test('missing retry flag and malformed counters do not invent a terminal diagnos
   assert.equal(foldTurns('s', [start, error(true, 'Reconnecting... 9/5')]).connection?.retry, undefined)
   assert.equal(foldTurns('s', [start, error(true, 'Reconnecting... 3/5 secret-token')]).connection?.retry, undefined)
 })
+
+test('paginated session API preserves latest connection evidence and full-session totals', async () => {
+  const service = Object.create(TaskConsoleService.prototype)
+  const events = [start, ...Array.from({ length: 23 }, (_, i) => ({ type: 'step/start', time: 1100 + i, data: { turn: 1, step: i + 1 } })), error()]
+  Object.defineProperty(service, 'ctx', { value: { get: (name: string) => name === 'sessionPersistence' ? { inspect: async () => ({ events }) } : undefined } })
+  for (const page of [1, 2, 3]) {
+    const response = JSON.parse(await service.sessionTurns(JSON.stringify({ sessionId: 's', page })))
+    assert.equal(response.pagination.page, page)
+    assert.equal(response.pagination.pages, 3)
+    assert.equal(response.totals.steps, 23)
+    assert.equal(response.turns[0].steps.length, page === 3 ? 3 : 10)
+    assert.equal(response.connection.status, 'reconnecting')
+    assert.deepEqual(response.turns[0].connection.retry, { attempt: 3, limit: 5 })
+  }
+})

@@ -219,6 +219,7 @@ export type ArtifactView = Omit<FoldArtifact, 'storagePath'>
 
 /** One task detail read, avoiding a browser-side events → batch → artifacts waterfall. */
 export interface TaskSnapshot {
+  detail?: { task: TaskSpec; batches: Batch[]; total: number; archived: number }
   events: import('./fold.ts').Event[]
   artifacts: ArtifactView[]
   batchId: string | null

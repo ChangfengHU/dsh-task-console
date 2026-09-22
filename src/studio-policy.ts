@@ -8,6 +8,7 @@ export interface StudioPolicy {
   fps: number
   durationMin: number
   durationMax: number
+  generationLimits?: {imageCalls:number; voiceSegments:number}
   maxRepairRounds: number
   referenceSha256: string
   referenceUrl: string
@@ -17,7 +18,7 @@ export interface StudioPolicy {
 export function validateStudioPolicy(value: unknown): StudioPolicy {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('studio 必须是明确的视频策略对象')
   const v = value as Record<string, unknown>
-  const allowed = ['characterId','width','height','fps','durationMin','durationMax','maxRepairRounds','referenceSha256','referenceUrl','requiredDimensions','publish']
+  const allowed = ['generationLimits','characterId','width','height','fps','durationMin','durationMax','maxRepairRounds','referenceSha256','referenceUrl','requiredDimensions','publish']
   if (Object.keys(v).some(key => !allowed.includes(key))) throw Error('studio 包含未知字段')
   if (v.publish !== undefined && v.publish !== false) throw Error('studio-video-v1 不授权发布；publish 只能为 false')
   let referenceUrl: URL

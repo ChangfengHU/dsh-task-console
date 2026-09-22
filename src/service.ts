@@ -3,6 +3,7 @@ import { StudioOperations } from './studio-operations.js'
 import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech } from './studio-host.js'
 import { registerStudioTools } from './studio-tools.js'
 import { StudioWorkflow } from './studio-workflow.js'
+import { registerStudioSkillGate } from './studio-skill-gate.js'
 /**
  * The `taskConsole` Remote service.
  *
@@ -109,17 +110,18 @@ export class TaskConsoleService extends TypertRemoteService {
     super(ctx, NAMESPACE)
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
-      registerStudioTools: async (agentCtx,input,isActive) => {
+      registerStudioTools: async (agentCtx,input,isActive,submitReview) => {
         const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
-        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,...locks,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
-        try { const speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});return ()=>{speech();media()} } catch(e){media();throw e}
+        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
+        let skillGate:()=>void=()=>{}
+        try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});const speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});return ()=>{speech();skillGate();media()} } catch(e){skillGate();media();throw e}
       },
       beforeStart: async input => {
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return
         const workflow = new StudioWorkflow(this.runner.store)
         workflow.enforceRuntime(input)
         const operations=new StudioOperations(this.runner.store)
-        operations.configure(input,{imageCalls:6,voiceSegments:80})
+        operations.configure(input,input.task.design.studio.generationLimits??{imageCalls:6,voiceSegments:80})
         const budget=operations.snapshot(input)
         workflow.recordBudget(input,{repairRounds:Math.max(0,(workflow.status(input).candidate?.revision??1)-1),used:budget.used,limits:budget.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
         await refreshStudioCapabilities(workflow,input.task)
@@ -129,7 +131,7 @@ export class TaskConsoleService extends TypertRemoteService {
       beforeComplete: async input => {
         if (input.task.design?.evidenceContract === 'studio-video-v1') {
           const workflow=new StudioWorkflow(this.runner.store),operations=new StudioOperations(this.runner.store).snapshot(input)
-          await refreshStudioCapabilities(workflow,input.task)
+          if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task)
           if(operations.unknown||operations.operations.some((o:any)=>o.state==='submitted'))throw Error('studio-generation-reconcile-required: query original jobs before handoff')
           const candidate=workflow.status(input).candidate
           workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})

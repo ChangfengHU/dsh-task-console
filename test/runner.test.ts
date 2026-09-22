@@ -1204,3 +1204,44 @@ test('Studio background unblock scheduling failure is durable telemetry, not an 
   assert.match(failure.payload??'',/fixture dispatcher failure/)
   runner.stop()
 })
+
+test('Studio structured review hands off through the same guarded completion without a second model tool call',async()=>{
+ let valid=false
+ const {host,store,runner}=await setup({graphMode:'dynamic-rounds',design:{evidenceContract:'studio-video-v1',failurePolicy:{maxAttempts:3}} as any},{
+  registerStudioTools:async(ctx,input,isActive,submitReview)=>ctx.tools.register({name:'studio_submit_review',execute:async()=>{assert.equal(isActive(),true);await submitReview();return {qualityApproved:false}}}),
+  beforeComplete:input=>{if(input.card.role==='reviewer'){if(!valid)throw Error('host-evidence-invalid');return {summary:'Negative review verified',metadata:{workflowOutcome:'review_needs_changes'}}}},
+ })
+ const batch=await runner.fire('T','manual'),latest=()=>[...host.sessions.keys()].at(-1)!
+ let session=latest();host.consumeFirst(session)
+ await assert.rejects(host.callTool(session,'studio_submit_review',{}),/reviewer-required/)
+ await host.callTool(session,'task_plan_round',{summary:'plan'});host.endTurn(session);await tick()
+ session=latest();host.consumeFirst(session);await host.callTool(session,'task_complete',{summary:'candidate'});host.endTurn(session);await tick()
+ session=latest();host.consumeFirst(session)
+ await assert.rejects(host.callTool(session,'studio_submit_review',{}),/host-evidence-invalid/)
+ assert.equal(store.s.cards.get(`${batch.id}#r1`)?.status,'running')
+ valid=true;await host.callTool(session,'studio_submit_review',{});host.endTurn(session);await tick()
+ assert.equal(store.s.cards.get(`${batch.id}#r1`)?.status,'done')
+ assert.equal(store.s.runs.get(`${batch.id}#r1#1`)?.metadata?.workflowOutcome,'review_needs_changes')
+ assert.equal(store.s.cards.get(`${batch.id}#p2`)?.status,'running')
+ assert.equal(store.all().some(e=>e.t==='run/nudged'),false)
+ runner.stop()
+})
+
+test('Studio workers receive real JSON tool-call corrections, not Python-style pseudocode',async()=>{
+ const {host,store,runner}=await setup({participants:[{agentId:'a'}],maxTries:1,onFail:'stop',design:{evidenceContract:'studio-video-v1'} as any},{registerStudioTools:async()=>()=>{}})
+ const batch=await runner.fire('T','manual'),session=[...host.sessions.keys()][0];host.consumeFirst(session)
+ host.endTurn(session);await tick();host.endTurn(session);await tick()
+ assert.equal(store.s.runs.get(`${batch.id}#0#1`)!.nudges,2)
+ assert.match(host.sessions.get(session)!.followups.at(-1).content[0].text,/JSON.*summary/)
+ assert.doesNotMatch(host.sessions.get(session)!.followups.at(-1).content[0].text,/task_complete\(summary/)
+ host.endTurn(session);await tick();assert.equal(store.s.runs.get(`${batch.id}#0#1`)!.outcome,'protocol_violation')
+ runner.stop()
+})
+
+test('Studio planner correction uses planning/finalization tools instead of unavailable worker completion',async()=>{
+ const {host,runner}=await setup({graphMode:'dynamic-rounds',design:{evidenceContract:'studio-video-v1',failurePolicy:{maxAttempts:3}} as any},{registerStudioTools:async()=>()=>{}})
+ await runner.fire('T','manual');const session=[...host.sessions.keys()][0];host.consumeFirst(session);host.endTurn(session);await tick()
+ const correction=host.sessions.get(session)!.followups.at(-1).content[0].text
+ assert.match(correction,/task_plan_round/);assert.match(correction,/task_finalize/);assert.doesNotMatch(correction,/task_complete/)
+ runner.stop()
+})

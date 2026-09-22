@@ -1,3 +1,4 @@
+import { observeModelConnection, type ModelConnection } from './model-connection.ts'
 /**
  * The task model, folded from an append-only event stream. Pure — shared by
  * host and browser so the replay a person scrubs through is computed by the
@@ -501,8 +502,8 @@ export function migrate(events: LegacyEvent[]): Event[] {
 
 export interface ToolRow { callId: string; name: string; kind: 'mcp' | 'skill' | 'native' | 'ask' | 'task'; server?: string; args: string; result: string; ok: boolean; ms: number; at: string }
 export interface StepRow { step: number; provider?: string; model?: string; at: string; ms: number; usage: { input: number; output: number; reasoning: number; cacheRead: number }; tools: ToolRow[]; text: string }
-export interface TurnRow { turn: number; at: string; endedAt?: string; reason?: string; user: string; steps: StepRow[] }
-export interface TurnLedger { sessionId: string; agentPreset?: string; turns: TurnRow[]; totals: { turns: number; steps: number; mcp: number; skill: number; native: number; ask: number; task: number; input: number; output: number; ms: number; byServer: Record<string, number>; skills: string[] } }
+export interface TurnRow { turn: number; at: string; endedAt?: string; reason?: string; user: string; steps: StepRow[]; connection?: ModelConnection }
+export interface TurnLedger { sessionId: string; agentPreset?: string; turns: TurnRow[]; connection?: ModelConnection; totals: { turns: number; steps: number; mcp: number; skill: number; native: number; ask: number; task: number; input: number; output: number; ms: number; byServer: Record<string, number>; skills: string[] } }
 
 const preview = (s: unknown, n: number) => { const t = typeof s === 'string' ? s : JSON.stringify(s ?? ''); return t.length > n ? t.slice(0, n) + '…' : t }
 
@@ -513,15 +514,19 @@ export function foldTurns(sessionId: string, events: any[], agentPreset?: string
   let cur: TurnRow | undefined, step: StepRow | undefined
   let model: { provider?: string; model?: string } = {}
   let pendingUser = ''
+  let connection: ModelConnection = { status: 'unknown' }
   const iso = (t: number) => new Date(t).toISOString()
   for (const e of events) {
     const d = e.data ?? {}
+    if (e.type === 'turn/start') connection = { status: 'unknown' }
+    connection = observeModelConnection(connection, e)
+    if (cur && e.type !== 'turn/start') cur.connection = connection
     switch (e.type) {
       case 'agent/inbox/spliced': { const txt = (d.inserted ?? []).flatMap((m: any) => (m.content ?? []).filter((c: any) => c.type === 'text').map((c: any) => c.text)).join('\n'); if (txt) pendingUser = txt; break }
       case 'user/message': { if (d.source?.kind === 'user' || !d.source) { const txt = (d.content ?? []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n'); if (txt && !txt.startsWith('<system-reminder>')) pendingUser = txt } break }
       case 'request/context': model = { provider: d.provider, model: d.model }; break
-      case 'turn/start': cur = { turn: d.turn, at: iso(e.time), user: pendingUser, steps: [] }; pendingUser = ''; turns.push(cur); totals.turns++; break
-      case 'step/start': if (!cur) { cur = { turn: d.turn ?? turns.length + 1, at: iso(e.time), user: pendingUser, steps: [] }; turns.push(cur); totals.turns++ }
+      case 'turn/start': cur = { turn: d.turn, at: iso(e.time), user: pendingUser, steps: [], connection }; pendingUser = ''; turns.push(cur); totals.turns++; break
+      case 'step/start': if (!cur) { cur = { turn: d.turn ?? turns.length + 1, at: iso(e.time), user: pendingUser, steps: [], connection }; turns.push(cur); totals.turns++ }
         step = { step: d.step, ...model, at: iso(e.time), ms: 0, usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0 }, tools: [], text: '' }; cur.steps.push(step); totals.steps++; break
       case 'assistant/message': {
         if (!step) break
@@ -562,5 +567,5 @@ export function foldTurns(sessionId: string, events: any[], agentPreset?: string
       case 'turn/end': if (cur) { cur.endedAt = iso(e.time); cur.reason = d.reason?.kind; totals.ms += e.time - +new Date(cur.at) } cur = undefined; break
     }
   }
-  return { sessionId, agentPreset, turns, totals }
+  return { sessionId, agentPreset, turns, totals, connection }
 }

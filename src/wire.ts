@@ -248,3 +248,5 @@ export interface LegacyRun {
   rounds?: number
   reworks?: number
 }
+
+export type { ModelConnection } from './model-connection.ts'

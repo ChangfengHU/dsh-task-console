@@ -40,7 +40,7 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
  }
  const current=async()=>{const location=workflow.candidateLocation(input),state=workflow.status(input),saved=state.candidate,candidate=saved?.candidate??saved;if(!location||!candidate)throw Error('studio-candidate-required');const path=await studioPath(input.task.cwd,location.path);if(await fileSha256(path)!==candidate.sha256)throw Error('studio-candidate-file-changed');check();return {path,candidate}}
  const directory=async()=>{const root=await realpath(input.task.cwd),base=join(root,'.studio-review');await mkdir(base,{recursive:true,mode:0o700});if(await realpath(base)!==base)throw Error('studio-review-directory-symlink');return mkdtemp(join(base,'sample-'))}
- const interval=(args:any,duration:number,max:number)=>{const {start,end}=args;if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>duration||end-start>max)throw Error('studio-invalid-sample-range');return [start,end]}
+ const interval=(args:any,duration:number,max:number)=>{const {start,end}=args;if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>duration||end-start>max)throw Error(`studio-invalid-sample-range: durationSeconds=${duration}; require 0 <= start < end <= ${duration}, maxWindowSeconds=${max}`);return [start,end]}
  let refreshingPreflight:Promise<void>|undefined,lastRefreshAttempt=0
  register('studio_status','Read host preflight and current version-bound state. Expired/missing host proofs trigger actual dependency revalidation; never aesthetic approval.',{},async()=>{
   let preflight=workflow.preflight(input.task)
@@ -57,7 +57,7 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   // snapshot at both levels, avoiding split results at an expiration boundary.
   preflight=state.preflight??workflow.preflight(input.task)
   const artifacts=state.candidate?(()=>{const loc=workflow.candidateLocation(input);return {manifestPath:relative(input.task.cwd,loc.manifestPath),videoPath:relative(input.task.cwd,loc.path)}})():null
-  return {preflight,state:{...state,preflight},artifacts,reference:options.reference?{sha256:options.reference.sha256}:null,characterReferences:(options.characterReferences??[]).map(({id,sha256})=>({id,sha256}))}
+  return {preflight,state:{...state,preflight},artifacts,reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(({id,sha256})=>({id,sha256}))}
  })
  register('studio_register_candidate','Producer only: register actual project MP4 and manifest after host probing and hashing.',{path:{type:'string',required:true},manifestPath:{type:'string',required:true},revision:{type:'number',required:true}},async args=>{
   requireRole(['executor']);if(!Number.isInteger(args.revision)||args.revision<1)throw Error('studio-invalid-revision')
@@ -79,9 +79,26 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   if(await fileSha256(path)!==before||await fileSha256(manifestPath)!==candidate.manifestSha256)throw Error('studio-candidate-file-changed')
   check();workflow.recordCandidate(input,candidate);workflow.recordCandidateLocation(input,{path,manifestPath,sha256:candidate.sha256});return {candidate,qualityApproved:false}
  })
- register('studio_read_text','Planner/reviewer only: read project text up to 64 KiB, excluding hidden and sensitive paths.',{path:{type:'string',required:true}},async args=>{requireRole(['planner','reviewer']);const path=await studioPath(input.task.cwd,args.path,true);if((await stat(path)).size>65536)throw Error('studio-text-too-large');const data=await readFile(path);if(data.length>65536||data.includes(0))throw Error('studio-text-invalid');check();let receipt:any
-  if(role==='reviewer'&&workflow.status(input).candidate){const location=workflow.candidateLocation(input);if(location?.manifestPath&&path===location.manifestPath){const {candidate}=await current();if(hash(data)!==candidate.manifestSha256)throw Error('studio-manifest-file-changed');receipt=workflow.recordReceipt(input,{candidateSha256:candidate.sha256,kind:'source',ranges:[[0,candidate.durationSeconds]],sha256:hash(data)})}}
-  return {path:relative(input.task.cwd,path),text:data.toString('utf8'),...(receipt?{receipt,scope:'Manifest read only; source rights and claims still require review.'}:{})}})
+ const textCoverage=new Map<string,{sha256:string;ranges:number[][]}>()
+ register('studio_read_text','Planner/reviewer only: paginated UTF-8 project text. Follow nextOffset until null using returned sha256 as expectedSha256. Offsets/counts are UTF-16 code units. Partial reads do not certify full source review. Hidden/sensitive paths excluded.',{path:{type:'string',required:true},offset:{type:'number'},limit:{type:'number'},expectedSha256:{type:'string'}},async args=>{
+  requireRole(['planner','reviewer']);const path=await studioPath(input.task.cwd,args.path,true)
+  if((await stat(path)).size>8*1024*1024)throw Error('studio-text-too-large: maximum file size 8MiB')
+  const data=await readFile(path);if(data.length>8*1024*1024||data.includes(0))throw Error('studio-text-invalid')
+  let text:string;try{text=new TextDecoder('utf-8',{fatal:true}).decode(data)}catch{throw Error('studio-text-invalid-utf8')}
+  const sha256=hash(data),offset=args.offset??0,limit=args.limit??(data.length<=65536?Math.max(1,text.length):16384)
+  if(!Number.isInteger(offset)||offset<0||offset>text.length||!Number.isInteger(limit)||limit<1||limit>65536)throw Error('studio-text-invalid-page')
+  if(offset>0&&!/^[a-f0-9]{64}$/.test(args.expectedSha256??''))throw Error('studio-text-page-sha256-required')
+  if(args.expectedSha256!==undefined&&args.expectedSha256!==sha256)throw Error('studio-text-file-changed')
+  if(offset>0&&/[\uDC00-\uDFFF]/.test(text[offset]??'')&&/[\uD800-\uDBFF]/.test(text[offset-1]))throw Error('studio-text-invalid-page-boundary')
+  let end=Math.min(text.length,offset+limit)
+  while(Buffer.byteLength(text.slice(offset,end))>65536)end=offset+Math.floor((end-offset)/2)
+  if(end<text.length&&/[\uDC00-\uDFFF]/.test(text[end])&&/[\uD800-\uDBFF]/.test(text[end-1]))end--
+  if(end===offset&&offset<text.length)throw Error('studio-text-page-too-small')
+  check();const prev=textCoverage.get(path),ranges=prev?.sha256===sha256?prev.ranges:[];ranges.push([offset,end]);ranges.sort((a,b)=>a[0]-b[0]);let covered=0;for(const [a,b] of ranges){if(a>covered)break;covered=Math.max(covered,b)}
+  textCoverage.set(path,{sha256,ranges});let receipt:any
+  if(role==='reviewer'&&workflow.status(input).candidate){const location=workflow.candidateLocation(input);if(location?.manifestPath&&path===location.manifestPath){const {candidate}=await current();if(sha256!==candidate.manifestSha256)throw Error('studio-manifest-file-changed');if(covered===text.length)receipt=workflow.recordReceipt(input,{candidateSha256:candidate.sha256,kind:'source',ranges:[[0,candidate.durationSeconds]],sha256})}}
+  return {path:relative(input.task.cwd,path),text:text.slice(offset,end),sha256,totalChars:text.length,offset,nextOffset:end<text.length?end:null,completeRead:covered===text.length,...(receipt?{receipt,scope:'Manifest read only; source rights and claims still require review.'}:{})}
+ })
  register('studio_inspect_probe','Reviewer only: actual ffprobe metadata bound to the current file, not aesthetic approval.',{},async()=>{requireRole(['reviewer']);const {path,candidate}=await current(),raw=(await command(process.env.FFPROBE_PATH??'ffprobe',['-v','error','-show_streams','-show_format','-of','json',path])).stdout,probe=JSON.parse(raw);if(await fileSha256(path)!==candidate.sha256)throw Error('studio-candidate-file-changed');check();const receipt=workflow.recordReceipt(input,{candidateSha256:candidate.sha256,kind:'probe',ranges:[[0,candidate.durationSeconds]],sha256:hash(raw)});return {probe,receipt,qualityApproved:false}})
 
  register('studio_inspect_frames','Reviewer only: inspect 8 ordered actual frames across up to 2 seconds. Sparse sampling is not full-frame coverage.',{start:{type:'number',required:true},end:{type:'number',required:true}},async args=>{

@@ -18,7 +18,7 @@ async function setup(t:any,role='reviewer'){
 test('realpath confines symlinks and traversal; text rejects hidden/sensitive',async t=>{const s=await setup(t);await symlink('/etc/hosts',join(s.cwd,'escape'));await assert.rejects(studioPath(s.cwd,'escape'),/outside/);await assert.rejects(studioPath(s.cwd,'../../../etc/hosts'));await writeFile(join(s.cwd,'.env'),'secret');await assert.rejects(studioPath(s.cwd,'.env',true),/sensitive/);await writeFile(join(s.cwd,'credentials.json'),'{}');await assert.rejects(studioPath(s.cwd,'credentials.json',true),/sensitive/)})
 test('producer registers actual hashes and probe dimensions',async t=>{const s=await setup(t,'executor');await s.tools.studio_register_candidate.execute({path:'film.mp4',manifestPath:'manifest.json',revision:2});assert.equal(s.getCandidate().sha256,hash('video'));assert.equal(s.getCandidate().manifestSha256,hash('{}'));assert.equal(s.getCandidate().fps,30);assert.equal(await fileSha256(join(s.cwd,'film.mp4')),hash('video'))})
 test('role denial and stale session reject before work',async t=>{const s=await setup(t,'planner');await assert.rejects(s.tools.studio_register_candidate.execute({path:'film.mp4',manifestPath:'manifest.json',revision:1}),/role/);await assert.rejects(s.tools.studio_status.execute({}, {agent:{session:{id:'other'}}}),/session/);s.deactivate();await assert.rejects(s.tools.studio_status.execute({}),/stale/)})
-test('read text is bounded and binaries rejected',async t=>{const s=await setup(t);assert.equal((await s.tools.studio_read_text.execute({path:'manifest.json'})).text,'{}');await writeFile(join(s.cwd,'large.txt'),'x'.repeat(65537));await assert.rejects(s.tools.studio_read_text.execute({path:'large.txt'}),/large/);await writeFile(join(s.cwd,'binary.txt'),Buffer.from([0,1]));await assert.rejects(s.tools.studio_read_text.execute({path:'binary.txt'}),/invalid/)})
+test('read text is bounded and binaries rejected',async t=>{const s=await setup(t);assert.equal((await s.tools.studio_read_text.execute({path:'manifest.json'})).text,'{}');await writeFile(join(s.cwd,'large.txt'),'x'.repeat(65537));assert.equal((await s.tools.studio_read_text.execute({path:'large.txt'})).nextOffset,16384);await writeFile(join(s.cwd,'binary.txt'),Buffer.from([0,1]));await assert.rejects(s.tools.studio_read_text.execute({path:'binary.txt'}),/invalid/)})
 test('ordered actual frames return durable image blocks and trusted receipt',async t=>{const s=await setup(t),tool=s.tools.studio_inspect_frames,result=await tool.execute({start:0,end:2}),content=tool.output.render({},result);assert.equal(content.filter((b:any)=>b.type==='image').length,8);assert.equal(result.frames.length,8);assert.equal(s.receipts[0].kind,'frames');assert.equal(s.receipts[0].candidateSha256,hash('video'));assert.match(s.receipts[0].sha256,/^[a-f0-9]{64}$/);await assert.rejects(tool.execute({start:0,end:4}),/range/)})
 test('changed candidate refused and no receipt minted',async t=>{const s=await setup(t);await writeFile(join(s.cwd,'film.mp4'),'altered');await assert.rejects(s.tools.studio_inspect_frames.execute({start:0,end:1}),/changed/);assert.equal(s.receipts.length,0)})
 test('review identity and version supplied by host; not acceptance',async t=>{const s=await setup(t),r=await s.tools.studio_submit_review.execute({checks:[],issues:[],candidateSha256:'fake',revision:900});assert.equal(s.reviews[0].candidateSha256,hash('video'));assert.equal(s.reviews[0].revision,1);assert.equal(r.qualityApproved,false)})
@@ -98,8 +98,8 @@ test('producer can observe locked reference frames and audio without reviewer ca
 test('status renews expired host proof once and returns one coherent preflight snapshot',async t=>{
  const s=await setup(t),tools:any={};let status='expired',calls=0,reads=0
  const preflight=()=>({ok:status==='passed',status:status==='passed'?'ready':'blocked_quality_capability',checks:[{name:'audio',status}]})
- await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd:s.cwd},card:{role:'executor'},sessionId:'s'},workflow:{preflight,status:()=>{reads++;return {candidate:null,preflight:preflight()}}},isActive:()=>true,refreshPreflight:async()=>{calls++;status='passed';return {reference:{path:'locked-reference',sha256:'a'.repeat(64)},characterReferences:[{id:'character',path:'locked-image',sha256:'b'.repeat(64)}]}}})
- const result=await tools.studio_status.execute({});assert.equal(calls,1);assert.equal(result.preflight.ok,true);assert.deepEqual(result.preflight,result.state.preflight);assert.equal(result.characterReferences[0].id,'character');assert.equal(reads,1)
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd:s.cwd,design:{studio:{referenceSha256:hash('video')}}},card:{role:'executor'},sessionId:'s'},runCommand:async()=>({stdout:JSON.stringify({format:{duration:'98.6'}})}),workflow:{preflight,status:()=>{reads++;return {candidate:null,preflight:preflight()}}},isActive:()=>true,refreshPreflight:async()=>{calls++;status='passed';return {reference:{path:join(s.cwd,'film.mp4'),sha256:hash('video')},characterReferences:[{id:'character',path:'locked-image',sha256:'b'.repeat(64)}]}}})
+ const result=await tools.studio_status.execute({});assert.equal(calls,1);assert.equal(result.preflight.ok,true);assert.deepEqual(result.preflight,result.state.preflight);assert.equal(result.characterReferences[0].id,'character');assert.equal(reads,1);assert.equal(result.reference.durationSeconds,98.6)
  await tools.studio_status.execute({});assert.equal(calls,1,'unexpired successful proofs do not rerun dependency checks')
 })
 
@@ -153,3 +153,21 @@ test('actual silent and black encodes are refused before candidate state mutatio
  await run('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=108x192:r=30','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','2','-y',file])
  assert.equal((await tools.studio_register_candidate.execute(args)).qualityApproved,false);assert.equal(registered,1)
 })
+
+
+test('text pagination reconstructs unicode and refuses stale or invalid offsets',async t=>{
+ const s=await setup(t,'planner'),text='许小满😀'.repeat(15000);await writeFile(join(s.cwd,'inputs.json'),text)
+ let result=await s.tools.studio_read_text.execute({path:'inputs.json'}),joined=result.text
+ assert.equal(result.completeRead,false)
+ while(result.nextOffset!==null){result=await s.tools.studio_read_text.execute({path:'inputs.json',offset:result.nextOffset,expectedSha256:result.sha256});assert.ok(Buffer.byteLength(result.text)<=65536);joined+=result.text}
+ assert.equal(joined,text);assert.equal(result.completeRead,true)
+ await assert.rejects(s.tools.studio_read_text.execute({path:'inputs.json',offset:1}),/sha256-required/)
+ await assert.rejects(s.tools.studio_read_text.execute({path:'inputs.json',offset:-1}),/invalid-page/)
+ await writeFile(join(s.cwd,'inputs.json'),'changed')
+ await assert.rejects(s.tools.studio_read_text.execute({path:'inputs.json',expectedSha256:result.sha256}),/file-changed/)
+})
+test('partial manifest cannot mint full source receipt until every range has been read',async t=>{
+ const s=await setup(t);const a=await s.tools.studio_read_text.execute({path:'manifest.json',limit:1});assert.equal(a.receipt,undefined);assert.equal(s.receipts.length,0)
+ const b=await s.tools.studio_read_text.execute({path:'manifest.json',offset:1,limit:1,expectedSha256:a.sha256});assert.equal(b.receipt.kind,'source');assert.equal(b.completeRead,true)
+})
+test('range errors expose probed duration and allowed window',async t=>{const s=await setup(t);await assert.rejects(s.tools.studio_inspect_frames.execute({start:99,end:101}),/durationSeconds=100.*maxWindowSeconds=2/)})

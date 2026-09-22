@@ -1,6 +1,7 @@
 import { registerStudioSpeechTools } from './studio-speech-tools.js'
+import { registerStudioBoardTools } from './studio-board-tools.js'
 import { StudioOperations } from './studio-operations.js'
-import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech } from './studio-host.js'
+import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard } from './studio-host.js'
 import { registerStudioTools } from './studio-tools.js'
 import { StudioWorkflow } from './studio-workflow.js'
 import { registerStudioSkillGate } from './studio-skill-gate.js'
@@ -114,8 +115,8 @@ export class TaskConsoleService extends TypertRemoteService {
       registerStudioTools: async (agentCtx,input,isActive,submitReview) => {
         const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
         const media=await registerStudioTools(agentCtx,{input,workflow,isActive,...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
-        let skillGate:()=>void=()=>{}
-        try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});const speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});return ()=>{speech();skillGate();media()} } catch(e){skillGate();media();throw e}
+        let skillGate:()=>void=()=>{},speech:()=>void=()=>{},board:()=>void=()=>{}
+        try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});board=await registerStudioBoardTools(agentCtx,{input,workflow,isActive,compile:args=>compileStudioStoryboard(input.task,args)});return ()=>{board();speech();skillGate();media()} } catch(e){board();speech();skillGate();media();throw e}
       },
       beforeStart: async input => {
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return

@@ -67,3 +67,13 @@ export async function observeStudioVision(task:any,args:import('./studio-tools.j
  for(let i=0;i<args.images.length;i++){const expected=args.images[i];if(result.images[i].sha256!==expected.sha256||result.images[i].time!==expected.time||await fileSha256(expected.path)!==expected.sha256)throw Error('studio-vision-observation-invalid')}
  return result
 }
+
+/** Fixed, hash-checked local compiler. Arguments select data paths, never code. */
+export async function compileStudioStoryboard(task:any,args:{boardPath:string;outputDirectory:string},deps:HostDeps={}){
+ const config=deps.config??await configuration()
+ if(!config.storyboardCompilerScript||!/^[a-f0-9]{64}$/.test(config.storyboardCompilerSha256??''))throw Error('studio-storyboard-host-not-configured')
+ if(await fileSha256(config.storyboardCompilerScript)!==config.storyboardCompilerSha256)throw Error('studio-storyboard-compiler-changed')
+ const result=await(deps.execute??execute)(config.storyboardCompilerScript,['--project-root',task.cwd,'--board',args.boardPath,'--output',args.outputDirectory],task,config)
+ if(!result||typeof result.ok!=='boolean'||result.qualityApproved!==false)throw Error('studio-storyboard-host-result-invalid')
+ return result
+}

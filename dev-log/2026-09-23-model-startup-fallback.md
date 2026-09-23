@@ -58,3 +58,19 @@ vocabulary; unknown/raw/oversized stderr stays generic. All 33 onboarding tool
 tests passed with NODE_ENV=test (the initial invocation without that required
 test environment failed loopback fixtures). Live deployment is pending the
 zero-active boundary; target installation is still delegated exclusively to DSH.
+
+## Deployment correction and impact
+
+Integrated diagnostic revision 55ea995 is pushed and staged in
+`dsh-studio-migration/task-console-onboard-55ea995`. Editing the live profile
+triggered a hot reload BEFORE the planned restart. This interrupted Studio Run
+1105 and our verification Run 1106 even though systemd PID remained unchanged.
+This was a developer error, disclosed to the user; never treat configuration
+editing as harmless staging. Both failed histories remain. We cancelled only our
+Batch b-chat-8d581e4fe0dd30541381; no explicit Studio retry/cancel was performed.
+
+After independently verifying native sessions=0 and SQLite running=0, restarted
+the host to load the corrected CLI catalog and integrated diagnostics. New
+authorized onboarding Batch b-chat-c80f18f2b92cf417a283 / Run1108 starts on Codex,
+loads fleet-node-onboard and calls fleet_onboard_start. Target acceptance remains
+pending. No developer SSH operation to 236. All source changes have been pushed.

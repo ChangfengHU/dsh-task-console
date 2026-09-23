@@ -1,5 +1,14 @@
 # Task Console runtime contracts
 
+## Live configuration is not a staging area
+
+Editing the live `cordis.patch.yml` triggers plugin hot reload even when the
+systemd service PID does not change. Require zero native running sessions AND
+zero running SQLite claims BEFORE editing that file, not merely before a service
+restart. Stage bundles and a separate candidate configuration elsewhere. A hot
+reload interrupted Runs 1105/1106 during the 2026-09-23 diagnostic deployment;
+retain those records and do not silently restart other owners' work.
+
 ## Model startup fallback
 
 Optional host `taskFallbackModel` is a registered `provider/model` route, scoped

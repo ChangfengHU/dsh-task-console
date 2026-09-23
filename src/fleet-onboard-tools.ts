@@ -807,7 +807,14 @@ function adapterFailureCode(stderr: Buffer): string {
     if (new Set(['probe-transport-failed', 'probe-executor-unavailable', 'probe-result-identity-mismatch',
       'probe-target-fingerprint-required', 'probe-result-shape-invalid', 'host-adapter-config-required',
       'host-adapter-config-unavailable', 'host-adapter-config-not-private-to-service',
-      'host-adapter-config-invalid', 'runtime-unavailable']).has(value.error)) return value.error
+      'host-adapter-config-invalid', 'runtime-unavailable',
+      'ssh-host-key-rejected', 'ssh-private-key-invalid', 'ssh-authentication-failed',
+      'ssh-connect-timeout', 'ssh-connection-refused', 'ssh-network-unreachable',
+      'ssh-remote-python-unavailable', 'ssh-probe-timeout', 'ssh-executor-unavailable',
+      'ssh-probe-failed', 'ssh-probe-output-invalid', 'ssh-login-user-mismatch',
+      'ssh-unavailable', 'ssh-keygen-unavailable', 'sshpass-unavailable',
+      'private-key-memfd-unavailable', 'negotiated-host-key-unavailable',
+      'known-hosts-file-unsafe', 'target-identity-unavailable']).has(value.error)) return value.error
   } catch { /* Unstructured transport output is not safe diagnostic evidence. */ }
   return 'adapter-process-failed'
 }

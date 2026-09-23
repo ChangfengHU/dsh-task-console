@@ -153,3 +153,16 @@ SSH execution permission and added browser Skill. No global profile/restart.
 The manual `移出集群` Action is saved through the revision-checked Action API.
 Chrome created agent-fleet-ops-mue2yyrn and submitted bounded noVNC preparation;
 execution remains under observation, not accepted as completed installation.
+
+22 Action/preset tests passed. Public Chrome opened the existing fleet-ops Actions
+tab in29.18s with no page errors; screenshot /tmp/dsh-manual-withdraw-action.png.
+The earlier test used a button locator for a tab and timed out; the corrected real
+tab click and screenshot establish visibility, not deletion acceptance.
+DSH ops backed up236's exact novnc unit at /root/novnc-recovery-20260923T123219Z,
+disabled only that unit and verified6080 free. Installer session
+agent-fleet-installer-mudto47m resumed the existing transaction, stage7 attempt2
+passed, then stage8 failed with downstream-read-failed. A subsequent DSH read-only
+probe confirms8792/health reports0.15.8 and the authenticated publication-endpoints
+route returns424; old8787/8080 probes were wrong-service evidence and explicitly
+corrected in the same session. Do not restore the legacy noVNC over the healthy new
+listener. No Fleet registration or actual manual removal is claimed yet.

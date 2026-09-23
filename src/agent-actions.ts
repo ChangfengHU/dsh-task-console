@@ -7,7 +7,7 @@ export interface ActionParameter {
   default?: string | number | boolean
   acceptDefaultOnEnter?: boolean
   choices?: string[]
-  source?: 'fleet.nodes' | 'fleet.gemini-accounts'
+  source?: 'fleet.nodes' | 'fleet.gemini-accounts' | 'vault.ssh-nodes'
   dependsOn?: string[]
   visibleWhen?: { key: string; equals: string | number | boolean }
   inactiveValue?: string
@@ -69,7 +69,7 @@ export function validateActions(raw: unknown): AgentAction[] {
         field.choices = p.choices.map((v: unknown) => text(v, '选项', 120))
       }
       if (p.source !== undefined) {
-        if (p.type !== 'text' || !['fleet.nodes', 'fleet.gemini-accounts'].includes(p.source) || p.choices) throw new Error('候选来源无效')
+        if (p.type !== 'text' || !['fleet.nodes', 'fleet.gemini-accounts', 'vault.ssh-nodes'].includes(p.source) || p.choices) throw new Error('候选来源无效')
         field.source = p.source
       }
       if (p.dependsOn !== undefined) {

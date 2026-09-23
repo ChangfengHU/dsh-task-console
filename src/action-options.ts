@@ -11,6 +11,7 @@ export function optionPage(items: ActionOption[], search = '', page = 1, notice?
   return { items: rows.slice((page - 1) * 20, page * 20), page, pages, total: rows.length, ...(notice ? { notice } : {}) }
 }
 export const ACTION_SOURCES = [
+  { id: 'vault.ssh-nodes', label: '金库 SSH 机器（装机 Task，可手填新 IP）', tool: 'browser_fleet_inventory' },
   { id: 'fleet.nodes', label: 'Fleet 机器（可手填新 IP）', tool: 'browser_fleet_inventory' },
   { id: 'fleet.gemini-accounts', label: '授权 Gemini 账号来源', tool: 'browser_login_candidates' },
 ] as const

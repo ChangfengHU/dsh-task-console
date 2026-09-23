@@ -1,5 +1,6 @@
 import { isAbsolute, dirname, join, basename } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { isIP } from 'node:net'
 import type { ActionParameter } from './agent-actions.ts'
 import type { ActionOption } from './action-options.ts'
 
@@ -19,9 +20,29 @@ function cachedRead(key: string, read: () => Promise<any>) {
  * URLs, headers or tool names. No SSH, discovery refresh, verification or copy.
  */
 export async function fleetActionOptions(config: Record<string, unknown>, p: ActionParameter, values: Record<string, unknown>, load?: (name: string) => Promise<any>, intakeOnly = false): Promise<{ items: ActionOption[]; notice: string }> {
+  if (p.source === 'vault.ssh-nodes' && (!intakeOnly || p.binding !== 'target-ip')) throw Error('此部署尚未允许此 Action 查询装机金库目录')
   const entry = (Array.isArray(config.args) ? config.args : []).find(v => typeof v === 'string' && isAbsolute(v) && basename(v) === 'server.mjs')
   if (!entry) throw Error('此部署尚未配置 Fleet 只读候选适配器；仍可手填机器 IP')
   const module = load ?? ((name: string) => import(pathToFileURL(join(dirname(entry), name + '.mjs')).href))
+  if (p.source === 'vault.ssh-nodes') {
+    const { request } = await module('transport')
+    const read = async () => {
+      const response = await request('/mcp/vault', { jsonrpc: '2.0', id: 'onboard-candidates', method: 'tools/call', params: { name: 'vyibc-vault_list_configs', arguments: {} } }, true)
+      if (response.error || response.result?.isError) throw Error('vault-directory-unavailable')
+      const data = JSON.parse(response.result?.content?.find((c: any) => c.type === 'text')?.text ?? '{}')
+      if (data.ok !== true || !Array.isArray(data.configs)) throw Error('vault-directory-invalid')
+      // Only canonical SSH host keys describe candidate IPs. Never read secret
+      // values or parse free-form descriptions/password/key-history records.
+      const ips = new Set<string>()
+      for (const row of data.configs) {
+        const match = /^ssh:(?:managed-)?host-((?:\d{1,3}-){3}\d{1,3})$/.exec(row?.key ?? '')
+        const ip = match?.[1].replaceAll('-', '.')
+        if (ip && isIP(ip) === 4) ips.add(ip)
+      }
+      return { items: [...ips].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(ip => ({ value: ip, label: ip, detail: '金库 SSH 接入记录 · 凭据与连通性待执行时核验' })), notice: '来自金库 SSH 机器清单，不限于 Fleet 已注册节点；也可手填新 IP。这里只读取目录，不读取密码或私钥，不启动装机。' }
+    }
+    return load ? read() : cachedRead(`${entry}:vault.ssh-nodes`, read)
+  }
   const [{ request }, { policy }] = await Promise.all([module('transport'), module('runtime')])
   const grants = await policy()
   const get = (path: string, authenticated = false) => load ? request(path, null, authenticated) : cachedRead(`${entry}:${path}`, () => request(path, null, authenticated))

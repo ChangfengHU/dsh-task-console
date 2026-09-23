@@ -171,6 +171,14 @@ Task/AgentSpec hashes, schedules and all history. Node execution remains visible
 
 ## Agent Actions
 
+Onboarding Task machine suggestions use `vault.ssh-nodes` for a `fleet-base-v2`
+target-IP parameter. Host metadata reads only the Vault directory and recognizes
+canonical `ssh:host-<IPv4>` / `ssh:managed-host-<IPv4>` keys; aliases are not guessed.
+No password/private key is read or returned. Manual IP input remains supported.
+Browser-manager Actions retain `fleet.nodes`. An existing saved Task Action needs
+an explicit revision-CAS source update; changing the shipped seed does not overwrite
+user-authored Actions, workflow definitions, role permissions or schedules.
+
 Vault-v2 account suggestions use a stable `accountId` per stored authorized account,
 with version/current holder metadata, including inventory without an online source.
 The browser-manager starter passes this ID to the MCP's exact selector, not just an

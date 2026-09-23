@@ -266,7 +266,7 @@ async function createAdapter(files: FixtureFiles, ledger: LedgerFixture, options
   })
 }
 
-test('module registers exactly four strict intent-only schemas', async () => {
+test('module registers five strict intent-only schemas including read-only inspection', async () => {
   const adapter: FleetOnboardHostAdapter = {
     executionAvailable: false,
     async start(ip) { return result('start', ip) }, async status(ip) { return result('status', ip) },
@@ -274,6 +274,7 @@ test('module registers exactly four strict intent-only schemas', async () => {
   }
   const { definitions } = await registry(adapter)
   assert.deepEqual(definitions.map(tool => tool.name), [
+    'fleet_onboard_inspect',
     'fleet_onboard_start', 'fleet_onboard_status', 'fleet_onboard_resume', 'fleet_onboard_report',
   ])
   for (const tool of definitions) {
@@ -285,6 +286,51 @@ test('module registers exactly four strict intent-only schemas', async () => {
     }
     assert.throws(() => tool.execute({ ip: IP, inventory: {} }, execution(`repair ${IP}`)), /unsupported tool argument/)
   }
+})
+
+test('inspection returns projected ownership without creating a ledger or invoking the installer', async t => {
+  const files = await fixtureFiles()
+  const ledger = await ledgerFixture(files.log)
+  t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
+  const adapter = await createAdapter(files, ledger, { vaultAvailable: true })
+  const value = await adapter.inspect(IP, execution(`Inspect ${IP} only`))
+  assert.equal(value.ok, true)
+  assert.equal(value.phase, 'inspected')
+  assert.equal(value.run_created, false)
+  assert.deepEqual(value.browser_stack, {managed_config_present: true, resources: [
+    {kind: 'port', id: '6080', state: 'unmanaged', owners: [{pid: 42, process: 'node', unit: 'other.service', managed: false}]},
+  ]})
+  assert.deepEqual(ledger.calls, [])
+  const log = await readFile(files.log, 'utf8')
+  const calls = log.trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+  assert.equal(calls.filter(call => call.role === 'probe').length, 1)
+  assert.equal(calls.some(call => call.role === 'runtime'), false)
+  assert.equal(JSON.stringify(value).includes(CANARY), false)
+  assert.equal(log.includes(CANARY), false)
+})
+
+test('inspection asks for missing credentials without creating a job or probing the machine', async t => {
+  const files = await fixtureFiles()
+  const ledger = await ledgerFixture(files.log)
+  t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
+  const adapter = await createAdapter(files, ledger)
+  const value = await adapter.inspect(IP, execution(`Inspect ${IP} only`))
+  assert.equal(value.needs_input, true)
+  assert.equal(value.run_created, false)
+  assert.deepEqual(ledger.calls, [])
+  assert.equal((await readFile(files.log, 'utf8')).includes('"role":"probe"'), false)
+})
+
+test('inspection transport failures remain bounded and cannot invoke the installer', async t => {
+  const files = await fixtureFiles()
+  const ledger = await ledgerFixture(files.log)
+  t.after(() => new Promise<void>(resolve => ledger.server.close(() => resolve())))
+  const adapter = await createAdapter(files, ledger, {vaultAvailable: true, probeError: CANARY})
+  const value = await adapter.inspect(IP, execution(`Inspect ${IP}`))
+  assert.equal(value.ok, false)
+  assert.equal(value.reason, 'host-inspection-failed')
+  assert.equal(JSON.stringify(value).includes(CANARY), false)
+  assert.deepEqual(ledger.calls, [])
 })
 
 test('production plugin wiring passes scoped Vault credentials to the host adapter only', async t => {

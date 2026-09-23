@@ -89,3 +89,17 @@ Public Chrome opened the actual execution in31.4s, with three roles/one session
 and no page errors. Screenshot /tmp/dsh-onboard-probe-retry-236.png.
 Temporary diagnostic worktree/build removed after pushed-source bundle verification;
 1.7MiB build output freed, deployed runtime and evidence retained.
+
+## Read-only onboarding ownership tool
+
+`fleet_onboard_inspect` accepts only an IP and uses the host-owned credential and
+fixed SSH probe. It projects fresh, bounded ownership observations and discards
+unknown output fields. It cannot create a ledger, install, or infer permission to
+kill/uninstall an unknown service. Missing credentials use normal intake; probe
+failures use bounded diagnostics. Added to the installer runtime tool group, not
+to the review-only role. Unit/browser deployment acceptance is recorded below as
+it occurs;236 is still blocked and deletion scope/target require confirmation.
+
+Verification:36 onboarding-tool and12 preset tests passed. Inspections make zero
+ledger calls, never invoke the installer, and cannot leak fixture credentials.
+Host probe5 + SSH/readiness17 + onboarding67 tests also passed.

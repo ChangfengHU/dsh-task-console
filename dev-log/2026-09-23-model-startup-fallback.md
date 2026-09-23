@@ -132,3 +132,8 @@ Installer success, Fleet registration and complete two-capability acceptance
 are still pending. The older host's catalog/full integrated deployment remains
 pending a dual-zero window. New test fixtures now clean only paths they create
 after all tests finish;36 onboarding tests pass again with that cleanup.
+
+Deletion preflight public browser reread passed in39.97s with no page errors,
+screenshot /tmp/dsh-retirement-preview-public.png. It proves the read-only
+preflight and report, not deletion. Runtime88KiB and screenshots are retained as
+active service dependency and acceptance evidence, not temporary cleanup targets.

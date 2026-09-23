@@ -1,5 +1,7 @@
 # 后续优化
 
+- [x] [ONBOARD-VAULT-CANDIDATES-20260923] 装机 Task Action 改为金库 SSH 目录候选，支持未注册 Fleet 的 129.213.30.236；浏览器 Actions 保持 Fleet 名册，手填新 IP 保留。334 tests passed/3 skipped，零活跃窗口合入 Studio 部署；公网 @ 选择和候选点击通过，不发送、不启动装机，Task 快照前后相同。窄屏仅验证候选弹层，原生侧栏挤压输入框未在本项重构。见 `dev-log/2026-09-23-onboard-vault-candidates.md`。
+
 - [x] [RETIREMENT-ONLINE-REPORT-20260922] Existing retirement Task now includes all returned online/unreachable/unknown nodes in its frozen WeCom summary, without authorizing operations on deferred nodes. Final public-page manual run `b-mucl5nq6lxq`: six fresh reachable nodes, zero candidates, both roles done, sent once; persisted observations and notification body independently matched. Preset and Task revisions applied through normal APIs/review, no host restart or machine writes. Schedule remains disabled; report-only page still lacks text summaries and friendly timestamp formatting remains pending. See `dev-log/2026-09-22-retirement-online-report.md`.
 
 - [ ] [TASK-DETAIL-QUERY-038] 2026-09-22 详情摘要、最多10条执行头、内存缓存、当前回放会话计数、DAG游标分页/增量轮询及Trace十步分页已合入Studio并零活跃窗口部署。线上摘要33KB；Chrome本机1.97秒、公网静态缓存48 HIT时20.67秒，回放/Trace通过。全局插件故障隔离、进一步冷启动优化及真正按需历史加载尚未完成。部署和测试边界见 `dev-log/2026-09-22-task-detail-summary.md`。

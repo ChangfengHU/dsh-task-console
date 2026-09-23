@@ -19,3 +19,14 @@ test('speech result binds current candidate, plan, line, stage and actual audio 
 test('reject changed source, stale session and caller-selected unknown line',async t=>{const s=await setup(t);await s.register();const r=await s.toolsFor('reviewer');await assert.rejects(r.studio_check_speech.execute({lineId:'other',stage:'final'}),/line-required/);await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'final'},{agent:{session:{id:'executor'}}}),/session/);await writeFile(s.source,'changed');await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'source'}),/file-changed/);s.stop();await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'final'}),/stale/)})
 test('real FFmpeg source and final dialogue extraction',async t=>{const {execFile}=await import('node:child_process'),{promisify}=await import('node:util');try{await promisify(execFile)('ffmpeg',['-version'])}catch{t.skip('FFmpeg unavailable');return}const s=await setup(t,true);await s.register();const r=await s.toolsFor('reviewer');await r.studio_check_speech.execute({lineId:'1',stage:'source'});await r.studio_check_speech.execute({lineId:'1',stage:'final'});assert.equal(s.checks.length,2);assert.match(s.checks[0].audioSha256,/^[a-f0-9]{64}$/)})
 test('speech plan refuses out-of-film intervals and source path escape',async t=>{const s=await setup(t);await s.register();const e=await s.toolsFor('executor');await writeFile(join(s.cwd,'plan.json'),JSON.stringify([{id:'1',text:'你好',start:0,end:9,sourcePath:'line.wav'}]));await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/range-invalid/);await writeFile(join(s.cwd,'plan.json'),JSON.stringify([{id:'1',text:'你好',start:0,end:1,sourcePath:'/etc/hosts'}]));await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/outside-project/)})
+
+test('speech ranges tolerate floating-point roundoff but reject real overlap and negative starts',async t=>{
+ const s=await setup(t),p=await s.toolsFor('planner'),e=await s.toolsFor('executor')
+ await p.studio_freeze_script.execute({lines:[{id:'1',text:'你好'},{id:'2',text:'再见'}]})
+ const plan=[{id:'1',text:'你好',start:0,end:0.1+0.2,sourcePath:'line.wav'},{id:'2',text:'再见',start:0.3,end:1,sourcePath:'line.wav'}]
+ const save=()=>writeFile(join(s.cwd,'plan.json'),JSON.stringify(plan))
+ await save();await e.studio_register_speech_plan.execute({path:'plan.json'})
+ plan[1].start=0.299;await save();await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/range-invalid/)
+ plan[1].start=0.3;plan[1].end=1.001;await save();await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/range-invalid/)
+ plan[1].end=1;plan[0].start=-1e-12;await save();await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/range-invalid/)
+})

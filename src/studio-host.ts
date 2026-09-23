@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises'
-import { join,dirname } from 'node:path'
+import { readFile, realpath, stat } from 'node:fs/promises'
+import { join,dirname,resolve,relative,isAbsolute,sep } from 'node:path'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { fileSha256 } from './studio-tools.js'
@@ -73,7 +73,12 @@ export async function compileStudioStoryboard(task:any,args:{boardPath:string;ou
  const config=deps.config??await configuration()
  if(!config.storyboardCompilerScript||!/^[a-f0-9]{64}$/.test(config.storyboardCompilerSha256??''))throw Error('studio-storyboard-host-not-configured')
  if(await fileSha256(config.storyboardCompilerScript)!==config.storyboardCompilerSha256)throw Error('studio-storyboard-compiler-changed')
- const result=await(deps.execute??execute)(config.storyboardCompilerScript,['--project-root',task.cwd,'--board',args.boardPath,'--output',args.outputDirectory],task,config)
+ const root=await realpath(task.cwd),board=await realpath(resolve(root,args.boardPath)),boardRelative=relative(root,board)
+ if(!boardRelative||isAbsolute(boardRelative)||boardRelative==='..'||boardRelative.startsWith('..'+sep)||!(await stat(board)).isFile())throw Error('studio-board-source-outside-project')
+ // The board tool freezes an absolute path; the compiler deliberately accepts only
+ // project-relative sources. Preserve its boundary instead of relaxing the CLI.
+ if(!/^[A-Za-z0-9._-]{1,80}$/.test(args.outputDirectory)||['.','..'].includes(args.outputDirectory))throw Error('studio-board-output-name-invalid')
+ const result=await(deps.execute??execute)(config.storyboardCompilerScript,['--project-root',root,'--board',boardRelative,'--output',args.outputDirectory],task,config)
  if(!result||typeof result.ok!=='boolean'||result.qualityApproved!==false)throw Error('studio-storyboard-host-result-invalid')
  return result
 }

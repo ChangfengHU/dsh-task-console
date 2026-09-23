@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [ONBOARD-PROBE-DIAGNOSTICS-20260923] Host diagnostic allowlist now distinguishes SSH authentication, connectivity, identity and missing dependencies without raw stderr. All 33 onboarding tool tests passed with NODE_ENV=test. Integrated Studio deployment and 236 Agent execution remain pending; do not interrupt the active Studio Task.
+- [ ] [ONBOARD-PROBE-DIAGNOSTICS-20260923] Integrated 55ea995 deployed; 33 tool tests plus 84 host tests pass. Codex Run1108 autonomously called start/resume/report:236 stages1–6 passed; stage7 blocked by machine-browser-stack-conflict. Fleet registration and browser acceptance NOT complete; preserve unknown existing browser stack. Deployment hot-reload accidentally interrupted Runs1105/1106, disclosed and documented in HANDOFF; live config edits require dual-zero, not merely explicit restarts. See existing model-startup-fallback log.
 
 - [x] [ONBOARD-VAULT-CANDIDATES-20260923] 装机 Task Action 改为金库 SSH 目录候选，支持未注册 Fleet 的 129.213.30.236；浏览器 Actions 保持 Fleet 名册，手填新 IP 保留。334 tests passed/3 skipped，零活跃窗口合入 Studio 部署；公网 @ 选择和候选点击通过，不发送、不启动装机，Task 快照前后相同。窄屏仅验证候选弹层，原生侧栏挤压输入框未在本项重构。见 `dev-log/2026-09-23-onboard-vault-candidates.md`。
 

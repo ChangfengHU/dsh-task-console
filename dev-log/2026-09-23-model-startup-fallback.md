@@ -74,3 +74,18 @@ the host to load the corrected CLI catalog and integrated diagnostics. New
 authorized onboarding Batch b-chat-c80f18f2b92cf417a283 / Run1108 starts on Codex,
 loads fleet-node-onboard and calls fleet_onboard_start. Target acceptance remains
 pending. No developer SSH operation to 236. All source changes have been pushed.
+
+## Actual 236 Agent outcome
+
+Run1108 uses Codex successfully (no fallback event). It loaded the Skill, started
+onboarding and called resume/report itself. Ledger onb-6e02b413-20f7-4281-8c15-7f935e9df64e
+records stages1–3 reused, stage4 repaired-and-verified, stage5 reused and stage6
+installed/passed. Stage7 stopped with machine-browser-stack-conflict and
+browser-startup-unconfirmed. This is not installation completion. The installer
+refuses occupied display/ports not attributed to its managed units; do not bypass
+this guard or delete existing browsers. Exact conflicting service ownership is not
+yet established. Registration and subsequent Runner/login acceptance remain pending.
+Public Chrome opened the actual execution in31.4s, with three roles/one session
+and no page errors. Screenshot /tmp/dsh-onboard-probe-retry-236.png.
+Temporary diagnostic worktree/build removed after pushed-source bundle verification;
+1.7MiB build output freed, deployed runtime and evidence retained.

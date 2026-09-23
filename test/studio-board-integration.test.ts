@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,readFile,readdir,rm,symlink,writeFile} from 'node:fs/promises'
+import {lstat,mkdtemp,mkdir,readFile,readdir,readlink,rename,rm,symlink,writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname,join,resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
@@ -50,7 +50,7 @@ function storyboard(){
  }
 }
 
-async function fixture(t:any){
+async function fixture(t:any,options:{loseResponse?:boolean}={}){
  const root=await mkdtemp(join(tmpdir(),'studio-real-board-'))
  t.after(()=>rm(root,{recursive:true,force:true}))
  const cwd=join(root,'project');await mkdir(join(cwd,'assets'),{recursive:true})
@@ -72,14 +72,14 @@ async function fixture(t:any){
  ])
  const config={storyboardCompilerScript:compiler,storyboardCompilerSha256:sha(await readFile(compiler))}
  const task={cwd,design:{studio:{width:1080,height:1920,fps:30,durationMin:1,durationMax:3}}}
- let tool:any
+ let tool:any,calls=0,active=true,lines=storyboard().script
+ const input={task,card:{role:'executor'},sessionId:'real-compiler-integration'}
  const dispose=await registerStudioBoardTools({tools:{register:(value:any)=>{tool=value;return()=>{}}}},{
-  input:{task,card:{role:'executor'},sessionId:'real-compiler-integration'},
-  workflow:{script:()=>({lines:storyboard().script})},isActive:()=>true,
-  compile:value=>compileStudioStoryboard(task,value,{config}),
+  input,workflow:{script:()=>({lines})},isActive:()=>active,
+  compile:async value=>{calls++;const result=await compileStudioStoryboard(task,value,{config});if(options.loseResponse)throw Error('lost compiler response');return result},
  })
  t.after(dispose)
- return {root,cwd,task,config,execute:(board:any=storyboard(),outputDirectory='composition-r1')=>tool.execute({board,outputDirectory})}
+ return {root,cwd,task,config,input,calls:()=>calls,stop:()=>{active=false},changeScript:()=>{lines=[{id:'L1',text:'changed script'}]},execute:(board:any=storyboard(),outputDirectory='composition-r1',exec?:any)=>tool.execute({board,outputDirectory},exec)}
 }
 
 test('SDK → host → real Python compiler produces verifiable assets, speech and immutable revisions',async t=>{
@@ -110,7 +110,9 @@ test('SDK → host → real Python compiler produces verifiable assets, speech a
  assert.equal(second.boardPath,result.boardPath);assert.equal(second.indexSha256,result.indexSha256)
  assert.equal(await readFile(result.indexPath,'utf8'),html)
  assert.deepEqual(await readdir(join(f.cwd,'.studio-boards')),[sha(JSON.stringify(board))+'.json'])
- await assert.rejects(f.execute(board),/output-exists/)
+ const replay=await f.execute(board)
+ assert.deepEqual(replay,{...result,inputReused:true,outputReused:true})
+ assert.equal(f.calls(),2,'replaying the first revision must not call the compiler again')
 })
 
 test('real missing-media rejection leaves no output and can retry the same immutable board',async t=>{
@@ -161,4 +163,72 @@ test('host refuses a board outside the project, including a project-local symlin
   await assert.rejects(compileStudioStoryboard(f.task,{boardPath,outputDirectory:'composition-r1'},{config:f.config}),/source-outside-project/)
  }
  assert.deepEqual((await readdir(f.cwd)).sort(),['assets','escaped-board.json'])
+})
+
+async function snapshot(path:string):Promise<any>{
+ const info=await lstat(path)
+ if(info.isSymbolicLink())return {symlink:await readlink(path)}
+ if(!info.isDirectory())return {sha256:sha(await readFile(path))}
+ const result:Record<string,any>={}
+ for(const name of (await readdir(path)).sort())result[name]=await snapshot(join(path,name))
+ return result
+}
+
+test('a lost successful compiler response is recovered by verified replay without recompiling',async t=>{
+ const f=await fixture(t,{loseResponse:true}),first=await f.execute()
+ assert.equal(first.ok,false);assert.match(first.reason,/lost compiler response/)
+ const before=await snapshot(f.root),replay=await f.execute()
+ assert.equal(replay.ok,true);assert.equal(replay.qualityApproved,false);assert.equal(replay.outputReused,true)
+ assert.equal(replay.inputReused,true);assert.equal(replay.boardPath,first.boardPath)
+ assert.equal(f.calls(),1);assert.deepEqual(await snapshot(f.root),before)
+})
+
+test('replay refuses altered, incomplete or symlinked compiler artifacts without repairing them',async t=>{
+ for(const mode of ['input','missing-input','source','source-escape','html','copy','board','receipt-asset','quality','speech','missing-speech','directory-symlink','assets-symlink','index-symlink'])await t.test(mode,async t=>{
+  const f=await fixture(t),first=await f.execute();assert.equal(first.ok,true,first.reason)
+  const output=first.composition,receiptPath=join(output,'compile-receipt.json')
+  const receipt=JSON.parse(await readFile(receiptPath,'utf8')),copied=join(output,receipt.assets['assets/subject.png'].file)
+  if(mode==='input')await writeFile(first.boardPath,'{}')
+  if(mode==='missing-input')await rm(first.boardPath)
+  if(mode==='source')await writeFile(join(f.cwd,'assets/subject.png'),'changed source')
+  if(mode==='source-escape'){
+   const source=join(f.cwd,'assets/subject.png'),outside=join(f.root,'outside.png')
+   await rename(source,outside);await symlink(outside,source)
+  }
+  if(mode==='html')await writeFile(first.indexPath,'changed HTML')
+  if(mode==='copy')await writeFile(copied,'changed copied asset')
+  if(mode==='board')await writeFile(join(output,'board.json'),JSON.stringify({...storyboard(),background:'#000000'}))
+  if(mode==='receipt-asset'){delete receipt.assets['assets/subject.png'];await writeFile(receiptPath,JSON.stringify(receipt))}
+  if(mode==='quality'){receipt.qualityApproved=true;await writeFile(receiptPath,JSON.stringify(receipt))}
+  if(mode==='speech'){
+   const path=join(output,'speech-plan.json'),speech=JSON.parse(await readFile(path,'utf8'))
+   speech[0].end=.5;await writeFile(path,JSON.stringify(speech))
+  }
+  if(mode==='missing-speech')await rm(join(output,'speech-plan.json'))
+  if(mode==='directory-symlink'){
+   const outside=join(f.root,'outside-composition');await rename(output,outside);await symlink(outside,output)
+  }
+  if(mode==='assets-symlink'){
+   const assets=join(output,'assets'),outside=join(f.root,'outside-assets');await rename(assets,outside);await symlink(outside,assets)
+  }
+  if(mode==='index-symlink'){
+   const outside=join(f.root,'outside.html');await rename(first.indexPath,outside);await symlink(outside,first.indexPath)
+  }
+  const before=await snapshot(f.root)
+  await assert.rejects(f.execute(),/output-exists|input-changed/)
+  assert.equal(f.calls(),1);assert.deepEqual(await snapshot(f.root),before)
+ })
+})
+
+test('replay preserves frozen board, role, session, active-run and script gates',async t=>{
+ const f=await fixture(t),first=await f.execute();assert.equal(first.ok,true,first.reason)
+ const changed=storyboard();changed.background='#000000'
+ await assert.rejects(f.execute(changed),/output-exists/)
+ assert.equal((await readdir(join(f.cwd,'.studio-boards'))).length,1,'conflicting replay must not create a new frozen input')
+ f.input.card.role='reviewer';await assert.rejects(f.execute(),/role-denied/)
+ f.input.card.role='executor'
+ await assert.rejects(f.execute(storyboard(),'composition-r1',{agent:{session:{id:'other'}}}),/session-mismatch/)
+ f.changeScript();await assert.rejects(f.execute(),/script-mismatch/)
+ f.stop();await assert.rejects(f.execute(),/stale/)
+ assert.equal(f.calls(),1)
 })

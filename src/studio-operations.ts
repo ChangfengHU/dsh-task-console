@@ -1,3 +1,4 @@
+import {studioStageFor} from './studio-stages.js'
 import {createHash} from 'node:crypto'
 const hash=(v:any)=>createHash('sha256').update(JSON.stringify(v)).digest('hex')
 function canonical(v:any):any{return Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v}
@@ -39,7 +40,9 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
   async invoke(input:any,raw:string,args:any,invoke:(args:any)=>Promise<any>){
     if(/(?:publish_video|post_video|upload_video|register_published_video)$/.test(raw))throw Error('studio-publication-not-authorized')
     const d=definition(raw,args)
-    if((d||/vyibc-voice_cancel$/.test(raw))&&input.card?.role!=='executor')throw Error('studio-generation-executor-only')
+    const stage=studioStageFor(input)
+    const specialistAllowed=!!d&&((stage?.id==='visual'&&d.kind==='imageCalls')||(stage?.id==='sound'&&d.kind==='voiceSegments'))
+    if((d||/vyibc-voice_cancel$/.test(raw))&&input.card?.role!=='executor'&&!specialistAllowed)throw Error('studio-generation-executor-only')
     // Retrying an unconfirmed upstream outcome may charge twice. No automatic waiver.
     if(/retry_segments$/.test(raw)&&args?.retry_uncertain===true)throw Error('studio-uncertain-retry-not-authorized')
     if(!d){const result=await invoke(args),value=unpack(result),requestedId=job(args),returnedId=job(value),id=requestedId??returnedId,status=terminal(value)

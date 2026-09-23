@@ -1,3 +1,5 @@
+import {registerStageFiles,requireStudioStages,verifyStageReceipt} from './studio-stage-files.js'
+import {studioStageFor} from './studio-stages.js'
 import { registerStudioSpeechTools } from './studio-speech-tools.js'
 import { registerStudioBoardTools } from './studio-board-tools.js'
 import { StudioOperations } from './studio-operations.js'
@@ -114,13 +116,14 @@ export class TaskConsoleService extends TypertRemoteService {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
       registerStudioTools: async (agentCtx,input,isActive,submitReview) => {
         const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
-        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
+        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
         let skillGate:()=>void=()=>{},speech:()=>void=()=>{},board:()=>void=()=>{}
         try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});board=await registerStudioBoardTools(agentCtx,{input,workflow,isActive,compile:args=>compileStudioStoryboard(input.task,args)});return ()=>{board();speech();skillGate();media()} } catch(e){board();speech();skillGate();media();throw e}
       },
       beforeStart: async input => {
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return
         const workflow = new StudioWorkflow(this.runner.store)
+        await requireStudioStages(input,workflow,this.runner.store.kernel.db)
         workflow.enforceRuntime(input)
         const operations=new StudioOperations(this.runner.store)
         operations.configure(input,input.task.design.studio.generationLimits??{imageCalls:6,voiceSegments:80})
@@ -134,9 +137,17 @@ export class TaskConsoleService extends TypertRemoteService {
         if (input.task.design?.evidenceContract === 'studio-video-v1') {
           const workflow=new StudioWorkflow(this.runner.store),operations=new StudioOperations(this.runner.store).snapshot(input)
           if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task)
-          if(operations.unknown||operations.operations.some((o:any)=>o.state==='submitted'))throw Error('studio-generation-reconcile-required: query original jobs before handoff')
+          if(input.card.role!=='studio-stage'&&(operations.unknown||operations.operations.some((o:any)=>o.state==='submitted')))throw Error('studio-generation-reconcile-required: query original jobs before handoff')
           const candidate=workflow.status(input).candidate
           workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
+          if(input.card.role==='studio-stage'){
+            const stage=studioStageFor(input)!,receipt=workflow.stageReceipt(input,stage.id)
+            await requireStudioStages(input,workflow,this.runner.store.kernel.db)
+            await verifyStageReceipt(input,receipt)
+            if(receipt.sessionId!==input.sessionId)throw Error('studio-stage-session-mismatch')
+            return {summary:receipt.summary,metadata:{workflowOutcome:'stage_handoff',stage:stage.id,manifest:receipt.manifest,outputs:receipt.outputs,qualityApproved:false}}
+          }
+          await requireStudioStages(input,workflow,this.runner.store.kernel.db)
           return workflow.complete(input)
         }
         if (input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId) return new TaskNotifications(this.runner.store).complete(input)
@@ -971,10 +982,12 @@ export class TaskConsoleService extends TypertRemoteService {
     const presets = (this.ctx as any).get('agentPresets')
     const rows = presets ? (await presets.list() as any[]) : []
     const ids = new Set<string>(rows.filter(p => !p.broken).map(p => String(p.id)))
-    const task = validateTask(JSON.parse(payload), ids)
+    const raw = JSON.parse(payload)
+    if(raw.saveOnly !== undefined && typeof raw.saveOnly !== 'boolean')throw Error('saveOnly 必须是布尔值')
+    const task = validateTask(raw, ids)
     for (const p of rows) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
     await this.runner.store.append({ t: 'task/created', at: task.createdAt, taskId: task.id, task })
-    if (task.trigger.kind === 'once') await this.runner.fire(task.id, 'manual')
+    if (task.trigger.kind === 'once' && !raw.saveOnly) await this.runner.fire(task.id, 'manual')
     return JSON.stringify({ id: task.id })
   }
 

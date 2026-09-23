@@ -131,7 +131,7 @@ export interface Card {
   index: number
   agentId: string
   kind?: 'agent' | 'gate'
-  role?: 'planner' | 'executor' | 'reviewer' | 'gate' | 'notifier' | 'proxy'
+  role?: 'planner' | 'executor' | 'reviewer' | 'gate' | 'notifier' | 'proxy' | 'studio-stage'
   round?: number
   brief?: string
   deps: string[]

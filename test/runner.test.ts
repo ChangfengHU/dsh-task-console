@@ -237,7 +237,9 @@ test('delegated notifications are real idempotent side cards with frozen reports
   assert.equal(store.graphSnapshot('T',batch.id).live.tasks.find(t=>t.id===first.cardId)?.role,'notifier')
   await host.callTool(planner,'task_plan_round',{summary:'real next round, notifier does not consume planning lock'})
   host.endTurn(planner);await tick()
-  const noticeSession=[...store.s.runs.values()].find(r=>r.cardId===first.cardId)!.sessionId
+  for(let attempt=0;attempt<30&&!([...store.s.runs.values()].some(r=>r.cardId===first.cardId));attempt++)await tick()
+  const noticeRun=[...store.s.runs.values()].find(r=>r.cardId===first.cardId);assert.ok(noticeRun,'notifier should be scheduled within bounded wait')
+  const noticeSession=noticeRun.sessionId
   host.consumeFirst(noticeSession)
   assert.match(host.sessions.get(noticeSession)!.followups[0].content[0].text,/企微通知协作/)
   await assert.rejects(host.callTool(noticeSession,'task_notify',{stage:'restored'}),/冻结的阶段/)
@@ -1282,4 +1284,17 @@ test('Studio planner correction uses planning/finalization tools instead of unav
  const correction=host.sessions.get(session)!.followups.at(-1).content[0].text
  assert.match(correction,/task_plan_round/);assert.match(correction,/task_finalize/);assert.doesNotMatch(correction,/task_complete/)
  runner.stop()
+})
+
+test('studio preparation Task Links are materialized in the same batch and retained in replay',async()=>{
+ const stages=['storyboard','visual','sound'].map(id=>({id,agentId:'a',brief:`Prepare ${id}`}))
+ const {runner,store,host}=await setup({graphMode:'dynamic-rounds',design:{studioStages:stages,failurePolicy:{maxAttempts:3}} as any})
+ const batch=await runner.fire('T','manual');await tick();const sid=[...host.sessions.keys()][0]
+ await host.callTool(sid,'task_plan_round',{summary:'Prepare staged production'})
+ const rows=store.kernel.db.prepare('SELECT id,role,tenant FROM tasks WHERE tenant=?').all(batch.id) as any[]
+ assert.equal(rows.filter(r=>r.role==='studio-stage').length,3)
+ assert.equal(store.s.cards.get(`${batch.id}#s1-visual`)?.role,'studio-stage')
+ assert.deepEqual(store.kernel.parentIds(`${batch.id}#g1`),[`${batch.id}#s1-sound`,`${batch.id}#s1-visual`])
+ assert.deepEqual(store.kernel.parentIds(`${batch.id}#s1-sound`),[`${batch.id}#s1-storyboard`])
+ assert.ok(rows.every(r=>r.tenant===batch.id));runner.stop()
 })

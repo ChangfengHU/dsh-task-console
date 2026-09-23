@@ -1,3 +1,4 @@
+import {studioStageRows,studioStageCardId} from './studio-stages.js'
 import { validateDesign } from './task-design.js'
 /**
  * Store, validation, and the message a card receives. The model itself
@@ -400,8 +401,9 @@ export class EventStore {
         commit?.()
         const atIso = new Date().toISOString(); const at = toEpoch(atIso)
         const rows = [
+          ...studioStageRows(execution,batch.id,round,planner.id),
           ...(execution.design?.proxy ? [{ id: `${batch.id}#x${round}`, agentId: execution.design.proxy.agentId, kind:'agent' as const, role:'proxy' as const, round, deps:[planner.id], brief:'根据本轮冻结的 proxyItems 逐台检查或幂等修复批准线路；必须调用 proxy_status 取得全部操作终态，再 task_complete 交接通过/未通过清单。确定失败不重复修复，继续其他节点；下游宿主逐机器阻止未通过目标登录写入。不确定只查原操作，不换编号重复；仍无法确认 task_block。' }] : []),
-          { id: `${batch.id}#g${round}`, agentId: '__gate__', kind: 'gate' as const, role: 'gate' as const, round, deps: [execution.design?.proxy ? `${batch.id}#x${round}` : planner.id], brief: `Round ${round} ${execution.design?.proxy ? '代理阶段交接；逐机器校验后' : ''}放行闸门` },
+          { id: `${batch.id}#g${round}`, agentId: '__gate__', kind: 'gate' as const, role: 'gate' as const, round, deps: execution.design?.studioStages ? ['visual','sound'].map(id=>studioStageCardId(batch.id,round,id as any)) : [execution.design?.proxy ? `${batch.id}#x${round}` : planner.id], brief: `Round ${round} ${execution.design?.proxy ? '代理阶段交接；逐机器校验后' : ''}放行闸门` },
           { id: `${batch.id}#e${round}`, agentId: execution.participants[1].agentId, kind: 'agent' as const, role: 'executor' as const, round, deps: [`${batch.id}#g${round}`], brief: execution.participants[1].brief ?? `执行规划者给出的第 ${round} 轮方案。` },
           { id: `${batch.id}#r${round}`, agentId: execution.participants[2].agentId, kind: 'agent' as const, role: 'reviewer' as const, round, deps: [`${batch.id}#e${round}`], brief: execution.participants[2].brief ?? `评估第 ${round} 轮结果，明确给出通过或返工依据。` },
           { id: `${batch.id}#p${round + 1}`, agentId: execution.participants[0].agentId, kind: 'agent' as const, role: 'planner' as const, round: round + 1, deps: [`${batch.id}#r${round}`], brief: execution.participants[0].brief ?? `读取第 ${round} 轮评估，决定结束或创建第 ${round + 1} 轮。` },
@@ -547,6 +549,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (task.targets?.length) lines.push('', '[TARGETS — RESOURCE METADATA ONLY]', task.targets.map(target => `${target.kind}:${target.id}${target.label ? ` (${target.label})` : ''}`).join('\n'))
   if (task.origin?.reviewPlanId) lines.push('', '[HOST REVIEW RELEASE]',
     `本 Run 已由独立审查放行，审批计划 ${task.origin.reviewPlanId}。原始消息中“先生成计划、等待审查、不执行”描述的创建阶段已完成；现在执行下方已审查的业务范围。其他禁止事项、宿主权限及验收要求仍有效，不因批准而扩大。`)
+  if(task.design?.studioStages)lines.push('', '[STUDIO STAGES]', `当前轮次 ${card.round}。studio_status.stages列出本轮实际登记清单。读取stages/r${card.round}/中上游文件再行动；合成阶段必须汇聚分镜、视觉、声音三个交接，不能凭Gate完成就猜素材存在。阶段完成不等于整片通过。`)
   if (card.brief?.trim()) lines.push('', '[YOUR PART]', card.brief.trim())
   if (task.workflowRecipe?.id === 'fleet-base-v2') lines.push('', '[FRESH EXECUTION / RECOVERY]',
     '本次使用当前工具重新检查目标。其他执行或历史会话的 blocked/人工验证原因不代表当前仍故障；健康组件及有效登录只复用，不为重跑而重装或再次复制。',
@@ -636,6 +639,7 @@ export function validateTask(raw: unknown, agentIds: Set<string>): TaskSpec {
   if (graphMode === 'dynamic-rounds' && participants.length !== 3) throw new Error('动态回合必须依次选择 3 位参与者:规划者、执行者、评估者')
   const design = s.design === undefined ? undefined : validateDesign(s.design)
   if (design?.evidenceContract === 'studio-video-v1' && (graphMode !== 'dynamic-rounds' || new Set(participants.map(p => p.agentId)).size !== 3)) throw Error('studio-video-v1 需要三个不同的规划、制作、审查 Agent')
+  if(design?.studioStages) for(const stage of design.studioStages){if(!agentIds.has(stage.agentId))throw Error(`没有这个 Agent:${stage.agentId}`);if(participants.some(p=>p.agentId===stage.agentId))throw Error('Studio specialists must be separate from planner, producer and reviewer')}
   return {
     ...(design ? {design} : {}),
     id: String(s.id ?? '') || `T-${Date.now().toString(36)}`,

@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useState } from 'react'
+import {validateDesign} from '../task-design.ts'
 import { cronHuman, nextFire, parseCron, validTimeZone } from '../cron.ts'
 import type { AgentRow, ArtifactView, GraphSnapshot, LegacyRun as Run, TaskEvent, TaskSnapshot, TaskSpec } from '../wire.ts'
 import { closeConsole, go } from './Console.tsx'
@@ -25,7 +26,7 @@ export interface TasksApi {
   executionHistory: (query: import('../execution-history.ts').ExecutionQuery) => Promise<import('../execution-history.ts').ExecutionPage>
   launchWorkflow: (taskId: string, text: string, requestId: string, cwd?: string) => Promise<{ taskId: string; batchId: string; path: string }>
   tasks: () => Promise<{ tasks: (TaskSpec & { nextFire: string | null })[]; runs: Run[] }>
-  createTask: (spec: Partial<TaskSpec>) => Promise<{ id: string }>
+  createTask: (spec: Partial<TaskSpec> & {saveOnly?:boolean}) => Promise<{ id: string }>
   setTaskEnabled: (id: string, enabled: boolean) => Promise<void>
   setBatchArchived: (taskId: string, batchId: string, archived: boolean) => Promise<void>
   deleteTask: (id: string) => Promise<void>
@@ -255,6 +256,9 @@ const CRON_PRESETS: [string, string][] = [['*/10 * * * *', '每 10 分钟'], ['0
 
 export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; agents: AgentRow[]; toast: (m: string) => void; workspaces: { id: string; path: string; title: string }[] }) {
   const [brief, setBrief] = useState('')
+  const [taskBook,setTaskBook]=useState('')
+  const [bookMeta,setBookMeta]=useState<any>(null)
+  const [saveOnly,setSaveOnly]=useState(true)
   const [parts, setParts] = useState<{ agentId: string; brief?: string }[]>([])
   const [graphMode, setGraphMode] = useState<'dynamic-rounds' | 'static-chain'>('dynamic-rounds')
   const [kind, setKind] = useState<'once' | 'cron'>('once')
@@ -275,17 +279,19 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
   const submit = async () => {
     setBusy(true); setErr('')
     try {
-      const { id } = await api.createTask({ brief, participants: parts, graphMode, trigger: kind === 'once' ? { kind: 'once' } : { kind: 'cron', expr, timeZone }, cwd, timeoutSec: timeout * 60, onFail, maxTries: tries })
-      toast(kind === 'once' ? '已建卡并触发' : '已建卡')
+      const { id } = await api.createTask({ ...(bookMeta ?? {}), saveOnly:kind==='once'&&saveOnly, brief, participants: parts, graphMode, trigger: kind === 'once' ? { kind: 'once' } : { kind: 'cron', expr, timeZone }, cwd, timeoutSec: timeout * 60, onFail, maxTries: tries })
+      toast(kind === 'once' && !saveOnly ? '已建卡并触发' : '已保存任务书，尚未运行')
       go(`tasks/${id}`)
     } catch (e) { setErr(String((e as Error).message ?? e)) } finally { setBusy(false) }
   }
+  const applyBook=()=>{try{const b=JSON.parse(taskBook);const design=validateDesign(b.design);if(!b.title||!b.brief||!Array.isArray(b.participants)||b.graphMode!=='dynamic-rounds'||b.participants.length!==3||!b.cwd)throw Error('任务书缺少标题、任务、三位主角色或工作区');const all=[...b.participants.map((p:any)=>p.agentId),...(design.studioStages?.map(s=>s.agentId)??[])];if(all.some(id=>!usable.some(a=>a.id===id)))throw Error('任务书包含未安装的 Agent');setBrief(b.brief);setParts(b.participants);setGraphMode(b.graphMode);setCwd(b.cwd);setKind('once');setSaveOnly(true);setTimeoutMin((b.timeoutSec??3600)/60);setBookMeta({title:b.title,design});setErr('');toast('任务书已载入，请核对下方阶段与边界')}catch(e){setErr(String((e as Error).message))}}
   const next = kind === 'cron' && parseCron(expr) && validTimeZone(timeZone) ? nextFire(parseCron(expr)!, new Date(), timeZone) : null
   return (
     <>
       <div className="dtc-crumb"><a onClick={() => go('tasks')}>任务</a><span>/</span><span>新建</span></div>
       {err ? <div className="dtc-err">{err}</div> : null}
       <div className="dtc-wiz"><div>
+        <div className="dtc-step"><h3>载入结构化任务书</h3><p>保存角色、真实阶段依赖和验收配置；载入不会启动任务。</p><textarea aria-label="结构化任务书" value={taskBook} onChange={e=>setTaskBook(e.target.value)} placeholder="粘贴工作室任务书 JSON"/><button className="dtc-btn" onClick={applyBook}>载入任务书</button></div>
         <div className="dtc-step"><h3><span className="no">1</span>写任务书</h3><div className="sub">建卡后不可改。每个参与者都会原文收到它。</div>
           <textarea value={brief} onChange={e => setBrief(e.target.value)} placeholder="要做成什么样,怎么算做完。例:逐台核对机群状态,把异常写成「现象 / 依据 / 建议动作」。" /></div>
         <div className="dtc-step"><h3><span className="no">2</span>选参与者</h3><div className="sub">勾选顺序 = 接力顺序:上一位的最后一条回复作为交接单交给下一位。</div>
@@ -297,8 +303,10 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
           {claudeOnes.length ? <div className="dtc-warn">{claudeOnes.join('、')} 挂在 claude-local 上:这条路上 dsh 的工具都是延迟工具,它交不了卷(task_complete),会被催一次后判「没按协议交卷」。换成 codex-local 或 API 型模型再参与任务。</div> : null}
           {noAsk ? <div className="dtc-warn">有参与者没勾 ask_user_question,它遇到拿不准的事只能失败,不会停下来问。</div> : null}
         </div>
-        <div className="dtc-step"><h3><span className="no">3</span>触发</h3><div className="sub">单次任务提交后立刻进「进行中」;时间表任务进「待触发」,到点各生一张运行卡。</div>
+        {bookMeta?.design?.studioStages ? <div className="dtc-step"><h3>视频制作阶段 · 真实 Task Link</h3><p>编导 → 分镜 → 视觉素材与声音准备 → 合成 → 独立质检 → 编导收口或返修</p>{bookMeta.design.studioStages.map((stage:any)=><p key={stage.id}><b>{agentName(agents,stage.agentId)}</b> · {stage.id==='storyboard'?'等待编导': '等待分镜'}<br/>{stage.brief}</p>)}<p>阶段交付必须登记实际文件及哈希；阶段完成不等于成片合格。返修保留旧轮次，复用仍需核对。</p></div>:null}
+        <div className="dtc-step"><h3><span className="no">3</span>触发</h3><div className="sub">可先保存任务书，稍后从任务页运行。运行时才创建阶段节点和 Agent 会话。</div>
           <div className="dtc-radio"><div className={`dtc-rd ${kind === 'once' ? 'on' : ''}`} onClick={() => setKind('once')}>现在跑一次</div><div className={`dtc-rd ${kind === 'cron' ? 'on' : ''}`} onClick={() => setKind('cron')}>按时间表</div></div>
+          {kind==='once'?<label><input type="checkbox" checked={saveOnly} onChange={e=>setSaveOnly(e.target.checked)}/>只保存任务书，暂不运行</label>:null}
           {kind === 'cron' ? <><div className="dtc-chips" style={{ margin: '10px 0' }}>{CRON_PRESETS.map(([e, n]) => <button key={e} className={`dtc-chip ${expr === e ? 'on' : ''}`} onClick={() => setExpr(e)}>{n}</button>)}</div>
             <div className="dtc-chips"><input aria-label="Cron expression" className="dtc-mono" style={{ width: 180 }} value={expr} onChange={e => setExpr(e.target.value)} /><input aria-label="Schedule time zone" style={{ width: 180 }} value={timeZone} onChange={e => setTimeZone(e.target.value)} /><span className="dtc-muted" style={{ fontSize: 12.5 }}>{cronHuman(expr)}{next ? ` · 下次 ${next.toLocaleString('zh-CN', { timeZone })}` : ' · 表达式或时区无效'}</span></div></> : null}
         </div>
@@ -314,10 +322,10 @@ export function NewTask({ api, agents, toast, workspaces }: { api: TasksApi; age
         <span className="k">任务书</span><span>{brief.trim() ? brief.trim().slice(0, 60) + (brief.length > 60 ? '…' : '') : <span className="dtc-faint">还没写</span>}</span>
         <span className="k">参与</span><span>{parts.length ? parts.map(p => agentName(agents, p.agentId)).join(' → ') : <span className="dtc-faint">还没选</span>}</span>
         <span className="k">编排</span><span>{graphMode === 'dynamic-rounds' ? '动态回合 · DB 真相回放' : '固定接力 · 兼容模式'}</span>
-        <span className="k">触发</span><span>{kind === 'once' ? '提交即跑' : cronHuman(expr)}</span>
+        <span className="k">触发</span><span>{kind === 'once' ? (saveOnly?'保存，暂不运行':'提交即跑') : cronHuman(expr)}</span>
         <span className="k">边界</span><span>{timeout} 分钟/段 · {onFail === 'retry' ? `失败重试 ${tries} 次` : '失败停下'}</span>
-        <span className="k">进哪列</span><span>{kind === 'once' ? '进行中' : '待触发'}</span></div>
-        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}><button className="dtc-btn pri" disabled={!ok || busy} onClick={submit}>{busy ? '建卡中…' : kind === 'once' ? '建卡并运行' : '建卡'}</button><button className="dtc-btn" onClick={() => go('tasks')}>取消</button></div>
+        <span className="k">进哪列</span><span>{kind === 'once' ? (saveOnly?'待运行':'进行中') : '待触发'}</span></div>
+        <div style={{ marginTop: 12, display: 'flex', gap: 8 }}><button className="dtc-btn pri" disabled={!ok || busy} onClick={submit}>{busy ? '建卡中…' : kind === 'once' ? (saveOnly?'保存任务书':'建卡并运行') : '建卡'}</button><button className="dtc-btn" onClick={() => go('tasks')}>取消</button></div>
       </div></div>
     </>
   )

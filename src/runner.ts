@@ -25,8 +25,13 @@ import { ScheduleLedger, type ScheduleClaim } from './scheduler.ts'
 import { publicToolName } from './filtered-mcp-client.ts'
 import { dispatchNotification } from './notification-dispatch.ts'
 import { readBrowserAcceptance } from './workflow-acceptance.ts'
+import { startupFallbackAllowed, installFallbackSelection } from './model-fallback.ts'
 
 interface Flight {
+  modelProvider?: string
+  fallbackUsed?: boolean
+  toolCalled?: boolean
+  disposeFallback?: () => void
   runId: string
   cardId: string
   taskId: string
@@ -81,6 +86,7 @@ export interface FireOptions {
 }
 
 export class TaskRunner {
+  modelFallback?: { fromProvider: string; provider: string; model: string }
   private readonly ctx: Context
   readonly store: EventStore
   private flights = new Map<string, Flight>()
@@ -149,7 +155,7 @@ export class TaskRunner {
   stop(): void {
     if (this.ticker) clearInterval(this.ticker)
     this.disposeListener?.()
-    for (const f of this.flights.values()) { this.disarm(f); this.stopHeartbeat(f); f.disposeTools?.() }
+    for (const f of this.flights.values()) { this.disarm(f); this.stopHeartbeat(f); f.disposeFallback?.(); f.disposeTools?.() }
   }
 
   private now(): string { return new Date(this.clock()).toISOString() }
@@ -397,6 +403,7 @@ export class TaskRunner {
     const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview)
     if (!claim) return
     const flight: Flight = {
+      modelProvider: selection?.provider,
       runId, cardId: card.id, taskId: task.id, sessionId, messageId, consumed: false,
       handle: undefined, lastText: '', timeoutSec: card.role === 'notifier' ? 300 : task.timeoutSec,
       coreRunId: claim.run.id, claimLock: claim.lock, profileId,
@@ -591,6 +598,7 @@ export class TaskRunner {
         }
         break
       case 'tool/call':
+        f.toolCalled = true
         if (String(event.data?.name ?? '').endsWith('ask_user_question')) {
           let q = ''
           try { const a = JSON.parse(event.data.arguments ?? '{}'); q = a.questions?.[0]?.question ?? a.question ?? JSON.stringify(a).slice(0, 200) } catch { q = String(event.data.arguments ?? '').slice(0, 200) }
@@ -621,10 +629,28 @@ export class TaskRunner {
   private async onTurnEnd(f: Flight, reason: any): Promise<void> {
     if (!this.flights.has(f.sessionId)) return
     if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
-    if (reason && reason.kind !== 'completed') { await this.finish(f, 'run/failed', 'failed', JSON.stringify(reason)); return }
+    if (reason && reason.kind !== 'completed') {
+      const fallback = this.modelFallback
+      if (fallback && startupFallbackAllowed(reason, { used: f.fallbackUsed, toolCalled: f.toolCalled, terminal: f.terminal, provider: f.modelProvider }, fallback.fromProvider)) {
+        f.fallbackUsed = true // Reserve once before async resolution or duplicate events.
+        try {
+          const resolved = await (this.ctx as any).get('llm').resolveCallConfig({ provider: fallback.provider, model: fallback.model })
+          if (!this.flights.has(f.sessionId)) return
+          f.disposeFallback = installFallbackSelection(f.handle.agent.ctx, { provider: resolved.provider, model: resolved.model })
+          const fact = { from: f.modelProvider, to: `${resolved.provider}/${resolved.model}`, code: reason.error.code, stage: 'before-tools' }
+          this.store.kernel.recordEvent(f.cardId, 'model_fallback', fact, f.coreRunId)
+          f.modelProvider = resolved.provider
+          f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: `[HOST MODEL FALLBACK]\n主模型启动失败（${fact.code}），尚未调用任何工具。已切换至 ${fact.to}。在同一任务、会话与原权限范围继续原始请求；不是新任务，不得改变验收条件。` }], source: { kind: 'user' } })
+          return
+        } catch {
+          this.store.kernel.recordEvent(f.cardId, 'model_fallback_unavailable', { provider: fallback.provider, model: fallback.model }, f.coreRunId)
+        }
+      }
+      await this.finish(f, 'run/failed', 'failed', JSON.stringify(reason)); return
+    }
     const t = f.terminal
     if (t?.kind === 'deferred') {
-      this.flights.delete(f.sessionId); this.disarm(f); this.stopHeartbeat(f); f.disposeTools?.()
+      this.flights.delete(f.sessionId); this.disarm(f); this.stopHeartbeat(f); f.disposeFallback?.(); f.disposeTools?.()
       try { await f.handle?.dispose?.() } catch { /* already closed */ }
       await this.tick(); return
     }
@@ -672,6 +698,7 @@ export class TaskRunner {
     this.flights.delete(f.sessionId)
     if (f.timer) clearTimeout(f.timer)
     this.stopHeartbeat(f)
+    f.disposeFallback?.()
     f.disposeTools?.()
     try { await f.handle?.dispose?.() } catch { /* already gone */ }
     let changed = false
@@ -723,6 +750,7 @@ export class TaskRunner {
     this.flights.delete(f.sessionId)
     if (f.timer) clearTimeout(f.timer)
     this.stopHeartbeat(f)
+    f.disposeFallback?.()
     f.disposeTools?.()
     try { await f.handle?.dispose?.() } catch { /* already gone */ }
     const ok = await this.store.transition(
@@ -743,6 +771,7 @@ export class TaskRunner {
     this.flights.delete(f.sessionId)
     if (f.timer) clearTimeout(f.timer)
     this.stopHeartbeat(f)
+    f.disposeFallback?.()
     f.disposeTools?.()
     try { await f.handle?.dispose?.() } catch { /* already gone */ }
     const result = await this.store.transition(

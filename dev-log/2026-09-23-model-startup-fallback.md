@@ -17,3 +17,35 @@ Tests cover scoped prompt/request selection, no duplicate session/run, one-shot
 fallback, preserved permission preset, cleanup and no fallback after tools.
 Production still requires a zero-active deployment window and actual model/Task
 and browser verification; no target-machine operations by the developer.
+
+## Live verification
+
+- Main `aa8eaee`; live Studio integration `c683d2d`, both pushed.
+- Deployed Task runtime at `dsh-studio-migration/task-console-fallback-c683d2d`
+  during zero native sessions / zero running SQLite claims; existing Studio kept.
+- Live route is `deepseek-official/qwen-plus-latest`, not the plugin package name.
+- New Batch `b-chat-48a47c2f21fe61a23551`, Run 1104, one same session:
+  request/header changed from codex-local/gpt-5.6-terra to Qwen Plus after startup
+  TRANSPORT. Canonical event 14955 records model_fallback. Actual Qwen dispatched
+  fleet_onboard_start then fleet_onboard_status, with the original role tools.
+- Tool returned probe-transport-failed/run_created=false. This is not proof of bad
+  credentials and not onboarding success. The verification Batch was cancelled
+  through Task API, retaining its records, without developer target operations.
+- Public Chrome 1440x1000 passes workflow + replay STEP 10 model switch text and
+  provider destination, no page errors. Screenshot `/tmp/dsh-model-fallback-run-1440.png`.
+- Tests: main 53, integrated Studio 59, CLI 137 and CLI typecheck passed.
+
+## Remaining deployment boundary
+
+The initial CLI module-path override was rejected by the profile name guard;
+that was NOT a successful primary-route deployment. Corrected the patch to keep
+`name: dsh-codex-claude-cli`, configured modelCatalogPath and staged patched host
+code in its installed lib/index.js. Old bundle backup is in
+`dsh-studio-migration/codex-startup-0289358/previous-index.js`.
+Composed config now includes the catalog. Standalone pinned runner gets a genuine
+MODEL_OK response, no tools. The running host still holds the old imported CLI
+module until restart. Another Studio Task became active; do not interrupt it.
+Re-check BOTH native session.list running and SQLite task_runs running before
+restarting sop-dsh-web.service, then test a no-tool fleet-installer session.
+The Qwen fallback already runs in the current host. The separate 236 SSH probe
+transport blocker remains unresolved; do not claim Fleet onboarding completed.

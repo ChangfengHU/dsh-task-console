@@ -166,3 +166,50 @@ probe confirms8792/health reports0.15.8 and the authenticated publication-endpoi
 route returns424; old8787/8080 probes were wrong-service evidence and explicitly
 corrected in the same session. Do not restore the legacy noVNC over the healthy new
 listener. No Fleet registration or actual manual removal is claimed yet.
+
+## Actual236 installation and manual withdrawal accepted
+
+DSH read-only inspection isolated root0700 control_plane.sh: matching pinned SHA,
+but the ordinary user verifier could not read it. SOP8839764 introduced privileged
+digest verification; follow-up98badcc added the exact manifest paths to its existing
+allowlist. Initial digest-mocked tests missed that guard boundary;46 machine tests
+now include real guard/metadata/digest-chain coverage. R2 machined0.15.17 and host
+linux-clash8b01bf3 deployed with matching SHA;17 focused host tests passed,67 core
+onboarding tests passed before the final version-only pin follow-up.
+
+Installer session agent-fleet-installer-mudto47m used its own start/resume/report.
+Ledger onb-92f512d5-0bf2-4e0b-b3b1-66426c0c4b7e completed10 stages at13:12:32Z:
+stages1–7 reused,8/9 repaired,10 registered. Older failed ledgers remain immutable.
+Public Chrome history loaded15.64s, zero errors; Fleet visible236 card showed online,
+two desktop browsers, telemetry, proxy and VNC. Hidden duplicate text initially
+fooled the test locator; corrected test selected the visible card, not hidden DOM.
+This is base-node acceptance, not a Gemini login or Runner installation claim.
+
+In the existing fleet-ops session agent-fleet-ops-mue2yyrn, browser selected the
+actual @移出集群 Action and filled236. First Enter commits placeholders; second
+Enter really submits. Verified new turn9 before claiming execution. Agent called
+status/node_detail/recycle_node/status/node_audit, not retirement or direct SSH.
+Audit6088 at13:19:24Z: changed, registered=false, runnerDisabled=true,
+vaultPreserved/accessInventoryPreserved/remoteUntouched=true. Independent D1 reads:
+membership0 and enabled matching runners0. Exact node Vault inventory and value
+digest match before/after; machine_access absent both before and after (not a
+claim that a row existed). Public Chrome confirms Fleet card absent, zero errors;
+VNC page200/title noVNC and Clash health200 remain. VNC websocket login was not
+tested; no remote service/data mutation was performed by manual withdrawal.
+
+Final236 state: intentionally withdrawn from Fleet after successful installation;
+all credentials/services/profiles/DNS/tunnels retained for later re-enrolment.
+Developer never SSHed the target and did not globally reload DSH. Failed Task/ledger
+history remains. Ops turn8 falsely said stdout was unavailable despite a persisted
+health result; final acceptance uses actual tool receipts and independent reads,
+not that prose claim. Broader CLI rendering behavior is not declared fixed here.
+
+Evidence retained: /tmp/dsh-236-verifier-history.png,
+/tmp/fleet-236-agent-installed.png, /tmp/dsh-236-withdraw-submitted.png,
+/tmp/fleet-236-agent-withdrawn.png, /tmp/fleet-236-vnc-preserved.png.
+Two host-only temporary backup directories under /var/backups named
+dsh-onboard-verifier-yWzEPP and dsh-onboard-verifier-h1BZSD were byte-matched to
+linux-clash895b4b9/1beeb77, checked unused, then removed (126232 bytes). Restore
+scripts from those commits if needed. Remote legacy noVNC backup is retained.
+No dependencies installed; unrelated lib/client-heavy.js, lib/client.js and
+lib/index.js edits preserved. Source changes already pushed; this records outcome.

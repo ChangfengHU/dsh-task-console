@@ -49,3 +49,12 @@ Re-check BOTH native session.list running and SQLite task_runs running before
 restarting sop-dsh-web.service, then test a no-tool fleet-installer session.
 The Qwen fallback already runs in the current host. The separate 236 SSH probe
 transport blocker remains unresolved; do not claim Fleet onboarding completed.
+
+## Safe probe diagnostic propagation
+
+Linux-clash SSH probe/host adapter now report fixed error codes instead of
+discarding every failure cause. Task Console accepts only that finite diagnostic
+vocabulary; unknown/raw/oversized stderr stays generic. All 33 onboarding tool
+tests passed with NODE_ENV=test (the initial invocation without that required
+test environment failed loopback fixtures). Live deployment is pending the
+zero-active boundary; target installation is still delegated exclusively to DSH.

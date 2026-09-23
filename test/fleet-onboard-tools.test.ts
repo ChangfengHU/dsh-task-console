@@ -515,6 +515,14 @@ test('host probe errors expose only bounded allowlisted diagnostics and never ra
   const cases: [string, string][] = [
     [JSON.stringify({schema: 1, ok: false, error: 'probe-inventory-invalid:unknown-field:inventory.fleet.metrics_ready'}), 'probe-inventory-contract-invalid'],
     [JSON.stringify({schema: 1, ok: false, error: 'probe-transport-failed'}), 'probe-transport-failed'],
+    ...['ssh-host-key-rejected', 'ssh-private-key-invalid', 'ssh-authentication-failed',
+      'ssh-connect-timeout', 'ssh-connection-refused', 'ssh-network-unreachable',
+      'ssh-remote-python-unavailable', 'ssh-probe-timeout', 'ssh-executor-unavailable',
+      'ssh-probe-failed', 'ssh-probe-output-invalid', 'ssh-login-user-mismatch',
+      'ssh-unavailable', 'ssh-keygen-unavailable', 'sshpass-unavailable',
+      'private-key-memfd-unavailable', 'negotiated-host-key-unavailable',
+      'known-hosts-file-unsafe', 'target-identity-unavailable']
+      .map(error => [JSON.stringify({schema: 1, ok: false, error}), error]),
     [JSON.stringify({schema: 1, ok: false, error: CANARY}), 'adapter-process-failed'],
     [`Traceback: ${CANARY}`, 'adapter-process-failed'],
     [JSON.stringify({schema: 1, ok: false, error: 'probe-transport-failed'}) + '\n' + CANARY, 'adapter-process-failed'],

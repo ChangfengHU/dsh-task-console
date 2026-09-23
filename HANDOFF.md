@@ -23,8 +23,14 @@ save/regenerate this preset with the older running host renderer in between.
 
 Installation and deletion are separate acceptance contracts. `retire_due_node`
 requires continuous168-hour offline evidence; do not fake downtime to implement
-manual deletion. Confirm the exact target and whether deletion means registry/
-node-owned Vault retirement or remote component/data uninstall first.
+manual deletion. Manual removal uses Fleet `recycle_node`, preserving ALL Vault
+records, access information, remote services/data, DNS and tunnels while removing
+membership and disabling Runner scheduling. The existing fleet-ops role has a
+separate `移出集群` Action; the scheduled fleet-node-retirer role is unchanged.
+fleet-ops MCP must be regenerated through the normal Agent API using authoritative
+host entry references, never stale copied headers or the legacy vault alias.
+For236 the user explicitly authorized replacing the identified old noVNC only;
+that is not permission to clear profiles or delete credentials.
 
 Optional host `taskFallbackModel` is a registered `provider/model` route, scoped
 to Task workers whose provider equals `taskFallbackFromProvider` (codex-local by

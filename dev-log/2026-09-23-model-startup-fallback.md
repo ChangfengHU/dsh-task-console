@@ -137,3 +137,19 @@ Deletion preflight public browser reread passed in39.97s with no page errors,
 screenshot /tmp/dsh-retirement-preview-public.png. It proves the read-only
 preflight and report, not deletion. Runtime88KiB and screenshots are retained as
 active service dependency and acceptance evidence, not temporary cleanup targets.
+
+## User-approved replacement and manual membership removal
+
+User authorized236's exact old noVNC replacement, but clarified that manual removal
+only removes Fleet membership, preserving ALL Vault/access and remote data.
+Automatic168h retirement remains separate. Fleet c3ff0b7 was pushed and deployed
+as four source-preserving module deltas with unchanged bindings and matching
+readback SHA;31 targeted Fleet tests passed. No production node removed yet.
+
+Browser testing found legacy fleet-ops could not mount its copied-header vault
+client. Regenerated only that preset through saveAgent using current vyibc-vault
+host references, retained its existing role tools, enabled the already-authorized
+SSH execution permission and added browser Skill. No global profile/restart.
+The manual `移出集群` Action is saved through the revision-checked Action API.
+Chrome created agent-fleet-ops-mue2yyrn and submitted bounded noVNC preparation;
+execution remains under observation, not accepted as completed installation.

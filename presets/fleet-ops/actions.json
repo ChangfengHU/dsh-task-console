@@ -1,0 +1,17 @@
+{"version":1,"actions":[
+  {
+    "id": "withdraw-node",
+    "name": "移出集群",
+    "description": "只移出 Fleet 并停止其调度；保留金库、远端服务和所有资料。",
+    "enabled": true,
+    "template": "请将 {{ip}} 手动移出 Fleet 集群。先从实时名册核对完整 IP 与唯一 node id；确认没有活动派发或巡检作业后，仅调用 recycle_node。不要使用自动退役接口，不伪造离线时长。保留全部金库记录、SSH 接入、远端服务、浏览器资料、DNS 和 Tunnel。完成后复读名册和 node_audit，报告移出结果、Runner 停调度情况以及保留的数据。若节点已不在名册中，如实报告无操作；若忙碌，不取消其他任务。此次请求只授权移出集群，不授权卸载服务或删除凭据。",
+    "parameters": [
+      {
+        "key": "ip",
+        "label": "机器 IP",
+        "type": "text",
+        "required": true
+      }
+    ]
+  }
+]}

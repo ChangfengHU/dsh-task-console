@@ -51,6 +51,8 @@ const eventEffect = (event: GraphEventRow, frame: GraphFrame) => {
     case 'run_bound': return { icon: '⛓', title: 'DSH Run 已绑定', copy: '没有新增 Task/Link；当前节点的运行阶段推进到“已绑定”。', facts: [`Run #${event.run_id}`, `external_run_id = ${short(p.external_run_id)}`] }
     case 'session_created': return { icon: '▣', title: 'Agent 会话已建立', copy: '没有新增 Task/Link；同一节点亮起“会话”阶段，并可从 Run 打开会话。', facts: [`Run #${event.run_id}`, `session_id = ${short(p.session_id ?? run?.session_id)}`] }
     case 'prompt_dispatched': return { icon: '✉', title: '任务书已发送给 Agent', copy: '没有新增 Task/Link；同一节点亮起“发令”阶段，消息 ID 成为运行证据。', facts: [`Run #${event.run_id}`, `message_id = ${short(p.message_id ?? run?.message_id)}`] }
+    case 'model_fallback': return { icon: '↪', title: '主模型启动失败，切换备用模型', copy: '尚未调用工具；保留同一任务、会话和权限，仅切换模型一次。', facts: [`${p.from} → ${p.to}`, `原因：${p.code}`] }
+    case 'model_fallback_unavailable': return { icon: '!', title: '备用模型不可用', copy: '未绕过失败或执行权限，保留原始错误。', facts: [`${p.provider}/${p.model}`] }
     case 'heartbeat': return { icon: '♥', title: 'Agent 心跳续租', copy: '没有新增 Task/Link；运行节点产生脉冲，更新最后心跳与 CAS 租约证据。', facts: [`last_heartbeat_at = ${epoch(Number(p.last_heartbeat_at) || run?.last_heartbeat_at)}`, `claim_expires = ${typeof p.claim_expires === 'number' ? epoch(p.claim_expires) : '旧事件未记录精确值'}`] }
     case 'gate_opened': return { icon: '◇', title: '系统闸门放行', copy: '闸门节点变为完成；它不会创建 Agent Run，下游随后才能进入 ready。', facts: ['tasks.status = done', event.task_id] }
     case 'completed': return { icon: '✓', title: '当前角色执行完成', copy: '运行节点变为完成，task_runs 写入结果；依赖它的下游随后才会推进。', facts: [`Run #${event.run_id}`, `summary = ${short(p.summary)}`] }

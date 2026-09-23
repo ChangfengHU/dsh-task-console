@@ -64,6 +64,44 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
 
+test('startup fallback retains run/session and permissions, retries once, and releases scoped hooks', async () => {
+  const { runner, store, host } = await setup({ participants:[{agentId:'a'}], onFail:'stop', maxTries:1 })
+  const get = host.ctx.get
+  host.ctx.get = (key: string) => key === 'llm' ? { resolveCallConfig: async (config: any) => config } : get(key)
+  runner.modelFallback = { fromProvider:'p', provider:'qwen', model:'plus' }
+  await runner.fire('T','manual'); await tick()
+  const [sid, rec] = [...host.sessions.entries()][0]
+  let hooks = 0
+  rec.agent.ctx.on = () => { hooks++; return () => { hooks-- } }
+  host.consumeFirst(sid)
+  const permissions = [...host.permissions]
+  const error = {type:'turn/end',data:{reason:{kind:'error',error:{code:'TRANSPORT',message:'startup failed'}}}}
+  host.emit(sid,error); await tick()
+  assert.equal(host.sessions.size,1)
+  assert.equal(store.s.runs.size,1)
+  assert.equal(rec.followups.length,2)
+  assert.match(rec.followups[1].content[0].text,/qwen\/plus/)
+  assert.equal(hooks,2)
+  assert.deepEqual(host.permissions,permissions)
+  assert.equal(rec.disposed,false)
+  host.emit(sid,error); await tick()
+  assert.equal(rec.followups.length,2,'fallback does not loop')
+  assert.equal(rec.disposed,true)
+  assert.equal(hooks,0)
+})
+
+test('model failure after tool dispatch never repeats business work through fallback', async () => {
+  const { runner, host } = await setup({ participants:[{agentId:'a'}], onFail:'stop', maxTries:1 })
+  runner.modelFallback = { fromProvider:'p', provider:'qwen', model:'plus' }
+  await runner.fire('T','manual'); await tick()
+  const [sid, rec] = [...host.sessions.entries()][0]
+  host.consumeFirst(sid)
+  host.emit(sid,{type:'tool/call',data:{name:'business_write',callId:'fixture'}})
+  host.emit(sid,{type:'turn/end',data:{reason:{kind:'error',error:{code:'TRANSPORT'}}}}); await tick()
+  assert.equal(rec.followups.length,1)
+  assert.equal(rec.disposed,true)
+})
+
 test('Task Actions use CAS independent storage and frozen fresh inputs; real scheduler creates only a Batch and its role sessions', async () => {
   const { store, runner, host, root } = await setup({ origin: { source: 'task-chat', signalId: 'fixture' } as any })
   const creator = new TaskCreator(runner, async () => ['a','b','c'].map(id => ({ id, name: id } as any)))

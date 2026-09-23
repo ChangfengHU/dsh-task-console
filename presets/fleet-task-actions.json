@@ -7,7 +7,7 @@
     "isDefault": true,
     "template": "请对 {{ip}} 执行本 Task 已审查的 Fleet 基础节点幂等接入与 Gemini 账号验收流程。首次接入方式：{{ssh_mode}}；SSH 用户名：{{username}}；SSH 密码：{{password}}。已有金库接入方式时不重复索要凭据。账号选择：{{login_mode}}；指定金库账号：{{account}}。健康组件与已有健康登录保留，不卸载重装，不修改令牌。未登录浏览器按本次选择补齐；指定账号必须将 accountId 传入 browser_login_provision，使用金库库存，不依赖来源浏览器在线，不静默换号。自动分配沿用 MCP 既有候选与排除策略。工作流角色、权限、交接和验收保持原定义；完成后输出本次三个角色的证据与最终报告，不把短期登录当作原双浏览器20分钟验收通过。",
     "parameters": [
-      {"key":"ip","label":"机器 IP","type":"text","required":true,"source":"fleet.nodes","binding":"target-ip"},
+      {"key":"ip","label":"机器 IP","type":"text","required":true,"source":"vault.ssh-nodes","binding":"target-ip"},
       {"key":"ssh_mode","label":"SSH 接入方式","type":"text","required":true,"choices":["使用金库接入","提供首次凭据"],"default":"使用金库接入"},
       {"key":"username","label":"SSH 用户名","type":"text","required":true,"default":"root","binding":"ssh-user","dependsOn":["ssh_mode"],"visibleWhen":{"key":"ssh_mode","equals":"提供首次凭据"},"inactiveValue":"由金库解析"},
       {"key":"password","label":"首次 SSH 密码","type":"text","required":true,"binding":"ssh-password","dependsOn":["ssh_mode"],"visibleWhen":{"key":"ssh_mode","equals":"提供首次凭据"},"inactiveValue":"由金库解析"},

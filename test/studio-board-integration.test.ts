@@ -184,13 +184,19 @@ test('a lost successful compiler response is recovered by verified replay withou
 })
 
 test('replay refuses altered, incomplete or symlinked compiler artifacts without repairing them',async t=>{
- for(const mode of ['input','missing-input','source','source-escape','html','copy','board','receipt-asset','quality','speech','missing-speech','directory-symlink','assets-symlink','index-symlink'])await t.test(mode,async t=>{
+ for(const mode of ['input','missing-input','source','source-and-receipt','source-escape','html','copy','board','receipt-asset','quality','speech','missing-speech','directory-symlink','assets-symlink','index-symlink'])await t.test(mode,async t=>{
   const f=await fixture(t),first=await f.execute();assert.equal(first.ok,true,first.reason)
   const output=first.composition,receiptPath=join(output,'compile-receipt.json')
   const receipt=JSON.parse(await readFile(receiptPath,'utf8')),copied=join(output,receipt.assets['assets/subject.png'].file)
   if(mode==='input')await writeFile(first.boardPath,'{}')
   if(mode==='missing-input')await rm(first.boardPath)
   if(mode==='source')await writeFile(join(f.cwd,'assets/subject.png'),'changed source')
+  if(mode==='source-and-receipt'){
+   const changed=Buffer.from('changed source'),asset=receipt.assets['assets/subject.png']
+   asset.sha256=sha(changed);asset.bytes=changed.length;asset.file=`assets/${asset.sha256}.png`
+   await writeFile(join(f.cwd,'assets/subject.png'),changed);await writeFile(join(output,asset.file),changed)
+   await writeFile(receiptPath,JSON.stringify(receipt))
+  }
   if(mode==='source-escape'){
    const source=join(f.cwd,'assets/subject.png'),outside=join(f.root,'outside.png')
    await rename(source,outside);await symlink(outside,source)

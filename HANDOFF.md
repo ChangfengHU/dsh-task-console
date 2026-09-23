@@ -1,5 +1,16 @@
 # Task Console runtime contracts
 
+## Model startup fallback
+
+Optional host `taskFallbackModel` is a registered `provider/model` route, scoped
+to Task workers whose provider equals `taskFallbackFromProvider` (codex-local by
+default). It retries once in the same session/Run only on recognized model startup
+errors before any tool dispatch. It never resets the deadline, changes role tools,
+or retries a business-tool failure. Both provider selection and system prompt
+change together; request headers and canonical `model_fallback` are the evidence.
+Do not infer readiness from configured model names: verify the registered route
+and a real response. Correct CLI startup configuration separately from fallback.
+
 ## Configuration migration (0.31.1)
 
 Agent home and Task home expose one shared configuration-migration page. Export is host-side and

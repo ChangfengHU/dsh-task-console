@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
-import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import {
   HttpFleetOnboardCloudTransport,
   HttpFleetOnboardLedger,
@@ -101,8 +101,14 @@ interface FixtureFiles {
   root: string; log: string; keyFile: string; contractFile: string; probe: string; runtime: string; provider: string
 }
 
+const fixtureRoots = new Set<string>()
+after(async () => {
+  for (const root of fixtureRoots) await rm(root, { recursive: true, force: true })
+})
+
 async function fixtureFiles(): Promise<FixtureFiles> {
   const root = await mkdtemp(join(tmpdir(), 'fleet-onboard-tools-test-'))
+  fixtureRoots.add(root)
   const log = join(root, 'argv.jsonl')
   const keyFile = join(root, 'hmac.key')
   const contractFile = join(root, 'component-contract.json')

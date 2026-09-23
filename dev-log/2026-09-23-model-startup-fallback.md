@@ -103,3 +103,32 @@ it occurs;236 is still blocked and deletion scope/target require confirmation.
 Verification:36 onboarding-tool and12 preset tests passed. Inspections make zero
 ledger calls, never invoke the installer, and cannot leak fixture credentials.
 Host probe5 + SSH/readiness17 + onboarding67 tests also passed.
+
+### Scoped live/browser verification
+
+Built only the88KiB onboarding module into the versioned runtime above, retaining
+existing Studio/Task frontend assets and the global profile. Verified preset
+generation behavior in the installed harness before changing only the idle
+fleet-installer composition; Studio Run1110 remained running. Host81cf5bb scripts
+installed root-owned, matching SHA256; prior two scripts retained in root-only
+upgrade-backup-81cf5bb. Both source commits pushed.
+
+Chrome clicked the real Agent page's new-session button and sent one read-only
+request in agent-fleet-installer-mudto47m. The Agent loaded its Skill and invoked
+fleet_onboard_inspect exactly once. It found unmanaged novnc.service/websockify
+PID45314 on6080, no managed desktop config, other default ports/display free.
+No installer, SSH by developer, deletion, or global restart occurred. Public
+Chrome rendered the actual response in31.72s without page errors, screenshot
+/tmp/dsh-installer-inspect-public-result.png. The initial submission assertion
+timed out because the composer placeholder changed after send; persisted user
+input, actual tool result and a separate browser reread establish submission.
+
+Chrome also created fleet-node-retirer session agent-fleet-node-retirer-mudtrsm2
+and requested only deletion preflight. The Agent queried fleet_status once,
+correctly found236 absent and performed zero lifecycle mutations. This is NOT
+real deletion acceptance. User confirmation of deletion scope/target and the
+existing novnc service's replacement/adoption boundary remains necessary.
+Installer success, Fleet registration and complete two-capability acceptance
+are still pending. The older host's catalog/full integrated deployment remains
+pending a dual-zero window. New test fixtures now clean only paths they create
+after all tests finish;36 onboarding tests pass again with that cleanup.

@@ -11,6 +11,21 @@ retain those records and do not silently restart other owners' work.
 
 ## Model startup fallback
 
+The installer has a scoped read-only ownership tool, `fleet_onboard_inspect`.
+Host probe scripts come from linux-clash-skill; the result is diagnostic only,
+not a signed installation gate or deletion authorization. The current installer
+composition points to `dsh-studio-migration/task-console-inspect-bb3a01f/fleet-onboard-tools.mjs`
+and explicitly allows the tool. This isolated preset generation leaves other
+active roles intact; no global profile edit/restart was performed. A future
+full integrated release must include main bb3a01f's module AND presets schema
+list before replacing that override with the normal package specifier. Do not
+save/regenerate this preset with the older running host renderer in between.
+
+Installation and deletion are separate acceptance contracts. `retire_due_node`
+requires continuous168-hour offline evidence; do not fake downtime to implement
+manual deletion. Confirm the exact target and whether deletion means registry/
+node-owned Vault retirement or remote component/data uninstall first.
+
 Optional host `taskFallbackModel` is a registered `provider/model` route, scoped
 to Task workers whose provider equals `taskFallbackFromProvider` (codex-local by
 default). It retries once in the same session/Run only on recognized model startup

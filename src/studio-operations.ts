@@ -17,6 +17,32 @@ const failedStates=new Set(['failed','cancelled','canceled'])
 const rejected=(result:any,value:any)=>result?.isError===true||value?.ok===false||!!value?.error
 const statusTool=(name:string)=>/(?:vyibc-voice_(?:status|result|cancel)|vyibc-image_get_task)$/.test(name)
 
+/** Read existing submission metadata only. Never poll, replay provider bodies,
+ * create tables, reserve budget, or change paid-operation state from status. */
+export function readStudioOperationStatus(db:any,input:any){
+  const rows=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_studio_operations'").get()
+    ?db.prepare('SELECT tool,state,job_id FROM dsh_studio_operations WHERE task_id=? AND batch_id=? ORDER BY intent').all(input.task.id,input.batch.id):[]
+  const operations=rows.flatMap((row:any)=>{
+    const tool=typeof row.tool==='string'?row.tool.match(/(?:vyibc-image_generate_image|vyibc-voice_(?:synthesize|retry_segments))$/)?.[0]:undefined
+    if(!tool)return []
+    const jobId=typeof row.job_id==='string'&&/^[A-Za-z0-9_.:-]{1,200}$/.test(row.job_id)?row.job_id:null
+    const state=['dispatching','unknown','submitted','completed','failed'].includes(row.state)?row.state:'unknown'
+    const voice=tool.startsWith('vyibc-voice_')
+    const nextCalls=jobId?(voice?[
+      {tool:'vyibc-voice_status',arguments:{job_id:jobId}},
+      {tool:'vyibc-voice_result',arguments:{job_id:jobId}},
+    ]:[{tool:'vyibc-image_get_task',arguments:{taskId:jobId}}]):[]
+    return [{tool,jobId,state,nextCalls,
+      action:!jobId?'The submission has no usable job ID. Reconcile the original operation; do not invent an ID or submit again.':voice?
+        'Poll the original job with voice_status for fresh state, then voice_result for completed segment metadata. A queued receipt or a missing local WAV does not establish current synthesis status. Download and verify completed segment files before registering them; preserve every frozen dialogue line.':
+        'Read the original image job with get_task. Use only its succeeded items by index, then download and verify their files. Do not substitute the global latest-results feed.'}]
+  })
+  return {scope:'current-task-and-batch',source:'studio-operation-ledger',providerPolled:false,
+    stateFreshness:'Recorded ledger states may be stale; this read does not query providers. No last-provider-check timestamp is stored.',
+    instruction:'These calls only inspect existing jobs. Do not resubmit generation, infer provider failure from missing local files, or treat job completion as downloaded files or quality approval.',
+    operations,qualityApproved:false}
+}
+
 /** Add host provenance without rewriting the saved provider receipt or its schema.
  * A historical queued response is not a newly queued job or a fresh status poll.
  */

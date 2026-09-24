@@ -1,4 +1,5 @@
 import {StudioInterventions} from './studio-interventions.js'
+import {readStudioOperationStatus} from './studio-operations.js'
 import {StudioPreparation,assertPreparationWritable} from './studio-preparation.js'
 import {StudioRenderLedger} from './studio-render-ledger.js'
 import {assertScriptLanguage} from './studio-script-language.js'
@@ -152,7 +153,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
       savedReview.reviewerSessionId!==input.sessionId||savedReview.candidateSha256!==current?.candidate.sha256||savedReview.revision!==current?.candidate.revision
     )?null:savedReview
     const planning=input.card?.role==='planner'&&this.read(input,'runtime_enforcement')===true?this.planningPrerequisites(input):undefined
-    return {...(input.card?.role==='reviewer'?{reviewProgress:this.reviewProgress(input,true)}:{}),...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),preparationRevisions:new StudioPreparation({kernel:{db:this.db}}).publicRows(input.batch.id),renderJobs:this.renderLedger.publicRows(input),candidate:current?.policyHash===ph?current.candidate:null,review,budget:this.read(input,'budget')??null,autonomy:this.autonomy(input),interventions:this.interventions(input),preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
+    return {...(input.card?.role==='reviewer'?{reviewProgress:this.reviewProgress(input,true)}:{}),...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),preparationRevisions:new StudioPreparation({kernel:{db:this.db}}).publicRows(input.batch.id),renderJobs:this.renderLedger.publicRows(input),mediaOperations:readStudioOperationStatus(this.db,input),candidate:current?.policyHash===ph?current.candidate:null,review,budget:this.read(input,'budget')??null,autonomy:this.autonomy(input),interventions:this.interventions(input),preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
   }
   recordCandidateLocation(input:any,location:{path:string;manifestPath:string;sha256:string}){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')

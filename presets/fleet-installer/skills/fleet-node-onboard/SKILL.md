@@ -8,6 +8,26 @@ description: 把一台裸机接进 vyibc 机群,或修复/校验已有节点。�
 Treat onboarding as a transaction. Never register a node before its public capability endpoint
 passes verification.
 
+## 基础接入与完整装机的边界
+
+本 Skill 的十阶段事务只证明 **基础接入完成**。`phase=complete` 或 Fleet 在线、
+VNC 可打开，不证明独立浏览器管理、账号验收或 Runner 已完成。
+DSH 装机者只使用本角色实际挂载的受限工具；不能假装已委派其他角色，
+也不能为了自行收口而取得浏览器管理员或 Runner 的额外权限。
+
+用户要求完整 Fleet 装机时，复用已审查 Task，由装机者交接基础证据给浏览器管理员，
+再由 Runner 运维者完成独立巡检。完整报告须同时证明：
+
+- 独立浏览器管理已接入，目标实例 CDP/VNC 可用，Fleet 不只是 desktopOnly 占位。
+- 登录后台检测有新鲜状态与原因；未要求登录时明确未登录可接受，unknown 不是未登录。
+- 要求账号配置时，由浏览器管理员遵循本次账号策略、金库库存和独立稳定性标准；
+  复制成功不等于登录成功，也不缩短已约定的验收窗口。
+- Runner 已注册并完成本轮真实签名作业；Fleet 回读到持续状态、主机指标、出口和线路结果。
+
+单独调用装机者时，报告已完成的基础阶段及尚未验收的下游能力，不宣布“完整装机成功”。
+完整 Task 的宿主按原始工具回执与 Fleet 回读收口。发现异常时由责任角色定向返工，
+健康组件和资料复用；保留原失败证据，遵守 Task 的次数、时间和权限边界。
+
 ## Provisioning profiles
 
 - **Base Fleet node (default):** SSH/`claude` account, Mihomo/Clash, machine-local controller and
@@ -26,8 +46,14 @@ an image worker. Never install `chatgpt-image-service` merely because an image M
 不要问机主要 Cloudflare 凭据、代理源 URL、上传令牌,也不要去翻本地 `~/.ssh` 或某台机器的
 `/etc/` —— 那些做法把这个能力绑死在某一台机器上,正是这个 skill 要消灭的东西。
 
-DSH 装机者优先使用它已经获准的 `vyibc-vault` MCP。`scripts/vault.sh` 只供可信运行时
-已经通过 `FLEET_VAULT_TOKEN` 注入管理员令牌时使用；它不会从公网下载管理员令牌：
+DSH 装机者使用 `fleet_onboard_*` 工具；金库由这些工具背后的受限宿主通道访问，
+不是模型直接调用的通用 `vyibc-vault` MCP。不要因为角色没有通用金库工具而停止装机，
+也不要声称角色已经挂载该 MCP。首次 SSH 凭据、正式账号回写与回读由宿主执行，
+Cloudflare 和线路凭据由对应的受限执行器处理，凭据不得进入工具结果。
+
+在独立运维环境中，只有确实获得相应授权时才使用 `vyibc-vault` MCP。
+`scripts/vault.sh` 只供可信运行时已经通过 `FLEET_VAULT_TOKEN` 注入管理员令牌时使用；
+它不会从公网下载管理员令牌：
 
 ```bash
 scripts/vault.sh list                              # 有哪些键
@@ -44,7 +70,8 @@ scripts/vault.sh set  ssh:host-129-146-55-188 /tmp/v.txt "说明"      # 存回�
 |---|---|
 | `clash:lines` | **线路登记表(单一真相源)**,3 条 `{id,label,config_url,expected_ip,note}`。机器上的 `/etc/linux-clash-skill/sources.json` 是它的**缓存**,由本 skill 写下去 |
 | `ssh:fleet-operator-key` / `ssh:fleet-operator-pubkey` | 机群统一 SSH 密钥对。新机器装的就是这把公钥 |
-| `ssh:host-<完整IP打横线>` | 每台机器的登录方式,如 `ssh:host-84-8-217-45`。**新机器建完账号必须写回**。<br>**绝不能用 IP 的某一段命名**:按末段 `107.150.119.232`→`host-232` 会撞上已回收机器的 id;按首段 `129.146.55.188` 和 `129.213.30.236` 都变成 `host-129`,后写的覆盖先写的。两种都实测踩过 |
+| `ssh:managed-host-<完整IP打横线>` | 标准账号的已验证接入信息；创建账号后由宿主写回并独立回读。优先于旧键；无效时明确失败，不静默退回首次密码 |
+| `ssh:host-<完整IP打横线>` | 既有首次登录信息；旧的 claude 记录可在无 managed 键时复用。不得为写回标准账号而覆盖 root 引导凭据。两个键均使用完整 IP，绝不能只取首段或末段命名 |
 | `service:cloudflare` | 建隧道 / CNAME。注意 vyibc.com 的 zone 和 Worker 不在同一个 CF 账号下 |
 | `service:suqu-api` | R2 上传令牌(发布 clash YAML 时用) |
 | `clash-controller:host-<id>` / `dashboard:host-<id>` | 控制器与面板令牌。**装完必须写回** |
@@ -57,6 +84,10 @@ scripts/vault.sh set  ssh:host-129-146-55-188 /tmp/v.txt "说明"      # 存回�
    极难往这上面想。私钥一律走 `vault.sh getfile`,它无条件补回。
 
 **凭据只在内存和 600 文件里流动**:不回显、不进日志、不进 argv、不落进仓库。
+
+GitHub 下载失败应区分鉴权、限流和网络错误。公开 Release 下载不以通用金库 MCP 为前提；
+私有制品的授权由可信下载器解析受限凭据。TLS/连接超时不能靠添加金库权限修复，
+任何重试都保留固定制品来源与 SHA256 校验，不允许降级到未验证的下载。
 
 ## Required inputs
 
@@ -76,7 +107,7 @@ command, or state-changing MCP tool, verify that the conversation contains the t
 first-login SSH username, and either its password or a bootstrap key. If any field is missing, ask
 only for the missing field and stay in intake; do not call `begin`, mark the task blocked, or touch
 the target. When only an IP is supplied, a read-only vault lookup for the exact
-`ssh:host-<full-IP-with-dashes>` record is allowed. If that record is absent or unusable, ask for
+`ssh:managed-host-<full-IP-with-dashes>` record (or legacy `ssh:host-<full-IP-with-dashes>` when absent) is allowed. If no usable record exists, ask for
 the missing first-login information instead of guessing a username or credential. Missing intake
 data is not a failed gate; an actually attempted preflight with an invalid credential is.
 
@@ -199,7 +230,7 @@ stages remain immutable. Repair, rerun that stage, and continue. Do not use `res
    `scripts/stage-gate.sh run IP 2 standard-account -- scripts/init-node-user.sh USER@IP`。
    它做:建用户 → 装 `ssh:fleet-operator-pubkey` 进 `authorized_keys`(`grep -qxF` 去重)→
    写 `/etc/sudoers.d/90-claude` 并**先 `visudo -cf` 校验再 `install -m 0440`**(写坏 sudoers 会锁死机器)→
-   从操作机用私钥重新登一次、断言 `whoami` 与 `sudo -n true` → **写回金库 `ssh:host-<完整IP打横线>` 并读回验证**。
+   从操作机用私钥重新登一次、断言 `whoami` 与 `sudo -n true` → **写回金库 `ssh:managed-host-<完整IP打横线>` 并读回验证，保留原引导凭据**。
    此后所有步骤都用 `claude@` + 密钥,不再碰 root 口令。
 3. **正式登录与金库回读。** 独立使用金库里的新记录回登 `claude@IP`，验证 `sudo -n true`，
    再把阶段 3 标为通过。不得仅凭阶段 2 的输出推定金库可用。
@@ -234,9 +265,16 @@ stages remain immutable. Repair, rerun that stage, and continue. Do not use `res
    If the only failure is a browser IPv6/egress mismatch, treat it as an automatic, bounded repair:
    run `linux-browser-vnc.sh harden-egress --expected-ip`, then rerun stage 9 through the same
    `stage-gate.sh run` transaction. Register nothing until the repeated full acceptance passes.
+   Machine telemetry belongs to the Controller (`fleet-host-v1`), not a browser or image service.
+   Its public Dashboard status must expose host memory, load/cores, root-disk availability and
+   five cached proxy-latency observations. Missing telemetry is a control-plane repair, not a
+   reason to install an image worker. A first latency snapshot may be pending; wait for the
+   bounded probe to finish and verify its timestamp instead of treating pending as success.
 10. **Fleet 注册与读回。** Register the unique full-IP node id, direct-IP name, Clash URL, and VNC URL,
    with a non-empty audit `reason`,
-   only after stage 9 passes. Read the row back from Fleet and verify it is reachable, then run
+   only after stage 9 passes. Read the row back from Fleet and run `scripts/verify-node.sh IP`:
+   `readback` requires fresh, complete host/disk/five-target telemetry, not just `reachable=true`.
+   A missing, expired or failed metric blocks completion. Then run
    `stage-gate.sh fact` for the node id, desired/actual line, browser count, public URLs, profile and
    Fleet reachability. Run `scripts/stage-gate.sh complete IP`; it atomically creates the redacted
    `~/.local/state/dsh-fleet-onboard/<dashed-ip>.report.md`. Finally run `stage-gate.sh report IP`
@@ -308,7 +346,7 @@ digest check. On systemd older than 244, remove only unsupported `ProtectClock` 
 
 ## Completion gate
 
-For the default base profile, report complete only when SSH survives the TUN change, Mihomo and
+For the default base profile, report **base provisioning complete**, not full-node acceptance, only when SSH survives the TUN change, Mihomo and
 tunnel services are active, Clash/VNC public endpoints respond, Fleet shows the node with disk and
 proxy latency telemetry, and the verified TCP/UDP exit and timezone match the Fleet standard.
 The final report must distinguish resources that were checked, reused, changed or blocked, and

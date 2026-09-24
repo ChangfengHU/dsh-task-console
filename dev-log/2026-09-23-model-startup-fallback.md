@@ -290,3 +290,19 @@ timestamps remain epoch seconds, covered explicitly. Live SQLite claims were0
 when checked, but this is not enough to authorize hot reload without a fresh
 native session check. Integration, Skill/preset rollout and actual236 verification
 remain pending; no target-machine actions occurred in this slice.
+
+### 2026-09-24: Skill packaging and live baseline recheck
+
+Authoritative linux-clash Skill7a7e59a separates base provisioning from full Task
+acceptance and corrects managed SSH writeback to its dedicated key, preserving
+bootstrap records. The installed local Skill and packaged installer copy match;
+Skill validator passes. Existing stage gates and privileges are unchanged.
+
+Isolated Studio integration on55ea995 built and passed528/531 tests,3 existing
+skips. Its first full test run exposed a test-only hardcoded sibling calibration
+path; the test now accepts an explicit existing evidence path, without changing
+production calibration logic or fabricating proofs. Rechecked live configuration
+then discovered newer deployed Studioff7eed66461f. The55ea995 candidate MUST NOT be
+deployed over it. Import the live source.bundle, merge its newer stage/UI logic,
+repeat tests, and recheck zero native/SQLite activity before any live edit.
+No target action, live Task revision or production switch has occurred.

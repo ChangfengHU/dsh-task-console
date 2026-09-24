@@ -49,6 +49,7 @@ export class TaskCreator {
 
   async context() {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
+      designFields: { scope:'required string, not an object; reusable target-selection policy, no fixed IP', branches:'required array of {id:string,when:string,action:string,evidence:string}', coordination:'required string describing actual role dependencies', failurePolicy:'{isolateItems:boolean,maxAttempts:integer 1..3,stopConditions:string[]}', acceptance:'required nonempty string[] of business evidence criteria', optional:'notifications only when requested; evidenceContract only for a matching catalog contract, not a Fleet recipe ID' },
       revisionCandidates: [...this.runner.store.tasks.values()].filter(t=>!t.enabled && !t.archivedAt && t.origin?.source === 'task-chat')
         .map(t=>({id:t.id,title:t.title,trigger:t.trigger,...(t.workflowRecipe ? {workflowRecipe:t.workflowRecipe} : {}),manualAvailable:t.trigger.kind === 'cron'})),
       loginDiagnosis: '巡查可显式审查 browserPatrol.resumeAfterCopyLimit=1（需 actions 包含 resume）：复制预算耗尽但有同 Task 同故障已确认导入时，保留计数，允许额外一次正常登录续接。先新鲜 verify；canResume=true 应冻结 resume 而非再次 provision。原账号由 MCP 跨会话解析并核对当前授权，禁止静默换号；不再次导入、不重启、不绕过验证码。续接后独立20分钟4样本；失败只报告真实原因。一个目标失败，继续其他目标，本轮有界收口；未登录或未知不等于整轮执行协议应永久阻塞。旧计划不自动获得额外预算，必须 revise 审查。',

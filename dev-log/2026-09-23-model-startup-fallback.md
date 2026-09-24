@@ -337,3 +337,14 @@ lossless-context regression test (passed). Cancelled only this own planning turn
 before correcting it; no draft was approved and no236 execution started.
 Browser acceptance also exposed unconditionally applied Studio stage wording in
 the shared DAG. Restrict those labels to studio-video-v1; preserve Studio wording.
+
+9ecf721 deployed under another fresh zero-activity check. Public Chrome has no
+page errors and Fleet cards no longer say Studio production stage; cold load
+49.13s remains. Creator's same session now successfully reads task_create_context,
+but its prior prompt still named v2 and it repeated invalid object-valued scope.
+No plan was approved. Ended only this own planning turn, retained it, and tightened
+the shipped Creator policy: current v3/reviewed in-place upgrades, explicit string
+field types, no submitting guessed plans when context fails, and notification
+discovery only when requested. Context/tool descriptions now expose required
+field types. Focused revision tests and preset tests passed before these added
+policy assertions; final focused rerun below is required before rollout.

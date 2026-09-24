@@ -1,11 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,readFile,readdir,rm,symlink} from 'node:fs/promises'
-import {join} from 'node:path'
+import {join,dirname,basename} from 'node:path'
+import {createHash} from 'node:crypto'
+import {withPresetLock} from '../src/preset-lock.ts'
 import {tmpdir} from 'node:os'
 import {loadStudioRolePack} from '../src/studio-role-pack.ts'
 import {planStudioRoleInstall,applyStudioRoleInstall} from '../src/studio-role-install.ts'
-import {readSpec,verifyPresetSkills} from '../src/presets.ts'
+import {readSpec,verifyPresetSkills,writePreset} from '../src/presets.ts'
 async function setup(t:any){
  const root=await mkdtemp(join(tmpdir(),'studio-role-install-'));t.after(()=>rm(root,{recursive:true,force:true}));const pack=await loadStudioRolePack(),library=[]
  for(const name of pack.requiredSkills){const dir=join(root,'skills',name);await mkdir(dir,{recursive:true});await writeFile(join(dir,'SKILL.md'),`---\nname: ${name}\ndescription: fixture\n---\nFixture skill only.\n`);library.push({name,dir,description:'fixture',root:'fixture'})}
@@ -64,4 +66,71 @@ test('installer preserves symlinked existing roles instead of reading through or
  await mkdir(other);await writeFile(join(other,'keep.txt'),'private');await mkdir(s.options.presetRoot);await symlink(other,target)
  const plan=await planStudioRoleInstall(s.options);assert.equal(plan.canApply,false);assert.equal(plan.roles[0].action,'conflict');assert.equal(plan.roles[0].currentFingerprint,null)
  assert.equal((await applyStudioRoleInstall(s.options,plan.planSha256)).applied,false);assert.equal(await readFile(join(other,'keep.txt'),'utf8'),'private')
+})
+
+async function oldRuntimeFixture(t:any){
+ const s=await setup(t),initial=await planStudioRoleInstall(s.options);assert.equal((await applyStudioRoleInstall(s.options,initial.planSha256)).applied,true)
+ const role=s.pack.roles.find(r=>r.role==='storyboard')!,dir=join(s.options.presetRoot,role.spec.id),path=join(dir,'agent.cordis.yml'),current=await readFile(path,'utf8')
+ const old=current.replace(/(^  name: ')([^']+\/filtered-mcp-client\.js)(')/gm,(_all,lead,module,tail)=>{
+  const release=dirname(dirname(module)),base=basename(release).replace(/-[a-f0-9]{12,40}(?:-[a-z0-9-]+)?$/,'')
+  return lead+join(dirname(release),base+'-0123456789ab-old',basename(dirname(module)),'filtered-mcp-client.js')+tail
+ })
+ assert.notEqual(old,current);await writeFile(path,old)
+ const lockPath=join(dir,'capabilities.lock.json'),lock=JSON.parse(await readFile(lockPath,'utf8'));lock.compositionSha256=createHash('sha256').update(old).digest('hex');await writeFile(lockPath,JSON.stringify(lock,null,2)+'\n')
+ return {...s,role,dir,path,current,old,lockPath}
+}
+test('stock runtime-path-only drift is explicit reviewed refresh using the normal writer',async t=>{
+ const s=await oldRuntimeFixture(t),meta=await readFile(join(s.dir,'agent-meta.json'),'utf8')
+ await writeFile(join(s.dir,'actions.json'),'[]\n')
+ const plan=await planStudioRoleInstall(s.options),entry=plan.roles.find(r=>r.agentId===s.role.spec.id)!
+ assert.equal(entry.action,'refresh');assert.equal(entry.reason,'generated-runtime-module-path-drift');assert.equal(plan.canApply,true)
+ const result=await applyStudioRoleInstall(s.options,plan.planSha256)
+ assert.equal(result.applied,true);assert.equal(result.roles.find(r=>r.agentId===s.role.spec.id)?.status,'refreshed');assert.equal(result.runtimeVerified,false);assert.equal(result.qualityApproved,false)
+ assert.equal(await readFile(s.path,'utf8'),s.current);assert.equal(await readFile(join(s.dir,'agent-meta.json'),'utf8'),meta);assert.equal(await readFile(join(s.dir,'actions.json'),'utf8'),'[]\n')
+ assert.ok((await planStudioRoleInstall(s.options)).roles.every(r=>r.action==='keep'))
+})
+test('runtime refresh refuses changed raw author fields, copied skills, permissions and arbitrary module paths',async t=>{
+ for(const variant of ['author','unknown-author-field','skill','permission','module','unlocked-composition','extra-file'])await t.test(variant,async st=>{
+  const s=await oldRuntimeFixture(st)
+  if(variant==='author'||variant==='unknown-author-field')await writeFile(join(s.dir,'task-console.json'),JSON.stringify({...s.role.spec,...(variant==='author'?{persona:'custom'}:{unknownPrivateExtension:true})}))
+  if(variant==='skill')await writeFile(join(s.dir,'skills',s.role.spec.skills[0],'SKILL.md'),'custom copy')
+  if(variant==='extra-file')await writeFile(join(s.dir,'my-extra.txt'),'preserve me')
+  if(variant==='permission'||variant==='module'||variant==='unlocked-composition'){
+   const custom=variant==='permission'?s.old+'\n# custom permission configuration\n':variant==='module'?s.old.replace(/\/[^/]+-0123456789ab-old\//g,'/unrelated-user-module/'):s.old+'\n# hand edit\n'
+   await writeFile(s.path,custom)
+   if(variant!=='unlocked-composition'){const lock=JSON.parse(await readFile(s.lockPath,'utf8'));lock.compositionSha256=createHash('sha256').update(custom).digest('hex');await writeFile(s.lockPath,JSON.stringify(lock))}
+  }
+  const before=await readFile(s.path,'utf8'),plan=await planStudioRoleInstall(s.options)
+  assert.equal(plan.roles.find(r=>r.agentId===s.role.spec.id)?.action,'conflict');assert.equal(plan.canApply,false);assert.equal((await applyStudioRoleInstall(s.options,plan.planSha256)).applied,false);assert.equal(await readFile(s.path,'utf8'),before)
+ })
+})
+test('stale refresh plans reject source and target changes without overwriting',async t=>{
+ const s=await oldRuntimeFixture(t),plan=await planStudioRoleInstall(s.options)
+ await writeFile(join(s.dir,'actions.json'),'[]\n')
+ await assert.rejects(applyStudioRoleInstall(s.options,plan.planSha256),/plan-changed/);assert.equal(await readFile(s.path,'utf8'),s.old)
+ const next=await planStudioRoleInstall(s.options);await writeFile(join(s.options.library[0].dir,'SKILL.md'),'new source')
+ await assert.rejects(applyStudioRoleInstall(s.options,next.planSha256),/plan-changed/);assert.equal(await readFile(s.path,'utf8'),s.old)
+})
+test('writer guard runs inside the preset lock and refuses a change made while waiting',async t=>{
+ const s=await oldRuntimeFixture(t);let release!:()=>void,entered!:()=>void,called=0
+ const enteredPromise=new Promise<void>(r=>entered=r),hold=withPresetLock(s.dir,async()=>{entered();await new Promise<void>(r=>release=r)})
+ await enteredPromise
+ const pending=writePreset(s.role.spec,s.options.hostMcp,s.options.library,s.options.presetRoot,[],{assertCurrent:async dir=>{called++;assert.equal(dir,s.dir);if(await readFile(s.path,'utf8')!==s.old)throw Error('reviewed-state-changed')}})
+ const checked=assert.rejects(pending,/reviewed-state-changed/)
+ await new Promise(r=>setImmediate(r));assert.equal(called,0)
+ await writeFile(s.path,s.old+'\n# another writer\n');release();await hold;await checked
+ assert.equal(called,1);assert.equal(await readFile(s.path,'utf8'),s.old+'\n# another writer\n')
+})
+test('writer guard checks again after staging and preserves the old preset on refusal',async t=>{
+ const s=await oldRuntimeFixture(t);let calls=0
+ await assert.rejects(writePreset(s.role.spec,s.options.hostMcp,s.options.library,s.options.presetRoot,[],{assertCurrent:async()=>{calls++;if(calls===2)throw Error('state-changed-during-staging')}}),/state-changed-during-staging/)
+ assert.equal(calls,2);assert.equal(await readFile(s.path,'utf8'),s.old)
+ assert.ok(!(await readdir(s.options.presetRoot)).some(name=>name.startsWith('.'+s.role.spec.id+'-')))
+})
+test('concurrent reviewed refreshes replace a stock role at most once',async t=>{
+ const s=await oldRuntimeFixture(t),plan=await planStudioRoleInstall(s.options)
+ const results=await Promise.allSettled([applyStudioRoleInstall(s.options,plan.planSha256),applyStudioRoleInstall(s.options,plan.planSha256)])
+ assert.ok(results.some(r=>r.status==='fulfilled'&&r.value.applied))
+ assert.equal(results.flatMap(r=>r.status==='fulfilled'?r.value.roles:[]).filter(r=>r.status==='refreshed').length,1)
+ assert.equal(await readFile(s.path,'utf8'),s.current);assert.deepEqual(await readSpec(s.dir),s.role.spec)
 })

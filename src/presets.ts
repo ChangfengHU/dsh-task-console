@@ -461,13 +461,20 @@ export function validateSpec(raw: unknown): AgentSpec {
   }
 }
 
+export interface PresetWriteOptions {
+  allowMissingSkills?: boolean
+  /** Internal host guard, checked inside the preset writer lock before reads and immediately before replacement.
+   * The lock serializes this process's API writers; it is not a cross-process filesystem CAS. */
+  assertCurrent?: (dir: string) => Promise<void>
+}
 /** Write (or rewrite) one preset directory from a spec. Returns its path. */
-export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root = userPresetRoot(), inheritedTools: string[] = [], options: { allowMissingSkills?: boolean } = {}): Promise<{ path: string; preview: Preview }> {
+export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root = userPresetRoot(), inheritedTools: string[] = [], options: PresetWriteOptions = {}): Promise<{ path: string; preview: Preview }> {
   return withPresetLock(resolve(root, spec.id), () => writePresetLocked(spec, hostMcp, library, root, inheritedTools, options))
 }
-async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root: string, inheritedTools: string[], options: { allowMissingSkills?: boolean }): Promise<{ path: string; preview: Preview }> {
+async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root: string, inheritedTools: string[], options: PresetWriteOptions): Promise<{ path: string; preview: Preview }> {
   const dir = resolve(root, spec.id)
   if (!dir.startsWith(resolve(root) + '/')) throw new Error('非法 id')
+  await options.assertCurrent?.(dir)
   // Fail before changing any authored files if a selected source vanished.
   const availableSkills = spec.skills.filter(name => selectedSkill(name, library))
   if (!options.allowMissingSkills) for (const name of spec.skills) if (!selectedSkill(name, library)) throw new Error(`Skill 不存在:${name}`)
@@ -494,6 +501,7 @@ async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: S
       try { await writeFile(join(staged, ACTION_FILE), await readFile(join(dir, ACTION_FILE)), { mode: 0o600 }) }
       catch (error: any) { if (error.code !== 'ENOENT') throw error }
     }
+    await options.assertCurrent?.(dir)
     if (existed) { await rename(dir, backup); backedUp = true }
     try {
       await rename(staged, dir)

@@ -9,6 +9,7 @@ import { groupArtifacts } from '../src/artifact-delivery.ts'
 import { TaskCreator } from '../src/task-create.ts'
 import { taskCredential } from '../src/task-credentials.ts'
 import { TaskNotifications } from '../src/task-notifications.ts'
+import { composeRecipe } from '../src/workflow-recipes.ts'
 
 const testResources: { root: string; runner: TaskRunner; store: EventStore }[] = []
 after(async () => {
@@ -747,6 +748,42 @@ test('Creator revises the same paused Task by review without executing or rewrit
   restored.kernel.db.close()
 })
 
+test('review upgrades a paused once-only Fleet Task in place without executing, scheduling or weakening login', async () => {
+  const recipe = {id:'fleet-base-v2' as const,login:'provision-gemini' as const}
+  const {store,runner,host,task,root} = await setup({...composeRecipe(recipe),workflowRecipe:recipe,enabled:false,
+    origin:{source:'task-chat',signalId:'fixture-original',decision:'create'}})
+  const creator = new TaskCreator(runner,async()=>['fleet-installer','browser-manager','fleet-runner-operator'].map(id=>({id,name:id,profileHash:'fixed'} as any)))
+  const design = {scope:'Complete onboarding',branches:[{id:'inspect',when:'current observations',action:'reuse or repair missing components',evidence:'host receipts'}],coordination:'three roles',failurePolicy:{isolateItems:false,maxAttempts:1,stopConditions:['missing authority']},acceptance:['full Fleet readback']}
+  const input=(id:string)=>({agent:{session:{id,deriveMessages:()=>[{role:'user',content:'Upgrade this workflow without deleting history; do not start yet'}]}}})
+  const revision={decision:'revise' as const,taskId:task.id,reason:'require full node evidence',recipe:{id:'fleet-base-v3' as const,login:'provision-gemini' as const},design}
+  assert.ok((await creator.context()).revisionCandidates.some(t=>t.id===task.id))
+  await assert.rejects(creator.prepare({...revision,recipe:{id:'fleet-base-v3',login:'preserve'}},input('weaken'),root),/不能弱化/)
+  const plan:any=await creator.prepare(revision,input('upgrade'),root)
+  assert.equal(store.tasks.get(task.id)?.workflowRecipe?.id,'fleet-base-v2')
+  const approved=await creator.review(plan.id,plan.hash,'approve','same login criteria, stronger complete-node evidence')
+  assert.equal(approved.taskId,task.id);assert.equal(approved.batchId,null)
+  assert.equal(store.tasks.size,1);assert.equal(store.s.batches.size,0);assert.equal(host.sessions.size,0)
+  assert.equal(store.tasks.get(task.id)?.workflowRecipe?.id,'fleet-base-v3')
+  assert.equal(store.tasks.get(task.id)?.enabled,false)
+  assert.deepEqual(store.tasks.get(task.id)?.trigger,{kind:'once'})
+  assert.equal((store.kernel.db.prepare('SELECT COUNT(*) AS n FROM dsh_schedule_bindings').get() as any).n,0)
+  await creator.review(plan.id,plan.hash,'approve','duplicate')
+  assert.equal(store.all().filter(e=>e.t==='task/revised').length,1)
+  runner.stop()
+})
+
+test('Fleet full acceptance cannot bypass evidence through a human-review terminator', async () => {
+  const {host,store,runner,task} = await setup({participants:[{agentId:'a'}],workflowRecipe:{id:'fleet-base-v3',login:'preserve'}},
+    {beforeComplete:async()=>{throw Error('missing business receipt')}})
+  const batch=await runner.fire(task.id,'manual'),session=[...host.sessions.keys()][0];host.consumeFirst(session)
+  await assert.rejects(host.callTool(session,'task_request_review',{summary:'please approve'}),/不能用人工批准/)
+  await assert.rejects(host.callTool(session,'task_complete',{summary:'done'}),/missing business receipt/)
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  await host.callTool(session,'task_block',{reason:'missing business receipt',kind:'capability'});host.endTurn(session);await tick()
+  assert.equal([...store.s.cards.values()].find(c=>c.batchId===batch.id)?.status,'blocked')
+  runner.stop()
+})
+
 test('Creator exposes blocked rather than running for a parked dependency', async () => {
   const { host, store, runner, task } = await setup({ participants: [{ agentId: 'a' }] })
   const creator = new TaskCreator(runner, async () => [])
@@ -1057,17 +1094,28 @@ test('runner: request_review cannot settle until a person approves it', async ()
 test('runner: review changes restart the chosen upstream role and replay the downstream chain', async () => {
   const { host, store, runner } = await setup()
   const batch = await runner.fire('T', 'manual')
-  const nextSession = () => [...host.sessions.keys()].at(-1)!
-  let session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'A1' }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'B1' }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_request_review', { summary: 'R1' }); host.endTurn(session); await tick()
+  let expectedSessions = 0
+  const nextSession = async () => {
+    expectedSessions++
+    const deadline = Date.now()+5000
+    while (Date.now()<deadline) {
+      const entries=[...host.sessions.entries()], last=entries.at(-1)
+      if (entries.length === expectedSessions && last?.[1].tools.length && last[1].followups.length && !last[1].disposed) return last[0]
+      await tick()
+    }
+    assert.fail(`Expected ready session ${expectedSessions}; got ${host.sessions.size}`)
+  }
+  let session = await nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'A1' }); host.endTurn(session); await tick()
+  session = await nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'B1' }); host.endTurn(session); await tick()
+  session = await nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_request_review', { summary: 'R1' }); host.endTurn(session); await tick()
   const reviewer = `${batch.id}#2`; const planner = `${batch.id}#0`
   await runner.reviewCard(reviewer, 'changes', '重新规划交互', planner); await tick()
+  session = await nextSession()
   assert.equal(store.s.cards.get(planner)!.status, 'running'); assert.equal(store.s.cards.get(`${batch.id}#1`)!.status, 'todo'); assert.equal(store.s.cards.get(reviewer)!.status, 'todo')
-  session = nextSession(); assert.match(host.sessions.get(session)!.followups[0].content[0].text, /\[REVIEW CHANGES\]\n重新规划交互/)
+  assert.match(host.sessions.get(session)!.followups[0].content[0].text, /\[REVIEW CHANGES\]\n重新规划交互/)
   host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'A2' }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'B2' }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_request_review', { summary: 'R2' }); host.endTurn(session); await tick()
+  session = await nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'B2' }); host.endTurn(session); await tick()
+  session = await nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_request_review', { summary: 'R2' }); host.endTurn(session); await tick()
   await runner.reviewCard(reviewer, 'approve', '第二轮通过'); await tick()
   assert.deepEqual(batch.cardIds.map(id => store.s.cards.get(id)!.runIds.length), [2, 2, 2])
   assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')

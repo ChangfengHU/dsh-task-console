@@ -213,3 +213,59 @@ linux-clash895b4b9/1beeb77, checked unused, then removed (126232 bytes). Restore
 scripts from those commits if needed. Remote legacy noVNC backup is retained.
 No dependencies installed; unrelated lib/client-heavy.js, lib/client.js and
 lib/index.js edits preserved. Source changes already pushed; this records outcome.
+
+## 2026-09-24: full-node acceptance correction — development, not deployment
+
+The owner subsequently re-enrolled236 through installer session
+agent-fleet-installer-mudto47m. The earlier withdrawal snapshot above remains a
+historical acceptance result, not today's membership state. Today's public Fleet
+read confirms236 online with desktop-only browser rows and unknown reachability;
+Vault directory still has no browser:host-129-213-30-236 entry. These observations
+do not prove the standalone browser service is physically absent on disk.
+
+Root cause: the base ten-stage contract is narrower than the requested complete
+node. The existing v2 recipe names all three roles, but its host business gate
+only enforces Gemini acceptance on browser-manager. Standalone base completion
+does not prove browser management or Runner readiness.
+
+Source changes in this slice:
+- Explicit base-provisioning/not_evaluated scope on model-facing start/resume/
+  status/report results; report availability is visible on status too.
+- Separately reviewed fleet-base-v3 orders installer, browser-manager, Runner.
+  Paired native same-Batch tool receipts prove fresh base execution/report and
+  session-owned signed Runner execution. Fleet readback rejects desktop-only,
+  unknown/stale login detection, absent continuous observation, incomplete host/
+  proxy metrics, and missing same-job exit/line observations. Preserve-login
+  permits explicit signed-out; provision-gemini retains the v2 20-minute gate.
+- No human-review shortcut around v3 business evidence.
+- Paused once Task revisions reuse existing review/CAS/history, do not create
+  another Task or schedule; v2→v3 cannot weaken its login policy.
+- Managed installer persona distinguishes base completion from full acceptance.
+
+Verification: focused initial110 tests passed; after revision and review-bypass
+coverage,73 focused tests passed. A full357-test run had353 pass/3 existing skips
+and one timing failure in an existing rework test (it selected the disposed
+previous session after a fixed80ms sleep). That test now waits boundedly for
+the expected new ready Session instead of assuming startup latency; full rerun
+passed354/357 with3 existing skips and0 failures. Subsequent exact-hostname legacy
+node-ID support and retained v3 Gemini stability passed18 focused tests. Staged
+build succeeds using existing dependencies; no dependency installation occurred.
+
+Not deployed: live DSH has unrelated Studio Runs (1117 then1118 observed with
+fresh heartbeats). Do not edit live profile/restart until both native and Task
+activity are zero. Main's dirty lib/client-heavy.js, lib/client.js, lib/index.js
+are pre-existing unrelated changes and must not be staged or overwritten.
+Build /tmp/dsh-fleet-v3-build-yj8sdf is a temporary1.6MB candidate, not referenced
+by production; rebuild from source, remove after integration evidence is retained.
+
+Remaining: update authoritative Skill contract, inspect actual role capabilities
+and operator receipts, integrate source into the Studio deployment lineage,
+upgrade the existing Task through Creator review (old unsettled Batch must be
+handled visibly without deleting history), update scoped installer preset safely,
+run236 through actual Task/Agents, browser-check Fleet/Board/report, then repeat
+for idempotence. A controlled targeted-rework path must be verified too; current
+v3 reports responsible-role capability blocks and is not claimed autonomous recovery.
+No target machine operations, live Task revisions or deployments in this slice.
+Boss binding retained the task; linux-clash Brain initialization reported ignored
+metadata, so no portability claim is made for that Brain (use its tracked TASKS/
+dev-log/HANDOFF when changing that repository).

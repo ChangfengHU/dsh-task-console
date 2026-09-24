@@ -1,5 +1,29 @@
 # Task Console runtime contracts
 
+## Full Fleet onboarding acceptance (v3)
+
+`fleet-base-v3` is a separately reviewed recipe, not an automatic rewrite of v1/v2
+executions. It orders installer → browser-manager → Runner operator. The base
+tool result explicitly reports `completion_scope=base-provisioning` and
+`full_node_acceptance=not_evaluated`; it cannot certify browser management or Runner.
+The full recipe joins paired native tool calls/results from the same Batch's actual
+role Sessions. It rejects missing base probe/report, incomplete stage receipts,
+missing/cross-session Runner results, desktop-only browser rows and stale Fleet
+observations. Gemini still uses the existing independent 20-minute host receipt
+validator, now before the final Runner check. Preserve-login permits fresh
+signed-out observations, not an unknown/broken detector. Required Fleet readback
+includes current Controller telemetry and same-job signed exit/line observations;
+an advisory score or optional candidate-line failure is not itself absence of data.
+Human-review approval is not a bypass for this business evidence contract.
+
+Paused once-only Tasks can use the same revision CAS as paused cron Tasks; no
+schedule, Batch or Session is created on approval. Trigger, Task ID, Actions and
+historical frozen definitions remain unchanged. Fleet v2→v3 recipe revision must
+retain the login policy. Any unsettled, unarchived execution blocks revision.
+Source support does not mean the live Task, presets, Skill or integrated Studio
+deployment has already been upgraded. Check the existing model-startup-fallback
+dev log before deployment; preserve Studio and the scoped installer override.
+
 ## Live configuration is not a staging area
 
 Editing the live `cordis.patch.yml` triggers plugin hot reload even when the

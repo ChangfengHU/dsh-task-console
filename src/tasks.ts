@@ -238,8 +238,8 @@ export class EventStore {
     const next = this.queue.then(() => {
       const current = this.tasks.get(previous.id)
       if (!current || JSON.stringify(current) !== JSON.stringify(previous)) throw new Error('待更新工作流已变化，需重新审查')
-      if (current.enabled || current.archivedAt || current.trigger.kind !== 'cron' || task.trigger.kind !== 'cron' || task.enabled || task.id !== current.id)
-        throw new Error('只能审查更新已暂停、未归档的定时 Task')
+      if (current.enabled || current.archivedAt || JSON.stringify(current.trigger) !== JSON.stringify(task.trigger) || task.enabled || task.id !== current.id)
+        throw new Error('只能审查更新已暂停、未归档且时间表不变的 Task')
       const db = this.kernel.db
       const event: Event = { t: 'task/revised', at: new Date().toISOString(), taskId: task.id, task, previous, planId }
       this.kernel.write(() => {
@@ -545,10 +545,10 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (task.origin?.reviewPlanId) lines.push('', '[HOST REVIEW RELEASE]',
     `本 Run 已由独立审查放行，审批计划 ${task.origin.reviewPlanId}。原始消息中“先生成计划、等待审查、不执行”描述的创建阶段已完成；现在执行下方已审查的业务范围。其他禁止事项、宿主权限及验收要求仍有效，不因批准而扩大。`)
   if (card.brief?.trim()) lines.push('', '[YOUR PART]', card.brief.trim())
-  if (task.workflowRecipe?.id === 'fleet-base-v2') lines.push('', '[FRESH EXECUTION / RECOVERY]',
+  if (['fleet-base-v2','fleet-base-v3'].includes(task.workflowRecipe?.id ?? '')) lines.push('', '[FRESH EXECUTION / RECOVERY]',
     '本次使用当前工具重新检查目标。其他执行或历史会话的 blocked/人工验证原因不代表当前仍故障；健康组件及有效登录只复用，不为重跑而重装或再次复制。',
     'Google 交互验证若当前仍真实存在，按回执 task_block，不能绕过。未安排 task_wait 或真实恢复触发时，不得承诺“完成验证后自动恢复”。本次新会话必须取得自己的完整验收回执。')
-  if (task.workflowRecipe?.id === 'fleet-base-v2' && card.agentId === 'browser-manager') lines.push('', '[BASE NODE BROWSER API]',
+  if (['fleet-base-v2','fleet-base-v3'].includes(task.workflowRecipe?.id ?? '') && card.agentId === 'browser-manager') lines.push('', '[BASE NODE BROWSER API]',
     '独立浏览器 API 的准备使用默认 browser_prepare（省略 component）。component=login-observation 仅修复已安装旧图片服务的检测循环；imageInstalled=false 的基础节点不能选它。legacy-login-observer-required 表示选错专项组件，不代表缺少图片服务或必须安装旧观察器。未知版本或真实权限错误仍应停止；不能通过省略 component 绕过一个原本明确授权的专项范围。')
   if (task.design) lines.push('', '[REVIEWED DECISION CONTRACT]', JSON.stringify(task.design, null, 2),
     '以上为已审查的业务决策契约：依据真实工具证据选分支，不能将 unknown 当失败或未登录；它不是自动执行的脚本。逐目标记录匹配分支、证据、动作和结果；隔离的失败不得遗漏或伪装成整体成功。重试上限不授予重复副作用或扩大权限。最终报告覆盖全部目标和验收条件；有未达标项必须明确列出。')

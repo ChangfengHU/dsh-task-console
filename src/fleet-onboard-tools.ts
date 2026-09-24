@@ -1141,6 +1141,16 @@ function continuation(phase: string, executionAvailable: boolean, failureClass?:
     : phase === 'blocked' && executionAvailable && failureClass === undefined ? {} : { can_resume: false }
 }
 
+/** The ten-stage ledger proves base provisioning, never the whole Fleet workflow. */
+export function baseCompletionScope(result: FleetToolResult): FleetToolResult {
+  return { ...result, completion_scope: 'base-provisioning',
+    base_complete: result.phase === 'complete' && result.current_stage === 10 && result.report_available === true,
+    full_node_acceptance: 'not_evaluated',
+    remaining_acceptance: ['browser-management', 'runner-registration-and-first-probe', 'fleet-readback', 'requested-login-policy'],
+    completion_notice: '本工具只证明基础十阶段接入。完整装机须通过已有 Fleet Task，由浏览器管理员和 Runner 运维者完成独立管理、巡检及本次账号要求的验收。不得将本工具 complete 报告为完整装机成功。',
+  }
+}
+
 function projectLedger(operation: 'status' | 'report', ip: string, value: FleetLedgerStatus, executionAvailable: boolean): FleetToolResult {
   if (!value.ok || !value.run) return { ...blockedResult(operation, ip, 'onboarding-run-not-found'), execution_available: executionAvailable }
   const run = value.run
@@ -1157,7 +1167,7 @@ function projectLedger(operation: 'status' | 'report', ip: string, value: FleetL
   const result: FleetToolResult = {
     schema: 1, ok: true, operation, ip, phase: run.status, execution_available: executionAvailable,
     needs_input: run.status === 'blocked' && latest?.failure_class === 'needs-user', run_created: false, probe_executed: false, run_id: run.id,
-    revision: run.revision, current_stage: run.currentStage, stages, events,
+    revision: run.revision, current_stage: run.currentStage, stages, events, report_available: Boolean(run.report),
     ...continuation(run.status, executionAvailable, latest?.failure_class),
   }
   if (operation === 'report') {
@@ -1719,14 +1729,14 @@ export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardH
         ip: { type: 'string', required: true, description: '完整 IPv4 地址。' },
       },
       output: { schema: OUTPUT_SCHEMA, render },
-      async execute(args: any, exec: ToolExecutionLike) { return adapter.start(requireIp(args.ip), 'base', exec) },
+      async execute(args: any, exec: ToolExecutionLike) { return baseCompletionScope(await adapter.start(requireIp(args.ip), 'base', exec)) },
     }, ['ip'])),
     register(strictTool(defineTool, {
       name: 'fleet_onboard_status',
       description: '只读取 Fleet 接入事务账本，不连接目标机也不推进执行。running 且 can_resume=true 时，执行者必须调用 fleet_onboard_resume，不能交付为完成。',
       parameters: { ip: { type: 'string', required: true, description: '完整 IPv4 地址。' } },
       output: { schema: OUTPUT_SCHEMA, render },
-      async execute(args: any, exec: ToolExecutionLike) { return adapter.status(requireIp(args.ip), exec) },
+      async execute(args: any, exec: ToolExecutionLike) { return baseCompletionScope(await adapter.status(requireIp(args.ip), exec)) },
     }, ['ip'])),
     register(strictTool(defineTool, {
       name: 'fleet_onboard_resume',
@@ -1735,14 +1745,14 @@ export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardH
         ip: { type: 'string', required: true, description: '完整 IPv4 地址。' },
       },
       output: { schema: OUTPUT_SCHEMA, render },
-      async execute(args: any, exec: ToolExecutionLike) { return adapter.resume(requireIp(args.ip), 'base', exec) },
+      async execute(args: any, exec: ToolExecutionLike) { return baseCompletionScope(await adapter.resume(requireIp(args.ip), 'base', exec)) },
     }, ['ip'])),
     register(strictTool(defineTool, {
       name: 'fleet_onboard_report',
       description: '读取 Fleet 接入事务的脱敏验收报告，不连接目标机。',
       parameters: { ip: { type: 'string', required: true, description: '完整 IPv4 地址。' } },
       output: { schema: OUTPUT_SCHEMA, render },
-      async execute(args: any, exec: ToolExecutionLike) { return adapter.report(requireIp(args.ip), exec) },
+      async execute(args: any, exec: ToolExecutionLike) { return baseCompletionScope(await adapter.report(requireIp(args.ip), exec)) },
     }, ['ip'])),
   ]
   return () => { for (const dispose of disposers.reverse()) dispose() }

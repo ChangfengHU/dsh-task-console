@@ -1,17 +1,28 @@
 import type { Participant } from './fold.ts'
 
 /** Business presets, not a second scheduler. The Creator selects a policy, never rewrites its boundaries. */
-export const workflowRecipes = [{ id: 'fleet-base-v2', title: 'Fleet 双浏览器基础节点接入与跨周期验收',
-  description: '基础装机 → Runner 独立巡检 → 浏览器管理员最终验收。Gemini 策略要求 browser-1、browser-2 跨 20 分钟后台验证并提交宿主回执；一次复制成功不能交卷。目标/IP 留在本次输入中。',
+export const workflowRecipes = [{ id: 'fleet-base-v3', title: 'Fleet 完整节点接入与证据验收',
+  description: '基础装机 → 独立浏览器管理与账号验收 → Runner 首轮巡检及 Fleet 回读。三个角色均须本次原始工具证据；Gemini 策略保留双浏览器20分钟验收。目标/IP 留在本次输入中。',
   loginPolicies: ['preserve', 'provision-gemini'],
-  requiredAgents: ['fleet-installer', 'fleet-runner-operator', 'browser-manager'],
+  requiredAgents: ['fleet-installer', 'browser-manager', 'fleet-runner-operator'],
 }]
 
-export interface WorkflowRecipe { id: 'fleet-base-v1' | 'fleet-base-v2'; login: 'preserve' | 'provision-gemini' }
+export interface WorkflowRecipe { id: 'fleet-base-v1' | 'fleet-base-v2' | 'fleet-base-v3'; login: 'preserve' | 'provision-gemini' }
 
 export function composeRecipe(recipe: WorkflowRecipe) {
-  if (!['fleet-base-v1', 'fleet-base-v2'].includes(recipe?.id) || !['preserve', 'provision-gemini'].includes(recipe.login)) throw new Error('未知工作流配方或登录策略')
+  if (!['fleet-base-v1', 'fleet-base-v2', 'fleet-base-v3'].includes(recipe?.id) || !['preserve', 'provision-gemini'].includes(recipe.login)) throw new Error('未知工作流配方或登录策略')
   const provision = recipe.login === 'provision-gemini'
+  if (recipe.id === 'fleet-base-v3') {
+    const prior = composeRecipe({id:'fleet-base-v2',login:recipe.login})
+    const [installer,runner,browser] = prior.participants
+    return {...prior,
+      brief: '完整接入必须依次完成基础装机、独立浏览器管理和本次账号要求、Runner 首轮签名巡检及 Fleet 回读；基础十阶段完成不代表整个任务完成。保留健康组件、浏览器资料、现有登录和令牌，不安装图片服务。每环节先检查，健康复用，缺失补齐，异常定向修复；没有证据时明确阻塞，不把历史记录当本轮结果。' + (provision ? 'Gemini 仍须双浏览器20分钟独立稳定性验收。' : '保持登录现状，不复制账号；明确未登录不算安装失败，但检测未知或接口缺失必须定位。'),
+      participants:[
+        {...installer,brief:installer.brief + '本次必须 start/resume 取得 probe_executed=true、current_stage=10 的 complete 回执，再读取同 run_id 的十阶段 report；只读取旧报告不能交卷。你的交卷是基础交接，不是完整装机成功。'},
+        {...browser,brief:browser.brief!.split('读取所有上游原始交接')[0].replace('你是最后一位执行角色','你是第二位执行角色') + '独立管理服务未接入时，使用已有 browser_prepare 默认模式补齐，不安装图片服务；Fleet 必须能读取真实 CDP、实例和新鲜登录检测。汇总本角色 checked/reused/changed/blocked、实例保全及账号验收证据；通过后交给 Runner 运维者，不等待尚未执行的下游，不宣布整个 Task 完成。'},
+        {...runner,brief:'你是末位执行角色。先 fleet_runner_inspect，使用 fleet_runner_ensure 幂等补齐或复用 Runner 并派发一次新的签名巡检；持续 fleet_runner_status 直到本会话 complete。只处理 Runner，不修改代理、浏览器、账号或令牌。交接 signedJobId、signatureVerified、检查明细及 changed/reused/blocked。签名成功只说明巡检执行，不能掩盖节点健康异常。宿主会重读 Fleet，要求浏览器能力、持续状态、主机指标、出口和候选线路均有本次真实证据。缺项则针对负责角色和原因 task_block，不代替其越权修复。最终汇总全部原始交接，报告 checked/reused/changed/blocked/failed 和遗留风险。'},
+      ]}
+  }
   const participants: Participant[] = [
     { agentId: 'fleet-installer', brief: '负责本次目标的基础 Fleet 幂等接入、十阶段验收和授权范围内的必要修复。健康组件检查复用，保留既有浏览器及资料，不卸载重装、不轮换凭据。使用自己的装机 Skill 与受限 runtime；不负责账号登录或 Runner。交接本轮 run_id、十阶段结果、checked/reused/changed/blocked 和验收报告。' },
     { agentId: 'browser-manager', brief: '负责目标浏览器的实例保全核验及本次登录策略，按用户指定实例执行；未另指定时处理现有 browser-1、browser-2。先 inspect，必要的独立管理 API 准备只能在宿主授权范围内。保留资料、有效登录和未选中实例，不创建/删除浏览器，不修复整机或网络。' + (provision

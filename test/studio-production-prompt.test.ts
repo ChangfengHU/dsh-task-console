@@ -13,7 +13,7 @@ test('real sound card receives authenticated download, source-card and failure p
  assert.match(prompt,/source-only.*不能把页面\/来源卡当音频/);assert.match(prompt,/不要循环重试同一个 source-only ID/)
  assert.match(prompt,/不自行拼接 \/api\/media\/assets/);assert.match(prompt,/不读取、替换或输出凭据/)
  assert.match(prompt,/asset-file-auth-failed/);assert.match(prompt,/output-exists-with-other-bytes/);assert.match(prompt,/output-extension-mismatch/)
- assert.match(prompt,/studio_status.state.script/);assert.match(prompt,/stages\/r2\/sound\//);assert.match(prompt,/studio_status.state.stages/)
+ assert.match(prompt,/不能用全局list_results最近图片补位/);assert.match(prompt,/实测尺寸/);assert.match(prompt,/studio_status.state.script/);assert.match(prompt,/stages\/r2\/sound\//);assert.match(prompt,/studio_status.state.stages/)
  assert.doesNotMatch(prompt,/\[STUDIO REAL RENDER\]/)
 })
 test('executor has actual rendering failure instructions and cannot manufacture placeholder candidates',()=>{

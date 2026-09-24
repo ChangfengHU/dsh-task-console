@@ -104,3 +104,14 @@ test('frozen image batches reject third dispatch despite remaining units and sur
  assert.equal(calls,2);assert.deepEqual(restarted.snapshot(input),before)
  assert.throws(()=>restarted.configure(input,{imageCalls:6,voiceSegments:30,imageBatches:3}),/cannot-change/)
 })
+
+
+test('global latest-image results cannot substitute another job output for a running item',async t=>{
+ const {ops,input}=setup(t);let dispatched=0
+ await ops.invoke(input,'vyibc-image_generate_image',{prompts:['one','two']},async()=>receipt({taskId:'own-job',status:'running'}))
+ const before=ops.snapshot(input)
+ await assert.rejects(ops.invoke(input,'vyibc-image_list_results',{limit:10},async()=>{dispatched++;return {images:['unrelated.png']}}),/global-results-not-a-job-receipt/)
+ assert.equal(dispatched,0);assert.deepEqual(ops.snapshot(input),before)
+ const result=await ops.invoke(input,'vyibc-image_get_task',{taskId:'own-job'},async()=>receipt({taskId:'own-job',status:'done',items:[{idx:0,status:'succeeded',imageUrl:'one.png'},{idx:1,status:'succeeded',imageUrl:'two.png'}]}))
+ assert.ok(result);assert.equal(ops.snapshot(input).operations[0].state,'completed');assert.deepEqual(ops.snapshot(input).used,before.used)
+})

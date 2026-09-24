@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
   }
   async invoke(input:any,raw:string,args:any,invoke:(args:any)=>Promise<any>,beforeDispatch?:()=>unknown){
     if(/(?:publish_video|post_video|upload_video|register_published_video)$/.test(raw))throw Error('studio-publication-not-authorized')
+    if(/vyibc-image_list_results$/.test(raw))throw Error('studio-image-global-results-not-a-job-receipt: poll get_task with the original submitted taskId and use only its succeeded items by idx. A running item is not completed. The global latest-results feed can contain other tasks; use the asset library for intentional reuse instead.')
     const d=definition(raw,args)
     const stage=studioStageFor(input)
     const specialistAllowed=!!d&&((stage?.id==='visual'&&d.kind==='imageCalls')||(stage?.id==='sound'&&d.kind==='voiceSegments'))

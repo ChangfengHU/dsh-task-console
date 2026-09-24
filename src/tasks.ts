@@ -596,6 +596,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
     `本 Run 已由独立审查放行，审批计划 ${task.origin.reviewPlanId}。原始消息中“先生成计划、等待审查、不执行”描述的创建阶段已完成；现在执行下方已审查的业务范围。其他禁止事项、宿主权限及验收要求仍有效，不因批准而扩大。`)
   if(task.design?.studioStages)lines.push('', '[STUDIO STAGES]', `当前轮次 ${card.round}。studio_status.state.stages列出本轮实际登记清单。读取stages/r${card.round}/中上游文件再行动；合成阶段必须汇聚分镜、视觉、声音三个交接，不能凭Gate完成就猜素材存在。阶段完成不等于整片通过。`)
   if(task.design?.evidenceContract==='studio-video-v1'&&['executor','studio-stage'].includes(card.role??''))lines.push('', '[STUDIO MEDIA ACQUISITION]',
+    '异步生图只按本次提交的taskId调用get_task，逐项按idx/status/imageUrl建立文件映射；running或失败项不能用全局list_results最近图片补位。结果图保存taskId、idx、URL、实际sha256和实测尺寸；素材库复用另记真实来源，不冒称本次生成。图像观察指出角色或构图不符时必须处理或标为未通过，不能忽略后汇报全部匹配。',
     '素材库检索结果先用已连接素材 MCP 的 asset_get(id) 查看实际归档及来源信息（工具名以当前 schema 为准），使用返回的真实素材 ID。获取已归档文件调用 studio_download_asset({id:实际素材ID,path:新的项目相对路径})；文件扩展名必须与归档一致，声音/视觉专家写入当前 stages/r<round>/<stage>/，合成角色写入项目素材目录。宿主负责认证，不自行拼接 /api/media/assets/{id}/file 或其他 /file URL，不读取、替换或输出凭据。',
     '只有下载返回 ok=true、path、sha256、bytes 后才把实际文件作为输入；kind、标签、封面或来源卡不证明有音频文件，下载成功也不证明许可或质量。source-only 表示只有来源资料，不能把页面/来源卡当音频：选择有归档文件的合适素材，或按原始来源核实许可后获取真实媒体。不要循环重试同一个 source-only ID。',
     'asset-file-auth-failed、installed-asset-auth-unavailable、studio-asset-download-host-not-configured 属于宿主依赖问题；保留 error_code 和 httpStatus，先 studio_status 核对可用状态，报告该下载工具的确切故障，不用 bootstrap token 或猜测地址绕过。output-exists-with-other-bytes 时保留旧文件、使用新路径；output-extension-mismatch 时按归档扩展名更正输出路径。失败或完整性校验失败的响应不能改名成 .wav/.mp3/.png，也不能加入已完成清单。',

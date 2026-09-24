@@ -1,3 +1,4 @@
+import {readStudioCharacterProfile,type StudioCharacterProfileLock} from './studio-character-profile.js'
 import {publicCharacterReference} from './studio-character-source.js'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { join,dirname,resolve,relative,isAbsolute,sep } from 'node:path'
@@ -59,6 +60,7 @@ async function preflightIdentity(config:any){
   path===config.preflightScript||path.endsWith('/package.json')?await fileSha256(path):null]}catch{return [path,'unavailable']}}))
  return {files,environment:preflightEnvironment()}
 }
+const characterProfileLock=(p:any):StudioCharacterProfileLock=>({path:p.profilePath,sha256:p.sha256,characterId:p.characterId,...(p.profileVersion!==undefined?{profileVersion:p.profileVersion}:{})})
 async function preflightFiles(value:any,task:any):Promise<Record<string,string>>{
  const files:Record<string,string>={}
  if(value?.ok===false)throw Error('preflight failed')
@@ -67,7 +69,7 @@ async function preflightFiles(value:any,task:any):Promise<Record<string,string>>
   if(p?.ok!==true||!p.proofPath)throw Error('preflight incomplete')
   if(name==='hyperframes'&&(p.hyperframes_verified!==true||p.scope!=='actual_hyperframes_smoke_render'))throw Error('render proof invalid')
   if((name==='character'&&p.characterId!==task.design?.studio?.characterId)||(name==='reference'&&p.sha256!==task.design?.studio?.referenceSha256))throw Error('preflight policy changed')
-  if(name==='character')publicCharacterReference({id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256,...(p.profileAssetId?{assetId:p.profileAssetId}:{}),...(p.sourceUrl!==undefined?{sourceUrl:p.sourceUrl,sourceSha256:p.sourceSha256}:{})})
+  if(name==='character'){publicCharacterReference({id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256,...(p.profileAssetId?{assetId:p.profileAssetId}:{}),...(p.sourceUrl!==undefined?{sourceUrl:p.sourceUrl,sourceSha256:p.sourceSha256}:{})});await readStudioCharacterProfile(task,characterProfileLock(p))}
   const assets=name==='character'?[[p.imagePath,p.imageSha256],[p.profilePath,p.sha256]]:[[p.path,p.sha256]]
   for(const [path,expected] of assets){const actual=await fileSha256(path);if(actual!==expected)throw Error('preflight asset changed');files[path]=actual}
   files[p.proofPath]=await fileSha256(p.proofPath)
@@ -92,18 +94,18 @@ async function sharedPreflight(key:string,task:any,run:()=>Promise<any>){
 export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any,deps:HostDeps={}){
  const config=deps.config??await configuration(),exec=deps.execute??execute,now=Date.now(),checkedAt=new Date(now).toISOString(),expiresAt=new Date(now+15*60_000).toISOString()
  const record=(name:string,status:string,proofSha256?:string,reason?:string,method?:string,timing?:PreflightSnapshot)=>(workflow as any).recordCapability(task,{name,status,checkedAt:timing?new Date(timing.checkedAt).toISOString():checkedAt,expiresAt:timing?new Date(timing.expiresAt).toISOString():expiresAt,...(proofSha256?{proofSha256}:{}),...(reason?{reason}:{}),...(method?{method}:{})})
- let result:any,reference:any,characterReferences:any[]=[]
+ let result:any,reference:any,characterReferences:any[]=[],characterProfile:StudioCharacterProfileLock|undefined
  if(config.preflightScript){const scope=JSON.stringify({id:task.id,cwd:task.cwd,studio:task.design?.studio,config,environment:preflightEnvironment()}),key=hash(JSON.stringify({scope,host:await sharedIdentity(scope,config)}))
   let snapshot:PreflightSnapshot|undefined
   try{snapshot=await sharedPreflight(key,task,()=>exec(config.preflightScript,[],task,config,JSON.stringify(task)));result=snapshot.value}catch{result={capabilities:{}}}
   for(const [name,source] of [['character','character'],['reference','reference'],['frames','frames'],['render','hyperframes']]){const p=result?.capabilities?.[source];try{
    if(p?.ok!==true||!p.proofPath)throw Error('preflight unavailable');if(source==='hyperframes'&&(p.hyperframes_verified!==true||p.scope!=='actual_hyperframes_smoke_render'))throw Error('actual HyperFrames proof required')
-   if(source==='character'){if(p.characterId!==task.design.studio.characterId||await fileSha256(p.imagePath)!==p.imageSha256||await fileSha256(p.profilePath)!==p.sha256)throw Error('character lock mismatch');const ref={id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256,...(p.profileAssetId?{assetId:p.profileAssetId}:{}),...(p.sourceUrl!==undefined?{sourceUrl:p.sourceUrl,sourceSha256:p.sourceSha256}:{})};publicCharacterReference(ref);characterReferences=[ref]}
+   if(source==='character'){if(p.characterId!==task.design.studio.characterId||await fileSha256(p.imagePath)!==p.imageSha256||await fileSha256(p.profilePath)!==p.sha256)throw Error('character lock mismatch');const ref={id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256,...(p.profileAssetId?{assetId:p.profileAssetId}:{}),...(p.sourceUrl!==undefined?{sourceUrl:p.sourceUrl,sourceSha256:p.sourceSha256}:{})};publicCharacterReference(ref);const profileLock=characterProfileLock(p);await readStudioCharacterProfile(task,profileLock);characterReferences=[ref];characterProfile=profileLock}
    else {if(await fileSha256(p.path)!==p.sha256)throw Error('preflight asset changed');if(source==='reference'){if(p.sha256!==task.design.studio.referenceSha256)throw Error('reference lock mismatch');reference={path:p.path,sha256:p.sha256}}}
    const proofHash=await fileSha256(p.proofPath)
    if(snapshot?.files[p.proofPath]&&snapshot.files[p.proofPath]!==proofHash)throw Error('preflight proof changed')
    record(name,'passed',proofHash,undefined,'host_preflight',snapshot)
-  }catch{record(name,'failed',undefined,`actual ${source} preflight missing or invalid`)}}
+  }catch{if(source==='character'){characterProfile=undefined;characterReferences=[]}record(name,'failed',undefined,`actual ${source} preflight missing or invalid`)}}
  }else for(const name of ['character','reference','frames','render'])record(name,'unknown',undefined,'host preflight script not configured')
  // Calibration evidence is separate from an endpoint listing or a successful observation.
  let calibration:any;try{if(config.calibrationPath)calibration=JSON.parse(await readFile(config.calibrationPath,'utf8'))}catch{}
@@ -116,7 +118,7 @@ export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any
  const clean=rows.find((v:any)=>v.sample==='clean'),missing=rows.find((v:any)=>v.sample==='missing'),silence=regRows.find((v:any)=>v.sample==='silence'),noise=regRows.find((v:any)=>v.sample==='noise')
  const calibrated=audioOk&&!!calibrationHash&&calibration?.schema==='studio-speech-calibration-v1'&&calibration.speech_calibration_pass===true&&valid(clean)&&clean.content_gate==='pass'&&valid(missing)&&missing.content_gate==='blocked'&&missing.issues?.some((i:any)=>i.code==='no_audible_signal')&&valid(silence)&&silence.content_gate==='blocked'&&silence.issues?.some((i:any)=>i.code==='speech_delete')&&valid(noise)&&noise.content_gate==='blocked'
  record('audio_calibration',calibrated?'passed':'unknown',calibrated?calibrationHash:undefined,calibrated?'scope=speech_content_and_acoustic_defects; normal/muted utterance and retrospective deletion/noise regression only; performance_calibrated=false; no film quality approval':'speech content and acoustic defect calibration not established','actual_audio')
- return {reference,characterReferences,preflight:result}
+ return {reference,characterReferences,characterProfile,preflight:result}
 }
 function audioFailure(result:any,prefix:string){
  if(result?.ok===true)return

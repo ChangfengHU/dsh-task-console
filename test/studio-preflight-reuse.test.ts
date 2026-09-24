@@ -10,14 +10,16 @@ async function fixture(t:any){
  const cwd=await mkdtemp(join(tmpdir(),'studio-preflight-reuse-'));t.after(()=>rm(cwd,{recursive:true,force:true}))
  const path=join(cwd,'asset'),proofPath=join(cwd,'proof.json'),script=join(cwd,'preflight.py')
  await writeFile(path,'asset');await writeFile(proofPath,'{}');await writeFile(script,'# fixture')
+ await mkdir(join(cwd,'.studio-host'));const profilePath=join(cwd,'.studio-host/character.json'),profile={character_id:'c',profile_version:3,profile:{personality:['curious']}}
+ await writeFile(profilePath,JSON.stringify(profile));const profileSha=await fileSha256(profilePath)
  const sha256=await fileSha256(path),p={ok:true,path,sha256,proofPath}
  const task={id:cwd,cwd,design:{studio:{referenceSha256:sha256,characterId:'c'}}}
- const value={ok:true,capabilities:{reference:p,frames:p,hyperframes:{...p,hyperframes_verified:true,scope:'actual_hyperframes_smoke_render'},character:{...p,characterId:'c',imagePath:path,imageSha256:sha256,profilePath:path}}}
+ const value={ok:true,capabilities:{reference:p,frames:p,hyperframes:{...p,hyperframes_verified:true,scope:'actual_hyperframes_smoke_render'},character:{...p,characterId:'c',imagePath:path,imageSha256:sha256,profilePath,sha256:profileSha,profileVersion:3}}}
  const records:any[]=[],workflow:any={recordCapability:(_:any,v:any)=>records.push(v)}
  let calls=0
  const config:any={preflightScript:script},execute=async()=>{calls++;return value}
  const refresh=(currentTask:any=task,currentConfig:any=config)=>refreshStudioCapabilities(workflow,currentTask,{config:currentConfig,execute})
- return {cwd,path,proofPath,script,task,value,records,workflow,config,execute,refresh,calls:()=>calls}
+ return {cwd,path,proofPath,profilePath,profile,script,task,value,records,workflow,config,execute,refresh,calls:()=>calls}
 }
 
 test('61-second handoff reuses hashes with original expiry; exact expiry probes again',async t=>{
@@ -107,4 +109,23 @@ test('probe execution time consumes original lifetime and environment changes in
  const r=s.records.find(v=>v.name==='reference');assert.equal(Date.parse(r.checkedAt),start);assert.equal(Date.parse(r.expiresAt),start+15*60_000)
  process.env.STUDIO_RENDER_RUNTIME=join(s.cwd,'different-runtime')
  await refreshStudioCapabilities(s.workflow,s.task,{config:s.config,execute});assert.equal(calls,2)
+})
+
+for(const defect of ['json','version','path'] as const)test(`invalid full profile ${defect} is not cached and next probe repairs it`,async t=>{
+ const s=await fixture(t),character=s.value.capabilities.character,original={...character}
+ if(defect==='json'){
+  await writeFile(s.profilePath,'{"unfinished":');character.sha256=await fileSha256(s.profilePath)
+ }else if(defect==='version')character.profileVersion=4
+ else{
+  const alternate=join(s.cwd,'profile-copy.json');await writeFile(alternate,JSON.stringify(s.profile));character.profilePath=alternate
+ }
+ await s.refresh();assert.equal(s.records.find(v=>v.name==='character').status,'failed')
+ assert.equal(s.calls(),1)
+ // With unchanged invalid bytes the failed full-profile snapshot must still be reprobed.
+ await s.refresh();assert.equal(s.calls(),2)
+ if(defect==='json')await writeFile(s.profilePath,JSON.stringify(s.profile))
+ Object.assign(character,original);s.records.length=0
+ const repaired=await s.refresh();assert.equal(s.calls(),3);assert.equal(s.records.find(v=>v.name==='character').status,'passed')
+ assert.equal(repaired.characterProfile?.sha256,original.sha256)
+ await s.refresh();assert.equal(s.calls(),3,'only the repaired complete profile may be cached')
 })

@@ -1,3 +1,4 @@
+import {readStudioCharacterProfile,studioCharacterProfileSummary,characterProfileFallback,type StudioCharacterProfileLock} from './studio-character-profile.js'
 import {publicCharacterReference,type StudioCharacterReference} from './studio-character-source.js'
 import {STUDIO_REVIEW_PARAMETERS,validateReviewShape} from './studio-review-schema.js'
 /** Run-scoped media tools. Paths and evidence hashes are host-derived, never model claims. */
@@ -9,7 +10,7 @@ import {resolve,relative,sep,basename,extname,join} from 'node:path'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
 const run=promisify(execFile)
-export const STUDIO_TOOL_NAMES=['studio_request_preparation_revision','studio_render_start','studio_render_status','studio_download_asset','studio_register_stage','studio_status','studio_register_candidate','studio_read_text','studio_inspect_frames','studio_inspect_probe','studio_inspect_audio','studio_submit_review','studio_reference_overview','studio_reference_frames','studio_reference_audio','studio_character_image','studio_preview_audio','studio_preview_image','studio_preview_frames'] as const
+export const STUDIO_TOOL_NAMES=['studio_character_profile','studio_request_preparation_revision','studio_render_start','studio_render_status','studio_download_asset','studio_register_stage','studio_status','studio_register_candidate','studio_read_text','studio_inspect_frames','studio_inspect_probe','studio_inspect_audio','studio_submit_review','studio_reference_overview','studio_reference_frames','studio_reference_audio','studio_character_image','studio_preview_audio','studio_preview_image','studio_preview_frames'] as const
 const hash=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex')
 export async function fileSha256(path:string){const h=createHash('sha256');for await(const b of createReadStream(path))h.update(b);return h.digest('hex')}
 export async function studioPath(cwd:string,value:string,text=false){
@@ -21,7 +22,7 @@ export async function studioPath(cwd:string,value:string,text=false){
  return p
 }
 export interface VisionInput {images:{path:string;sha256:string;time?:number}[];purpose:'character'|'reference'|'reference_overview'|'candidate'|'preview'}
-export interface StudioToolOptions {requestPreparationRevision?:(value:{reason:string;evidence:{path:string;sha256:string};scriptSha256:string})=>Promise<any>;renderJob?:(action:'start'|'status',args:{composition?:string;output?:string;jobId?:string})=>Promise<any>;downloadAsset?:(args:{id:string;path:string})=>Promise<any>;registerStage?:(path:string)=>Promise<any>;submitReview?:()=>Promise<void>;visionObserve?:(value:VisionInput)=>Promise<any>;input:any;workflow:any;isActive:()=>boolean;refreshPreflight?:()=>Promise<{reference?:{path:string;sha256:string};characterReferences?:StudioCharacterReference[]}|void>;audioObserve?:(value:{wavPath:string;start:number;end:number})=>Promise<any>;runCommand?:(file:string,args:string[])=>Promise<{stdout:string}>;reference?:{path:string;sha256:string};characterReferences?:StudioCharacterReference[];referenceReceipt?:(value:{referenceSha256:string;kind:'frames'|'audio';ranges:number[][];sha256:string})=>any}
+export interface StudioToolOptions {requestPreparationRevision?:(value:{reason:string;evidence:{path:string;sha256:string};scriptSha256:string})=>Promise<any>;renderJob?:(action:'start'|'status',args:{composition?:string;output?:string;jobId?:string})=>Promise<any>;downloadAsset?:(args:{id:string;path:string})=>Promise<any>;registerStage?:(path:string)=>Promise<any>;submitReview?:()=>Promise<void>;visionObserve?:(value:VisionInput)=>Promise<any>;input:any;workflow:any;isActive:()=>boolean;refreshPreflight?:()=>Promise<{reference?:{path:string;sha256:string};characterReferences?:StudioCharacterReference[];characterProfile?:StudioCharacterProfileLock}|void>;audioObserve?:(value:{wavPath:string;start:number;end:number})=>Promise<any>;runCommand?:(file:string,args:string[])=>Promise<{stdout:string}>;reference?:{path:string;sha256:string};characterReferences?:StudioCharacterReference[];characterProfile?:StudioCharacterProfileLock;referenceReceipt?:(value:{referenceSha256:string;kind:'frames'|'audio';ranges:number[][];sha256:string})=>any}
 export async function registerStudioTools(agentCtx:any,options:StudioToolOptions):Promise<()=>void>{
  const {input,workflow,isActive}=options,role=input.card?.role,disposers:(()=>void)[]=[]
  const defineTool=process.env.NODE_ENV==='test'?(s:any)=>s:(await import('@deepseek-ai/dsh-tools')).defineTool
@@ -62,7 +63,7 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   if(needsRefresh&&options.refreshPreflight){
    if(!refreshingPreflight&&Date.now()-lastRefreshAttempt>=60000){
     lastRefreshAttempt=Date.now()
-    refreshingPreflight=(async()=>{check();const locks=await options.refreshPreflight!();check();if(locks){options.reference=locks.reference;options.characterReferences=locks.characterReferences}})().finally(()=>{refreshingPreflight=undefined})
+    refreshingPreflight=(async()=>{check();const locks=await options.refreshPreflight!();check();if(locks){options.reference=locks.reference;options.characterReferences=locks.characterReferences;options.characterProfile=locks.characterProfile}})().finally(()=>{refreshingPreflight=undefined})
    }
    if(refreshingPreflight)await refreshingPreflight
   }
@@ -71,7 +72,12 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   // snapshot at both levels, avoiding split results at an expiration boundary.
   preflight=state.preflight??workflow.preflight(input.task)
   const artifacts=state.candidate?(()=>{const loc=workflow.candidateLocation(input);return {manifestPath:relative(input.task.cwd,loc.manifestPath),videoPath:relative(input.task.cwd,loc.path)}})():null
-  return {preflight,state:{...state,preflight},artifacts,executionAssets:await studioExecutionAssets(input.task.cwd),reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(publicCharacterReference)}
+  return {preflight,state:{...state,preflight},artifacts,executionAssets:await studioExecutionAssets(input.task.cwd),reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(publicCharacterReference),characterProfile:await studioCharacterProfileSummary(input.task,options.characterProfile)}
+ })
+ register('studio_character_profile','Planner/producer/reviewer/preparation specialist: read the complete UTF-8 JSON character_get response from the exact host-locked profile file. No arguments, hidden-path override, provider call or refresh. Includes personality, scene plans and voice recommendations as recorded; design plans do not prove assets were generated.',{},async()=>{
+  requireRole(['planner','executor','reviewer','studio-stage'])
+  if(!options.characterProfile)throw Error('studio-character-profile-lock-missing: '+JSON.stringify(characterProfileFallback(input.task.design?.studio?.characterId)))
+  return readStudioCharacterProfile(input.task,options.characterProfile)
  })
  register('studio_register_candidate','Producer only: register actual project MP4 and manifest after host probing and hashing. An identical retry in the same session/card/round is idempotent; changed content requires a higher revision. A later production round cannot relabel the previous MP4; use the completed render job output and actual SHA.',{path:{type:'string',required:true},manifestPath:{type:'string',required:true},revision:{type:'number',required:true}},async args=>{
   requireRole(['executor']);if(!Number.isInteger(args.revision)||args.revision<1)throw Error('studio-invalid-revision')

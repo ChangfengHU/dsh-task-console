@@ -23,7 +23,7 @@ function fixture(role='executor',stage?:string){
 test('blocks shell/write/generation/unknown tools until real required loads; reads and diagnosis remain available',()=>{
  const f=fixture()
  for(const name of ['bash','write','edit','run_code','studio_register_candidate','vyibc-image_generate_image','vyibc-voice_synthesize','future_writer'])assert.match(f.guard(name),/required-skills-not-loaded.*hyperframes-core/)
- for(const name of ['skill','read','studio_status','studio_reference_overview','task_block','character_get','mcp__vyibc-cartoon-assets__asset_get'])assert.equal(f.guard(name),undefined)
+ for(const name of ['skill','read','studio_status','studio_character_profile','studio_reference_overview','task_block','character_get','mcp__vyibc-cartoon-assets__asset_get'])assert.equal(f.guard(name),undefined)
  for(const name of REQUIRED_PRODUCTION_SKILLS)f.load(name)
  assert.equal(f.guard('bash'),undefined);assert.equal(f.guard('write'),undefined);assert.equal(f.records.length,3)
  assert.match(f.records[0].sha256,/^[a-f0-9]{64}$/);assert.ok(f.records[0].bytes>0)

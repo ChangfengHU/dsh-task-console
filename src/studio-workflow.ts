@@ -1,3 +1,4 @@
+import {StudioRenderLedger} from './studio-render-ledger.js'
 import {createHash,randomUUID} from 'node:crypto'
 import {validateStudioPolicy} from './studio-policy.js'
 import {evaluateStudioReview} from './studio-evidence.mjs'
@@ -15,8 +16,10 @@ export interface StudioCapability {name:typeof NAMES[number];status:'passed'|'fa
 /** Host-only ledger, not an OS security boundary: same-UID unrestricted shell can tamper with SQLite. */
 export class StudioWorkflow {
   private db:any
+  readonly renderLedger:StudioRenderLedger
   constructor(private store:any){
     this.db=store.kernel.db
+    this.renderLedger=new StudioRenderLedger(store)
     this.db.exec(`CREATE TABLE IF NOT EXISTS dsh_studio_capabilities(task_id TEXT,name TEXT,policy_hash TEXT,payload TEXT,PRIMARY KEY(task_id,name));
 CREATE TABLE IF NOT EXISTS dsh_studio_preflight(task_id TEXT PRIMARY KEY,policy_hash TEXT,payload TEXT);
 CREATE TABLE IF NOT EXISTS dsh_studio_state(task_id TEXT,batch_id TEXT,kind TEXT,payload TEXT,PRIMARY KEY(task_id,batch_id,kind));
@@ -65,6 +68,13 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     }
     return {ok:true,status:'ready' as const}
   }
+  enforceRenderProvenance(input:any){this.write(input,`render_provenance:${input.card.id}`,true)}
+  recordRenderedCandidate(input:any,candidate:any,location:any){return this.db.transaction(()=>{
+    const proof=this.read(input,`render_provenance:${input.card.id}`)===true?this.renderLedger.requireCandidate(input,candidate,location.path):undefined
+    this.recordCandidate(input,candidate);this.recordCandidateLocation(input,location)
+    if(proof)this.write(input,'candidate_render_provenance',{...proof,candidateSha256:candidate.sha256,revision:candidate.revision})
+    return proof
+  })()}
   recordCandidate(input:any,candidate:any){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
     strict(candidate,['sha256','manifestSha256','referenceSha256','revision','durationSeconds','width','height','fps'],'candidate')
@@ -132,7 +142,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
       savedReview.reviewerSessionId!==input.sessionId||savedReview.candidateSha256!==current?.candidate.sha256||savedReview.revision!==current?.candidate.revision
     )?null:savedReview
     const planning=input.card?.role==='planner'&&this.read(input,'runtime_enforcement')===true?this.planningPrerequisites(input):undefined
-    return {...(input.card?.role==='reviewer'?{reviewProgress:this.reviewProgress(input,true)}:{}),...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),candidate:current?.policyHash===ph?current.candidate:null,review,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
+    return {...(input.card?.role==='reviewer'?{reviewProgress:this.reviewProgress(input,true)}:{}),...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),renderJobs:this.renderLedger.publicRows(input),candidate:current?.policyHash===ph?current.candidate:null,review,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
   }
   recordCandidateLocation(input:any,location:{path:string;manifestPath:string;sha256:string}){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
@@ -192,6 +202,10 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     const saved=this.read(input,'candidate'),budget=this.read(input,'budget')
     const policy=this.policy(input.task),role=input.card?.role
     if(!saved||!budget||saved.policyHash!==sha(policy))throw Error('studio-version-bound-trusted-review-required')
+    if(this.read(input,`render_provenance:${saved.producerCardId}`)===true){
+      const location=this.candidateLocation(input)
+      this.renderLedger.requireCandidate({...input,card:{id:saved.producerCardId,role:'executor',round:saved.producerRound}},saved.candidate,location.path)
+    }
     const base={candidateSha256:saved.candidate.sha256,revision:saved.candidate.revision}
     if(role==='executor'){
       if(this.read(input,'runtime_enforcement')===true&&!this.speechPlan(input))throw Error('studio-speech-plan-required')

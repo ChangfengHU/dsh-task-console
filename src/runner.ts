@@ -607,7 +607,7 @@ export class TaskRunner {
       if (task.design?.evidenceContract === 'studio-video-v1') {
         if (!this.registerStudioTools) throw Error('studio-runtime-tools-unavailable')
         const disposeWorker = flight.disposeTools
-        const disposeStudio = await this.registerStudioTools(flight.handle.agent.ctx, {task,batch,card,sessionId,profileId}, () => this.flights.get(sessionId) === flight && !flight.terminal, submitStudioReview!)
+        const disposeStudio = await this.registerStudioTools(flight.handle.agent.ctx, {task,batch,card,sessionId,profileId}, () => !this.stopped && this.flights.get(sessionId) === flight && !flight.terminal, submitStudioReview!)
         flight.disposeTools = () => { disposeStudio(); disposeWorker?.() }
       }
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }

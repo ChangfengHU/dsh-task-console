@@ -37,3 +37,12 @@ test('render native tools deny non-producer and stale invocations before launchi
  const exec={agent:{session:{id:'s'}}};let stop=await make('reviewer');await assert.rejects(defs.get('studio_render_start').execute({composition:'composition',output:'out.mp4'},exec),/role-denied/);stop()
  stop=await make('executor');await defs.get('studio_render_status').execute({jobId},exec);assert.equal(count,1);active=false;await assert.rejects(defs.get('studio_render_start').execute({composition:'composition',output:'out.mp4'},exec),/stale-run/);assert.equal(count,1);stop()
 })
+
+test('host-only intent is passed to helper and old unscoped jobs cannot satisfy it',async t=>{
+ const {task,config}=await setup(t),intent='e'.repeat(64)
+ const execute=async(_:string,argv:string[])=>{assert.deepEqual(argv.slice(-2),['--intent-id',intent]);return {...running,intentId:intent}}
+ const got=await studioRenderJob(task,'start',{composition:'composition',output:'output.mp4'},{config,execute},intent)
+ assert.equal(got.intentId,intent);assert.equal(got.helperSha256,config.renderJobSha256)
+ await assert.rejects(studioRenderJob(task,'status',{jobId},{config,execute:async()=>running},intent),/intent-mismatch/)
+ await assert.rejects(studioRenderJob(task,'status',{jobId},{config,execute:async()=>({...running,intentId:'f'.repeat(64)})},intent),/intent-mismatch/)
+})

@@ -17,7 +17,7 @@ const errorActions:Record<string,string>={
 for(const stage of ['check','render','decode'])for(const outcome of ['failed','timeout'])errorActions[`${stage}_step_${outcome}`]=`Inspect the ${stage} log and repair the reported prerequisite; preserve the original job before retry.`
 function failure(code:any){const errorCode=typeof code==='string'&&Object.hasOwn(errorActions,code)?code:'render_host_failed';return {errorCode,nextAction:errorActions[errorCode]}}
 function safeRelative(value:any){return typeof value==='string'&&value.length>0&&value.length<=240&&!isAbsolute(value)&&!value.includes('\0')&&!value.includes('\\')&&!value.split('/').some(p=>!p||p==='..'||p.startsWith('.')||/credential|secret|token|password|private.?key/i.test(p))}
-async function configuration(){try{return JSON.parse(await readFile(new URL('../studio-host.json',import.meta.url),'utf8'))}catch{return {}}}
+export async function studioRenderConfiguration(){try{return JSON.parse(await readFile(new URL('../studio-host.json',import.meta.url),'utf8'))}catch{return {}}}
 async function execute(script:string,args:string[]):Promise<any>{
  return new Promise((resolve,reject)=>{
   // The render bridge does not need provider credentials. Its detached worker applies its own allowlist too.
@@ -30,8 +30,8 @@ async function execute(script:string,args:string[]):Promise<any>{
   child.on('close',(code,signal)=>{try{const result=JSON.parse(output);if(signal||code!==0&&result?.ok!==false)throw Error();finish(undefined,result)}catch{finish(Error('studio-render-bridge-output-invalid'))}})
  })
 }
-export async function studioRenderJob(task:any,action:'start'|'status',args:{composition?:string;output?:string;jobId?:string},deps:Dependencies={}){
- const config=deps.config??await configuration()
+export async function studioRenderJob(task:any,action:'start'|'status',args:{composition?:string;output?:string;jobId?:string},deps:Dependencies={},intentId?:string){
+ const config=deps.config??await studioRenderConfiguration()
  if(!config.renderJobScript||!digest.test(config.renderJobSha256??'')||!config.renderRuntime)throw Error('studio-render-host-not-configured')
  if(await fileSha256(config.renderJobScript)!==config.renderJobSha256)throw Error('studio-render-helper-changed')
  const root=await realpath(task.cwd),policy=task.design?.studio
@@ -47,12 +47,14 @@ export async function studioRenderJob(task:any,action:'start'|'status',args:{com
   if(!digest.test(args.jobId??''))throw Error('studio-render-job-id-invalid')
   argv.push('--job-id',args.jobId!)
  }
+ if(intentId!==undefined){if(!digest.test(intentId))throw Error('studio-render-intent-invalid');if(action==='start')argv.push('--intent-id',intentId)}
  const r=await(deps.execute??execute)(config.renderJobScript,argv)
  // Never return arbitrary subprocess body, log contents, environment or provider errors.
  if(r?.ok!==true)return {ok:false,...failure(r?.errorCode),qualityApproved:false}
  if(!digest.test(r.jobId??'')||action==='status'&&r.jobId!==args.jobId||!['queued','running','completed','failed','unknown'].includes(r.state)||!digest.test(r.inputSha256??'')||!safeRelative(r.composition)||!safeRelative(r.output))throw Error('studio-render-receipt-invalid')
  if(action==='start'&&(r.composition!==args.composition||r.output!==args.output))throw Error('studio-render-receipt-mismatch')
- const result:any={ok:true,jobId:r.jobId,state:r.state,composition:r.composition,output:r.output,inputSha256:r.inputSha256,reused:r.reused===true,qualityApproved:false}
+ if(intentId!==undefined&&r.intentId!==intentId)throw Error('studio-render-intent-mismatch')
+ const result:any={...(intentId?{intentId,helperSha256:config.renderJobSha256,helperPath:config.renderJobScript,runtimePath:config.renderRuntime}:{}),ok:true,jobId:r.jobId,state:r.state,composition:r.composition,output:r.output,inputSha256:r.inputSha256,reused:r.reused===true,qualityApproved:false}
  if(r.state==='completed'){
   const output=await studioPath(root,r.output,true),size=(await stat(output)).size
   if(!digest.test(r.outputSha256??'')||!Number.isInteger(r.bytes)||r.bytes!==size||size<1||await fileSha256(output)!==r.outputSha256||r.width!==policy.width||r.height!==policy.height||Math.abs(r.fps-policy.fps)>.001||!Number.isFinite(r.durationSeconds)||r.durationSeconds<=0)throw Error('studio-render-completed-file-invalid')

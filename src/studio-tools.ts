@@ -83,7 +83,7 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   })).length
   if(uniformSamples>=Math.max(1,Math.floor(candidate.durationSeconds)*0.9))throw Error('studio-candidate-mostly-uniform: at least 90% of one-second samples contain only a nearly uniform color; verify mounted visible scenes before registering. This is technical rejection, not aesthetic scoring.')
   if(await fileSha256(path)!==before||await fileSha256(manifestPath)!==candidate.manifestSha256)throw Error('studio-candidate-file-changed')
-  check();workflow.recordCandidate(input,candidate);workflow.recordCandidateLocation(input,{path,manifestPath,sha256:candidate.sha256});return {candidate,qualityApproved:false}
+  check();const location={path,manifestPath,sha256:candidate.sha256};const renderProvenance=workflow.recordRenderedCandidate?workflow.recordRenderedCandidate(input,candidate,location):(workflow.recordCandidate(input,candidate),workflow.recordCandidateLocation(input,location),undefined);return {candidate,...(renderProvenance?{renderProvenance}:{}),qualityApproved:false}
  })
  const textCoverage=new Map<string,{sha256:string;ranges:number[][]}>()
  register('studio_read_text','Planner/reviewer only: paginated UTF-8 project text. Only a complete unchanged read of studio_status.artifacts.manifestPath returns a candidate source receipt; other project files are context only. Follow nextOffset until null using returned sha256 as expectedSha256. Offsets/counts are UTF-16 code units. Partial reads do not certify full source review. Hidden/sensitive paths excluded.',{path:{type:'string',required:true},offset:{type:'number'},limit:{type:'number'},expectedSha256:{type:'string'}},async args=>{

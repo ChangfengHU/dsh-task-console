@@ -1,6 +1,6 @@
 import {WorkflowEvidence} from './workflow-evidence.js'
 import {WorkflowExtensions,type WorkflowExtension} from './workflow-extensions.js'
-import { studioRenderJob } from './studio-render-host.js'
+import { studioRenderJob,studioRenderConfiguration } from './studio-render-host.js'
 import { inspectCapabilityContract } from './capability-contract.ts'
 import { taskAgentIds } from './task-design.ts'
 import {registerStageFiles,requireStudioStages,verifyStageReceipt} from './studio-stage-files.js'
@@ -146,7 +146,19 @@ export class TaskConsoleService extends TypertRemoteService {
       registerWorkflowTools:(ctx,input,isActive)=>this.workflowExtensions.registerTools(ctx,input,isActive),
       registerStudioTools: async (agentCtx,input,isActive,submitReview) => {
         const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
-        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,renderJob:(action,args)=>studioRenderJob(input.task,action,args),downloadAsset:args=>downloadStudioAsset(input.task,args),registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
+        if(input.card.role==='executor')workflow.enforceRenderProvenance(input)
+        const renderJob=async(action:'start'|'status',args:any)=>{
+          const assertActive=()=>{const c=this.runner.store.kernel.getTask(input.card.id),r=[...this.runner.store.s.runs.values()].find(r=>r.cardId===input.card.id&&r.sessionId===input.sessionId&&r.status==='running');if(!isActive()||!r||c?.status!=='running'||c.current_run_id!==this.runner.store.coreRunId(r.id)||!c.claim_expires||c.claim_expires<=Math.floor(Date.now()/1000))throw Error('studio-render-stale-run')}
+          assertActive();const config=action==='start'?await studioRenderConfiguration():undefined;assertActive();const intent=workflow.renderLedger.prepare(input,action,args,config)
+          // Recover a known job without starting another renderer; a lost first
+          // reply retries the helper's same durable intent and reserved output.
+          const selectedAction=action==='start'&&intent.jobId?'status':action
+          const selectedArgs=selectedAction==='status'?{jobId:intent.jobId}:args
+          const dependencies=intent.helperPath?{config:{renderJobScript:intent.helperPath,renderJobSha256:intent.helperSha256,renderRuntime:intent.runtimePath}}:{}
+          const result=await studioRenderJob(input.task,selectedAction,selectedArgs,dependencies,intent.intentId)
+          assertActive();workflow.renderLedger.record(input,intent,result);return result
+        }
+        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,renderJob,downloadAsset:args=>downloadStudioAsset(input.task,args),registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
         let skillGate:()=>void=()=>{},speech:()=>void=()=>{},board:()=>void=()=>{}
         try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});board=await registerStudioBoardTools(agentCtx,{input,workflow,isActive,compile:args=>compileStudioStoryboard(input.task,args)});return ()=>{board();speech();skillGate();media()} } catch(e){board();speech();skillGate();media();throw e}
       },

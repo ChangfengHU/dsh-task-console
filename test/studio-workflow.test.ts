@@ -102,7 +102,7 @@ test('missing audio can be pending on grounded technical rejection, never final 
 test('passing reviewer cannot directly declare final film acceptance',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_complete');assert.equal(workflow.complete(input).metadata.workflowOutcome,'machine_assessed_candidate')})
 test('preflight denial shows sanitized details and actual status',t=>{const {workflow,task}=setup(t);workflow.recordCapability(task,{name:'audio',status:'access_denied',checkedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),reason:'HTTP 403 token=private123 https://service.example/?key=secret'});const r=workflow.preflight(task);assert.match(r.reason??'',/blocked_quality_capability.*audio=access_denied/);assert.ok(!r.reason?.includes('private123'));assert.ok(!r.reason?.includes('service.example'))})
 test('negative issue ID may contain a colon',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);const r=workflow.status(input).review;delete r.reviewerSessionId;r.issues=[{id:'audio:quiet',severity:'major',status:'open'}];workflow.recordReview(reviewer,r);assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_needs_changes')})
-test('public status exposes only specified task data without location or raw capabilities',t=>{const {workflow,input}=setup(t);proof(workflow,input);assert.deepEqual(Object.keys(workflow.status(input)).sort(),['budget','candidate','interventions','preflight','referenceReceipts','review','script','skillLoads','speechChecks','speechPlan']);assert.equal(workflow.status({...input,batch:{id:'other'}}).candidate,null)})
+test('public status exposes only specified task data without location or raw capabilities',t=>{const {workflow,input}=setup(t);proof(workflow,input);assert.deepEqual(Object.keys(workflow.status(input)).sort(),['budget','candidate','interventions','preflight','referenceReceipts','renderJobs','review','script','skillLoads','speechChecks','speechPlan']);assert.equal(workflow.status({...input,batch:{id:'other'}}).candidate,null)})
 test('candidate location binds batch, policy and current candidate hash',t=>{const {workflow,input}=setup(t);const {candidate}=proof(workflow,input);const producer={...input,card:{role:'executor'},sessionId:'producer'};const location={path:'/project/final.mp4',manifestPath:'/project/manifest.json',sha256:candidate.sha256};workflow.recordCandidateLocation(producer,location);assert.deepEqual(workflow.candidateLocation(input),location);assert.throws(()=>workflow.candidateLocation({...input,batch:{id:'other'}}),/location-mismatch/);workflow.recordCandidate(producer,{...candidate,revision:2,sha256:h('e')});assert.throws(()=>workflow.candidateLocation(input),/location-mismatch/)})
 test('location rejects model identity fields, mismatch, reviewer write and relative paths',t=>{const {workflow,input}=setup(t);const {candidate}=proof(workflow,input);const producer={...input,card:{role:'executor'},sessionId:'producer'},location={path:'/project/final.mp4',manifestPath:'/project/manifest.json',sha256:candidate.sha256};assert.throws(()=>workflow.recordCandidateLocation(input,location),/producer-required/);assert.throws(()=>workflow.recordCandidateLocation(producer,{...location,sha256:h('e')}),/location-mismatch/);assert.throws(()=>workflow.recordCandidateLocation(producer,{...location,path:'relative.mp4'}),/location-path/);assert.throws(()=>workflow.recordCandidateLocation(producer,{...location,sessionId:'fake'} as any),/schema/)})
 
@@ -222,3 +222,21 @@ test('review integrity errors guide receipt repair without repeating observation
   assert.doesNotThrow(()=>workflow.recordCandidate(producer,candidate))
   assert.doesNotThrow(()=>workflow.recordCandidate(next,{...candidate,sha256:h('e'),revision:2}))
  })
+
+test('rendered candidate and location commit atomically and incomplete later render blocks handoff',t=>{
+ const {workflow,input}=setup(t),{candidate}=proof(workflow,input)
+ input.task.cwd='/project';const i={...input,card:{id:'e1',role:'executor',round:1},sessionId:'new-producer'}
+ ;(workflow as any).store.s={runs:new Map([['run-1',{id:'run-1',cardId:'e1',sessionId:i.sessionId,status:'running'}]])}
+ workflow.enforceRenderProvenance(i)
+ const next={...candidate,sha256:h('e'),revision:2},location={path:'/project/film.mp4',manifestPath:'/project/manifest.json',sha256:next.sha256}
+ assert.throws(()=>workflow.recordRenderedCandidate(i,next,location),/current-render-required/)
+ const job=workflow.renderLedger.prepare(i,'start',{composition:'composition',output:'film.mp4'},{renderJobScript:'/trusted/render.py',renderJobSha256:h('d'),renderRuntime:'/trusted/runtime'})
+ workflow.renderLedger.record(i,job,{ok:true,intentId:job.intentId,jobId:h('f'),inputSha256:h('a'),composition:'composition',output:'film.mp4',state:'completed',outputSha256:next.sha256,width:1080,height:1920,fps:30,durationSeconds:100,helperSha256:h('d'),helperPath:'/trusted/render.py',runtimePath:'/trusted/runtime'})
+ assert.throws(()=>workflow.recordRenderedCandidate(i,next,{...location,sha256:h('f')}),/location-mismatch/)
+ assert.equal(workflow.status(i).candidate.revision,1)
+ assert.equal(workflow.recordRenderedCandidate(i,next,location)?.jobId,h('f'))
+ assert.equal(workflow.complete(i).metadata.workflowOutcome,'candidate_handoff')
+ workflow.renderLedger.prepare(i,'start',{composition:'composition',output:'another.mp4'},{renderJobScript:'/trusted/render.py',renderJobSha256:h('d'),renderRuntime:'/trusted/runtime'})
+ assert.throws(()=>workflow.complete(i),/render-still-pending/)
+ assert.doesNotMatch(JSON.stringify(workflow.status(i).renderJobs),/trusted\/render/)
+})

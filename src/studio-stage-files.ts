@@ -5,7 +5,21 @@ import {studioStageFor,studioStageCardId,type StudioStageId} from './studio-stag
 import {studioPath,fileSha256} from './studio-tools.js'
 import {isStoryboardDocument,validateStoryboardScript} from './studio-storyboard-script.js'
 import {probeStageMedia,requireStageMediaMetadata} from './studio-stage-media.js'
+import {bindSoundPlan,soundPlanError} from './studio-sound-plan.js'
 const digest=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex')
+async function soundBinding(input:any,outputs:any[],workflow:any){
+ const plans=[]
+ for(const output of outputs.filter(f=>extname(f.path).toLowerCase()==='.json')){
+  if(output.bytes>8*1024*1024)soundPlanError('plan','JSON exceeds 8 MiB.')
+  const bytes=await readFile(await studioPath(input.task.cwd,output.path,true))
+  if(bytes.length>8*1024*1024)soundPlanError('plan','JSON exceeds 8 MiB.')
+  if(createHash('sha256').update(bytes).digest('hex')!==output.sha256)throw Error('studio-stage-file-changed')
+  let value:any;try{value=JSON.parse(bytes.toString('utf8'))}catch{soundPlanError('plan','Invalid JSON output.')}
+  if(value?.schema==='sound-plan-v1')plans.push({value,output})
+ }
+ if(plans.length!==1)soundPlanError('plan','Exactly one registered sound-plan-v1 JSON is required.')
+ return bindSoundPlan(plans[0].value,workflow?.script?.(input),outputs,plans[0].output)
+}
 async function storyboardBinding(input:any,outputs:any[],workflow:any){
  const script=workflow?.script?.(input)
  if(!script)throw Error('studio-storyboard-script-required: read studio_status.state.script; the planner must freeze dialogue with studio_freeze_script before storyboard handoff')
@@ -26,6 +40,13 @@ export async function verifyStageReceipt(input:any,receipt:any,workflow?:any) {
  for(const f of [receipt.manifest,...receipt.outputs]){const path=await studioPath(input.task.cwd,f.path,true);if(await fileSha256(path)!==f.sha256)throw Error('studio-stage-file-changed')}
  receipt.outputs.forEach((output:any,index:number)=>requireStageMediaMetadata(receipt.stage,output,index))
  if(receipt.stage==='storyboard'){const binding=await storyboardBinding(input,receipt.outputs,workflow);if(!receipt.scriptBinding||digest(receipt.scriptBinding)!==digest(binding))throw Error('studio-storyboard-script-binding-required: frozen dialogue changed or legacy receipt has no verified binding; correct storyboard and re-register it before downstream generation')}
+ if(receipt.stage==='sound'){
+  // Only host-recorded legacy receipts retain the old integrity contract. New registration always writes v2.
+  if(receipt.stageContractVersion!==undefined||receipt.soundBinding!==undefined){
+   if(receipt.stageContractVersion!==2||!receipt.soundBinding)soundPlanError('receipt','Unsupported contract or missing sound binding.')
+   if(digest(receipt.soundBinding)!==digest(await soundBinding(input,receipt.outputs,workflow)))soundPlanError('receipt','Sound binding changed.')
+  }
+ }
 }
 export async function requireStudioStages(input:any,workflow:any,db:any) {
  if(!input.task.design?.studioStages)return
@@ -51,7 +72,7 @@ export async function registerStageFiles(input:any,pathValue:string,workflow:any
  const outputs=[]
  for(const v of value.outputs){
   const p=await studioPath(input.task.cwd,v,true),rel=local(p),size=(await stat(p)).size
-  if(!rel.startsWith(base)||rel===base+'manifest.json'||size<1||size>500*1024*1024)throw Error('studio-stage-output-invalid')
+  if(!rel.startsWith(base)||rel===base+'manifest.json'||outputs.some(f=>f.path===rel)||size<1||size>500*1024*1024)throw Error('studio-stage-output-invalid')
   const outputSha256=await fileSha256(p),media=await probeStageMedia(stage.id,p,outputs.length)
   if(await fileSha256(p)!==outputSha256)throw Error('studio-stage-file-changed')
   outputs.push({path:rel,sha256:outputSha256,bytes:size,...(media?{media}:{})})
@@ -61,7 +82,8 @@ export async function registerStageFiles(input:any,pathValue:string,workflow:any
  if(!extensions.some(e=>required.includes(e)))throw Error('studio-stage-media-required')
  if(await fileSha256(path)!==sha256)throw Error('studio-stage-file-changed')
  const scriptBinding=stage.id==='storyboard'?await storyboardBinding(input,outputs,workflow):undefined
- const receipt={...(scriptBinding?{scriptBinding}:{}),stage:stage.id,round:input.card.round,batchId:input.batch.id,sessionId:input.sessionId,cardId:input.card.id,configSha256:digest(input.task.design.studioStages),manifest:{path:local(path),sha256},outputs,summary:value.summary.slice(0,4000),qualityApproved:false}
+ const audioBinding=stage.id==='sound'?await soundBinding(input,outputs,workflow):undefined
+ const receipt={...(scriptBinding?{scriptBinding}:{}),...(audioBinding?{stageContractVersion:2,soundBinding:audioBinding}:{}),stage:stage.id,round:input.card.round,batchId:input.batch.id,sessionId:input.sessionId,cardId:input.card.id,configSha256:digest(input.task.design.studioStages),manifest:{path:local(path),sha256},outputs,summary:value.summary.slice(0,4000),qualityApproved:false}
  await verifyStageReceipt(input,receipt,workflow);workflow.recordStageReceipt(input,receipt)
  return receipt
 }

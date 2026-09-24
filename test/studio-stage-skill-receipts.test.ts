@@ -23,5 +23,5 @@ for(const id of ['storyboard','visual','sound'] as const)test(`${id} instruction
  const receipt={name:REQUIRED_STAGE_SKILLS[id][0],sha256:'c'.repeat(64),bytes:32,callId:'other'}
  assert.throws(()=>workflow.recordSkillLoad({...input,card:{...input.card,agentId:'other'}},receipt),/identity-mismatch/)
  assert.throws(()=>workflow.recordSkillLoad({...input,card:{...input.card,role:'reviewer'}},receipt),/skill-load-invalid/)
- assert.throws(()=>workflow.recordSkillLoad({...input,task:{...input.task,design:{...input.task.design,studioStages:undefined}}},receipt),/skill-load-invalid/)
+ assert.throws(()=>workflow.recordSkillLoad({...input,task:{...input.task,design:{...input.task.design,studioStages:undefined}}},receipt),/studio-skill-stage-identity-required/)
 })

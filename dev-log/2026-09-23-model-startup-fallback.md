@@ -396,3 +396,43 @@ existing participant preset/module pins so the reviewed roster remains valid;
 installer7e38e84 code is byte-identical to candidate installer. Then enable the
 same once Task, supply236 as fresh run input through the public UI, track full
 three-role evidence, and repeat for idempotence. No developer SSH to236 occurred.
+
+### 2026-09-24: live v3 run and independent custody regression discovery
+
+After native Sessions AND SQLite claims reached zero, activated integrated
+1a14133cad869de1a76c79142e5328f07f4f6a1f from its staged release. No process restart
+or participant preset rewrite; served heavy asset digest matched candidate.
+Public Chrome enabled/launched the original reviewed once Task with fresh236
+input: Batch b-chat-5d944930d2d8c1582400. Actual DAG/fullscreen screenshots are
+/tmp/dsh-fleet-236-v3-board.png and -fullscreen.png; all three role cards are
+visible, future roles have no fabricated Run/Session, zero page errors. Cold
+public load remains36.74s and is not declared fixed.
+
+Installer Run1122/session suffix-1 completed base ledger
+onb-c9ed757e-80b7-489b-866e-e8eb949de60d at09:49:33Z; host accepted its paired
+native start/report evidence at09:50:02Z. Stages mostly reused; stage9 repaired.
+This is base handoff only, not full acceptance. Browser Run1123/session suffix-2
+called default prepare b45a92512170f55534cabb37a62a7830, complete09:53:49Z:
+independent browser control published, CDP1/2 working, profiles preserved and
+original browser PIDs retained by prepare; imageInstalled=false.
+Real login-provision jobs7bc528af0886a6c821ceac2926def40e and
+7d44784ab7f9c697d171c639b41896f3 completed09:57:03Z/10:00:06Z with verification.
+These imports can restart only their own target browser; do not generalize the
+prepare no-restart receipt to the entire execution. Full stability/Runner and
+second-run idempotence remain pending. Native raw browser tool names include the
+expected MCP prefix; Trace strips it for display, not an evidence mapper fault.
+
+New live evidence contradicts the requested Vault delivery path: authenticated
+login-accounts returns contract=login-vault-v2, usable stored credentials, but
+deliveryEnabled=false. Read-only CF settings confirm the binding is ABSENT, not
+an invalid account. Current version bee06404-80a7-4d3c-b928-f407b5311560 and prior
+1ce74cc2-7efe-47da-9efd-ada16ed4a73c both lack it. The linux-clash browser-node-create
+log documents actual activation on2026-09-14 (version2e54774d-4fb5-40ba-9630-105c0ad64453).
+The checked-in wrangler vars omit the flag; exact first removal/caller is not yet
+proven. Current MCP therefore legitimately selected its legacy live-copy path,
+and only one source was eligible, so both targets received the same account.
+Do not call this Vault delivery acceptance, overwrite these now-healthy logins,
+or broaden account grants to force diversity. Next: preserve current live Task,
+finish real verification, repair lost rollout configuration/persistence through
+the owning Fleet project after its deployment checks, and independently prove
+the requested custody path. No CF or target write was performed for this diagnosis.

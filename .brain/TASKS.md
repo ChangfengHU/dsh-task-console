@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [FLEET-FULL-ACCEPTANCE-20260924] v3 三角色证据、定向返工、Skill/角色已开发。Creator 真实计划 P-chat-81237bbff2216cf72aff 经源码逐字段核对及公网 Chrome 审查，原 Task 已升级 v3/provision-gemini，仍暂停，Actions/trigger/8条执行头保留，无新执行。最新候选 1a14133 保留 Studio b1c3c04，修正真实 exits 接口 envelope 与暂停修订/证据闸门 UI；全量621/624通过（3既有跳过），其后7项UI相关测试及候选桌面/手机浏览器通过。线上宿主仍b1c3c04；其他Studio1120/1121活跃，不能重载。236完整三角色和第二次幂等验收未开始。部署时保留既有参与角色配置/模块pin，避免使已审查名册失效；installer模块与候选字节一致。详见既有model-startup-fallback日志最新段。
+- [ ] [FLEET-FULL-ACCEPTANCE-20260924] v3已审查，1a14133已在原生/SQLite双零窗口部署，保留Studio及参与角色pin。原Task通过公网Chrome启动 b-chat-5d944930d2d8c1582400：装机者1122基础十阶段通过；浏览器管理员1123真实补齐独立管理服务，保留原资料/进程，双浏览器补登录已返回verified，20分钟独立稳定性和Runner收口仍待完成；第二次幂等验收未开始。另发现生产Worker缺失LOGIN_VAULT_DELIVERY_ENABLED（最近两个版本均缺失），账号库存可用却deliveryEnabled=false，本次补登录走旧在线来源路径，不能算金库下发验收；须修复配置持久化并验证，不覆盖现有健康登录。全量621/624通过（3既有跳过）、7项后续UI测试及公网DAG/全屏通过；冷加载仍约36秒。未直接SSH236。详见既有model-startup-fallback日志最新段。
 
 - [x] [MANUAL-FLEET-WITHDRAW-20260923] Fleet c3ff0b7 deployed;31 Fleet tests and22 preset/Action tests pass. Browser-selected fleet-ops Action performed real236 withdrawal in session agent-fleet-ops-mue2yyrn, audit6088. Public Fleet card absent; D1 membership0/enabledRunners0; Vault value digest unchanged, access inventory unchanged; VNC page and Clash health remain200. Installer session agent-fleet-installer-mudto47m first completed all10 stages in onb-92f512d5-0bf2-4e0b-b3b1-66426c0c4b7e. Final236 state is intentionally withdrawn, not uninstalled. No developer target SSH or global reload. Full receipts in existing model-startup-fallback log.
 

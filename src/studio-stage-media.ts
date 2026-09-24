@@ -5,11 +5,22 @@ const run=promisify(execFile),positive=(v:any)=>typeof v==='number'&&Number.isFi
 const imageCodec:Record<string,string>={'.png':'png','.jpg':'mjpeg','.jpeg':'mjpeg','.webp':'webp'}
 export function stageMediaKind(stage:string,path:string){const ext=extname(path).toLowerCase();return stage==='sound'&&['.wav','.mp3','.m4a'].includes(ext)?'audio':stage==='visual'&&imageCodec[ext]?'image':undefined}
 const failure=(reason:string,index:number):never=>{throw Error('studio-stage-media-invalid: '+JSON.stringify({error_code:'studio-stage-media-invalid',reason,outputIndex:index,retryable:false,retryAfterRepair:true,action:'Check the corresponding manifest output. A downloaded login page, JSON error or renamed file is not media. Verify source access and successful download, then register a real decodable audio/image file. If ffprobe is unavailable, repair the host dependency first. Do not rename an error response or reuse an unchecked receipt.'}))}
-export async function probeStageMedia(stage:string,path:string,index:number){
+/** Abort must wait for the killed child's close, not merely reject while a
+ * SIGTERM-ignoring diagnostic process remains alive. Normal probing is unchanged. */
+function diagnosticProbe(file:string,args:string[],options:{timeoutMs:number;signal?:AbortSignal}):Promise<{stdout:string}>{
+ return new Promise((resolve,reject)=>{
+  const child=execFile(file,args,{timeout:options.timeoutMs,maxBuffer:1024*1024,killSignal:'SIGKILL'},(error,stdout)=>{options.signal?.removeEventListener('abort',stop);if(error)reject(error);else resolve({stdout:String(stdout)})})
+  const stop=()=>{child.kill('SIGKILL')}
+  options.signal?.addEventListener('abort',stop,{once:true});if(options.signal?.aborted)stop()
+ })
+}
+export async function probeStageMedia(stage:string,path:string,index:number,diagnostic?:{timeoutMs:number;signal?:AbortSignal}){
+ if(diagnostic&&(!Number.isInteger(diagnostic.timeoutMs)||diagnostic.timeoutMs<1||diagnostic.timeoutMs>1000))throw Error('studio-diagnostic-probe-timeout-invalid')
  const kind=stageMediaKind(stage,path);if(!kind)return undefined
  let probe:any
  try{
-  const result=await run(process.env.FFPROBE_PATH??'ffprobe',['-v','error','-protocol_whitelist','file,pipe',...(kind==='image'?['-count_frames']:[]),'-show_streams','-show_format','-of','json',path],{timeout:60000,maxBuffer:1024*1024})
+  const args=['-v','error','-protocol_whitelist','file,pipe',...(kind==='image'?['-count_frames']:[]),'-show_streams','-show_format','-of','json',path],file=process.env.FFPROBE_PATH??'ffprobe'
+  const result=diagnostic?await diagnosticProbe(file,args,diagnostic):await run(file,args,{timeout:60000,maxBuffer:1024*1024})
   probe=JSON.parse(String(result.stdout))
  }catch(error:any){failure(error?.code==='ENOENT'?'ffprobe_unavailable':'probe_failed_or_invalid_media',index)}
  const streams=probe?.streams

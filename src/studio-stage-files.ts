@@ -1,13 +1,47 @@
-import {readFile,stat} from 'node:fs/promises'
-import {relative,sep,extname} from 'node:path'
+import {readFile,stat,readdir,realpath} from 'node:fs/promises'
+import {relative,sep,extname,join,resolve} from 'node:path'
 import {createHash} from 'node:crypto'
+import {createReadStream} from 'node:fs'
 import {studioStageFor,studioStageCardId,type StudioStageId} from './studio-stages.js'
 import {studioPath,fileSha256} from './studio-tools.js'
 import {isStoryboardDocument,validateStoryboardScript} from './studio-storyboard-script.js'
-import {probeStageMedia,requireStageMediaMetadata} from './studio-stage-media.js'
+import {probeStageMedia,requireStageMediaMetadata,stageMediaKind} from './studio-stage-media.js'
 import {bindSoundPlan,soundPlanError} from './studio-sound-plan.js'
 import {visualRequirements,bindVisualCoverage} from './studio-visual-coverage.js'
 const digest=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex')
+/** Bounded, read-only suggestions. Never import files or select creative assets. */
+async function stageRegistrationError(input:any,stage:string,code:string,field:string,reason:string):Promise<never>{
+ const base=`stages/r${input.card.round}/${stage}/`,expectedPath=base+'manifest.json'
+ const candidates:any[]=[];let scanned=0,probed=0,truncated=false,bytesRead=0
+ const started=performance.now(),deadline=started+5000,abort=new AbortController(),timer=setTimeout(()=>abort.abort(),5000)
+ const timeLeft=()=>Math.max(0,Math.floor(deadline-performance.now())),maxFileBytes=4*1024*1024,maxReadBytes=16*1024*1024
+ const boundedHash=async(path:string)=>{const hash=createHash('sha256');let fileBytes=0;for await(const chunk of createReadStream(path,{signal:abort.signal})){fileBytes+=chunk.length;bytesRead+=chunk.length;if(!timeLeft()||fileBytes>maxFileBytes||bytesRead>maxReadBytes)throw Error('diagnostic-scan-budget');hash.update(chunk)}return hash.digest('hex')}
+ try{
+ const root=await realpath(input.task.cwd),queue=[base]
+ while(queue.length&&scanned<128&&probed<8&&timeLeft()>0&&!abort.signal.aborted){
+  const dir=queue.shift()!
+  let entries:any[]
+  try{const canonical=await realpath(join(root,dir));if(canonical!==resolve(root,dir))continue;entries=await readdir(canonical,{withFileTypes:true})}catch{continue}
+  for(const entry of entries.sort((a,b)=>a.name.localeCompare(b.name))){
+   if(scanned++>=128||probed>=8||timeLeft()<=0||abort.signal.aborted){truncated=true;break}
+   if(entry.name.startsWith('.')||/credential|secret|token|password|private.?key/i.test(entry.name)||entry.isSymbolicLink())continue
+   const rel=dir+entry.name
+   if(entry.isDirectory()){if(rel.split('/').length<8)queue.push(rel+'/');else truncated=true;continue}
+   if(!entry.isFile()||!stageMediaKind(stage,rel))continue
+   try{
+    const path=await studioPath(root,rel,true),local=relative(root,path).split(sep).join('/'),size=(await stat(path)).size
+    if(!local.startsWith(base)||local!==rel||size<1)continue
+    if(size>maxFileBytes||bytesRead+size*2>maxReadBytes){truncated=true;continue}
+    const sha256=await boundedHash(path);if(!timeLeft()||abort.signal.aborted){truncated=true;break}probed++
+    const media=await probeStageMedia(stage,path,probed-1,{timeoutMs:Math.min(1000,timeLeft()),signal:abort.signal})
+    if(await boundedHash(path)===sha256)candidates.push({path:rel,sha256,bytes:size,media})
+   }catch{truncated=true;/* Failed/timed-out candidates remain explicitly unverified. */}
+  }
+ }
+ truncated=truncated||queue.length>0||timeLeft()<=0||abort.signal.aborted
+ }catch{truncated=true}finally{clearTimeout(timer)}
+ throw Error(code+': '+JSON.stringify({error_code:code,field,reason,stageDirectory:base,tool:'studio_register_stage',arguments:{path:expectedPath},manifestSchema:{stage,round:input.card.round,outputs:['project-relative existing file paths within '+base],summary:'actual work and unverified items'},eligibleExistingMedia:candidates,scan:{scanned,probed,bytesRead,elapsedMs:Math.round(performance.now()-started),deadlineMs:5000,maxFileBytes,maxReadBytes,truncated,complete:!truncated},retryable:false,retryAfterRepair:true,action:'Create/read the manifest at the exact arguments.path. outputs must explicitly list the actual image/audio files as well as required plan JSON; copying files or listing only JSON does not register media. Correct the indicated field, preserve required dialogue and visual requirements, then call studio_register_stage with {path}. Listed candidates are verified files only, not selected poses or complete coverage; choose and explicitly register the needed paths yourself. If required media is absent, obtain it or reconcile its original generation job; do not invent paths, create placeholders, delete requirements, or repeat the same manifest unchanged.',qualityApproved:false}))
+}
 async function soundBinding(input:any,outputs:any[],workflow:any){
  const plans=[]
  for(const output of outputs.filter(f=>extname(f.path).toLowerCase()==='.json')){
@@ -79,14 +113,20 @@ export async function requireStudioStages(input:any,workflow:any,db:any) {
 export async function registerStageFiles(input:any,pathValue:string,workflow:any,db:any) {
  const stage=studioStageFor(input);if(!stage)throw Error('studio-stage-role-required')
  await requireStudioStages(input,workflow,db)
- const base=`stages/r${input.card.round}/${stage.id}/`,path=await studioPath(input.task.cwd,pathValue,true)
+ const base=`stages/r${input.card.round}/${stage.id}/`
+ if(typeof pathValue!=='string'||!pathValue.trim())return stageRegistrationError(input,stage.id,'studio-stage-manifest-missing','path','Provide the existing stage manifest path in the tool argument {path}.')
+ let path:string
+ try{path=await studioPath(input.task.cwd,pathValue,true)}catch(error:any){if(error?.code==='ENOENT')return stageRegistrationError(input,stage.id,'studio-stage-manifest-missing','path','The supplied manifest path does not exist.');throw error}
  const local=(p:string)=>relative(input.task.cwd,p).split(sep).join('/')
- if(local(path)!==base+'manifest.json'||(await stat(path)).size>1024*1024)throw Error('studio-stage-manifest-path')
+ if(local(path)!==base+'manifest.json'||(await stat(path)).size>1024*1024)return stageRegistrationError(input,stage.id,'studio-stage-manifest-path','path','Manifest must be the exact stage manifest.json and at most 1 MiB.')
  const sha256=await fileSha256(path),value=JSON.parse(await readFile(path,'utf8'))
+ if(!Array.isArray(value.outputs)||value.outputs.length<1)return stageRegistrationError(input,stage.id,'studio-stage-manifest-invalid','outputs','outputs must be a non-empty array of explicit project-relative file paths; plans do not implicitly register their referenced media.')
  if(value.stage!==stage.id||value.round!==input.card.round||typeof value.summary!=='string'||!value.summary.trim()||!Array.isArray(value.outputs)||value.outputs.length<1||value.outputs.length>200||new Set(value.outputs).size!==value.outputs.length)throw Error('studio-stage-manifest-invalid')
  const outputs=[]
- for(const v of value.outputs){
-  const p=await studioPath(input.task.cwd,v,true),rel=local(p),size=(await stat(p)).size
+ for(const [index,v] of value.outputs.entries()){
+  let p:string
+  try{p=await studioPath(input.task.cwd,v,true)}catch(error:any){if(error?.code==='ENOENT')return stageRegistrationError(input,stage.id,'studio-stage-output-missing',`outputs[${index}]`,'The listed output file does not exist. Do not remove required dialogue or visual coverage to bypass this error.');throw error}
+  const rel=local(p),size=(await stat(p)).size
   if(!rel.startsWith(base)||rel===base+'manifest.json'||outputs.some(f=>f.path===rel)||size<1||size>500*1024*1024)throw Error('studio-stage-output-invalid')
   const outputSha256=await fileSha256(p),media=await probeStageMedia(stage.id,p,outputs.length)
   if(await fileSha256(p)!==outputSha256)throw Error('studio-stage-file-changed')
@@ -94,7 +134,7 @@ export async function registerStageFiles(input:any,pathValue:string,workflow:any
  }
  const extensions=outputs.map(f=>extname(f.path).toLowerCase())
  const required=stage.id==='visual'?['.png','.jpg','.jpeg','.webp']:stage.id==='sound'?['.wav','.mp3','.m4a']:['.json']
- if(!extensions.some(e=>required.includes(e)))throw Error('studio-stage-media-required')
+ if(!extensions.some(e=>required.includes(e)))return stageRegistrationError(input,stage.id,'studio-stage-media-required','outputs',`No registered ${stage.id==='visual'?'image':stage.id==='sound'?'audio':'storyboard JSON'} file. Eligible extensions: ${required.join(', ')}. Files on disk are not registered unless their paths appear in outputs.`)
  if(await fileSha256(path)!==sha256)throw Error('studio-stage-file-changed')
  const scriptBinding=stage.id==='storyboard'?await storyboardBinding(input,outputs,workflow):undefined
  const audioBinding=stage.id==='sound'?await soundBinding(input,outputs,workflow):undefined

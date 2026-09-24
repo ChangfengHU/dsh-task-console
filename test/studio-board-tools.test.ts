@@ -37,7 +37,7 @@ test('reported production field mistakes arrive together before writes, without 
  await writeFile(join(s.cwd,'draft.json'),original)
  await assert.rejects(s.tool.execute({boardPath:'draft.json'}),(e:any)=>{
   const d=JSON.parse(e.message.slice(e.message.indexOf(': ')+2));assert.equal(d.error_code,'studio-board-field-errors');assert.equal(d.dispatched,false)
-  for(const field of ['board.gsap','board.font','board.scenes[0]','board.scenes[0].layers[0]','board.audio[0].role','board.audio[1].role'])assert.ok(d.issues.some((i:any)=>i.field===field),field)
+  for(const field of ['board.gsap','board.font','board.scenes[0].layers[0]','board.audio[0].role','board.audio[1].role'])assert.ok(d.issues.some((i:any)=>i.field===field),field)
   assert.match(d.action,/Preserve/);return true
  })
  assert.equal(s.calls(),0);assert.equal(await readFile(join(s.cwd,'draft.json'),'utf8'),original);assert.deepEqual(await readdir(s.cwd),['draft.json'])
@@ -161,4 +161,28 @@ test('planning schema is diagnosed before dependent frozen-script checks; groupe
   const info=JSON.parse(error.message.slice(error.message.indexOf(': ')+2));assert.equal(info.field,'board.audio');assert.equal(info.dispatched,false);assert.match(info.action,/flat array/);return true
  })
  assert.equal(s.calls(),0);assert.deepEqual(await readdir(s.cwd),[])
+})
+
+test('documented planning metadata is validated and retained without changing rendering inputs',async t=>{
+ const b={...board(),width:1080,height:1920,scriptSha256:sha(JSON.stringify(board().script)),
+  scenes:[{id:'scene-1',title:'镜头名称',purpose:'保留原来的动作意图',start:0,duration:20,layers:[{type:'image',role:'character',src:'person.png',width:300,height:500}]}],
+  visualRequirements:[{id:'req-1',sceneId:'scene-1',purpose:'角色的动作素材'}]}
+ const original=JSON.stringify(b);assert.equal(boardFieldDiagnostics(b).total,0)
+ const s=await setup(t);const result=await s.execute({board:b})
+ assert.equal(result.ok,true);assert.equal(s.calls(),1);assert.equal(await readFile(result.boardPath,'utf8'),original);assert.equal(JSON.stringify(b),original);assert.equal(result.qualityApproved,false)
+})
+test('metadata rejects stale script digests, bad dimensions, ids and unbound requirements',()=>{
+ const valid=()=>({...board(),width:1080,height:1920,scriptSha256:sha(JSON.stringify(board().script)),scenes:[{id:'s1',start:0,duration:20,layers:[{type:'image',src:'person.png',role:'character',width:300,height:500}]}],visualRequirements:[{id:'r1',sceneId:'s1',purpose:'action'}]})
+ for(const mutate of [(b:any)=>b.width=720,(b:any)=>b.height='1920',(b:any)=>b.scriptSha256='a'.repeat(64),(b:any)=>b.scenes[0].title={},(b:any)=>b.scenes[0].purpose='',(b:any)=>b.scenes.push({...b.scenes[0]}),(b:any)=>b.visualRequirements[0].sceneId='missing',(b:any)=>b.visualRequirements.push({...b.visualRequirements[0]}),(b:any)=>b.visualRequirements[0].renderScale=2,(b:any)=>delete b.scenes[0].id]){
+  const b=valid();mutate(b);assert.ok(boardFieldDiagnostics(b).total>0,JSON.stringify(b))
+ }
+})
+test('exact unexpected ordinary field names aid repair without accepting audio or motion guesses',()=>{
+ const b={...board(),audio:[{src:'x.wav',role:'voice',start:0,lineId:'L1',text:'原来的话',loop:true,type:'voice',position:{x:3}}],scenes:[{start:0,duration:20,layers:[{type:'image',src:'x.png',width:300,height:500,position:{x:1},motion:[{at:0,duration:1,to:{x:2},loop:true}]}]}]}
+ const d=boardFieldDiagnostics(b)
+ assert.deepEqual(d.issues.find(i=>i.field==='board.audio[0]')?.unexpectedFields,['loop','type','position'])
+ assert.deepEqual(d.issues.find(i=>i.field==='board.scenes[0].layers[0]')?.unexpectedFields,['position'])
+ assert.deepEqual(d.issues.find(i=>i.field==='board.scenes[0].layers[0].motion[0]')?.unexpectedFields,['loop'])
+ const secret=boardFieldDiagnostics({...board(),audio:[{src:'SECRET_FILE',role:'music',start:0,'secret-token-no-echo':'SECRET_VALUE'}]})
+ assert.doesNotMatch(JSON.stringify(secret),/SECRET_FILE|SECRET_VALUE|secret-token-no-echo/);assert.match(JSON.stringify(secret),/non-schema-key/)
 })

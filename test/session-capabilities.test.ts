@@ -119,7 +119,7 @@ test('actual native ToolRuntime inherits by default, enforces explicit tool/serv
   const serverName = 'long.server-name-for-hashed-public-mcp-tool-identities-123456789'
   const name = publicToolName(serverName, 'browser_create')
   const stop = runtime.register(defineTool({ name, description: 'Fixture only', parameters: { sessionId: { type: 'string', required: true } }, output: { schema: { type: 'object', additionalProperties: true }, render: () => [] }, execute: () => { executed++; return {} } }))
-  const tools = { schemas: runtime.schemas.bind(runtime), get: runtime.get.bind(runtime), guard: runtime.guard.bind(runtime), register: (s: any) => runtime.register(defineTool(s)) }
+  const tools = { schemas: runtime.schemas.bind(runtime), get: runtime.get.bind(runtime), guard: runtime.guard.bind(runtime), register: (s: any) => runtime.register(process.env.NODE_ENV === 'test' ? defineTool(s) : s) }
   const cap = new SessionCapabilities({ tools, get: () => undefined, on: () => () => {}, agents: { get: () => agent } }, async () => ({}), db, () => [{ serverName, tools: ['browser_create'] }])
   const dispose = await cap.install()
   try {

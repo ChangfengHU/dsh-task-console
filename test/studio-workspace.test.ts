@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {mkdtemp,rm,mkdir,symlink,stat,readFile,writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {planStudioWorkspace,ensureStudioWorkspace} from '../src/studio-workspace.ts'
+import {planStudioWorkspace,ensureStudioWorkspace,planStudioBatchWorkspace,ensureStudioBatchWorkspace} from '../src/studio-workspace.ts'
 
 async function root(t:any){const path=await mkdtemp(join(tmpdir(),'studio workspace '));t.after(()=>rm(path,{recursive:true,force:true}));return path}
 test('workspace planning needs an existing absolute host root and writes nothing',async t=>{
@@ -36,4 +36,21 @@ test('symlink directories, owner markers and changed ownership fail closed',asyn
  await assert.rejects(ensureStudioWorkspace(plan,'T-one',plan.path),/ownership-conflict/)
  await rm(owner);await writeFile(owner,JSON.stringify({...plan,taskId:'T-other'}))
  await assert.rejects(ensureStudioWorkspace(plan,'T-one',plan.path),/ownership-conflict/)
+})
+
+test('batch workspace paths are host derived and cannot adopt another batch or symlink parent',async t=>{
+ const path=await root(t),other=await root(t),value=await planStudioBatchWorkspace(path,'T-one','b-one')
+ assert.equal(value.path,join(path,'studio-workspaces','T-one','batches','b-one'))
+ await assert.rejects(ensureStudioBatchWorkspace(path,value,'T-one','b-two',value.path,true),/batch-binding-invalid/)
+ await assert.rejects(ensureStudioBatchWorkspace(other,value,'T-one','b-one',value.path,true),/batch-binding-invalid/)
+ const task=await planStudioWorkspace(path,'T-one');await ensureStudioWorkspace(task,'T-one',task.path,true)
+ await symlink(other,join(task.path,'batches'))
+ await assert.rejects(ensureStudioBatchWorkspace(path,value,'T-one','b-one',value.path,true),/directory-conflict/)
+ await rm(join(task.path,'batches'));await ensureStudioBatchWorkspace(path,value,'T-one','b-one',value.path,true)
+ await writeFile(join(value.path,'keep.txt'),'first batch')
+ await ensureStudioBatchWorkspace(path,value,'T-one','b-one',value.path)
+ assert.equal(await readFile(join(value.path,'keep.txt'),'utf8'),'first batch')
+ await rm(value.path,{recursive:true})
+ await assert.rejects(ensureStudioBatchWorkspace(path,value,'T-one','b-one',value.path),/directory-conflict/)
+ await assert.rejects(stat(value.path),{code:'ENOENT'})
 })

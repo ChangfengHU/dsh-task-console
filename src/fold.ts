@@ -51,6 +51,8 @@ export interface TaskOrigin {
 export interface TaskTurn {
   /** Host-created only at an opted-in batch fire; legacy turns have no binding. */
   executionBinding?: import('./batch-execution-binding.ts').BatchExecutionBinding
+  /** Host-owned directory frozen with a newly opted-in batch, never supplied by callers. */
+  studioWorkspace?: import('./studio-workspace.js').StudioBatchWorkspace
   action?: import('./task-actions.ts').TaskActionSnapshot
   objective: string
   participants: Participant[]

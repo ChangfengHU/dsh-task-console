@@ -1,6 +1,7 @@
 import {StudioInterventions} from './studio-interventions.js'
 import {captureExecutionBinding,verifyExecutionBinding,withBoundPreset,executionRuntimeIdentity,ExecutionBindingError,type BatchExecutionBinding,type BoundFallback} from './batch-execution-binding.ts'
 import {workflowDefinition} from './workflow-plan.ts'
+import {planStudioBatchWorkspace,ensureStudioBatchWorkspace} from './studio-workspace.js'
 import {StudioPreparation,preparationBarrier,preparationOriginExited} from './studio-preparation.js'
 import { recoverStudioFailure, type StudioRecoveryInput } from './studio-recovery.ts'
 /**
@@ -112,6 +113,7 @@ export class TaskRunner {
   private ticking = false
   private backgroundTick?: ReturnType<typeof setImmediate>
   private backgroundBatches = new Set<string>()
+  private firing = new Map<string,{taskId:string;promise:Promise<Batch>}>()
   private dispatchSuspended = 0
   readonly maxInProgress: number
   private readonly clock: () => number
@@ -364,6 +366,8 @@ export class TaskRunner {
       // The first preflight is part of dispatch, so acknowledgement does not
       // wait for it, and restart cannot bypass it on a durable unclaimed batch.
       if (c.index === 0 && c.runIds.length === 0) {
+        try { await this.checkBatchWorkspace(task,batch,true) }
+        catch(error){await this.failInitialPreflight(task,c,error instanceof Error?error.message:'studio-workspace-invalid');continue}
         const problem = await this.preflight(task)
         if (problem) { await this.failInitialPreflight(task, c, problem); continue }
       }
@@ -418,13 +422,32 @@ export class TaskRunner {
       if (options.dispatch === 'background' && !existing.settled && !existing.archivedAt) this.queueDispatch(batchId)
       return existing
     }
+    const active=this.firing.get(batchId)
+    if(active){if(active.taskId!==taskId)throw Error('batchId 已被其他任务使用');return active.promise}
+    const promise=this.fireNew(template,by,{...options,batchId})
+    this.firing.set(batchId,{taskId,promise})
+    try{return await promise}finally{if(this.firing.get(batchId)?.promise===promise)this.firing.delete(batchId)}
+  }
+
+  private async fireNew(template:TaskSpec,by:Batch['by'],options:FireOptions&{batchId:string}):Promise<Batch>{
+    const taskId=template.id,batchId=options.batchId
     if (template.trigger.kind === 'cron' && !options.turn && this.scheduledTurn) options = { ...options, turn: await this.scheduledTurn(template, batchId) }
     if(options.turn?.executionBinding)throw new ExecutionBindingError('host-created-only')
-    const task = taskForTurn(template, options.turn)
+    if(options.turn?.studioWorkspace)throw Error('studio-workspace-host-created-only')
+    let task = taskForTurn(template, options.turn)
     if (!options.turn && (template.origin?.signalId || [...this.store.s.batches.values()].some(b => b.taskId === taskId && b.turn?.origin?.signalId))) {
       throw new Error('外部 Signal 任务请从来源系统重新提交，由 Task Agent 重新核对目标与角色；不能重跑旧模板。')
     }
     if (task.graphMode === 'dynamic-rounds' && task.participants.length !== 3) throw new Error('动态回合必须有规划者、执行者、评估者')
+    if(template.design?.workspaceMode&&task.design?.workspaceMode!==template.design.workspaceMode)throw Error('studio-workspace-mode-changed')
+    if(task.design?.workspaceMode!==undefined){
+      if(task.design.workspaceMode!=='studio-batch-v1'||task.design.evidenceContract!=='studio-video-v1')throw Error('unsupported-studio-workspace-mode')
+      if(options.turn?.cwd!==undefined&&options.turn.cwd!==template.cwd)throw Error('studio-workspace-override-forbidden')
+      const studioWorkspace=await planStudioBatchWorkspace(this.store.root,taskId,batchId)
+      const turn=options.turn??{objective:task.brief,participants:task.participants,workflow:{id:createHash('sha256').update(JSON.stringify(workflowDefinition(task))).digest('hex'),definition:workflowDefinition(task)}}
+      options={...options,turn:{...turn,cwd:studioWorkspace.path,studioWorkspace}}
+      task=taskForTurn(template,options.turn)
+    }
     if(task.design?.executionBinding==='agent-runtime-v1'){
       const definition=workflowDefinition(task)
       const turn=options.turn??{objective:task.brief,participants:task.participants,cwd:task.cwd,workflow:{id:createHash('sha256').update(JSON.stringify(definition)).digest('hex'),definition}}
@@ -437,6 +460,19 @@ export class TaskRunner {
     if (options.dispatch === 'background') this.queueDispatch(batchId)
     else await this.tick()
     return this.store.s.batches.get(batchId)!
+  }
+
+  private async checkBatchWorkspace(task:TaskSpec,batch:Batch,initial=false){
+    const value=batch.turn?.studioWorkspace
+    if(task.design?.workspaceMode===undefined&&!value)return // Immutable legacy batches retain their original cwd.
+    if(task.design?.workspaceMode!=='studio-batch-v1'||!value)throw Error('studio-workspace-batch-binding-missing')
+    const first=batch.cardIds[0],ready=this.store.kernel.listEvents(first).some(e=>e.kind==='studio_workspace_ready')
+    const used=batch.cardIds.some(id=>this.store.kernel.listRuns(id).length>0)
+    await ensureStudioBatchWorkspace(this.store.root,value,task.id,batch.id,task.cwd,initial&&!ready&&!used)
+    if(!ready){
+      if(!initial||used)throw Error('studio-workspace-allocation-evidence-missing')
+      this.store.kernel.recordEvent(first,'studio_workspace_ready',value)
+    }
   }
 
   private async failInitialPreflight(task: TaskSpec, first: Card, problem: string): Promise<void> {
@@ -520,6 +556,7 @@ export class TaskRunner {
     const assertStartupActive=()=>{const current=this.store.kernel.getTask(card.id);if(this.stopped||this.flights.get(sessionId)!==flight||current?.current_run_id!==flight.coreRunId||preparationBarrier(this.store.kernel.db,card.id))throw Error('studio-preparation-startup-superseded')}
     try {
       assertStartupActive()
+      try{await this.checkBatchWorkspace(task,batch)}catch(error){await this.finishBlocked(flight,error instanceof Error?error.message:'studio-workspace-invalid','capability');return}
       if(binding){
         if(bindingStartupError)throw new ExecutionBindingError('preset-unavailable')
         await verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity)
@@ -528,6 +565,7 @@ export class TaskRunner {
       const blocked = await this.beforeStart?.({ task, batch, card, sessionId, profileId })
       if (blocked) { await this.finishBlocked(flight, blocked.reason, blocked.kind); return }
       assertStartupActive()
+      try{await this.checkBatchWorkspace(task,batch)}catch(error){await this.finishBlocked(flight,error instanceof Error?error.message:'studio-workspace-invalid','capability');return}
       // The normalized CAS claim is durable before a DSH session is created.
       flight.sessionCreationAttempted=true
       const createSession=async()=>{
@@ -703,6 +741,7 @@ export class TaskRunner {
         const observed=await verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity)
         this.store.kernel.recordEvent(card.id,'execution_binding_verified',{bindingSha256:binding.sha256,runtimeSha256:binding.runtimeSha256,agentId:profileId,selection:observed.selection,permission:observed.permission,specSha256:observed.specSha256,compositionSha256:observed.compositionSha256,capabilitySha256:observed.capabilitySha256,skillsSha256:observed.skillsSha256},flight.coreRunId)
       }
+      try{await this.checkBatchWorkspace(task,batch)}catch(error){await this.finishBlocked(flight,error instanceof Error?error.message:'studio-workspace-invalid','capability');return}
       flight.handle.agent.followup({ id: messageId, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
       this.store.kernel.recordEvent(card.id, 'prompt_dispatched', { message_id: messageId }, flight.coreRunId)
       await this.append({ t: 'run/prompt_dispatched', taskId: task.id, runId, messageId })

@@ -8,6 +8,7 @@ const context={taskId:'fixture-new-task',cwd:'/workspace/new-isolated-video',cre
 test('ordinary request composes deterministic validated six-role save-only draft with no claimed source verification',()=>{
  const r=request(),copy=structuredClone(r),first=composeStudioTaskDraft(r,context),next=composeStudioTaskDraft(r,context)
  assert.deepEqual(first,next);assert.deepEqual(r,copy);assert.equal(first.draft.id,context.taskId);assert.equal(first.draft.createdAt,context.createdAt);assert.equal(first.draft.saveOnly,true)
+ assert.equal(first.draft.design?.workspaceMode,'studio-batch-v1')
  assert.equal(first.createdTask,false);assert.equal(first.startedTask,false);assert.equal(first.qualityApproved,false);assert.equal(first.resolution.verifiedByComposer,false);assert.equal(first.resolution.characterProfileVersionPinned,false)
  const task=first.draft;assert.equal(task.design?.evidenceContract,'studio-video-v1');assert.equal(task.design?.executionBinding,'agent-runtime-v1');assert.equal(task.design?.studio?.publish,false);assert.equal(task.design?.studio?.visualCoverage,'requirements-v1');assert.equal(task.design?.studio?.dialogueLanguage,'zh-CN')
  assert.deepEqual(task.participants.map(p=>p.agentId),[roles.director,roles.editor,roles.quality]);assert.deepEqual(task.design?.studioStages?.map(s=>s.agentId),[roles.storyboard,roles.visual,roles.sound]);assert.equal(task.design?.failurePolicy.maxAttempts,3)

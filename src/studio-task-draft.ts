@@ -20,7 +20,7 @@ export const STUDIO_TASK_REQUEST_CONTRACT={
  id:'studio-task-request-v1',required:['characterId','referenceUrl','referenceSha256','roles','generationLimits'],optional:['topic','durationMin','durationMax','maxRepairRounds'],additionalProperties:false,
  roles:[...STUDIO_TASK_ROLE_KEYS],defaults:{durationMin:90,durationMax:110,maxRepairRounds:2},
  maxRepairRounds:{type:'integer',minimum:0,maximum:2,meaning:'At most three production rounds including the initial candidate; requests for more repairs are rejected, never reduced silently.'},
- fixed:{width:1080,height:1920,fps:30,dialogueLanguage:'zh-CN',visualCoverage:'requirements-v1',publish:false,executionBinding:'agent-runtime-v1'},
+ fixed:{width:1080,height:1920,fps:30,dialogueLanguage:'zh-CN',visualCoverage:'requirements-v1',publish:false,executionBinding:'agent-runtime-v1',workspaceMode:'studio-batch-v1'},
  execution:{timeoutSec:7200,onFail:'retry',maxTries:3},topic:{maxCharacters:2000,blank:'autonomous selection using character and authorized available sources',input:'Use an explicitly supplied topic. When the user delegates topic discovery, omit this field and leave selection to the director; the Task Creator must not silently fix its own theme or attribute it to the user.'},
  generationLimits:{required:['imageCalls','imageBatches','voiceSegments'],imageCalls:{minimum:0,maximum:6,meaning:'generated image/prompt items'},imageBatches:{minimum:0,maximum:6,meaning:'generation submissions'},voiceSegments:{minimum:0,maximum:80,meaning:'synthesized voice segments'},default:null},
  reference:'Use the selected source metadata candidate URL on HTTPS cdn.vyibc.com and its declared expected SHA-256; no query/fragment/credentials or invented values. Unverified metadata may enter a pending-review draft. Host preflight must download and match actual bytes before production, followed by actual reference observation. Metadata and a matching hash do not establish baseline approval.',
@@ -58,7 +58,7 @@ export function composeStudioTaskDraft(raw:unknown,context:StudioDraftContext){
   '交付候选R2地址、工程、剧本、分镜、素材/音频清单、PUBLICATION.md、QA及实际截图和连续动作采样。必要署名放随片说明；仅交用户审核，不发布社交平台。只写宿主分配的本Task目录，按阶段/轮次保存版本；不改安装Skill、系统服务、浏览器登录，不启用新收费服务、下载TTS模型或读取输出凭据。',
  ].join('\n')
  const stageBriefs={storyboard:'将本轮冻结台词、角色人格与已核验参考转成完整分镜及逐镜素材需求；不得改写台词，登记真实分镜后交接。',visual:'按同轮分镜取得或生成真实表情、姿势、背景与道具，观察与核对裁切锚点，逐项绑定素材需求并登记；缺项明确回交。',sound:'按冻结原文和角色授权声音策略生成完整分句配音，实测时长并试听，获取许可配乐音效，登记完整sound-plan与实际音频。'}
- const design:TaskDesign={executionBinding:'agent-runtime-v1',evidenceContract:'studio-video-v1',studio:policy,studioStages:(['storyboard','visual','sound'] as const).map(id=>({id,agentId:roles[id],brief:stageBriefs[id]})),scope:'指定已解析角色与待核验参考候选，自主或按给定主题制作中文卡通并交R2预览；发布不在授权内。',branches:[
+ const design:TaskDesign={workspaceMode:STUDIO_TASK_REQUEST_CONTRACT.fixed.workspaceMode,executionBinding:'agent-runtime-v1',evidenceContract:'studio-video-v1',studio:policy,studioStages:(['storyboard','visual','sound'] as const).map(id=>({id,agentId:roles[id],brief:stageBriefs[id]})),scope:'指定已解析角色与待核验参考候选，自主或按给定主题制作中文卡通并交R2预览；发布不在授权内。',branches:[
   {id:'prepare',when:'角色、参考、工具、预算与当前能力已核对',action:'编导完成故事并冻结台词，交分镜、视觉、声音三个真实阶段节点',evidence:'冻结台词、参考观察、Task Link及阶段产物回执'},
   {id:'produce',when:'同轮分镜、视觉与声音已登记且文件未变化',action:'合成师按实际音频排镜并完成候选，上传真实预览',evidence:'实际MP4、公开URL字节及哈希、工程与配音时间表'},
   {id:'review',when:'当前候选已登记',action:'独立检查实际全片声音、画面、连续动作及认可参考',evidence:'与当前候选绑定的QA和观察回执，不使用旧版本结论'},

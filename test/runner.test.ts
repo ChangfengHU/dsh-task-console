@@ -1,7 +1,7 @@
 import {StudioInterventions} from '../src/studio-interventions.js'
 import {WorkflowExtensions} from '../src/workflow-extensions.js'
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises'
+import { mkdtemp, writeFile, mkdir, readFile, stat, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, after } from 'node:test'
@@ -1777,4 +1777,100 @@ test('studio unblock rolls back kernel transition when intervention write fails'
  await assert.rejects(runner.unblockCard(cardId),/intervention-id-conflict/)
  assert.equal(store.s.cards.get(cardId)?.status,'blocked');assert.equal(store.kernel.getTask(cardId)?.status,'blocked')
  assert.equal(store.all().filter(e=>e.t==='card/ready'&&e.cardId===cardId).length,0);runner.stop()
+})
+
+const isolatedStudioDesign=()=>({workspaceMode:'studio-batch-v1',evidenceContract:'studio-video-v1',scope:'fixture video',branches:[{id:'prepare',when:'authorized',action:'prepare',evidence:'receipt'}],coordination:'three roles',failurePolicy:{isolateItems:true,maxAttempts:3,stopConditions:['missing permission']},acceptance:['actual evidence'],studio:{characterId:'fixture-character',referenceUrl:'https://cdn.vyibc.com/reference.mp4',referenceSha256:'a'.repeat(64),generationLimits:{imageCalls:0,imageBatches:0,voiceSegments:0},publish:false}} as any)
+
+test('Studio batch fire freezes isolated durable paths, concurrent request IDs coalesce and paid preflight sees the owned directory',async()=>{
+ const observed:string[]=[]
+ const {runner,store,host,root}=await setup({graphMode:'dynamic-rounds',design:isolatedStudioDesign()},{registerStudioTools:async()=>()=>{},beforeStart:async input=>{assert.equal((await stat(input.task.cwd)).isDirectory(),true);assert.equal(JSON.parse(await readFile(join(input.task.cwd,'.studio-workspace.json'),'utf8')).batchId,input.batch.id);observed.push(input.task.cwd)}})
+ const [first,replay]=await Promise.all([runner.fire('T','manual',{batchId:'b-isolated-first',dispatch:'background'}),runner.fire('T','manual',{batchId:'b-isolated-first',dispatch:'background'})])
+ assert.equal(first.id,replay.id);assert.equal(store.s.batches.size,1)
+ assert.equal(first.turn?.cwd,join(store.root,'studio-workspaces','T','batches',first.id))
+ assert.equal(first.turn?.studioWorkspace?.mode,'studio-batch-v1');assert.equal(store.tasks.get('T')!.cwd,root)
+ assert.equal(store.kernel.db.prepare('SELECT workspace_path FROM tasks WHERE id=?').get(first.cardIds[0]).workspace_path,first.turn!.cwd)
+ await tick();assert.equal(host.sessions.size,1);assert.deepEqual(observed,[first.turn!.cwd])
+ await store.expandRound(store.tasks.get('T')!,first,store.s.cards.get(first.cardIds[0])!,'Expand fixture production')
+ assert.ok(store.kernel.db.prepare('SELECT workspace_path FROM tasks WHERE tenant=?').all(first.id).every((row:any)=>row.workspace_path===first.turn!.cwd))
+ await writeFile(join(first.turn!.cwd!,'output.txt'),'first movie')
+ const {TaskConsoleService}=await import('../src/service.ts')
+ const reply=JSON.parse(await TaskConsoleService.prototype.fireTask.call({ctx:{get:()=>undefined},runner} as any,JSON.stringify({id:'T',requestId:'manual-workspace-0001'})))
+ await tick();const second=store.s.batches.get(reply.batchId)!
+ assert.notEqual(first.turn!.cwd,second.turn!.cwd);assert.equal(observed.length,2)
+ await assert.rejects(stat(join(second.turn!.cwd!,'output.txt')),{code:'ENOENT'})
+ assert.equal(await readFile(join(first.turn!.cwd!,'output.txt'),'utf8'),'first movie')
+ await assert.rejects(runner.fire('T','manual',{batchId:'b-forged-workspace',turn:{objective:'x',participants:store.tasks.get('T')!.participants,cwd:root,studioWorkspace:first.turn!.studioWorkspace}}),/host-created-only/)
+ await assert.rejects(runner.fire('T','manual',{batchId:'b-forged-path',turn:{objective:'x',participants:store.tasks.get('T')!.participants,cwd:'/invented'}}),/override-forbidden/)
+ assert.equal(store.s.batches.size,2)
+})
+
+test('Studio suspended batch restores its frozen path after restart; later missing used directory blocks before paid work',async()=>{
+ const {runner,store,host,root}=await setup({graphMode:'dynamic-rounds',maxTries:3,design:isolatedStudioDesign()},{registerStudioTools:async()=>()=>{}})
+ const batch=await runner.fire('T','manual',{batchId:'b-workspace-restart',dispatch:'background'});runner.stop()
+ assert.equal(host.sessions.size,0);await assert.rejects(stat(batch.turn!.cwd!),{code:'ENOENT'})
+ store.kernel.db.close()
+ const restored=new EventStore(join(root,'store')),newHost=fakeHost(join(root,'presets'));let probes=0
+ const resumed=new TaskRunner(newHost.ctx,restored,{registerStudioTools:async()=>()=>{},beforeStart:async()=>{probes++}})
+ try{
+  await resumed.start();assert.equal(newHost.sessions.size,1);assert.equal(probes,1)
+  assert.equal(restored.s.batches.get(batch.id)!.turn!.cwd,batch.turn!.cwd)
+  await writeFile(join(batch.turn!.cwd!,'retained.txt'),'retained')
+  const sid=[...newHost.sessions.keys()][0];newHost.consumeFirst(sid)
+  newHost.emit(sid,{type:'turn/end',data:{reason:{kind:'error',error:{code:'FIXTURE',message:'retry fixture'}}}});await tick()
+  await resumed.tick();assert.equal(await readFile(join(batch.turn!.cwd!,'retained.txt'),'utf8'),'retained')
+  assert.equal(probes,2);assert.equal(restored.kernel.listRuns(batch.cardIds[0]).length,2)
+  await rm(batch.turn!.cwd!,{recursive:true})
+  const sid2=[...newHost.sessions.keys()].at(-1)!;newHost.consumeFirst(sid2)
+  newHost.emit(sid2,{type:'turn/end',data:{reason:{kind:'error',error:{code:'FIXTURE',message:'another retry'}}}});await tick()
+  await resumed.tick()
+  assert.equal(probes,2);assert.equal(newHost.sessions.size,2)
+  await assert.rejects(stat(batch.turn!.cwd!),{code:'ENOENT'})
+  assert.equal(restored.kernel.getTask(batch.cardIds[0])!.status,'blocked')
+  assert.match(restored.s.cards.get(batch.cardIds[0])!.lastBlockReason??'',/studio-workspace/)
+ }finally{resumed.stop();restored.kernel.db.close()}
+})
+
+test('Studio initial directory conflict blocks before host probes without adopting foreign files',async()=>{
+ let probes=0
+ const {runner,store,host}=await setup({graphMode:'dynamic-rounds',design:isolatedStudioDesign()},{registerStudioTools:async()=>()=>{},beforeStart:async()=>{probes++}})
+ const batch=await runner.fire('T','manual',{batchId:'b-workspace-conflict',dispatch:'background'});runner.stop()
+ await mkdir(batch.turn!.cwd!,{recursive:true});await writeFile(join(batch.turn!.cwd!,'foreign.txt'),'do not overwrite')
+ // start() reloads the durable batch, just like a restart before its first dispatch.
+ await runner.start()
+ assert.equal(probes,0);assert.equal(host.sessions.size,0);assert.equal(await readFile(join(batch.turn!.cwd!,'foreign.txt'),'utf8'),'do not overwrite')
+ assert.match(store.s.cards.get(batch.cardIds[0])!.error??'',/studio-workspace/)
+})
+
+test('Creator approval and Actions share runner batch allocation while legacy Studio cwd remains unchanged',async()=>{
+ const {runner,store,root}=await setup({graphMode:'dynamic-rounds',design:isolatedStudioDesign()},{registerStudioTools:async()=>()=>{}})
+ const creator=new TaskCreator(runner,async()=>['a','b','c'].map(id=>({id,name:id} as any)))
+ const proposal={decision:'create' as const,reason:'isolated fixture',title:'Isolated Studio',brief:'Produce fixture',graphMode:'dynamic-rounds' as const,participants:['a','b','c'].map(agentId=>({agentId})),design:isolatedStudioDesign(),actions:[{id:'produce',name:'Produce',template:'Produce {{topic}}',parameters:[{key:'topic',label:'Topic',type:'text' as const,required:true}]}]}
+ const plan=await creator.prepare(proposal,{agent:{session:{id:'workspace-creator',deriveMessages:()=>[{role:'user',content:'Create a fixture'}]}}},root)
+ const approved=await creator.review(plan.id,plan.hash,'approve','Fixture approval');await tick()
+ const first=store.s.batches.get(approved.batchId!)!,actions=creator.actions.read(approved.taskId!)
+ const action=await creator.launchAction({taskId:approved.taskId!,actionId:'produce',revision:actions.revision,values:{topic:'next'},requestId:'workspace-action-12345',cwd:root})
+ const next=store.s.batches.get(action.batchId)!
+ assert.notEqual(first.turn!.cwd,next.turn!.cwd);assert.ok(first.turn!.studioWorkspace);assert.ok(next.turn!.studioWorkspace)
+ const legacy=await setup({graphMode:'dynamic-rounds',design:{...isolatedStudioDesign(),workspaceMode:undefined}},{registerStudioTools:async()=>()=>{}})
+ const old=await legacy.runner.fire('T','manual')
+ assert.equal(old.turn?.studioWorkspace,undefined);assert.equal(legacy.store.tasks.get('T')!.cwd,legacy.root)
+ assert.equal(legacy.store.kernel.db.prepare('SELECT workspace_path FROM tasks WHERE id=?').get(old.cardIds[0]).workspace_path,legacy.root)
+})
+
+test('Studio scheduler freezes its occurrence path and keeps the existing no-overlap lease',async()=>{
+ let now=Date.parse('2026-01-01T00:00:00Z')
+ const {runner,store}=await setup({graphMode:'dynamic-rounds',design:isolatedStudioDesign(),trigger:{kind:'cron',expr:'* * * * *'}},{now:()=>now,registerStudioTools:async()=>()=>{}})
+ runner.schedule.sync(store.tasks.get('T')!,now);now+=60_000;await runner.tick()
+ const [batch]=[...store.s.batches.values()];assert.ok(batch);assert.equal(batch.by,'cron');assert.equal(batch.turn!.studioWorkspace!.batchId,batch.id)
+ assert.equal(batch.turn!.cwd,join(store.root,'studio-workspaces','T','batches',batch.id))
+ now+=60_000;await runner.tick();assert.equal(store.s.batches.size,1)
+})
+
+test('Studio workspace mutation during host preflight blocks session creation and keeps allocation evidence',async()=>{
+ const {runner,store,host}=await setup({graphMode:'dynamic-rounds',design:isolatedStudioDesign()},{registerStudioTools:async()=>()=>{},beforeStart:async input=>{await rm(input.task.cwd,{recursive:true})}})
+ const batch=await runner.fire('T','manual',{batchId:'b-preflight-workspace-drift'})
+ assert.equal(host.sessions.size,0);assert.equal(store.kernel.getTask(batch.cardIds[0]).status,'blocked')
+ assert.ok(store.kernel.listEvents(batch.cardIds[0]).some(e=>e.kind==='studio_workspace_ready'))
+ assert.match(store.s.cards.get(batch.cardIds[0])!.lastBlockReason??'',/studio-workspace/)
+ await assert.rejects(stat(batch.turn!.cwd!),{code:'ENOENT'})
 })

@@ -158,3 +158,16 @@ test('binding persists on reload, and preparation specialists are captured with 
  await s.save('a',{model:'provider/changed-after-reload'})
  await assert.rejects(verifyExecutionBinding(s.ctx,loaded.s.batches.get('batch')!.turn!.executionBinding!,'task','batch','a',s.runtime),/agent-drift/)
 })
+
+test('batch workspace and execution identity freeze together before any directory allocation or provider probe',async t=>{
+ const s=await runnerFixture(t,{registerStudioTools:async()=>()=>{}})
+ await s.save('c')
+ const task={...s.task,graphMode:'dynamic-rounds',participants:['a','b','c'].map(agentId=>({agentId})),design:{...s.task.design,evidenceContract:'studio-video-v1',workspaceMode:'studio-batch-v1'}}
+ await s.store.append({t:'task/created',at:'2026-09-24T00:00:00Z',taskId:task.id,task})
+ const [batch,replay]=await Promise.all([s.runner.fire(task.id,'manual',{batchId:'workspace-bound',dispatch:'background'}),s.runner.fire(task.id,'manual',{batchId:'workspace-bound',dispatch:'background'})]);s.runner.stop()
+ assert.equal(batch.id,replay.id);assert.equal(s.store.s.batches.size,1)
+ const turn=JSON.parse(s.store.kernel.db.prepare('SELECT turn_json FROM dsh_batches WHERE id=?').get(batch.id).turn_json)
+ assert.equal(turn.studioWorkspace.batchId,turn.executionBinding.batchId)
+ assert.equal(turn.cwd,turn.studioWorkspace.path);assert.equal(turn.workflow.definition.design.workspaceMode,'studio-batch-v1')
+ await assert.rejects(readFile(join(turn.cwd,'.studio-workspace.json')),{code:'ENOENT'});assert.equal(s.sessions.length,0)
+})

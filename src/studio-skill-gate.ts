@@ -22,7 +22,7 @@ export function requiredStudioSkills(input:any):readonly string[]{
  if(!stage)throw Error('studio-skill-stage-identity-required')
  return REQUIRED_STAGE_SKILLS[stage.id]
 }
-const READ_ONLY=new Set(['skill','read','glob','grep','studio_status','studio_read_text','studio_character_image','studio_character_profile','studio_reference_overview','studio_reference_frames','studio_reference_audio','studio_preview_image','studio_preview_frames','studio_preview_audio','session_capabilities','environment_capabilities','job_list','job_output','job_kill','task_block','task_notify'])
+const READ_ONLY=new Set(['skill','read','glob','grep','studio_status','studio_read_guide','studio_read_text','studio_character_image','studio_character_profile','studio_reference_overview','studio_reference_frames','studio_reference_audio','studio_preview_image','studio_preview_frames','studio_preview_audio','session_capabilities','environment_capabilities','job_list','job_output','job_kill','task_block','task_notify'])
 const READ_MCP=/(?:^|__|_)(?:character_get|character_assets|character_search|asset_get|asset_search|library_info|project_get|get_task|list_results)$/
 
 /** Workflow guard, not an OS sandbox or proof of comprehension/film quality. */

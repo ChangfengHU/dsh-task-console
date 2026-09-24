@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import sys
 from pathlib import Path
 import re
 import stat
@@ -227,10 +228,27 @@ def main():
     parser.add_argument('--vault-token-file', default=os.environ.get('STUDIO_VAULT_TOKEN_FILE'), help='Host-owned private token file; never pass token values')
     parser.add_argument('--dsh-profile', default='/home/claude/.dsh/profiles/web/cordis.patch.yml')
     parser.add_argument('--purpose', choices=['production', 'private-reference'], default='production')
+    parser.add_argument('--source-policy-stdin', action='store_true', help='Explicit project use for supported public source cards; JSON stdin, never a token')
     args = parser.parse_args()
     try:
         info = get_asset(args.asset_id, args.dsh_profile)
-        result = download(info, args.asset_id, args.project_root, args.output, args.vault_token_file, args.purpose)
+        if args.source_policy_stdin:
+            raw = sys.stdin.buffer.read(8193)
+            if len(raw) > 8192:
+                raise DownloadError('source_policy_invalid')
+            policy = json.loads(raw)
+            if args.purpose != 'production' or info.get('asset', {}).get('id') != args.asset_id:
+                raise DownloadError('source_policy_invalid')
+            if info.get('asset', {}).get('object') is not None:
+                raise DownloadError('source_card_required')
+            from acquire_incompetech_source import acquire_source_card, safe_failure
+            try:
+                result = acquire_source_card(info, args.project_root, args.output, policy)
+            except Exception as error:
+                print(json.dumps(safe_failure(error), ensure_ascii=False))
+                return 1
+        else:
+            result = download(info, args.asset_id, args.project_root, args.output, args.vault_token_file, args.purpose)
     except Exception as error:
         print(json.dumps(safe_error(error), ensure_ascii=False))
         return 1

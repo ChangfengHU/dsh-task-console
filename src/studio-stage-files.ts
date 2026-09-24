@@ -8,6 +8,7 @@ import {isStoryboardDocument,validateStoryboardScript} from './studio-storyboard
 import {probeStageMedia,requireStageMediaMetadata,stageMediaKind} from './studio-stage-media.js'
 import {inspectAudioSignal} from './studio-audio-signal.js'
 import {bindSoundPlan,soundPlanError} from './studio-sound-plan.js'
+import {bindVisualComponents,validateVisualComponentRequirements,type VisualComponentInputs} from './studio-visual-components.js'
 import {visualRequirements,bindVisualCoverage} from './studio-visual-coverage.js'
 const digest=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex')
 /** Bounded, read-only suggestions. Never import files or select creative assets. */
@@ -85,13 +86,38 @@ async function storyboardBinding(input:any,outputs:any[],workflow:any){
   if(bytes.length>8*1024*1024)throw Error('studio-storyboard-json-too-large')
   if(createHash('sha256').update(bytes).digest('hex')!==output.sha256)throw Error('studio-stage-file-changed')
   let board:any;try{board=JSON.parse(bytes.toString('utf8'))}catch{throw Error('studio-storyboard-json-invalid: repair JSON output before studio_register_stage')}
-  if(isStoryboardDocument(board)){validateStoryboardScript(board,script);if(input.task.design?.studio?.visualCoverage==='requirements-v1')visualRequirements(board);boards.push(output.path)}
+  if(isStoryboardDocument(board)){validateStoryboardScript(board,script);if(input.task.design?.studio?.visualCoverage==='requirements-v1')visualRequirements(board);if(input.task.design?.studio?.visualCoverage==='components-v2'){
+   const lockedId=input.task.design.studio.characterId,typed=validateVisualComponentRequirements({storyboard:{bytes,sha256:output.sha256},characterIds:[lockedId]})
+   if(!typed.requirements.some(r=>r.kind==='character'&&r.characterId===lockedId))throw Error('studio-storyboard-character-required: '+JSON.stringify({field:'visualRequirements.items',reason:'task-locked-character-not-represented',action:'Include the Task-designated character in the actual story and typed requirements. Background-only individual scenes are allowed; a background-only film cannot fulfill this character Task. Do not add a false declaration or invent files.',qualityApproved:false,pixelEvidence:'unverified'}))
+  }boards.push(output.path)}
  }
  if(!boards.length)throw Error('studio-storyboard-document-required: include a JSON storyboard with scenes and scriptSha256 matching studio_status.state.script; unrelated JSON files do not satisfy storyboard handoff')
- if(input.task.design?.studio?.visualCoverage==='requirements-v1'&&boards.length!==1)throw Error('studio-visual-coverage-required: register exactly one canonical storyboard before visual handoff')
+ if(['requirements-v1','components-v2'].includes(input.task.design?.studio?.visualCoverage)&&boards.length!==1)throw Error('studio-visual-coverage-required: register exactly one canonical storyboard before visual handoff')
  return {scriptSha256:script.sha256,boards}
 }
+/** Loads authoritative registered inputs only; callers also verify the stage receipts/actual media hashes. */
+export async function studioVisualComponentInputs(input:any,workflow:any,visualOutputs?:any[]):Promise<VisualComponentInputs>{
+ const story=workflow.stageReceipt(input,'storyboard'),paths=story?.scriptBinding?.boards
+ if(!Array.isArray(paths)||paths.length!==1)throw Error('studio-visual-components-required: exactly one registered storyboard is required')
+ const outputs=visualOutputs??workflow.stageReceipt(input,'visual')?.outputs
+ if(!Array.isArray(outputs))throw Error('studio-visual-components-required: registered visual stage outputs are required')
+ const load=async(f:any)=>{
+  if(!f||!Number.isFinite(f.bytes)||f.bytes<1||f.bytes>8*1024*1024)throw Error('studio-visual-components-document-invalid')
+  const bytes=await readFile(await studioPath(input.task.cwd,f.path,true))
+  if(bytes.length>8*1024*1024||createHash('sha256').update(bytes).digest('hex')!==f.sha256)throw Error('studio-stage-file-changed')
+  return {bytes,sha256:f.sha256}
+ }
+ const storyboard=await load(story.outputs.find((f:any)=>f.path===paths[0])),plans=[]
+ for(const f of outputs.filter((f:any)=>extname(f.path).toLowerCase()==='.json')){
+  const doc=await load(f);let value:any
+  try{value=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(doc.bytes))}catch{throw Error('studio-visual-components-document-invalid')}
+  if(value?.schema==='visual-plan-v2')plans.push(doc)
+ }
+ if(plans.length!==1)throw Error('studio-visual-components-required: include exactly one visual-plan-v2 with typed components, requirement bindings and actual registered image paths/SHA256; legacy visual-plan-v1 is not a v2 handoff')
+ return {storyboard,visualPlan:plans[0],outputs:outputs.filter((f:any)=>f.media?.kind==='image'),characterIds:[input.task.design.studio.characterId]}
+}
 async function visualBinding(input:any,outputs:any[],workflow:any){
+ if(input.task.design?.studio?.visualCoverage==='components-v2')return bindVisualComponents(await studioVisualComponentInputs(input,workflow,outputs))
  const receipt=workflow.stageReceipt(input,'storyboard'),paths=receipt?.scriptBinding?.boards
  if(!Array.isArray(paths)||paths.length!==1)throw Error('studio-visual-coverage-required: exactly one canonical registered storyboard is required')
  const boardFile=receipt.outputs.find((f:any)=>f.path===paths[0])
@@ -105,7 +131,7 @@ export async function verifyStageReceipt(input:any,receipt:any,workflow?:any) {
  if(!receipt || receipt.configSha256!==digest(input.task.design.studioStages) || receipt.batchId!==input.batch.id || receipt.round!==input.card.round)throw Error('studio-stage-receipt-required')
  for(const f of [receipt.manifest,...receipt.outputs]){const path=await studioPath(input.task.cwd,f.path,true);if(await fileSha256(path)!==f.sha256)throw Error('studio-stage-file-changed')}
  receipt.outputs.forEach((output:any,index:number)=>requireStageMediaMetadata(receipt.stage,output,index))
- if(receipt.stage==='visual'&&input.task.design?.studio?.visualCoverage==='requirements-v1'){
+ if(receipt.stage==='visual'&&['requirements-v1','components-v2'].includes(input.task.design?.studio?.visualCoverage)){
   if(!receipt.visualBinding||digest(receipt.visualBinding)!==digest(await visualBinding(input,receipt.outputs,workflow)))throw Error('studio-visual-coverage-required: receipt coverage missing or changed')
  }
  if(receipt.stage==='storyboard'){const binding=await storyboardBinding(input,receipt.outputs,workflow);if(!receipt.scriptBinding||digest(receipt.scriptBinding)!==digest(binding))throw Error('studio-storyboard-script-binding-required: frozen dialogue changed or legacy receipt has no verified binding; correct storyboard and re-register it before downstream generation')}
@@ -166,7 +192,7 @@ export async function registerStageFiles(input:any,pathValue:string,workflow:any
  if(await fileSha256(path)!==sha256)throw Error('studio-stage-file-changed')
  const scriptBinding=stage.id==='storyboard'?await storyboardBinding(input,outputs,workflow):undefined
  const audioBinding=stage.id==='sound'?await soundBinding(input,outputs,workflow,true):undefined
- const visual=stage.id==='visual'&&input.task.design?.studio?.visualCoverage==='requirements-v1'?await visualBinding(input,outputs,workflow):undefined
+ const visual=stage.id==='visual'&&['requirements-v1','components-v2'].includes(input.task.design?.studio?.visualCoverage)?await visualBinding(input,outputs,workflow):undefined
  const receipt={...(visual?{visualBinding:visual}:{}),...(scriptBinding?{scriptBinding}:{}),...(audioBinding?{stageContractVersion:2,soundBinding:audioBinding}:{}),stage:stage.id,round:input.card.round,batchId:input.batch.id,sessionId:input.sessionId,cardId:input.card.id,configSha256:digest(input.task.design.studioStages),manifest:{path:local(path),sha256},outputs,summary:value.summary.slice(0,4000),qualityApproved:false}
  await verifyStageReceipt(input,receipt,workflow);workflow.recordStageReceipt(input,receipt)
  return receipt

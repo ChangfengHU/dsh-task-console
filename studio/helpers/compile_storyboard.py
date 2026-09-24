@@ -8,7 +8,7 @@ def shape(value,required,optional,label):
  if not isinstance(value,dict): raise ValueError(label+'-must-be-object')
  missing=set(required)-value.keys();unknown=value.keys()-set(required)-set(optional)
  if missing: raise ValueError(label+'-missing-fields:'+','.join(sorted(missing)))
- if unknown: raise ValueError(label+'-unsupported-fields:'+','.join(sorted(unknown)))
+ if unknown: raise ValueError(label+'-unsupported-fields:'+','.join(k if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}',k) else '<non-schema-key>' for k in sorted(unknown)[:32]))
 def sha(p): return hashlib.sha256(p.read_bytes()).hexdigest()
 def number(v,lo,hi,name):
  if isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) or not lo<=v<=hi: raise ValueError('invalid-'+name)
@@ -19,11 +19,52 @@ def local(root,value):
  if root not in p.parents or not p.is_file(): raise ValueError('source-outside-project')
  return p
 
+def validate_planning_metadata(board):
+ """Optional width/height, scriptSha256, scene id/title/purpose and visualRequirements.
+ Retained in board.json only; declarations are not rendered or considered fulfilled assets.
+ The host separately binds script lines to its frozen record; this checks their supplied digest.
+ """
+ for key,expected in [('width',1080),('height',1920)]:
+  if key in board: number(board[key],expected,expected,key)
+ def text(value,field):
+  if not isinstance(value,str) or not value.strip(): raise ValueError('invalid-planning-metadata:'+field+' requires nonempty text')
+ if 'scriptSha256' in board:
+  lines=board.get('script')
+  if not isinstance(lines,list) or not lines: raise ValueError('scriptSha256-requires-frozen-lines')
+  ids=set();ordered=[]
+  for line in lines:
+   shape(line,['id','text'],[],'script-line');text(line['id'],'script.id');text(line['text'],'script.text')
+   if line['id'] in ids: raise ValueError('scriptSha256-duplicate-line-id')
+   ids.add(line['id']);ordered.append({'id':line['id'],'text':line['text']})
+  digest=hashlib.sha256(json.dumps(ordered,ensure_ascii=False,separators=(',',':')).encode('utf-8')).hexdigest()
+  if board['scriptSha256']!=digest: raise ValueError('scriptSha256-mismatch: use the exact ordered frozen id/text lines')
+ scenes=board.get('scenes');ids=set()
+ if not isinstance(scenes,list): raise ValueError('invalid-scenes')
+ for i,scene in enumerate(scenes):
+  if not isinstance(scene,dict): raise ValueError('scene-must-be-object')
+  for key in ['id','title','purpose']:
+   if key in scene:text(scene[key],f'scenes[{i}].{key}')
+  if 'id' in scene:
+   if scene['id'] in ids:raise ValueError('duplicate-scene-id')
+   ids.add(scene['id'])
+ if 'visualRequirements' in board:
+  if not scenes or any('id' not in scene for scene in scenes):raise ValueError('visualRequirements-requires-scene-ids')
+  items=board['visualRequirements'];requirement_ids=set();covered=set()
+  if not isinstance(items,list) or not 1<=len(items)<=200:raise ValueError('invalid-visualRequirements')
+  for i,item in enumerate(items):
+   shape(item,['id','sceneId','purpose'],[],f'visualRequirements[{i}]')
+   for key in ['id','sceneId','purpose']:text(item[key],f'visualRequirements[{i}].{key}')
+   if item['id'] in requirement_ids:raise ValueError('duplicate-visualRequirements-id')
+   if item['sceneId'] not in ids:raise ValueError('visualRequirements-unknown-scene')
+   requirement_ids.add(item['id']);covered.add(item['sceneId'])
+  if covered!=ids:raise ValueError('visualRequirements-missing-scene')
+
 def compile_board(root,board,out):
  root=pathlib.Path(root).resolve(strict=True);out=(root/out).resolve()
  if root not in out.parents or out.exists(): raise ValueError('new-project-subdirectory-required')
- shape(board,['schema','duration','gsap','font','script','scenes','audio'],['fps','background','notes'],'board')
+ shape(board,['schema','duration','gsap','font','script','scenes','audio'],['fps','background','notes','width','height','scriptSha256','visualRequirements'],'board')
  if board.get('schema')!=VERSION: raise ValueError('unsupported-schema')
+ validate_planning_metadata(board)
  duration=number(board['duration'],1,180,'duration');fps=number(board.get('fps',30),30,30,'fps')
  records={};media={}
  def source(value,kind):
@@ -46,7 +87,7 @@ def compile_board(root,board,out):
   if not isinstance(d,dict) or not d or set(d)-set(bounds): raise ValueError('invalid-transform')
   return {k:number(v,*bounds[k],k) for k,v in d.items()}
  for si,s in enumerate(scenes):
-  shape(s,['start','duration','layers'],['notes'],'scene')
+  shape(s,['start','duration','layers'],['notes','id','title','purpose'],'scene')
   start=number(s['start'],0,duration,'scene-start');length=number(s['duration'],.1,duration,'scene-duration')
   if abs(start-cursor)>.001 or start+length>duration+.001:
    raise ValueError(f'scene-gap-overlap-or-overrun: scenes[{si}] start={start:g}, previousEnd={cursor:g}, end={start+length:g}, board.duration={duration:g}; calculate cumulative times programmatically')

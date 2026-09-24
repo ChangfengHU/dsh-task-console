@@ -4,7 +4,7 @@ import { validateStudioPolicy as validateEvidencePolicy } from './studio-evidenc
 export interface StudioPolicy {
   characterId: string
   dialogueLanguage?: 'zh-CN'
-  visualCoverage?: 'requirements-v1'
+  visualCoverage?: 'requirements-v1' | 'components-v2'
   width: number
   height: number
   fps: number

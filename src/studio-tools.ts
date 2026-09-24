@@ -1,3 +1,4 @@
+import {studioGuide,studioGuideList} from './studio-guides.js'
 import {readStudioCharacterProfile,studioCharacterProfileSummary,characterProfileFallback,type StudioCharacterProfileLock} from './studio-character-profile.js'
 import {publicCharacterReference,type StudioCharacterReference} from './studio-character-source.js'
 import {STUDIO_REVIEW_PARAMETERS,validateReviewShape} from './studio-review-schema.js'
@@ -10,7 +11,7 @@ import {resolve,relative,sep,basename,extname,join} from 'node:path'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
 const run=promisify(execFile)
-export const STUDIO_TOOL_NAMES=['studio_character_profile','studio_request_preparation_revision','studio_render_start','studio_render_status','studio_download_asset','studio_register_stage','studio_status','studio_register_candidate','studio_read_text','studio_inspect_frames','studio_inspect_probe','studio_inspect_audio','studio_submit_review','studio_reference_overview','studio_reference_frames','studio_reference_audio','studio_character_image','studio_preview_audio','studio_preview_image','studio_preview_frames'] as const
+export const STUDIO_TOOL_NAMES=['studio_read_guide','studio_character_profile','studio_request_preparation_revision','studio_render_start','studio_render_status','studio_download_asset','studio_register_stage','studio_status','studio_register_candidate','studio_read_text','studio_inspect_frames','studio_inspect_probe','studio_inspect_audio','studio_submit_review','studio_reference_overview','studio_reference_frames','studio_reference_audio','studio_character_image','studio_preview_audio','studio_preview_image','studio_preview_frames'] as const
 const hash=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex')
 export async function fileSha256(path:string){const h=createHash('sha256');for await(const b of createReadStream(path))h.update(b);return h.digest('hex')}
 export async function studioPath(cwd:string,value:string,text=false){
@@ -35,6 +36,11 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
  const register=(name:string,description:string,parameters:any,execute:(args:any)=>Promise<any>,images=false,terminates=false)=>{
   disposers.push(agentCtx.tools.register(defineTool({name,description,parameters,output:{schema:{type:'object',additionalProperties:true},render:(_:any,v:any)=>[{type:'text',text:JSON.stringify(images?{...v,images:undefined}:v)},...(images&&!options.visionObserve?(v.images??[]).map((attachment:any)=>({type:'image',attachment})):[])]},async execute(args:any,exec:any){check(exec);const result=await execute(args);if(!terminates||!options.submitReview)check(exec);return JSON.parse(JSON.stringify(!terminates&&role==='reviewer'&&['studio_inspect_audio','studio_inspect_frames','studio_inspect_probe','studio_read_text'].includes(name)?{...result,reviewProgress:workflow.reviewProgress?.(input)??null}:result))}})))
  }
+ register('studio_read_guide','Read the complete packaged Studio execution contract or handoff cookbook. Fixed IDs only; no path access, provider call, skill-loading receipt or quality approval. Use execution before compiling and handoff for production handoffs.',{id:{type:'string',enum:['execution','handoff'],required:true}},async args=>{
+  requireRole(['planner','executor','reviewer','studio-stage'])
+  if(Object.keys(args).some(key=>key!=='id'))throw Error('studio-guide-arguments-invalid: only id is supported')
+  return studioGuide(args.id)
+ })
  register('studio_request_preparation_revision','Preparation specialist only: return a fundamental script/storyboard problem to the director BEFORE rendering. Provide a concise reason and an actual project evidence file. Host freezes the current round, settles original paid jobs, and releases the existing next planner with the same budget; no candidate MP4 is required. Do not use this for a transient download failure or to increase generation limits. After acceptance, stop creating assets and let the host retire this session.',{reason:{type:'string',required:true},evidencePath:{type:'string',required:true}},async args=>{
   requireRole(['studio-stage']);if(!options.requestPreparationRevision)throw Error('studio-preparation-revision-unavailable')
   const script=workflow.script(input);if(!script)throw Error('studio-script-required')
@@ -72,7 +78,7 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   // snapshot at both levels, avoiding split results at an expiration boundary.
   preflight=state.preflight??workflow.preflight(input.task)
   const artifacts=state.candidate?(()=>{const loc=workflow.candidateLocation(input);return {manifestPath:relative(input.task.cwd,loc.manifestPath),videoPath:relative(input.task.cwd,loc.path)}})():null
-  return {preflight,generationAllowance:state.generationAllowance??null,state:{...state,preflight},artifacts,executionAssets:await studioExecutionAssets(input.task.cwd),reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(publicCharacterReference),characterProfile:await studioCharacterProfileSummary(input.task,options.characterProfile)}
+  return {guides:studioGuideList(),preflight,generationAllowance:state.generationAllowance??null,state:{...state,preflight},artifacts,executionAssets:await studioExecutionAssets(input.task.cwd),reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(publicCharacterReference),characterProfile:await studioCharacterProfileSummary(input.task,options.characterProfile)}
  })
  register('studio_character_profile','Planner/producer/reviewer/preparation specialist: read the complete UTF-8 JSON character_get response from the exact host-locked profile file. No arguments, hidden-path override, provider call or refresh. Includes personality, scene plans and voice recommendations as recorded; design plans do not prove assets were generated.',{},async()=>{
   requireRole(['planner','executor','reviewer','studio-stage'])

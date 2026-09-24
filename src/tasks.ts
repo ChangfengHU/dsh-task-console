@@ -595,6 +595,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (task.targets?.length) lines.push('', '[TARGETS — RESOURCE METADATA ONLY]', task.targets.map(target => `${target.kind}:${target.id}${target.label ? ` (${target.label})` : ''}`).join('\n'))
   if (task.origin?.reviewPlanId) lines.push('', '[HOST REVIEW RELEASE]',
     `本 Run 已由独立审查放行，审批计划 ${task.origin.reviewPlanId}。原始消息中“先生成计划、等待审查、不执行”描述的创建阶段已完成；现在执行下方已审查的业务范围。其他禁止事项、宿主权限及验收要求仍有效，不因批准而扩大。`)
+  if(task.design?.studio)lines.push('', '[STUDIO GUIDES]', '调用 studio_read_guide({id:"handoff"}) 读取本包的制作交接示范；studio_status.guides列出固定指南及SHA。示例不是本Task的实际素材、冻结台词或质量证据。')
   if(task.design?.studioStages)lines.push('', '[STUDIO STAGES]', `当前轮次 ${card.round}。studio_status.state.stages列出本轮实际登记清单。读取stages/r${card.round}/中上游文件再行动；合成阶段必须汇聚分镜、视觉、声音三个交接，不能凭Gate完成就猜素材存在。阶段完成不等于整片通过。`)
   if(task.design?.evidenceContract==='studio-video-v1'&&['executor','studio-stage'].includes(card.role??''))lines.push('', '[STUDIO MEDIA ACQUISITION]',
     '异步生图只按本次提交的taskId调用get_task，逐项按idx/status/imageUrl建立文件映射；running或失败项不能用全局list_results最近图片补位。结果图保存taskId、idx、URL、实际sha256和实测尺寸；素材库复用另记真实来源，不冒称本次生成。图像观察指出角色或构图不符时必须处理或标为未通过，不能忽略后汇报全部匹配。',
@@ -606,7 +607,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
     '镜头时长必须由剧情、表演和实际声音支撑；冻结台词不证明故事足以支撑目标时长。先用认可片的实际画面/声音校准节奏，再设计完整故事和具体动作；不能把几句短台词拉长为整片或用静止留白补足时长。',
     '返修先读绑定当前候选的独立质量报告，区分剧本/分镜根因与局部剪辑问题。若当前候选已有major/blocker独立负评，studio_freeze_script允许编导修订后重新冻结完整台词；下游按新台词重新生成本轮分镜、声音和剪辑，并复用仍匹配的真实素材。没有该负评不能任意换剧本；不重置预算或靠删内容绕过验收。')
   if(task.design?.evidenceContract==='studio-video-v1'&&card.role==='executor')lines.push('', '[STUDIO EXECUTION BOARD]',
-    '采用结构化编译时先读本项目 STORYBOARD_EXECUTION.md 和当前 studio_compile_storyboard schema；规划分镜不是执行板。根字段为 schema=studio-board-v1、duration秒数、gsap、font、script、scenes、audio。沿用冻结台词，voice音轨逐条含lineId/text；场景需start/duration/layers，不能把frame描述当可执行图层。',
+    '采用结构化编译时先调用 studio_read_guide({id:"execution"}) 读取随包固定执行契约，并核对当前 studio_compile_storyboard schema；该指南不假定项目中存在文档文件；规划分镜不是执行板。根字段为 schema=studio-board-v1、duration秒数、gsap、font、script、scenes、audio。沿用冻结台词，voice音轨逐条含lineId/text；场景需start/duration/layers，不能把frame描述当可执行图层。',
     'scene.duration是视觉镜头持续时间，不是某句配音长度；台词、反应与无对白动作共同构成镜头，音轨时间单独按真实音频计算。编译前用短程序打印所有镜头start/duration/end及相邻差值，同时打印音轨边界，修正后复查。关键时刻之间不能留未渲染的空档；不能压缩整片、删剧情或静态填空来过检查。',
     '先读取 studio_status.executionAssets 中实际发现的本地GSAP/字体路径；若没有该字段则查现有工程文件。不能填包名、字体名或用Skill哈希猜运行库版本。根据同轮实际登记文件核对每个src；pending-generation不是存在的图片，缺失文件名应定位后处理，不能靠改绝对路径或反复重试解决。',
     '当前schema支持boardPath时，将完整执行板保存在项目内JSON，调用 studio_compile_storyboard({boardPath:相对JSON路径})，无需每次重新发送整份JSON；旧schema才用board对象。编译器负责创建输出目录，不预建目录、不先把源JSON写进输出目录，也不删除旧版规避output-exists。保持有效分镜，局部修正明确错误；失败编译不能直接交渲染。')

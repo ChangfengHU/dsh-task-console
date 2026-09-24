@@ -11,7 +11,7 @@ test('ordinary request composes deterministic validated six-role save-only draft
  assert.equal(first.draft.design?.workspaceMode,'studio-batch-v1')
  assert.equal(first.draft.design?.progressPolicy,'studio-bounded-v1')
  assert.equal(first.createdTask,false);assert.equal(first.startedTask,false);assert.equal(first.qualityApproved,false);assert.equal(first.resolution.verifiedByComposer,false);assert.equal(first.resolution.characterProfileVersionPinned,false)
- const task=first.draft;assert.equal(task.design?.evidenceContract,'studio-video-v1');assert.equal(task.design?.executionBinding,'agent-runtime-v1');assert.equal(task.design?.studio?.publish,false);assert.equal(task.design?.studio?.visualCoverage,'requirements-v1');assert.equal(task.design?.studio?.dialogueLanguage,'zh-CN')
+ const task=first.draft;assert.equal(task.design?.evidenceContract,'studio-video-v1');assert.equal(task.design?.executionBinding,'agent-runtime-v1');assert.equal(task.design?.studio?.publish,false);assert.equal(task.design?.studio?.visualCoverage,'components-v2');assert.equal(task.design?.studio?.dialogueLanguage,'zh-CN')
  assert.deepEqual(task.participants.map(p=>p.agentId),[roles.director,roles.editor,roles.quality]);assert.deepEqual(task.design?.studioStages?.map(s=>s.agentId),[roles.storyboard,roles.visual,roles.sound]);assert.equal(task.design?.failurePolicy.maxAttempts,3)
  assert.equal(task.timeoutSec,contract.execution.timeoutSec);assert.equal(task.onFail,contract.execution.onFail);assert.equal(task.maxTries,contract.execution.maxTries)
  assert.equal(task.design?.studio?.durationMin,contract.defaults.durationMin);assert.equal(task.design?.studio?.durationMax,contract.defaults.durationMax)

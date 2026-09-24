@@ -436,3 +436,33 @@ or broaden account grants to force diversity. Next: preserve current live Task,
 finish real verification, repair lost rollout configuration/persistence through
 the owning Fleet project after its deployment checks, and independently prove
 the requested custody path. No CF or target write was performed for this diagnosis.
+
+### 2026-09-24: restore custody setting and resume the same browser card
+
+First acceptance a096aa1f5a45573c1503d1643483c143 failed on browser1 signed_out
+at10:01:53Z; native Agent1123 called task_block and ended, retaining evidence.
+In linux-clash-skill, e916027 persists the accepted rollout flag in Wrangler vars
+with35 passing related tests. Historical CF version2e54774d independently proves
+prior activation. Settings-only restoration preserved actual live source and all
+other bindings; both fleet.vyibc.com and fleet-console.2513120790.workers.dev now
+return deliveryEnabled=true. See that project's2026-09-24-vault-delivery-persistence
+log for restoration checks. Actual candidate reader now returns delivery=vault,
+three eligible accounts, existing exclusion intact. This is not logout causality
+proof or permission to overwrite healthy login.
+
+Console unblockCard resumed the SAME Batch/card as Run1125/session suffix-2-t2;
+failed1123 remains, base1122 remains done and Runner has no premature Session.
+Second browser prepare44538f72af1c1b287dd6cfd080483676 completed10:11:55Z with
+changed=[], profilesPreserved=true, browserProcessesRestarted=false. Native Agent
+then started f502be401d1087fd037bc4d2b1807fb0 for the freshly signed-out browser1.
+Its real10:13:26Z vault_delivery_requested event selects gemini_648190cc from
+stored inventory, not live-copy; terminal login/stability evidence remains pending.
+Do not force re-copy healthy browser2 to test the restored transport.
+
+Public Chrome rechecked DAG/fullscreen in26.25s with0page errors. Public Fleet
+desktop/mobile screenshots /tmp/fleet-236-vault-restored-{desktop,mobile}.png show
+real9222/9223 browser rows, base host metrics, browser1 signed-out and browser2
+verified, with Runner continuity/lines still pending. This is intermediate truth,
+not full-node acceptance. A first browser fixture had an ambiguous duplicate name
+selector; scoping it to the actual nodeList fixed the test, not the production UI.
+No developer target SSH, browser import or process restart occurred.

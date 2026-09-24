@@ -1,3 +1,4 @@
+import {publicCharacterReference} from './studio-character-source.js'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { join,dirname,resolve,relative,isAbsolute,sep } from 'node:path'
 import { spawn } from 'node:child_process'
@@ -55,7 +56,7 @@ export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any
   try{result=await sharedPreflight(key,()=>exec(config.preflightScript,[],task,config,JSON.stringify(task)))}catch{result={capabilities:{}}}
   for(const [name,source] of [['character','character'],['reference','reference'],['frames','frames'],['render','hyperframes']]){const p=result?.capabilities?.[source];try{
    if(p?.ok!==true||!p.proofPath)throw Error('preflight unavailable');if(source==='hyperframes'&&(p.hyperframes_verified!==true||p.scope!=='actual_hyperframes_smoke_render'))throw Error('actual HyperFrames proof required')
-   if(source==='character'){if(p.characterId!==task.design.studio.characterId||await fileSha256(p.imagePath)!==p.imageSha256||await fileSha256(p.profilePath)!==p.sha256)throw Error('character lock mismatch');characterReferences=[{id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256}]}
+   if(source==='character'){if(p.characterId!==task.design.studio.characterId||await fileSha256(p.imagePath)!==p.imageSha256||await fileSha256(p.profilePath)!==p.sha256)throw Error('character lock mismatch');const ref={id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256,...(p.profileAssetId?{assetId:p.profileAssetId}:{}),...(p.sourceUrl!==undefined?{sourceUrl:p.sourceUrl,sourceSha256:p.sourceSha256}:{})};publicCharacterReference(ref);characterReferences=[ref]}
    else {if(await fileSha256(p.path)!==p.sha256)throw Error('preflight asset changed');if(source==='reference'){if(p.sha256!==task.design.studio.referenceSha256)throw Error('reference lock mismatch');reference={path:p.path,sha256:p.sha256}}}
    record(name,'passed',await fileSha256(p.proofPath),undefined,'host_preflight')
   }catch{record(name,'failed',undefined,`actual ${source} preflight missing or invalid`)}}

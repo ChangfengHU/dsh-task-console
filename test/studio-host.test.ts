@@ -59,3 +59,12 @@ test('observer network diagnostic preserves DNS and TLS classes but drops arbitr
   assert.match(detail.nextAction,reason==='gaierror'?/at most once/:/never disable certificate verification/);return true
  })
 })
+
+test('character preflight propagates exact safe source and fails changed source identity',async t=>{
+ const s=await setup(t),sourceUrl='https://cdn.vyibc.com/existing/reference.png'
+ const p={ok:true,path:s.path,sha256:s.sha256,proofPath:s.proofPath,characterId:'c',imagePath:s.path,imageSha256:s.sha256,profilePath:s.path,profileAssetId:'profile',sourceUrl,sourceSha256:s.sha256}
+ const result=await refreshStudioCapabilities(s.workflow,s.task,{config:{preflightScript:'source-fixture'},execute:async()=>({capabilities:{character:p}})})
+ assert.equal(result.characterReferences[0].sourceUrl,sourceUrl);assert.equal(result.characterReferences[0].sourceSha256,s.sha256);assert.equal(result.characterReferences[0].assetId,'profile')
+ const bad=await refreshStudioCapabilities(s.workflow,s.task,{config:{preflightScript:'bad-source-fixture'},execute:async()=>({capabilities:{character:{...p,sourceUrl:sourceUrl+'?token=SECRET'}}})})
+ assert.deepEqual(bad.characterReferences,[]);assert.ok(!JSON.stringify(bad.characterReferences).includes('SECRET'))
+})

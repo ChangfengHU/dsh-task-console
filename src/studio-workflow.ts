@@ -1,6 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto'
 import {validateStudioPolicy} from './studio-policy.js'
 import {evaluateStudioReview} from './studio-evidence.mjs'
+import {studioStageFor} from './studio-stages.js'
 
 const NAMES=['frames','audio','audio_calibration','render','character','reference'] as const
 const HASH=/^[a-f0-9]{64}$/i
@@ -90,7 +91,8 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   }
   recordBudget(input:any,budget:any){strict(budget,['repairRounds','used','limits','exceeded','maxRepairRounds'],'budget');this.write(input,'budget',budget)}
   recordSkillLoad(input:any,receipt:any){
-    if(input.card?.role!=='executor'||!HASH.test(receipt.sha256??'')||typeof receipt.name!=='string'||typeof receipt.callId!=='string'||!Number.isInteger(receipt.bytes)||receipt.bytes<1)throw Error('studio-skill-load-invalid')
+    const productionRole=input.card?.role==='executor'||(input.card?.role==='studio-stage'&&!!studioStageFor(input))
+    if(!productionRole||!HASH.test(receipt.sha256??'')||typeof receipt.name!=='string'||typeof receipt.callId!=='string'||!Number.isInteger(receipt.bytes)||receipt.bytes<1)throw Error('studio-skill-load-invalid')
     const rows=(this.read(input,'skill_loads')??[]).filter((r:any)=>r.sessionId!==input.sessionId||r.name!==receipt.name)
     this.write(input,'skill_loads',[...rows,{...receipt,sessionId:input.sessionId,policyHash:sha(this.policy(input.task)),at:new Date().toISOString()}])
   }

@@ -549,6 +549,11 @@ rewritten immediate handoff. The existing planner/Gate/executor/reviewer dynamic
 protocol remains separate; do not invent Gate nodes for static business chains.
 The Board reuses database-truth replay for both. Session Trace stays in a drawer;
 operations may deliver a text report without an HTML artifact.
+The separate execution report also shows partial/failed sequential workflows
+without requiring an artifact: role state, latest actual Run, safe failure code
+and retained handoff. It uses the displayed graph frame only; a historical frame
+must not borrow a later Batch outcome or failure. This does not alter acceptance,
+hide failed attempts, or reinterpret a model timeout as a machine/login failure.
 
 Chat workflow executions store the redacted `userRequest` separately and a
 content-addressed `TaskTurn.workflow` definition (goal, role briefs, graph mode and

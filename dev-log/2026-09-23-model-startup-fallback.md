@@ -592,3 +592,15 @@ ownership and absence of live-profile/module references, about9MiB. Rebuild from
 their pushed integration revisions with scripts/build.mjs. Final27c97b3 candidate
 and screenshots remain for activation/verification; dependencies and older owners'
 files were not deleted. Unrelated main lib/* modifications remain untouched.
+
+### 2026-09-24: partial/failed execution report
+
+Public screenshot proved the failed236 report showed only waiting-for-artifacts.
+Add a pure current-frame progress summary for non-dynamic workflows, preserving
+the separate report route/layout, artifact actions, Sessions and replay. Show each
+role's latest actual Run/outcome/handoff and unstarted roles; known model error
+codes have bounded explanations, raw provider error payloads are not exposed.
+Historical replay receives no later Batch outcome. Successful workflow and dynamic
+planner final-summary behavior are unchanged. Six focused report/replay tests pass,
+including TIMEOUT versus target-health distinction and secret-like error suppression.
+Candidate browser check, integrated tests and live activation remain pending here.

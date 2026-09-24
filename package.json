@@ -65,7 +65,10 @@
     "studio/roles",
     "studio/manifest.json",
     "studio/README.md",
-    "scripts/package-studio.mjs"
+    "scripts/package-studio.mjs",
+    "scripts/configure-studio.mjs",
+    "scripts/prepare-package.mjs",
+    "docs/studio-configuration.md"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -75,8 +78,9 @@
     "preset:creator": "node scripts/install-task-create.mjs",
     "test": "NODE_ENV=test tsx --test test/*.test.ts",
     "kernel:check": "npm --prefix cloudflare run check",
-    "prepack": "node scripts/package-studio.mjs",
-    "test:studio-package": "node --test test/studio-package-payload.test.mjs"
+    "prepack": "node scripts/prepare-package.mjs",
+    "test:studio-package": "node --test test/studio-package-payload.test.mjs",
+    "studio:configure": "node scripts/configure-studio.mjs"
   },
   "dsh": {
     "bundle": {

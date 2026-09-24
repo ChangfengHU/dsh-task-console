@@ -1,6 +1,14 @@
 {
   "schema": "studio-package-v1",
   "files": {
+    "roles/README.md": "c58af62234f87e69fcd2405a458c653e8a81b61dc8744a6f2d3e617d521478a0",
+    "roles/manifest.json": "ea993ddb03aa7b68098284b176e8b7b343664bacee9d4983c1c90c1e7c503e0c",
+    "roles/director/task-console.json": "51b671e7c5517757b7b182f7ca326e059fab4d1a8d0f2f00bd3377b1c7f0e8d8",
+    "roles/storyboard/task-console.json": "8e95e1a1d443878ffa823b8df2099a63116646d14f52ed7a8aad0ccd6e1dbed7",
+    "roles/visual/task-console.json": "a13749359f02b94381d3606e21268c48e944e90c83deddbc3aeb5a4be658700e",
+    "roles/sound/task-console.json": "d63a1559bf48d329df70e8419e76ef7ee9f22832e85939111bac9a486f9f12d9",
+    "roles/editor/task-console.json": "efef44cfc5f7e3b95283eba60df0f79b071f91144ba882eb7e4c36f6dd44d28f",
+    "roles/quality/task-console.json": "db1516c5ef481d1954d74d44cb0be39b311409afaab1253ef3155bdabc47458d",
     "helpers/audio_observe_host.py": "b0b85b39153d5dfb4dcc61227d46246e928b8e73959a7f7c87dfb1021b1e8250",
     "helpers/audio_review.py": "d1ff29d6435596764ec0ca66ae61bfec7658f3874f7cd22af9b0261c7c7522a6",
     "helpers/audio_signals.py": "ebe844143ee2fea3dc8f844200386627a1d9622a26740aca3bf39a8ac25752c2",
@@ -18,6 +26,7 @@
     "speech-differential-regression.json"
   ],
   "proofsPackaged": false,
-  "scope": "python-helper-closure",
+  "rolesPackaged": true,
+  "scope": "python-helper-closure-and-role-templates",
   "runtimeVerified": false
 }

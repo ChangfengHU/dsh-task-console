@@ -18,7 +18,7 @@ export async function downloadStudioAsset(task:any,args:{id:string;path:string},
  if(!/^[A-Za-z0-9_-]{1,160}$/.test(args.id??''))throw Error('studio-asset-id-invalid')
  if(typeof args.path!=='string'||!args.path||isAbsolute(args.path)||args.path.includes('\0')||args.path.split(/[\\/]/).some(p=>p.startsWith('.')||/credential|secret|token|password|private.?key/i.test(p)))throw Error('studio-asset-output-invalid')
  const root=await realpath(task.cwd)
- const result=await(deps.execute??execute)(config.assetDownloadScript,['--project-root',root,'--id',args.id,'--output',args.path],task,config)
+ const result=await(deps.execute??execute)(config.assetDownloadScript,['--project-root',root,'--id',args.id,'--output',args.path,...(config.dshProfilePath?['--dsh-profile',config.dshProfilePath]:[])],task,config)
  if(result?.ok!==true){
   const codes:Record<string,string>={asset_metadata_only:'source-only',output_exists_with_other_bytes:'output-exists-with-other-bytes',installed_asset_transport_missing:'installed-asset-auth-unavailable',installed_asset_transport_unsupported:'installed-asset-auth-unavailable',asset_lookup_failed:'asset-lookup-failed',proxy_authorization_denied:'asset-file-auth-failed',download_integrity_failed:'download-integrity-failed',invalid_asset_metadata:'invalid-asset-metadata',invalid_archived_asset:'invalid-asset-metadata',private_reference_not_for_production:'private-reference-not-for-production',output_extension_mismatch:'output-extension-mismatch'}
   const code=codes[result?.error_code]??'asset-download-failed'

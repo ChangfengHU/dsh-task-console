@@ -25,6 +25,13 @@ test('source-only and transport failures expose actionable fixed messages withou
  const bad=await downloadStudioAsset(task,{id:'source-card',path:'music.mp3'},{config,execute:async()=>({ok:false,error_code:'SECRET',message:'Bearer SECRET'})})
  assert.equal(bad.error_code,'asset-download-failed');assert.doesNotMatch(JSON.stringify(bad),/SECRET/)
 })
+test('configured nonoriginal DSH profile reaches the existing downloader CLI explicitly',async t=>{
+ const {task,config,cwd}=await setup(t),profile=join(cwd,'other user','web 配置.yml')
+ const result=await downloadStudioAsset(task,{id:'source-card',path:'music.mp3'},{config:{...config,dshProfilePath:profile},execute:async(_,argv)=>{
+  assert.deepEqual(argv.slice(-2),['--dsh-profile',profile]);return {ok:false,error_code:'asset_metadata_only'}
+ }})
+ assert.equal(result.error_code,'source-only')
+})
 test('metadata claims cannot certify absent or altered files',async t=>{
  const {task,config,cwd}=await setup(t)
  await writeFile(join(cwd,'clip.wav'),'unauthorized')

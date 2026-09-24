@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {createHash} from 'node:crypto'
 import Database from 'better-sqlite3'
 import {StudioOperations} from '../src/studio-operations.js'
-function setup(t:any,limits={imageCalls:6,voiceSegments:30}){const db=new Database(':memory:');t.after(()=>db.close());const ops=new StudioOperations({kernel:{db}});const input={task:{id:'task'},batch:{id:'batch'},card:{role:'executor'}};ops.configure(input,limits);return {db,ops,input}}
+function setup(t:any,limits:{imageCalls:number;voiceSegments:number;imageBatches?:number}={imageCalls:6,voiceSegments:30}){const db=new Database(':memory:');t.after(()=>db.close());const ops=new StudioOperations({kernel:{db}});const input={task:{id:'task'},batch:{id:'batch'},card:{role:'executor'}};ops.configure(input,limits);return {db,ops,input}}
 const receipt=(v:any)=>({content:[{type:'text',text:JSON.stringify(v)}]})
 const args={segments:[{text:'你好',voice_type:'voice'}]}
 test('canonical requests replay without second dispatch',async t=>{const {ops,input}=setup(t);let calls=0;const call=async()=>{calls++;return receipt({ok:true,job_id:'j1',status:'queued'})};const a=await ops.invoke(input,'vyibc-voice_synthesize',args,call);const b=await ops.invoke(input,'vyibc-voice_synthesize',{segments:[{voice_type:'voice',text:'你好'}]},call);assert.deepEqual(a,b);assert.equal(calls,1);assert.equal(ops.snapshot(input).used.voiceSegments,1)})
@@ -87,4 +87,20 @@ test('unknown image submission cannot be bypassed by changing its public referen
  await assert.rejects(restarted.invoke(input,'vyibc-image_generate_image',{...request,referenceImageUrl:'https://cdn.example.test/character-v2.png'},async()=>{calls++;return receipt({task_id:'duplicate-charge'})}),/prior-submission-unknown/)
  assert.equal(calls,1);assert.equal(restarted.snapshot(input).used.imageCalls,1)
  assert.equal(restarted.snapshot(input).operations[0].state,'unknown')
+})
+
+
+test('frozen image batches reject third dispatch despite remaining units and survive restart',async t=>{
+ const {db,ops,input}=setup(t,{imageCalls:6,voiceSegments:30,imageBatches:2});let calls=0
+ const send=async()=>{calls++;return receipt({task_id:'image-'+calls,status:calls===1?'completed':'failed'})}
+ await ops.invoke(input,'vyibc-image_generate_image',{prompts:['a','b','c','d']},send)
+ const failed=await ops.invoke(input,'vyibc-image_generate_image',{prompt:'e'},send)
+ const restarted=new StudioOperations({kernel:{db}}),before=restarted.snapshot(input)
+ assert.equal(before.used.imageCalls,5);assert.equal((before.used as any).imageBatches,2)
+ await assert.rejects(restarted.invoke(input,'vyibc-image_generate_image',{prompt:'f'},send),(error:any)=>{
+  assert.match(error.message,/batch-limit/);const details=JSON.parse(error.message.split(': ')[1]);assert.equal(details.remainingImageUnits,1);assert.equal(details.dispatched,false);return true
+ })
+ assert.deepEqual(await restarted.invoke(input,'vyibc-image_generate_image',{prompt:'e'},send),failed)
+ assert.equal(calls,2);assert.deepEqual(restarted.snapshot(input),before)
+ assert.throws(()=>restarted.configure(input,{imageCalls:6,voiceSegments:30,imageBatches:3}),/cannot-change/)
 })

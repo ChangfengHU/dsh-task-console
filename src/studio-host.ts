@@ -1,3 +1,4 @@
+import {readStudioHostConfiguration} from './studio-config.js'
 import {readStudioCharacterProfile,type StudioCharacterProfileLock} from './studio-character-profile.js'
 import {publicCharacterReference} from './studio-character-source.js'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -8,11 +9,10 @@ import { fileSha256,studioPath } from './studio-tools.js'
 import type { StudioWorkflow } from './studio-workflow.js'
 const hash=(v:string)=>createHash('sha256').update(v).digest('hex')
 // Host deployment configuration, never a model-supplied task field.
-async function configuration(): Promise<any> {try{return JSON.parse(await readFile(new URL('../studio-host.json',import.meta.url),'utf8'))}catch{return {}}}
-interface HostDeps {config?:any;execute?:(script:string,args:string[],task:any,config:any,stdin?:string)=>Promise<any>}
+interface HostDeps {config?:any;configPath?:string;execute?:(script:string,args:string[],task:any,config:any,stdin?:string)=>Promise<any>}
 /** Existing library blobs only. Installed MCP authorizes the ID before private transfer. */
 export async function downloadStudioAsset(task:any,args:{id:string;path:string},deps:HostDeps={}){
- const config=deps.config??await configuration()
+ const config=deps.config??await readStudioHostConfiguration(deps.configPath)
  if(!config.assetDownloadScript||!/^[a-f0-9]{64}$/.test(config.assetDownloadSha256??'')||!config.vaultTokenFile)throw Error('studio-asset-download-host-not-configured')
  if(await fileSha256(config.assetDownloadScript)!==config.assetDownloadSha256)throw Error('studio-asset-download-helper-changed')
  if(!/^[A-Za-z0-9_-]{1,160}$/.test(args.id??''))throw Error('studio-asset-id-invalid')
@@ -29,7 +29,7 @@ export async function downloadStudioAsset(task:any,args:{id:string;path:string},
  return {ok:true,assetId:args.id,path:relative(root,path),sha256:result.sha256,bytes:size,kind:result.kind,reused:result.reused,newGeneration:0,qualityApproved:false}
 }
 async function execute(script:string,args:string[],task:any,config:any,stdin?:string):Promise<any>{
- return new Promise((resolve,reject)=>{const child=spawn('python3',[script,...args],{env:{...process.env,STUDIO_PROJECT_ROOT:task.cwd,STUDIO_TASK_ID:String(task.id??''),STUDIO_VAULT_TOKEN_FILE:config.vaultTokenFile??'',STUDIO_OBSERVATION_CACHE_ROOT:config.observationCacheRoot??'',STUDIO_OBSERVATION_CACHE_EPOCH:config.observationCacheEpoch??''},stdio:['pipe','pipe','ignore']});let output='',overflow=false,done=false
+ return new Promise((resolve,reject)=>{const child=spawn('python3',[script,...args],{env:{...process.env,...(config.dshProfilePath?{STUDIO_DSH_PROFILE:config.dshProfilePath}:{}),...(config.renderRuntime?{STUDIO_RENDER_RUNTIME:config.renderRuntime}:{}),STUDIO_PROJECT_ROOT:task.cwd,STUDIO_TASK_ID:String(task.id??''),STUDIO_VAULT_TOKEN_FILE:config.vaultTokenFile??'',STUDIO_OBSERVATION_CACHE_ROOT:config.observationCacheRoot??'',STUDIO_OBSERVATION_CACHE_EPOCH:config.observationCacheEpoch??''},stdio:['pipe','pipe','ignore']});let output='',overflow=false,done=false
  const finish=(err?:Error,result?:any)=>{if(done)return;done=true;clearTimeout(timer);if(err)reject(err);else resolve(result)}
  const timer=setTimeout(()=>{child.kill('SIGKILL');finish(Error('studio-host-subprocess-timeout'))},420000)
  child.stdout.on('data',b=>{output+=b.toString();if(output.length>2_000_000){overflow=true;child.kill('SIGKILL')}});child.on('error',()=>finish(Error('studio-host-subprocess-unavailable')));child.stdin.on('error',()=>{});child.stdin.end(stdin??'')
@@ -49,11 +49,11 @@ async function sharedIdentity(key:string,config:any){
  try{return await request}finally{if(identities.get(key)===request)identities.delete(key)}
 }
 async function preflightIdentity(config:any){
- const runtime=process.env.STUDIO_RENDER_RUNTIME??'/home/claude/dsh-studio-migration/render-runtime'
+ const runtime=config.renderRuntime??process.env.STUDIO_RENDER_RUNTIME??'/home/claude/dsh-studio-migration/render-runtime'
  const paths=[config.preflightScript,...[runtime,config.renderRuntime].filter((v,i,a)=>v&&a.indexOf(v)===i).flatMap(root=>[
   join(root,'node_modules/hyperframes/package.json'),join(root,'node_modules/hyperframes/bin/hyperframes.mjs'),join(root,'node_modules/ffmpeg-static/ffmpeg')]),
   process.env.FFMPEG_PATH??'', '/usr/bin/node','/usr/bin/google-chrome','/usr/bin/ffprobe',
-  process.env.STUDIO_DSH_PROFILE??'/home/claude/.dsh/profiles/web/cordis.patch.yml',config.vaultTokenFile].filter(Boolean)
+  config.dshProfilePath??process.env.STUDIO_DSH_PROFILE??'/home/claude/.dsh/profiles/web/cordis.patch.yml',config.vaultTokenFile].filter(Boolean)
  // Metadata detects replacement of large host binaries without rereading them
  // on every handoff; helper/package bytes also bind same-path code updates.
  const files=await Promise.all(paths.map(async path=>{try{const [info,actual]=await Promise.all([stat(path),realpath(path)]);return [path,actual,info.dev,info.ino,info.size,info.mtimeMs,info.ctimeMs,
@@ -92,7 +92,7 @@ async function sharedPreflight(key:string,task:any,run:()=>Promise<any>){
  try{return await request}finally{if(preflights.get(key)===request)preflights.delete(key)}
 }
 export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any,deps:HostDeps={}){
- const config=deps.config??await configuration(),exec=deps.execute??execute,now=Date.now(),checkedAt=new Date(now).toISOString(),expiresAt=new Date(now+15*60_000).toISOString()
+ const config=deps.config??await readStudioHostConfiguration(deps.configPath),exec=deps.execute??execute,now=Date.now(),checkedAt=new Date(now).toISOString(),expiresAt=new Date(now+15*60_000).toISOString()
  const record=(name:string,status:string,proofSha256?:string,reason?:string,method?:string,timing?:PreflightSnapshot)=>(workflow as any).recordCapability(task,{name,status,checkedAt:timing?new Date(timing.checkedAt).toISOString():checkedAt,expiresAt:timing?new Date(timing.expiresAt).toISOString():expiresAt,...(proofSha256?{proofSha256}:{}),...(reason?{reason}:{}),...(method?{method}:{})})
  let result:any,reference:any,characterReferences:any[]=[],characterProfile:StudioCharacterProfileLock|undefined
  if(config.preflightScript){const scope=JSON.stringify({id:task.id,cwd:task.cwd,studio:task.design?.studio,config,environment:preflightEnvironment()}),key=hash(JSON.stringify({scope,host:await sharedIdentity(scope,config)}))
@@ -142,17 +142,17 @@ function audioFailure(result:any,prefix:string){
  throw Error(`${prefix}-failed:${stage}:${type}${status}${Object.keys(details).length?'; '+JSON.stringify(details):''}`)
 }
 export async function observeStudioAudio(task:any,args:{wavPath:string,start:number,end:number},deps:HostDeps={}){
- const config=deps.config??await configuration();if(!config.audioScript||!config.vaultTokenFile)throw Error('studio-audio-host-not-configured');const result=await(deps.execute??execute)(config.audioScript,[args.wavPath,'--start-seconds',String(args.start),'--end-seconds',String(args.end)],task,config)
+ const config=deps.config??await readStudioHostConfiguration(deps.configPath);if(!config.audioScript||!config.vaultTokenFile)throw Error('studio-audio-host-not-configured');const result=await(deps.execute??execute)(config.audioScript,[args.wavPath,'--start-seconds',String(args.start),'--end-seconds',String(args.end)],task,config)
  audioFailure(result,'studio-audio');if(result.input_modality!=='input_audio'||result.finish_reason!=='stop'||result.audio_sha256!==await fileSha256(args.wavPath))throw Error('studio-audio-observation-invalid');return result
 }
 export async function checkStudioSpeech(task:any,args:{wavPath:string,start:number,end:number,expectedText:string,stage:'source'|'final'},deps:HostDeps={}){
- const config=deps.config??await configuration();if(!config.speechScript||!config.vaultTokenFile)throw Error('studio-speech-host-not-configured');const result=await(deps.execute??execute)(config.speechScript,[args.wavPath,'--expected-text',args.expectedText,'--stage',args.stage,'--start-seconds',String(args.start),'--end-seconds',String(args.end)],task,config)
+ const config=deps.config??await readStudioHostConfiguration(deps.configPath);if(!config.speechScript||!config.vaultTokenFile)throw Error('studio-speech-host-not-configured');const result=await(deps.execute??execute)(config.speechScript,[args.wavPath,'--expected-text',args.expectedText,'--stage',args.stage,'--start-seconds',String(args.start),'--end-seconds',String(args.end)],task,config)
  audioFailure(result,'studio-speech');if(result.audio_sha256!==await fileSha256(args.wavPath)||result.expected_text_sha256!==hash(args.expectedText)||!['pass','blocked'].includes(result.content_gate))throw Error('studio-speech-observation-invalid');return result
 }
 
 /** Actual Qwen VL observations; the language planner cannot self-attest seeing an image. */
 export async function observeStudioVision(task:any,args:import('./studio-tools.js').VisionInput,deps:HostDeps={}){
- const config=deps.config??await configuration();if(!config.visionScript||!config.vaultTokenFile)throw Error('studio-vision-host-not-configured')
+ const config=deps.config??await readStudioHostConfiguration(deps.configPath);if(!config.visionScript||!config.vaultTokenFile)throw Error('studio-vision-host-not-configured')
  const result=await(deps.execute??execute)(config.visionScript,[],task,config,JSON.stringify(args));audioFailure(result,'studio-vision')
  if(result.input_modality!=='input_image'||result.finish_reason!=='stop'||!result.observation||!Array.isArray(result.images)||result.images.length!==args.images.length)throw Error('studio-vision-observation-invalid')
  for(let i=0;i<args.images.length;i++){const expected=args.images[i];if(result.images[i].sha256!==expected.sha256||result.images[i].time!==expected.time||await fileSha256(expected.path)!==expected.sha256)throw Error('studio-vision-observation-invalid')}
@@ -161,7 +161,7 @@ export async function observeStudioVision(task:any,args:import('./studio-tools.j
 
 /** Fixed, hash-checked local compiler. Arguments select data paths, never code. */
 export async function compileStudioStoryboard(task:any,args:{boardPath:string;outputDirectory:string},deps:HostDeps={}){
- const config=deps.config??await configuration()
+ const config=deps.config??await readStudioHostConfiguration(deps.configPath)
  if(!config.storyboardCompilerScript||!/^[a-f0-9]{64}$/.test(config.storyboardCompilerSha256??''))throw Error('studio-storyboard-host-not-configured')
  if(await fileSha256(config.storyboardCompilerScript)!==config.storyboardCompilerSha256)throw Error('studio-storyboard-compiler-changed')
  const root=await realpath(task.cwd),board=await realpath(resolve(root,args.boardPath)),boardRelative=relative(root,board)

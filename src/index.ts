@@ -17,10 +17,12 @@ import {loadWorkflowModules,loadBundledWorkflowModules,type WorkflowModule} from
 import { registerPublicHtmlTool } from './public-upload.ts'
 import { registerTaskSignalHttp } from './task-intake-http.ts'
 import { fallbackSelection } from './model-fallback.ts'
+import {readStudioHostConfiguration,type StudioConfigBinding} from './studio-config.js'
 
 export const name = 'task-console'
 export const inject = ['loader', 'tools', 'agents', 'webServer', 'workspaceRegistry']
 export const Config = z.object({
+  studioConfigPath: z.string(),
   workflowModules: z.array(z.object({path:z.string(),sha256:z.string()})).default([]),
   taskFallbackModel: z.string().default(''),
   taskFallbackFromProvider: z.string().default('codex-local'),
@@ -43,10 +45,12 @@ export { applyAgentPermission } from './agent-session.ts'
 export { TaskIntakeCoordinator, validateTaskIntakeDecision, validateTaskSignal } from './task-intake.ts'
 export { TASK_INTAKE_AGENT_ID } from './task-intake-agent.ts'
 
-export async function apply(ctx: Context, config: CapabilityPolicy & { taskFallbackModel?: string; taskFallbackFromProvider?: string; workflowModules?:WorkflowModule[] } = {}): Promise<void> {
+export async function apply(ctx: Context, config: CapabilityPolicy & StudioConfigBinding & { taskFallbackModel?: string; taskFallbackFromProvider?: string; workflowModules?:WorkflowModule[] } = {}): Promise<void> {
+  // Reject explicit broken configuration before the service recovers/dispatches Tasks.
+  if(config.studioConfigPath!==undefined)await readStudioHostConfiguration(config.studioConfigPath)
   const bundled=await loadBundledWorkflowModules(new URL('../',import.meta.url))
   const workflowExtensions=[...bundled,...await loadWorkflowModules(config.workflowModules??[])]
-  await ctx.plugin(TaskConsoleService,{workflowExtensions})
+  await ctx.plugin(TaskConsoleService,{workflowExtensions,studioConfigPath:config.studioConfigPath})
   await (ctx as any).get('taskConsole').ready
   const fallback = fallbackSelection(config.taskFallbackModel ?? '')
   ;(ctx as any).get('taskConsole').runner.modelFallback = fallback ? { ...fallback, fromProvider: config.taskFallbackFromProvider ?? 'codex-local' } : undefined

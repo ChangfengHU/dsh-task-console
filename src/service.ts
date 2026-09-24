@@ -1,3 +1,4 @@
+import type {StudioConfigBinding} from './studio-config.js'
 import {StudioPreparation,assertPreparationWritable} from './studio-preparation.js'
 import {pollStudioOperation} from './studio-operation-poll.js'
 import {WorkflowEvidence} from './workflow-evidence.js'
@@ -142,8 +143,9 @@ export class TaskConsoleService extends TypertRemoteService {
     return patrolFollowup(this.runner.store.kernel.db)
   }
 
-  constructor(ctx: Context, config: {workflowExtensions?:WorkflowExtension[]} = {}) {
+  constructor(ctx: Context, config: StudioConfigBinding & {workflowExtensions?:WorkflowExtension[]} = {}) {
     super(ctx, NAMESPACE)
+    const studioHostDeps={configPath:config.studioConfigPath}
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
       reconcilePreparationOperations:async request=>{
@@ -158,22 +160,22 @@ export class TaskConsoleService extends TypertRemoteService {
       },
       registerWorkflowTools:(ctx,input,isActive)=>this.workflowExtensions.registerTools(ctx,input,isActive),
       registerStudioTools: async (agentCtx,input,isActive,submitReview) => {
-        const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
+        const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task,studioHostDeps)
         if(input.card.role==='executor')workflow.enforceRenderProvenance(input)
         const renderJob=async(action:'start'|'status',args:any)=>{
           const assertActive=()=>{const c=this.runner.store.kernel.getTask(input.card.id),r=[...this.runner.store.s.runs.values()].find(r=>r.cardId===input.card.id&&r.sessionId===input.sessionId&&r.status==='running');if(!isActive()||!r||c?.status!=='running'||c.current_run_id!==this.runner.store.coreRunId(r.id)||!c.claim_expires||c.claim_expires<=Math.floor(Date.now()/1000))throw Error('studio-render-stale-run')}
-          assertActive();if(action==='start')assertPreparationWritable(this.runner.store.kernel.db,input);const config=action==='start'?await studioRenderConfiguration():undefined;assertActive();if(action==='start')assertPreparationWritable(this.runner.store.kernel.db,input);const intent=workflow.renderLedger.prepare(input,action,args,config)
+          assertActive();if(action==='start')assertPreparationWritable(this.runner.store.kernel.db,input);const config=action==='start'?await studioRenderConfiguration(studioHostDeps.configPath):undefined;assertActive();if(action==='start')assertPreparationWritable(this.runner.store.kernel.db,input);const intent=workflow.renderLedger.prepare(input,action,args,config)
           // Recover a known job without starting another renderer; a lost first
           // reply retries the helper's same durable intent and reserved output.
           const selectedAction=action==='start'&&intent.jobId?'status':action
           const selectedArgs=selectedAction==='status'?{jobId:intent.jobId}:args
-          const dependencies=intent.helperPath?{config:{renderJobScript:intent.helperPath,renderJobSha256:intent.helperSha256,renderRuntime:intent.runtimePath}}:{}
+          const dependencies=intent.helperPath?{config:{renderJobScript:intent.helperPath,renderJobSha256:intent.helperSha256,renderRuntime:intent.runtimePath}}:studioHostDeps
           const result=await studioRenderJob(input.task,selectedAction,selectedArgs,dependencies,intent.intentId)
           assertActive();workflow.renderLedger.record(input,intent,result);return result
         }
-        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,renderJob,requestPreparationRevision:value=>new StudioPreparation(this.runner.store).request(input,value),downloadAsset:args=>downloadStudioAsset(input.task,args),registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
+        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,renderJob,requestPreparationRevision:value=>new StudioPreparation(this.runner.store).request(input,value),downloadAsset:args=>downloadStudioAsset(input.task,args,studioHostDeps),registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task,studioHostDeps),audioObserve:args=>observeStudioAudio(input.task,args,studioHostDeps),visionObserve:args=>observeStudioVision(input.task,args,studioHostDeps),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
         let skillGate:()=>void=()=>{},speech:()=>void=()=>{},board:()=>void=()=>{}
-        try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});board=await registerStudioBoardTools(agentCtx,{input,workflow,isActive,compile:args=>compileStudioStoryboard(input.task,args)});return ()=>{board();speech();skillGate();media()} } catch(e){board();speech();skillGate();media();throw e}
+        try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args,studioHostDeps)});board=await registerStudioBoardTools(agentCtx,{input,workflow,isActive,compile:args=>compileStudioStoryboard(input.task,args,studioHostDeps)});return ()=>{board();speech();skillGate();media()} } catch(e){board();speech();skillGate();media();throw e}
       },
       beforeStart: async input => {
         const ids=input.card.role==='planner' ? taskAgentIds(input.task) : [input.profileId]
@@ -210,7 +212,7 @@ export class TaskConsoleService extends TypertRemoteService {
         operations.configure(input,input.task.design.studio.generationLimits??{imageCalls:6,voiceSegments:80})
         const budget=operations.snapshot(input)
         workflow.recordBudget(input,{repairRounds:Math.max(0,(workflow.status(input).candidate?.revision??1)-1),used:budget.used,limits:budget.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
-        await refreshStudioCapabilities(workflow,input.task)
+        await refreshStudioCapabilities(workflow,input.task,studioHostDeps)
         const result = workflow.preflight(input.task)
         if (!result.ok) return { kind: 'capability', reason: result.reason ?? 'blocked_quality_capability' }
       },
@@ -219,7 +221,7 @@ export class TaskConsoleService extends TypertRemoteService {
         if (input.task.design?.evidenceContract === 'studio-video-v1') {
           assertPreparationWritable(this.runner.store.kernel.db,input)
           const workflow=new StudioWorkflow(this.runner.store),operations=new StudioOperations(this.runner.store).snapshot(input)
-          if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task)
+          if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task,studioHostDeps)
           requireSettledStudioOperations(input,operations)
           const candidate=workflow.status(input).candidate
           workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
@@ -290,7 +292,7 @@ export class TaskConsoleService extends TypertRemoteService {
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
       beforePlanRound: async (input, items, proxyItems) => {
         if(input.task.design?.extension)return this.workflowExtensions.beforePlanRound(input,items,proxyItems)
-        if (input.task.design?.evidenceContract === 'studio-video-v1') { const w=new StudioWorkflow(this.runner.store);w.assertPlanningPrerequisites(input);await refreshStudioCapabilities(w,input.task);w.preflight(input.task);w.plan(input);return }
+        if (input.task.design?.evidenceContract === 'studio-video-v1') { const w=new StudioWorkflow(this.runner.store);w.assertPlanningPrerequisites(input);await refreshStudioCapabilities(w,input.task,studioHostDeps);w.preflight(input.task);w.plan(input);return }
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2') return
         const patrol = await this.patrolWorkflow(input); patrol.snapshot(input)
         new TaskNotifications(this.runner.store).requireStage(input,input.card.round === 1 ? 'started' : 'rework')

@@ -1,9 +1,10 @@
+import {readStudioHostConfiguration} from './studio-config.js'
 /** Pinned asynchronous render bridge. No caller-supplied commands or credentials. */
-import {readFile,realpath,stat} from 'node:fs/promises'
+import {realpath,stat} from 'node:fs/promises'
 import {spawn} from 'node:child_process'
 import {isAbsolute,relative,resolve,sep} from 'node:path'
 import {fileSha256,studioPath} from './studio-tools.js'
-interface Dependencies {config?:any;execute?:(script:string,args:string[])=>Promise<any>}
+interface Dependencies {config?:any;configPath?:string;execute?:(script:string,args:string[])=>Promise<any>}
 const digest=/^[a-f0-9]{64}$/
 const errorActions:Record<string,string>={
  render_node_version_unsupported:'The host renderer requires Node 22 or later at its pinned path; repair host configuration, not the project composition.',
@@ -17,7 +18,7 @@ const errorActions:Record<string,string>={
 for(const stage of ['check','render','decode'])for(const outcome of ['failed','timeout'])errorActions[`${stage}_step_${outcome}`]=`Inspect the ${stage} log and repair the reported prerequisite; preserve the original job before retry.`
 function failure(code:any){const errorCode=typeof code==='string'&&Object.hasOwn(errorActions,code)?code:'render_host_failed';return {errorCode,nextAction:errorActions[errorCode]}}
 function safeRelative(value:any){return typeof value==='string'&&value.length>0&&value.length<=240&&!isAbsolute(value)&&!value.includes('\0')&&!value.includes('\\')&&!value.split('/').some(p=>!p||p==='..'||p.startsWith('.')||/credential|secret|token|password|private.?key/i.test(p))}
-export async function studioRenderConfiguration(){try{return JSON.parse(await readFile(new URL('../studio-host.json',import.meta.url),'utf8'))}catch{return {}}}
+export const studioRenderConfiguration=readStudioHostConfiguration
 async function execute(script:string,args:string[]):Promise<any>{
  return new Promise((resolve,reject)=>{
   // The render bridge does not need provider credentials. Its detached worker applies its own allowlist too.
@@ -31,7 +32,7 @@ async function execute(script:string,args:string[]):Promise<any>{
  })
 }
 export async function studioRenderJob(task:any,action:'start'|'status',args:{composition?:string;output?:string;jobId?:string},deps:Dependencies={},intentId?:string){
- const config=deps.config??await studioRenderConfiguration()
+ const config=deps.config??await studioRenderConfiguration(deps.configPath)
  if(!config.renderJobScript||!digest.test(config.renderJobSha256??'')||!config.renderRuntime)throw Error('studio-render-host-not-configured')
  if(await fileSha256(config.renderJobScript)!==config.renderJobSha256)throw Error('studio-render-helper-changed')
  const root=await realpath(task.cwd),policy=task.design?.studio

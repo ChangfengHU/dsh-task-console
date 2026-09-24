@@ -365,3 +365,34 @@ Fresh public Fleet read still showed desktopOnly browser rows, missing browser
 service/HTTP521 and unknown reachability; no full-node success has been observed.
 The developer never SSHed236. Build/worktree/release candidates and screenshots
 are retained for deployment/acceptance/rollback, not safe to clean while pending.
+
+### 2026-09-24: reviewed v3 Task and latest integrated candidate
+
+Integration branch fix/model-fallback-studio-20260923 now contains f2d312d:
+the real /api/fleet/exits envelope uses exits, not rows; validator and tests
+were corrected without weakening signed-job/freshness/target checks. Full serial
+regression:621 passed of624,3 existing skips,0 failures.
+
+Continued the same Creator session with the exact tested explicit design. One
+response invented a plan ID without calling submit; native events/database
+caught it, and no fabricated plan was approved. A real subsequent submit produced
+P-chat-81237bbff2216cf72aff, independently byte/field-compared against the recipe.
+Public Chrome approved it (35.37s load,0 errors). Original Task is now v3 with
+provision-gemini, remains disabled, with original trigger/Actions and eight listed
+execution IDs unchanged. No236 execution began.
+
+Latest integration1a14133 additionally corrects review UI's misleading execute/
+cron/absent-gate wording and links back to the actual Task, without changing
+layout or removing functionality. Seven focused tests, build, and candidate
+asset interception in real public Chrome at1440/390px passed. Screenshots:
+/tmp/dsh-fleet-review-81237-before.png and -approved.png;
+/tmp/dsh-fleet-review-candidate-1440.png and -390.png.
+These candidate screenshots do not mean production UI is updated.
+
+Staged task-console-fleet-1a14133cad86 is not activated: live remains Studio
+b1c3c04 with unrelated Runs1120/1121 and real active native Sessions. Before
+switching recheck both activity sources and any newer live source. Preserve
+existing participant preset/module pins so the reviewed roster remains valid;
+installer7e38e84 code is byte-identical to candidate installer. Then enable the
+same once Task, supply236 as fresh run input through the public UI, track full
+three-role evidence, and repeat for idempotence. No developer SSH to236 occurred.

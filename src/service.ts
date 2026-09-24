@@ -5,6 +5,7 @@ import {studioStageFor} from './studio-stages.js'
 import { registerStudioSpeechTools } from './studio-speech-tools.js'
 import { registerStudioBoardTools } from './studio-board-tools.js'
 import { StudioOperations } from './studio-operations.js'
+import { requireSettledStudioOperations } from './studio-stage-operations.js'
 import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard } from './studio-host.js'
 import { registerStudioTools } from './studio-tools.js'
 import { StudioWorkflow } from './studio-workflow.js'
@@ -149,13 +150,13 @@ export class TaskConsoleService extends TypertRemoteService {
         if (input.task.design?.evidenceContract === 'studio-video-v1') {
           const workflow=new StudioWorkflow(this.runner.store),operations=new StudioOperations(this.runner.store).snapshot(input)
           if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task)
-          if(input.card.role!=='studio-stage'&&(operations.unknown||operations.operations.some((o:any)=>o.state==='submitted')))throw Error('studio-generation-reconcile-required: query original jobs before handoff')
+          requireSettledStudioOperations(input,operations)
           const candidate=workflow.status(input).candidate
           workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
           if(input.card.role==='studio-stage'){
             const stage=studioStageFor(input)!,receipt=workflow.stageReceipt(input,stage.id)
             await requireStudioStages(input,workflow,this.runner.store.kernel.db)
-            await verifyStageReceipt(input,receipt)
+            await verifyStageReceipt(input,receipt,workflow)
             if(receipt.sessionId!==input.sessionId)throw Error('studio-stage-session-mismatch')
             return {summary:receipt.summary,metadata:{workflowOutcome:'stage_handoff',stage:stage.id,manifest:receipt.manifest,outputs:receipt.outputs,qualityApproved:false}}
           }

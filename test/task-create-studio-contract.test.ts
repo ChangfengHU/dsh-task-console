@@ -6,8 +6,16 @@ import {join} from 'node:path'
 import {EventStore,validateTask} from '../src/tasks.ts'
 import {TaskCreator} from '../src/task-create.ts'
 import {validateDesign} from '../src/task-design.ts'
+import {renderComposition,validateSpec} from '../src/presets.ts'
 const roleIds=['director','editor','reviewer','storyboard','visual','sound']
 const exec=(id:string)=>({agent:{session:{id,deriveMessages:()=>[{role:'user',content:'Create a character video preview; do not publish.'}]}}})
+test('Creator tools mount from the same deployed bundle as their generated fence',()=>{
+ const spec=validateSpec({id:'fixture-creator',name:'Creator',persona:'Create pending plans.',tools:['task-create-runtime'],mcpTools:{},skills:[]})
+ const output=renderComposition(spec,[]).yml
+ assert.match(output,/name: '\/[^\n']+\/task-create-tools\.js'/)
+ assert.doesNotMatch(output,/name: 'dsh-task-console\/task-create-tools'/)
+ assert.match(output,/- task_create_studio_sources\n/)
+})
 async function setup(t:any){
  const cwd=await mkdtemp(join(tmpdir(),'studio-creator-contract-')),store=new EventStore(join(cwd,'store'));await store.load()
  t.after(async()=>{if(store.kernel.db.open)store.kernel.db.close();await rm(cwd,{recursive:true,force:true})})

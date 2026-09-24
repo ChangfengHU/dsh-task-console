@@ -45,3 +45,18 @@ test('composer repair limits support 0..2 and explicitly refuse a fourth product
  for(const maxRepairRounds of [0,1,2]){const result=composeStudioTaskDraft({...request(),maxRepairRounds},context);assert.equal(result.draft.design?.studio?.maxRepairRounds,maxRepairRounds);assert.equal(result.draft.design?.failurePolicy.maxAttempts,maxRepairRounds+1)}
  for(const maxRepairRounds of [3,4,-1,0.5])assert.throws(()=>composeStudioTaskDraft({...request(),maxRepairRounds},context),(error:any)=>{assert.match(error.message,/maxRepairRounds/);assert.match(error.message,/supports 0 to 2 repair rounds/);assert.match(error.message,/not silently reduced/);return true})
 })
+
+test('source-declared expected hash can enter pending review without claiming download or baseline approval',()=>{
+ const input=request(),result=composeStudioTaskDraft(input,context)
+ assert.equal(result.draft.saveOnly,true);assert.equal(result.startedTask,false)
+ assert.equal(result.draft.design?.studio?.referenceUrl,input.referenceUrl)
+ assert.equal(result.draft.design?.studio?.referenceSha256,input.referenceSha256)
+ assert.equal(result.resolution.verifiedByComposer,false)
+ assert.equal(result.resolution.downloadVerification,'pending_host_preflight')
+ assert.equal(result.resolution.baselineApproval,'not_established_by_composer')
+ assert.match(contract.reference,/Unverified metadata may enter a pending-review draft/)
+ assert.match(result.resolution.notice,/match actual reference bytes to the expected hash before production/)
+ assert.match(result.resolution.notice,/actual reference observation is still required/)
+ assert.match(result.draft.brief,/元数据或哈希相符不代表用户认可基准/)
+ assert.throws(()=>composeStudioTaskDraft({...input,referenceSha256:undefined},context),/source-declared expected SHA-256/)
+})

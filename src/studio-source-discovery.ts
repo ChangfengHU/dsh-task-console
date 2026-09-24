@@ -61,6 +61,6 @@ export async function resolveStudioSources(args:{query?:string;characterId?:stri
    notice:'Current character/profile design approval is not video approval. Reference URL and SHA are metadata claims only; fetch, hash verification and independent viewing are still required. No baseline selected.'}
  }catch(error){
   const known=new Set(['provider_error','response_too_large','metadata_invalid','call_budget_exhausted','timeout','current_profile_unresolved','current_profile_changed_or_invalid'])
-  return {...base,status:'incomplete',reason:error instanceof Error&&known.has(error.message)?error.message:'provider_error',character,references,rejectedReferences,unresolvedAssetIds,calls,maxCalls,partial:true}
+  return {...base,status:'incomplete',reason:object(error)&&(error as any).code===-32001?'timeout':error instanceof Error&&known.has(error.message)?error.message:'provider_error',character,references,rejectedReferences,unresolvedAssetIds,calls,maxCalls,partial:true}
  }
 }

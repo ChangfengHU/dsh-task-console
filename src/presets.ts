@@ -199,7 +199,9 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
     if (tool) {
       // Codex-backed topic searches can exceed the generic 30-second tool budget.
       // Scope the longer cooperative budget to Studio; fetch and other Agents keep defaults.
-      parts.push(id === 'web' && spec.tools.includes('studio-runtime')
+      parts.push(id === 'task-create-runtime'
+        ? `- id: task-create-runtime\n  name: '${fileURLToPath(new URL('./task-create-tools.js',import.meta.url))}'`
+        : id === 'web' && spec.tools.includes('studio-runtime')
         ? `${tool.rows}\n  config:\n    searchTimeoutMs: 120000`
         : tool.rows)
       for (const name of tool.schemaNames) allowedToolNames.add(name)

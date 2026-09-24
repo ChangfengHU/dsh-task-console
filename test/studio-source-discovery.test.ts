@@ -45,3 +45,12 @@ test('MCP text envelopes work; malformed current groups and invalid input fail e
  await assert.rejects(resolveStudioSources({characterId,tenant:'other'} as any,async()=>{calls++}),/input-invalid/)
  assert.equal(calls,0)
 })
+
+test('SDK numeric request timeout is classified without exposing upstream diagnostics',async()=>{
+ for(const [code,expected] of [[-32001,'timeout'],['-32001','provider_error'],[-32000,'provider_error']] as const){
+  const result=await resolveStudioSources({characterId},async()=>{throw Object.assign(new Error('upstream PRIVATE_TOKEN Request timed out'),{code})})
+  assert.equal(result.status,'incomplete');assert.equal(result.reason,expected)
+  assert.equal(result.partial,true);assert.equal(result.qualityApproved,false)
+  assert.ok(!JSON.stringify(result).includes('PRIVATE_TOKEN'))
+ }
+})

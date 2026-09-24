@@ -593,3 +593,40 @@ reconciliation. Imported its source.bundle and merged into the pushed integratio
 branch5ffecb9, preserving all12 changed Studio files. First integrated tests failed
 because worktree-relative compiler/calibration paths were absent; rerun uses the
 existing deployed config paths, without installing dependencies or skipping tests.
+
+### 2026-09-24 11:02Z: tested integrated candidate, activation deferred for live work
+
+Main fixes d4185a7/098b521 are pushed. Integration27c97b3aaa012ebb1a491e48b4122199d53d3c31
+also merges the newer live Studioac490303 (15 files: compiler inputs/assets, error
+reporting and preflight coalescing). This preserves both sets of concurrent changes.
+Full integrated suite659 tests:656 pass,0 fail,3 existing native-host skips,94.4s.
+Used STUDIO_TEST_STORYBOARD_COMPILER and STUDIO_TEST_CALIBRATION_PATH from the
+existing deployed studio-host.json, not fake compiler data. No new dependencies.
+
+Candidate release: /home/claude/dsh-studio-migration/task-console-fleet-27c97b3aaa01;
+matching frontend package studio-task-console-ui-fleet-27c97b3aaa01 is staged,
+NOT installed into profile node_modules and NOT activated. Build succeeded;
+manifest/source.bundle/SOURCE_REVISION retained. Browser interception of candidate
+heavy asset on the real failed Batch verifies DAG/fullscreen+inspector, Sessions
+drawer, separate report route and mobile screenshot,0 errors. Evidence:
+/tmp/dsh-fleet-wait-candidate-fullscreen.png, -report.png and -mobile.png.
+The report currently shows waiting-for-artifacts on a failed non-artifact workflow;
+that is not a useful failure report. Add a truthful failed/partial role summary
+without changing the existing separate report layout; not yet implemented.
+
+At10:58 native sessions and SQLite claims both reached0, but another owner had
+just activated Studioac490303; incorporated it before any change. At11:01:56Z,
+Run1127/studio-taskbook-editor and native task-t-mue3kz9c-b-mue73n1r9ck-6-t3 are
+running with a fresh heartbeat. Did NOT edit profile, restart DSH, alter its Task
+or start236 on the obsolete host. Next: verify both activity sources and latest
+live revision, activate tested candidate only in a safe window, then use the
+existing /tmp/dsh-fleet-launch-236-v3.py public-browser launch on the same original
+Task; preserve all failed histories. First full and second idempotent acceptance
+remain unachieved. Do not reuse14-minute prior browser samples.
+
+Removed this turn's never-activated rebuildable releases8fd48cabe1c3,5ffecb9c4968,
+609b41dc28fc and UI package609b41dc28fc under dsh-studio-migration after checking
+ownership and absence of live-profile/module references, about9MiB. Rebuild from
+their pushed integration revisions with scripts/build.mjs. Final27c97b3 candidate
+and screenshots remain for activation/verification; dependencies and older owners'
+files were not deleted. Unrelated main lib/* modifications remain untouched.

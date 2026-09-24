@@ -604,3 +604,21 @@ Historical replay receives no later Batch outcome. Successful workflow and dynam
 planner final-summary behavior are unchanged. Six focused report/replay tests pass,
 including TIMEOUT versus target-health distinction and secret-like error suppression.
 Candidate browser check, integrated tests and live activation remain pending here.
+
+Integrated97c65e6a41b31984315ecf07f5c58373e6f3edb6 includes the report fix plus
+all earlier waiting fixes and current Studioac490303. Full662 tests:659 pass,
+0 fail,3 existing skips;94.4s. Focused host/model/report/replay suite90/90 passed.
+Build staged at task-console-fleet-97c65e6a41b3, corresponding UI package staged
+alongside (not linked into live profile). Real public Chrome with candidate asset
+interception proves the old failed236 report now says未通过, installer completed,
+browser TIMEOUT (not a login diagnosis), Runner unstarted; no waiting-for-result
+placeholder,0 errors. Fullscreen DAG/inspector and Sessions preserved; desktop
+and390px screenshots viewed. Existing evidence paths now contain this final
+candidate; current production was not modified by interception.
+
+At11:08:46Z Studio1127 remains running; /tmp/dsh-fleet-safe-window.mjs monitors
+native session.list and read-only SQLite every30s, stops when both are empty or
+the profile hash changes. It NEVER activates, mutates or cancels anything. Current
+watch PTY61139. Observation errors retry the same handle; expiry is not task failure.
+Recheck activity and live source before applying any configuration after a ready
+notice. Only then activate candidate and use original public-browser Task launch.

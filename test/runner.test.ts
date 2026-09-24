@@ -751,6 +751,17 @@ test('Creator revises the same paused Task by review without executing or rewrit
   restored.kernel.db.close()
 })
 
+test('Creator context stays lossless JSON with a paused non-recipe revision candidate', async () => {
+  const {store,runner,host} = await setup({enabled:false,origin:{source:'task-chat',signalId:'paused-custom',decision:'create'}})
+  try {
+    const context=await new TaskCreator(runner,async()=>[]).context()
+    assert.equal(context.revisionCandidates.length,1)
+    assert.equal('workflowRecipe' in context.revisionCandidates[0],false)
+    assert.deepEqual(JSON.parse(JSON.stringify(context)),context)
+    assert.equal(host.sessions.size,0)
+  } finally { runner.stop(); store.kernel.db.close() }
+})
+
 test('review upgrades a paused once-only Fleet Task in place without executing, scheduling or weakening login', async () => {
   const recipe = {id:'fleet-base-v2' as const,login:'provision-gemini' as const}
   const {store,runner,host,task,root} = await setup({...composeRecipe(recipe),workflowRecipe:recipe,enabled:false,

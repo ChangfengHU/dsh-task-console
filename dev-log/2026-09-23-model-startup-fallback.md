@@ -319,3 +319,21 @@ The suite uses compiler-bridge-fb6ee9862c0c and retained7063694a00e2 calibration
 Fresh native session and SQLite running-claim checks both returned zero. This
 is only a deployment prerequisite, not permission to interrupt later work.
 No production switch or236 business acceptance has occurred at this point.
+
+### 2026-09-24: deployed integration; real Creator uncovered optional-field bug
+
+61578995375d deployed at the fresh zero-native/zero-claim boundary, retaining the
+previous profile and scoped role files under the release's owner-only pre-switch
+directory. Installer saved through normal API with only persona changed; its Skill
+matches authoritative source byte-for-byte. Installer/Creator runtime paths point
+explicitly to this bundle, not main's dirty lib files. No target SSH occurred.
+Public Chrome opened the original Task in46.36s with zero page errors; cold-load
+latency is still not solved. Screenshot /tmp/dsh-fleet-6157899-public.png retained.
+Only original blocked Batch c80f18f2 was cancelled, all history retained; original
+once Task paused for review. Creator session agent-task-create-agent-mufae9y7 then
+hit native lossless-JSON rejection: a paused non-recipe Task supplied an undefined
+workflowRecipe in revisionCandidates. Fix omits that optional field and adds a
+lossless-context regression test (passed). Cancelled only this own planning turn
+before correcting it; no draft was approved and no236 execution started.
+Browser acceptance also exposed unconditionally applied Studio stage wording in
+the shared DAG. Restrict those labels to studio-video-v1; preserve Studio wording.

@@ -50,7 +50,7 @@ export class TaskCreator {
   async context() {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
       revisionCandidates: [...this.runner.store.tasks.values()].filter(t=>!t.enabled && !t.archivedAt && t.origin?.source === 'task-chat')
-        .map(t=>({id:t.id,title:t.title,trigger:t.trigger,workflowRecipe:t.workflowRecipe,manualAvailable:t.trigger.kind === 'cron'})),
+        .map(t=>({id:t.id,title:t.title,trigger:t.trigger,...(t.workflowRecipe ? {workflowRecipe:t.workflowRecipe} : {}),manualAvailable:t.trigger.kind === 'cron'})),
       loginDiagnosis: '巡查可显式审查 browserPatrol.resumeAfterCopyLimit=1（需 actions 包含 resume）：复制预算耗尽但有同 Task 同故障已确认导入时，保留计数，允许额外一次正常登录续接。先新鲜 verify；canResume=true 应冻结 resume 而非再次 provision。原账号由 MCP 跨会话解析并核对当前授权，禁止静默换号；不再次导入、不重启、不绕过验证码。续接后独立20分钟4样本；失败只报告真实原因。一个目标失败，继续其他目标，本轮有界收口；未登录或未知不等于整轮执行协议应永久阻塞。旧计划不自动获得额外预算，必须 revise 审查。',
       recurringInput: 'create/revise 定时计划可显式提供顶层 recurringObjective：完整可复用的业务执行目标，包含原始目标的范围、禁令、验收与通知约束，但不含“生成待审查计划/等待审批”这类 Creator 控制指令。它与原始请求并列供独立审查，批准后才用于后续 cron；不提供时保留旧输入语义。不得省略原请求中的操作限制。reuse 不允许改写它。',
       actions: { fleetBaseExample: fleetTaskActions, contract: '新建可复用 Task 时同时提交 actions 数组，独立审查显示快捷入口。每项 {id,name,description,template,parameters,enabled?,isDefault?}。模板用 {{key}}；参数 {key,label,type:text|number|boolean,required,default?,choices?,source?,dependsOn?,visibleWhen?,binding?}。binding 可用 target-ip、ssh-user、ssh-password、gemini-account；密码不能保存默认值。账号来源 fleet.gemini-accounts 依赖目标 IP，账号必须保存明确 accountId 意图；机器候选 fleet.nodes 可手填新 IP。Task Actions 仅提供本次参数，不改变角色、工具、验收、定时；执行同 Task 新 Batch，绝不复制历史 IP/密码。复用和 revise 不覆盖现有 Actions；用户在 Task Actions 页单独编辑。' },

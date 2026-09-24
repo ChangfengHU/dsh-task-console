@@ -213,7 +213,13 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
         (c.evidenceReceiptIds.length===0&&x===`check.${c.dimension}: missing or duplicate evidence receipts`)||
         ['audio','frames','probe','source'].some(kind=>x===`check.${c.dimension}: requires ${kind} evidence`)))
       const integrity=result.issues.filter((x:string)=>!pendingOmission(x)&&!/^check\.[^:]+: not passed$/.test(x)&&!/^issue\..+: unresolved (blocker|major|minor|info)$/.test(x)&&!x.startsWith('budget:')&&!x.startsWith('autonomy:')&&!/^candidate: (duration outside policy|width mismatch|height mismatch|fps mismatch)$/.test(x))
-      if(integrity.length)throw Error(`studio-review-integrity-failed: ${integrity.join('; ')}`)
+      if(integrity.length){
+        const hints:string[]=[]
+        if(integrity.some((x:string)=>x.includes('unknown receipt')))hints.push('Use studio_status.reviewProgress.receiptIndex for existing current-session CANDIDATE receipts; do not repeat observations just to recover IDs. ReferenceReceipt IDs from studio_reference_* are not candidate receipts, including in the reference comparison dimension. Describe the comparison using candidate frame evidence; reference observations are recorded separately.')
+        if(integrity.some((x:string)=>x.startsWith('check.ending:')))hints.push('Ending requires candidate frames AND candidate audio covering the SAME stated ranges. If either is unchecked on a grounded rejection, mark ending pending with evidenceReceiptIds:[]; do not claim it passed.')
+        if(integrity.some((x:string)=>x.startsWith('check.source_records:')))hints.push('Source evidence comes only from a complete unchanged read of studio_status.artifacts.manifestPath. Stage manifests and file SHA strings are not receipt IDs. If unavailable on a grounded rejection, mark source_records pending with evidenceReceiptIds:[] and state the limitation.')
+        throw Error(`studio-review-integrity-failed: ${integrity.join('; ')}${hints.length?' Correction guidance (report not stored): '+hints.join(' '):''}`)
+      }
       return {summary:result.ok?'Independent review completed; planner must verify final acceptance.':'Independent review found issues; return to planner for repairs.',metadata:{workflowOutcome:result.ok?'review_complete':'review_needs_changes',...base,reviewerSessionId:review.reviewerSessionId,issues:result.issues}}
     }
     if(this.read(input,'runtime_enforcement')===true){

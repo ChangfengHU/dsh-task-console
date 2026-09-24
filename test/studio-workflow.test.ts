@@ -191,3 +191,21 @@ test('review progress is rebuilt from current host ledger and isolated by sessio
  input.task.design.studio.characterId='changed'
  assert.equal(rebuilt.reviewProgress(reviewer),null)
 })
+
+test('review integrity errors guide receipt repair without repeating observations or changing evidence',t=>{
+ const {workflow,input}=setup(t),{reviewer}=proof(workflow,input),before=workflow.status(input).review
+ const ref=workflow.recordReferenceReceipt(reviewer,{referenceSha256:h('b'),sha256:h('d'),kind:'frames',ranges:[[0,2]]})
+ const review=structuredClone(before);delete review.reviewerSessionId
+ review.checks.find((c:any)=>c.dimension==='reference').evidenceReceiptIds=[ref.id]
+ review.checks.find((c:any)=>c.dimension==='ending').evidenceReceiptIds=[]
+ review.checks.find((c:any)=>c.dimension==='source_records').evidenceReceiptIds=['file-sha-is-not-a-receipt']
+ assert.throws(()=>workflow.recordValidatedReview(reviewer,review),(error:any)=>{
+  assert.match(error.message,/unknown receipt/)
+  assert.match(error.message,/ReferenceReceipt IDs.*are not candidate receipts/)
+  assert.match(error.message,/do not repeat observations just to recover IDs/)
+  assert.match(error.message,/SAME stated ranges/)
+  assert.match(error.message,/artifacts.manifestPath/)
+  return true
+ })
+ assert.deepEqual(workflow.status(input).review,before)
+})

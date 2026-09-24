@@ -62,6 +62,24 @@ function replayResult(result:any,row:any):any {
   return result&&typeof result==='object'?{...result,studioOperation:provenance}:{providerReceipt:result,studioOperation:provenance}
 }
 
+/** Append a host note to the delivered result, never the persisted provider
+ * receipt. Preserve error flags, structured content and provider text. */
+function imageBudgetResult(result:any,snapshot:any):any {
+  const items={limit:snapshot.limits.imageCalls,used:snapshot.used.imageCalls,remaining:Math.max(0,snapshot.limits.imageCalls-snapshot.used.imageCalls)}
+  const submissions={limit:snapshot.limits.imageBatches,used:snapshot.used.imageBatches,remaining:Math.max(0,snapshot.limits.imageBatches-snapshot.used.imageBatches)}
+  const budget={source:'studio-operation-ledger',scope:'current-task-and-batch',recordedAfterSubmission:true,items,submissions,qualityApproved:false,
+    instruction:'Image items and submission batches are separate allowances. One generate_image call consumes one submission batch; every prompt in prompts[] (plus prompt if supplied) consumes one image item. If several required images share the reference/settings, prompts:["image 1 instructions","image 2 instructions",...] can request them in one call within the remaining item allowance. A one-prompt call still consumes a whole submission batch. No minimum batch size is required. Failed and unknown submissions also retain their allowance. Poll the original taskId; do not repeat this submission. '+(submissions.remaining===0?'No new image submission remains, even if item allowance is positive. Reuse verified assets and report missing coverage; never reset the ledger.':'Plan any genuinely needed remaining images against BOTH allowances before another call. This note does not authorize extra generation.')}
+  const note={type:'text',text:JSON.stringify({studioImageBudget:budget})}
+  if(result?.type==='text'&&typeof result.text==='string'){
+    try{return {...result,text:JSON.stringify(imageBudgetResult(JSON.parse(result.text),snapshot))}}catch{return {...result,text:result.text+'\n'+note.text}}
+  }
+  if(Array.isArray(result))return [...result,note]
+  if(result&&typeof result==='object'&&Array.isArray(result.content))return {...result,content:[...result.content,note]}
+  if(result&&typeof result==='object'&&result.structuredContent)return {...result,content:[note]}
+  if(result&&typeof result==='object')return 'studioImageBudget' in result?{...result,content:[note]}:{...result,studioImageBudget:budget}
+  return {providerReceipt:result,studioImageBudget:budget}
+}
+
 /** Paid MCP submissions are reserved before dispatch and replayed by argument digest.
  * An unknown submission is never automatically retried. This is not a shell sandbox.
  */
@@ -143,6 +161,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
       return undefined
     })()
     if(raced){if(raced.result)return replayResult(JSON.parse(raced.result),raced);throw Error('studio-submission-unknown: reconcile original operation; do not resubmit')}
+    let providerResult:any
     try {
       const result=await invoke(args),value=unpack(result),id=job(value),status=terminal(value),failed=rejected(result,value)||!!status&&failedStates.has(status)
       const encoded=JSON.stringify(result)
@@ -150,7 +169,8 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
       if(!failed&&!id)throw Error('studio-submission-missing-job-receipt')
       // Even an explicit upstream rejection consumes the reserved request allowance.
       this.db.prepare('UPDATE dsh_studio_operations SET state=?,job_id=?,result=? WHERE task_id=? AND batch_id=? AND intent=?').run(failed?'failed':status&&done.has(status)?'completed':'submitted',id??null,encoded,...key)
-      return result
+      providerResult=result
     } catch {this.db.prepare("UPDATE dsh_studio_operations SET state='unknown' WHERE task_id=? AND batch_id=? AND intent=?").run(...key);throw Error('studio-submission-unknown: host retained reservation; reconcile without retry')}
+    return d.kind==='imageCalls'?imageBudgetResult(providerResult,this.snapshot(input)):providerResult
   }
 }

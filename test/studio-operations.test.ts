@@ -110,7 +110,10 @@ test('frozen image batches reject third dispatch despite remaining units and sur
  await assert.rejects(restarted.invoke(input,'vyibc-image_generate_image',{prompt:'f'},send),(error:any)=>{
   assert.match(error.message,/batch-limit/);const details=JSON.parse(error.message.split(': ')[1]);assert.equal(details.remainingImageUnits,1);assert.equal(details.dispatched,false);return true
  })
- assertReplay(await restarted.invoke(input,'vyibc-image_generate_image',{prompt:'e'},send),failed)
+ // Replay preserves the provider receipt; the fresh host budget note is not persisted.
+ const original=JSON.parse((db.prepare('SELECT result FROM dsh_studio_operations WHERE job_id=?').get('image-2') as any).result)
+ assert.deepEqual(failed.content.slice(0,-1),original.content)
+ assertReplay(await restarted.invoke(input,'vyibc-image_generate_image',{prompt:'e'},send),original)
  assert.equal(calls,2);assert.deepEqual(restarted.snapshot(input),before)
  assert.throws(()=>restarted.configure(input,{imageCalls:6,voiceSegments:30,imageBatches:3}),/cannot-change/)
 })

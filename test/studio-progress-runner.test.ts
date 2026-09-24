@@ -19,7 +19,14 @@ async function fixture(t:any,options:{disposeFails?:boolean,legacy?:boolean,nati
  const ctx:any={on:(name:string,fn:any)=>{listeners.push(fn);return()=>{}},effect:()=>{},get:(key:string)=>key==='agentPresets'?{resolve:async(id:string)=>({id,path:join(preset,'agent.cordis.yml')}),mount:async()=>{}}:key==='permissionPresets'?{set:()=>{}}:key==='agentDefaultModel'?{currentSelection:()=>({provider:'p',model:'m'})}:undefined,agents:{create:async(opts:any)=>{
   const hooks=new Map(),guards:any[]=[],rec:any={hooks,guards,disposed:false,messages:[],cwd:opts.meta.cwd}
   let agentCtx:any={on:(name:string,fn:any)=>{hooks.set(name,fn);return()=>hooks.delete(name)},tools:{register:()=>()=>{},guard:(fn:any)=>{guards.push(fn);return()=>guards.splice(guards.indexOf(fn),1)}}}
-  if(options.native){agentCtx=new Context();agentCtx.provide('systemPrompt',{tools:()=>{}});rec.runtime=new ToolRuntime(agentCtx)}
+  if(options.native){
+   agentCtx=new Context();agentCtx.provide('systemPrompt',{tools:()=>{}});rec.runtime=new ToolRuntime(agentCtx)
+   // worker-tools intentionally leaves descriptors uncompiled in unit-test
+   // mode. This fixture exercises the real registry in BOTH modes; do not
+   // compile an already-defined native fixture tool a second time.
+   const register=rec.runtime.register.bind(rec.runtime)
+   rec.runtime.register=(spec:any)=>register(process.env.NODE_ENV==='test'&&spec.parameters?.type!=='object'?defineTool(spec):spec)
+  }
   rec.agent={ctx:agentCtx,session:{id:opts.sessionId},followup:(m:any)=>rec.messages.push(m)};sessions.push(rec);await opts.setup({})
   return{agent:rec.agent,dispose:async()=>{if(options.disposeFails)throw Error('fixture stop failed');await rec.beforeDispose?.();rec.disposed=true}}
  }}}

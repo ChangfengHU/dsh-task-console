@@ -9,6 +9,8 @@ import { groupArtifacts } from '../src/artifact-delivery.ts'
 import { TaskCreator } from '../src/task-create.ts'
 import { taskCredential } from '../src/task-credentials.ts'
 import { TaskNotifications } from '../src/task-notifications.ts'
+import { composeRecipe } from '../src/workflow-recipes.ts'
+import { FleetRepairRequired } from '../src/fleet-workflow-evidence.ts'
 
 const testResources: { root: string; runner: TaskRunner; store: EventStore }[] = []
 after(async () => {
@@ -747,6 +749,101 @@ test('Creator revises the same paused Task by review without executing or rewrit
   restored.kernel.db.close()
 })
 
+test('review upgrades a paused once-only Fleet Task in place without executing, scheduling or weakening login', async () => {
+  const recipe = {id:'fleet-base-v2' as const,login:'provision-gemini' as const}
+  const {store,runner,host,task,root} = await setup({...composeRecipe(recipe),workflowRecipe:recipe,enabled:false,
+    origin:{source:'task-chat',signalId:'fixture-original',decision:'create'}})
+  const creator = new TaskCreator(runner,async()=>['fleet-installer','browser-manager','fleet-runner-operator'].map(id=>({id,name:id,profileHash:'fixed'} as any)))
+  const design = {scope:'Complete onboarding',branches:[{id:'inspect',when:'current observations',action:'reuse or repair missing components',evidence:'host receipts'}],coordination:'three roles',failurePolicy:{isolateItems:false,maxAttempts:1,stopConditions:['missing authority']},acceptance:['full Fleet readback']}
+  const input=(id:string)=>({agent:{session:{id,deriveMessages:()=>[{role:'user',content:'Upgrade this workflow without deleting history; do not start yet'}]}}})
+  const revision={decision:'revise' as const,taskId:task.id,reason:'require full node evidence',recipe:{id:'fleet-base-v3' as const,login:'provision-gemini' as const},design}
+  assert.ok((await creator.context()).revisionCandidates.some(t=>t.id===task.id))
+  await assert.rejects(creator.prepare({...revision,recipe:{id:'fleet-base-v3',login:'preserve'}},input('weaken'),root),/不能弱化/)
+  const plan:any=await creator.prepare(revision,input('upgrade'),root)
+  assert.equal(store.tasks.get(task.id)?.workflowRecipe?.id,'fleet-base-v2')
+  const approved=await creator.review(plan.id,plan.hash,'approve','same login criteria, stronger complete-node evidence')
+  assert.equal(approved.taskId,task.id);assert.equal(approved.batchId,null)
+  assert.equal(store.tasks.size,1);assert.equal(store.s.batches.size,0);assert.equal(host.sessions.size,0)
+  assert.equal(store.tasks.get(task.id)?.workflowRecipe?.id,'fleet-base-v3')
+  assert.equal(store.tasks.get(task.id)?.enabled,false)
+  assert.deepEqual(store.tasks.get(task.id)?.trigger,{kind:'once'})
+  assert.equal((store.kernel.db.prepare('SELECT COUNT(*) AS n FROM dsh_schedule_bindings').get() as any).n,0)
+  await creator.review(plan.id,plan.hash,'approve','duplicate')
+  assert.equal(store.all().filter(e=>e.t==='task/revised').length,1)
+  runner.stop()
+})
+
+test('Fleet full acceptance cannot bypass evidence through a human-review terminator', async () => {
+  const {host,store,runner,task} = await setup({participants:[{agentId:'a'}],workflowRecipe:{id:'fleet-base-v3',login:'preserve'}},
+    {beforeComplete:async()=>{throw Error('missing business receipt')}})
+  const batch=await runner.fire(task.id,'manual'),session=[...host.sessions.keys()][0];host.consumeFirst(session)
+  await assert.rejects(host.callTool(session,'task_request_review',{summary:'please approve'}),/不能用人工批准/)
+  await assert.rejects(host.callTool(session,'task_complete',{summary:'done'}),/missing business receipt/)
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  await host.callTool(session,'task_block',{reason:'missing business receipt',kind:'capability'});host.endTurn(session);await tick()
+  assert.equal([...store.s.cards.values()].find(c=>c.batchId===batch.id)?.status,'blocked')
+  runner.stop()
+})
+
+test('Fleet final readback creates a real bounded owner-only repair DAG, no early sessions or fake success', async () => {
+  let failures = 1
+  const recipe = composeRecipe({id:'fleet-base-v3',login:'preserve'})
+  const {host,store,runner,task} = await setup({...recipe,workflowRecipe:{id:'fleet-base-v3',login:'preserve'},timeoutSec:300},
+    {beforeComplete:async input=>{if(input.profileId==='fleet-runner-operator' && failures-->0)throw new FleetRepairRequired('browser-manager','fixture missing CDP')}})
+  const batch = await runner.fire(task.id,'manual')
+  const active = async () => {
+    for(let n=0;n<100;n++){
+      const found = [...host.sessions.entries()].find(([,s])=>!s.disposed && s.tools.length && s.followups.length)
+      if(found)return found[0]
+      await tick()
+    }
+    throw Error('no active fixture session')
+  }
+  const complete = async () => {const sid=await active();host.consumeFirst(sid);await host.callTool(sid,'task_complete',{summary:'checked'});host.endTurn(sid);await tick();return sid}
+  await complete();await complete()
+  const sid=await active();host.consumeFirst(sid)
+  assert.equal(host.sessions.size,3)
+  await host.callTool(sid,'task_complete',{summary:'claims success'})
+  assert.equal(host.sessions.size,3,'repair sessions are not precreated')
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  const rows=[...store.s.cards.values()].filter(c=>c.id.includes('#fleet-'))
+  assert.equal(rows.length,3)
+  assert.deepEqual(rows.map(c=>c.agentId),['__gate__','browser-manager','fleet-runner-operator'])
+  assert.ok(rows.every(c=>c.status==='todo' && !c.runIds.length))
+  host.endTurn(sid);await tick()
+  assert.equal(store.s.cards.get(rows[0].id)?.status,'done')
+  assert.equal(store.kernel.listRuns(rows[0].id).length,0)
+  const previous = [...store.s.runs.values()].find(r=>r.sessionId===sid)!
+  assert.equal(previous.metadata?.decision,'rework');assert.match(previous.summary!,/未通过/)
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  await complete();await complete()
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'done')
+  assert.equal([...store.s.runs.values()].filter(r=>r.profileId==='fleet-installer').length,1,'healthy installer is not repeated')
+  const graph=store.graphSnapshot(task.id,batch.id)
+  assert.equal(graph.live.tasks.length,6)
+  assert.equal(graph.live.links.length,5)
+  assert.ok(graph.live.tasks.every(t=>Math.abs(t.created_at-Date.now()/1000)<60),'all kernel timestamps use seconds')
+})
+
+test('Fleet repair budget and source CAS reject extra or stale graph mutation atomically', async () => {
+  const recipe=composeRecipe({id:'fleet-base-v3',login:'preserve'})
+  const {host,store,runner,task}=await setup({...recipe,workflowRecipe:{id:'fleet-base-v3',login:'preserve'},timeoutSec:300})
+  const batch=await runner.fire(task.id,'manual')
+  for(let i=0;i<2;i++){
+    const sid=[...host.sessions.entries()].find(([,s])=>!s.disposed)![0]
+    host.consumeFirst(sid);await host.callTool(sid,'task_complete',{summary:'checked'});host.endTurn(sid);await tick()
+  }
+  const source=[...store.s.cards.values()].find(c=>c.agentId==='fleet-runner-operator')!,core=store.kernel.getTask(source.id)!
+  const count=()=>store.kernel.db.prepare('SELECT COUNT(*) AS n FROM tasks').get() as {n:number}
+  await assert.rejects(store.expandFleetRepair(task,batch,source,core.current_run_id!+1,'browser-manager','stale'),/租约/)
+  assert.equal(count().n,3)
+  await assert.rejects(store.expandFleetRepair(task,batch,source,core.current_run_id!,'browser-manager','late',Date.parse(batch.firedAt)+900001),/时间预算/)
+  assert.equal(count().n,3)
+  for(let i=0;i<2;i++)store.kernel.recordEvent(source.id,'fleet_repair_requested',{round:i+1})
+  await assert.rejects(store.expandFleetRepair(task,batch,source,core.current_run_id!,'browser-manager','third'),/两轮/)
+  assert.equal(count().n,3)
+})
+
 test('Creator exposes blocked rather than running for a parked dependency', async () => {
   const { host, store, runner, task } = await setup({ participants: [{ agentId: 'a' }] })
   const creator = new TaskCreator(runner, async () => [])
@@ -1057,17 +1154,28 @@ test('runner: request_review cannot settle until a person approves it', async ()
 test('runner: review changes restart the chosen upstream role and replay the downstream chain', async () => {
   const { host, store, runner } = await setup()
   const batch = await runner.fire('T', 'manual')
-  const nextSession = () => [...host.sessions.keys()].at(-1)!
-  let session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'A1' }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'B1' }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_request_review', { summary: 'R1' }); host.endTurn(session); await tick()
+  let expectedSessions = 0
+  const nextSession = async () => {
+    expectedSessions++
+    const deadline = Date.now()+5000
+    while (Date.now()<deadline) {
+      const entries=[...host.sessions.entries()], last=entries.at(-1)
+      if (entries.length === expectedSessions && last?.[1].tools.length && last[1].followups.length && !last[1].disposed) return last[0]
+      await tick()
+    }
+    assert.fail(`Expected ready session ${expectedSessions}; got ${host.sessions.size}`)
+  }
+  let session = await nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'A1' }); host.endTurn(session); await tick()
+  session = await nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'B1' }); host.endTurn(session); await tick()
+  session = await nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_request_review', { summary: 'R1' }); host.endTurn(session); await tick()
   const reviewer = `${batch.id}#2`; const planner = `${batch.id}#0`
   await runner.reviewCard(reviewer, 'changes', '重新规划交互', planner); await tick()
+  session = await nextSession()
   assert.equal(store.s.cards.get(planner)!.status, 'running'); assert.equal(store.s.cards.get(`${batch.id}#1`)!.status, 'todo'); assert.equal(store.s.cards.get(reviewer)!.status, 'todo')
-  session = nextSession(); assert.match(host.sessions.get(session)!.followups[0].content[0].text, /\[REVIEW CHANGES\]\n重新规划交互/)
+  assert.match(host.sessions.get(session)!.followups[0].content[0].text, /\[REVIEW CHANGES\]\n重新规划交互/)
   host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'A2' }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'B2' }); host.endTurn(session); await tick()
-  session = nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_request_review', { summary: 'R2' }); host.endTurn(session); await tick()
+  session = await nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_complete', { summary: 'B2' }); host.endTurn(session); await tick()
+  session = await nextSession(); host.consumeFirst(session); await host.callTool(session, 'task_request_review', { summary: 'R2' }); host.endTurn(session); await tick()
   await runner.reviewCard(reviewer, 'approve', '第二轮通过'); await tick()
   assert.deepEqual(batch.cardIds.map(id => store.s.cards.get(id)!.runIds.length), [2, 2, 2])
   assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')

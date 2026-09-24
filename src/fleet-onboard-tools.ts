@@ -4,7 +4,7 @@
  * The model supplies only intent (an IP). Credentials,
  * inventory, executable paths and commands stay behind this module's adapter
  * boundary. A deployment without a production adapter still registers the
- * four tools, but every executable operation fails closed.
+ * intent-only tools, but every executable operation fails closed.
  *
  * @module dsh-task-console/fleet-onboard-tools
  */
@@ -26,7 +26,7 @@ const LEDGER_TIMEOUT_MS = 120_000
 const DEFAULT_ADAPTER_TIMEOUT_MS = 12 * 60_000
 const MAX_ADAPTER_TIMEOUT_MS = 14 * 60_000
 const CLOUD_TIMEOUT_MS = 30_000
-const TOOL_NAMES = ['fleet_onboard_start', 'fleet_onboard_status', 'fleet_onboard_resume', 'fleet_onboard_report'] as const
+const TOOL_NAMES = ['fleet_onboard_start', 'fleet_onboard_status', 'fleet_onboard_resume', 'fleet_onboard_report', 'fleet_onboard_inspect'] as const
 const SAFE_SOURCE = new Set(['intake', 'vault', 'managed-account'])
 const SECRET_KEYS = new Set([
   'accesskey', 'apikey', 'authheader', 'authorization', 'authorizationheader', 'bearer', 'bootstrapkey',
@@ -43,7 +43,7 @@ const SECRET_TEXT = [
 ]
 
 export type FleetProfile = 'base' | 'image-worker'
-export type FleetOperation = 'start' | 'status' | 'resume' | 'report'
+export type FleetOperation = 'start' | 'status' | 'resume' | 'report' | 'inspect'
 
 export interface FleetToolResult {
   schema: 1
@@ -382,6 +382,7 @@ export class HttpFleetOnboardLedger implements FleetOnboardLedger {
 
 export interface FleetOnboardHostAdapter {
   readonly executionAvailable: boolean
+  inspect?(ip: string, exec: ToolExecutionLike): Promise<FleetToolResult>
   start(ip: string, profile: FleetProfile, exec: ToolExecutionLike): Promise<FleetToolResult>
   status(ip: string, exec: ToolExecutionLike): Promise<FleetToolResult>
   resume(ip: string, profile: FleetProfile, exec: ToolExecutionLike): Promise<FleetToolResult>
@@ -939,7 +940,7 @@ function verifiedProbeInventory(raw: Record<string, unknown>, ip: string, profil
   return inventory
 }
 
-function intakeResult(operation: 'start' | 'resume', ip: string, missing: string[], executionAvailable: boolean): FleetToolResult {
+function intakeResult(operation: 'start' | 'resume' | 'inspect', ip: string, missing: string[], executionAvailable: boolean): FleetToolResult {
   return {
     schema: 1, ok: false, operation, ip, phase: 'intake', execution_available: executionAvailable,
     needs_input: true, run_created: false, probe_executed: false,
@@ -1140,6 +1141,16 @@ function continuation(phase: string, executionAvailable: boolean, failureClass?:
     : phase === 'blocked' && executionAvailable && failureClass === undefined ? {} : { can_resume: false }
 }
 
+/** The ten-stage ledger proves base provisioning, never the whole Fleet workflow. */
+export function baseCompletionScope(result: FleetToolResult): FleetToolResult {
+  return { ...result, completion_scope: 'base-provisioning',
+    base_complete: result.phase === 'complete' && result.current_stage === 10 && result.report_available === true,
+    full_node_acceptance: 'not_evaluated',
+    remaining_acceptance: ['browser-management', 'runner-registration-and-first-probe', 'fleet-readback', 'requested-login-policy'],
+    completion_notice: '本工具只证明基础十阶段接入。完整装机须通过已有 Fleet Task，由浏览器管理员和 Runner 运维者完成独立管理、巡检及本次账号要求的验收。不得将本工具 complete 报告为完整装机成功。',
+  }
+}
+
 function projectLedger(operation: 'status' | 'report', ip: string, value: FleetLedgerStatus, executionAvailable: boolean): FleetToolResult {
   if (!value.ok || !value.run) return { ...blockedResult(operation, ip, 'onboarding-run-not-found'), execution_available: executionAvailable }
   const run = value.run
@@ -1156,7 +1167,7 @@ function projectLedger(operation: 'status' | 'report', ip: string, value: FleetL
   const result: FleetToolResult = {
     schema: 1, ok: true, operation, ip, phase: run.status, execution_available: executionAvailable,
     needs_input: run.status === 'blocked' && latest?.failure_class === 'needs-user', run_created: false, probe_executed: false, run_id: run.id,
-    revision: run.revision, current_stage: run.currentStage, stages, events,
+    revision: run.revision, current_stage: run.currentStage, stages, events, report_available: Boolean(run.report),
     ...continuation(run.status, executionAvailable, latest?.failure_class),
   }
   if (operation === 'report') {
@@ -1196,6 +1207,51 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
   }
 
   get executionAvailable(): boolean { return Boolean(this.config.executor && this.config.ledger && this.config.cloud) }
+
+  async inspect(ip: string, exec: ToolExecutionLike): Promise<FleetToolResult> {
+    if (!executionSessionId(exec)) return blockedResult('inspect', ip, 'dsh-session-id-unavailable')
+    let lease: CredentialLease
+    try { lease = await this.config.credentials.resolve(ip, exec, true) }
+    catch { return blockedResult('inspect', ip, 'credential-provider-unavailable') }
+    if (!lease.available) {
+      if (lease.material instanceof Uint8Array) lease.material.fill(0)
+      await lease.dispose?.().catch(() => undefined)
+      return intakeResult('inspect', ip, lease.missing ?? [], this.executionAvailable)
+    }
+    try {
+      return await withCredentialFile(lease, this.config, async env => {
+        const raw = await runJsonProcess(this.config.probe, [], {schema: 1, operation: 'inspect', ip}, env, exec.signal, this.config.timeoutMs)
+        if (raw.schema !== 1 || raw.ok !== true || raw.operation !== 'inspect' || raw.ip !== ip
+          || typeof raw.target_fingerprint !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(raw.target_fingerprint)
+          || typeof raw.observed_at !== 'string' || !Number.isFinite(Date.parse(raw.observed_at))
+          || Math.abs(Date.now() - Date.parse(raw.observed_at)) > 300_000) throw new Error('inspection-invalid')
+        const stack = raw.browser_stack as any
+        if (!stack || typeof stack.managed_config_present !== 'boolean' || !Array.isArray(stack.resources)
+          || stack.resources.length > 16) throw new Error('inspection-invalid')
+        const resources = stack.resources.map((row: any) => {
+          if (!['port', 'display'].includes(row?.kind) || typeof row.id !== 'string' || !/^:?\d{1,5}$/.test(row.id)
+            || !['free', 'managed', 'unmanaged', 'stale-candidate', 'unknown'].includes(row.state)
+            || !Array.isArray(row.owners) || row.owners.length > 16) throw new Error('inspection-invalid')
+          const owners = row.owners.map((owner: any) => {
+            if (!Number.isSafeInteger(owner.pid) || owner.pid < 1 || typeof owner.managed !== 'boolean'
+              || typeof owner.process !== 'string' || !/^[A-Za-z0-9_.+-]{1,64}$/.test(owner.process)
+              || (owner.unit !== null && (typeof owner.unit !== 'string' || !/^[A-Za-z0-9_.@-]{1,120}\.service$/.test(owner.unit)))) throw new Error('inspection-invalid')
+            return {pid: owner.pid, process: owner.process, unit: owner.unit, managed: owner.managed}
+          })
+          return {kind: row.kind, id: row.id, state: row.state, owners}
+        })
+        const result: FleetToolResult = {schema: 1, ok: true, operation: 'inspect', ip, phase: 'inspected',
+          execution_available: this.executionAvailable, needs_input: false, run_created: false, probe_executed: true,
+          observed_at: raw.observed_at, browser_stack: {managed_config_present: stack.managed_config_present, resources},
+          next_action: 'Read-only observation, not repair or acceptance. Preserve unknown services. Stale candidates require fresh ownership and liveness checks under the executor lock before any cleanup.'}
+        assertNoSecrets(result, 'inspection-result')
+        return result
+      })
+    } catch (error) {
+      return {...blockedResult('inspect', ip, 'host-inspection-failed'), probe_executed: true,
+        diagnostic: {boundary: 'inspection', code: error instanceof AdapterProcessError ? error.diagnostic : 'inspection-result-invalid'}}
+    }
+  }
 
   private async inventory(ip: string, profile: FleetProfile, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<Record<string, unknown>> {
     const raw = await runJsonProcess(this.config.probe, [], { schema: 1, operation: 'probe', ip }, env, signal, this.config.timeoutMs)
@@ -1658,20 +1714,29 @@ export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardH
   const register = (tool: any) => readOnly && !['fleet_onboard_status', 'fleet_onboard_report'].includes(tool.name) ? () => undefined : ctx.tools.register(tool)
   const disposers = [
     register(strictTool(defineTool, {
+      name: 'fleet_onboard_inspect',
+      description: '只读连接目标机检查浏览器/VNC 端口、显示资源及进程和服务归属。冲突时先用此工具，不启动安装、不修改机器、不创建或推进事务；不是验收通过。',
+      parameters: {ip: {type: 'string', required: true, description: '完整 IPv4 地址。'}},
+      output: {schema: OUTPUT_SCHEMA, render},
+      async execute(args: any, exec: ToolExecutionLike) {
+        return adapter.inspect ? adapter.inspect(requireIp(args.ip), exec) : blockedResult('inspect', requireIp(args.ip), 'inspection-unavailable')
+      },
+    }, ['ip'])),
+    register(strictTool(defineTool, {
       name: 'fleet_onboard_start',
       description: '开始或幂等评估一个基础 Fleet 节点。宿主自行取得凭据、探测并执行；模型只提供 IP。',
       parameters: {
         ip: { type: 'string', required: true, description: '完整 IPv4 地址。' },
       },
       output: { schema: OUTPUT_SCHEMA, render },
-      async execute(args: any, exec: ToolExecutionLike) { return adapter.start(requireIp(args.ip), 'base', exec) },
+      async execute(args: any, exec: ToolExecutionLike) { return baseCompletionScope(await adapter.start(requireIp(args.ip), 'base', exec)) },
     }, ['ip'])),
     register(strictTool(defineTool, {
       name: 'fleet_onboard_status',
       description: '只读取 Fleet 接入事务账本，不连接目标机也不推进执行。running 且 can_resume=true 时，执行者必须调用 fleet_onboard_resume，不能交付为完成。',
       parameters: { ip: { type: 'string', required: true, description: '完整 IPv4 地址。' } },
       output: { schema: OUTPUT_SCHEMA, render },
-      async execute(args: any, exec: ToolExecutionLike) { return adapter.status(requireIp(args.ip), exec) },
+      async execute(args: any, exec: ToolExecutionLike) { return baseCompletionScope(await adapter.status(requireIp(args.ip), exec)) },
     }, ['ip'])),
     register(strictTool(defineTool, {
       name: 'fleet_onboard_resume',
@@ -1680,14 +1745,14 @@ export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardH
         ip: { type: 'string', required: true, description: '完整 IPv4 地址。' },
       },
       output: { schema: OUTPUT_SCHEMA, render },
-      async execute(args: any, exec: ToolExecutionLike) { return adapter.resume(requireIp(args.ip), 'base', exec) },
+      async execute(args: any, exec: ToolExecutionLike) { return baseCompletionScope(await adapter.resume(requireIp(args.ip), 'base', exec)) },
     }, ['ip'])),
     register(strictTool(defineTool, {
       name: 'fleet_onboard_report',
       description: '读取 Fleet 接入事务的脱敏验收报告，不连接目标机。',
       parameters: { ip: { type: 'string', required: true, description: '完整 IPv4 地址。' } },
       output: { schema: OUTPUT_SCHEMA, render },
-      async execute(args: any, exec: ToolExecutionLike) { return adapter.report(requireIp(args.ip), exec) },
+      async execute(args: any, exec: ToolExecutionLike) { return baseCompletionScope(await adapter.report(requireIp(args.ip), exec)) },
     }, ['ip'])),
   ]
   return () => { for (const dispose of disposers.reverse()) dispose() }

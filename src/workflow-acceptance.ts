@@ -4,6 +4,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import type { CompletionCheck, BlockDecision } from './runner.ts'
+import { fleetNodeForIp } from './fleet-workflow-evidence.ts'
 
 const windowMs = 20 * 60_000
 const rejection = (reason: string): never => { throw new Error(`工作流登录验收未通过：${reason}。由浏览器管理员完成 browser_login_acceptance 后提交真实 operationId；不要用再次复制代替验收。`) }
@@ -86,7 +87,7 @@ export async function validateWorkflowCompletion(input: CompletionCheck, deps: {
   receipt?: (id: string) => Promise<any>; fleet?: () => Promise<any>; now?: () => number
 } = {}) {
   const { task, batch, profileId, sessionId, metadata } = input
-  if (task.workflowRecipe?.id !== 'fleet-base-v2' || task.workflowRecipe.login !== 'provision-gemini' || profileId !== 'browser-manager') return
+  if (!['fleet-base-v2','fleet-base-v3'].includes(task.workflowRecipe?.id ?? '') || task.workflowRecipe?.login !== 'provision-gemini' || profileId !== 'browser-manager') return
   const now = (deps.now || Date.now)(), targets = [...new Set(batch.turn?.targets?.filter(t => t.kind === 'fleet-node').map(t => t.id) || [])]
   const ids = Array.isArray(metadata?.browserAcceptanceOperationIds) ? metadata.browserAcceptanceOperationIds : [metadata?.browserAcceptanceOperationId]
   if (!targets.length || ids.length !== targets.length || ids.some(id => typeof id !== 'string' || !/^[a-f0-9]{32}$/.test(id)) || new Set(ids).size !== ids.length) return rejection('缺少各目标的真实稳定性回执')
@@ -111,7 +112,7 @@ export async function validateWorkflowCompletion(input: CompletionCheck, deps: {
     return response.json()
   }))()
   for (const [ip, rows] of accepted) {
-    const node = fleet.nodes?.find((n: any) => n.id === 'host-' + ip.replaceAll('.', '-'))
+    const node = task.workflowRecipe.id === 'fleet-base-v3' ? fleetNodeForIp(fleet.nodes,ip) : fleet.nodes?.find((n: any) => n.id === 'host-' + ip.replaceAll('.', '-'))
     for (const row of rows) {
       const b = node?.browsers?.find((b: any) => b.browserNo === row.instance), check = b?.loginVerification
       if (b?.identities?.gemini !== 'in' || b.accounts?.gemini?.fingerprint !== row.fingerprint || b.accounts?.gemini?.source !== 'gemini-account-control' || check?.probeVersion !== 3 || check.status !== 'verified' || !(Date.parse(check.expiresAt) > now) || !(Date.parse(check.checkedAt) >= Date.parse(row.checkedAt))) return rejection('Fleet 当前登录与验收回执不一致')

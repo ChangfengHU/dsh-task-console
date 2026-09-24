@@ -29,6 +29,14 @@ if (process.env.FLEET_FIXTURE_PROBE_ERROR) {
   process.stderr.write(process.env.FLEET_FIXTURE_PROBE_ERROR + '\n')
   process.exit(2)
 }
+if (input.operation === 'inspect') {
+  process.stdout.write(JSON.stringify({schema:1,ok:true,operation:'inspect',ip:input.ip,
+    observed_at:new Date().toISOString(),target_fingerprint:'sha256:'+'a'.repeat(64),
+    browser_stack:{managed_config_present:true,resources:[{kind:'port',id:'6080',state:'unmanaged',
+      owners:[{pid:42,process:'node',unit:'other.service',managed:false}]}]},
+    ignored_secret:credential.password})+'\n')
+  process.exit(0)
+}
 const contract = JSON.parse(await readFile(process.env.FLEET_ONBOARD_CONTRACT_FILE, 'utf8'))
 const key = (await readFile(process.env.FLEET_ONBOARD_INVENTORY_HMAC_KEY_FILE, 'utf8')).trimEnd()
 const through = Number(process.env.FLEET_FIXTURE_HEALTHY_THROUGH || 0)

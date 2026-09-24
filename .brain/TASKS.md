@@ -1,0 +1,109 @@
+# 后续优化
+
+- [ ] [FLEET-FULL-ACCEPTANCE-20260924] 开发 v3 完整接入配方（装机者→浏览器管理员→Runner）、原始工具证据与 Fleet 回读门槛、基础工具范围标识，以及暂停 once Task 的独立审查原地升级。旧 v1/v2 历史不改。当前236仍仅基础接入；尚未升级线上原 Task、Skill/角色、Studio 集成部署或进行236真实三角色/重复幂等验收。当前全量测试与部署边界见 `dev-log/2026-09-23-model-startup-fallback.md` 2026-09-24段。
+
+- [x] [MANUAL-FLEET-WITHDRAW-20260923] Fleet c3ff0b7 deployed;31 Fleet tests and22 preset/Action tests pass. Browser-selected fleet-ops Action performed real236 withdrawal in session agent-fleet-ops-mue2yyrn, audit6088. Public Fleet card absent; D1 membership0/enabledRunners0; Vault value digest unchanged, access inventory unchanged; VNC page and Clash health remain200. Installer session agent-fleet-installer-mudto47m first completed all10 stages in onb-92f512d5-0bf2-4e0b-b3b1-66426c0c4b7e. Final236 state is intentionally withdrawn, not uninstalled. No developer target SSH or global reload. Full receipts in existing model-startup-fallback log.
+
+- [x] [ONBOARD-PROBE-DIAGNOSTICS-20260923] Scoped bb3a01f inspection deployed without global reload;48 DSH and89 host tests passed. DSH ops replaced only user-approved legacy noVNC after backup; installer completed236 after root0700 artifact verification correction (sop-ui98badcc, machined0.15.17; linux-clash8b01bf3 host pin).46 machine tests pass. Actual installation and manual withdrawal verified, not just retirement preflight. Existing global integrated55ea995 remains; full global integration is separate pending work, unrelated Studio/lib edits preserved. Failed historical Runs/ledgers retained. See existing model-startup-fallback log.
+
+- [x] [ONBOARD-VAULT-CANDIDATES-20260923] 装机 Task Action 改为金库 SSH 目录候选，支持未注册 Fleet 的 129.213.30.236；浏览器 Actions 保持 Fleet 名册，手填新 IP 保留。334 tests passed/3 skipped，零活跃窗口合入 Studio 部署；公网 @ 选择和候选点击通过，不发送、不启动装机，Task 快照前后相同。窄屏仅验证候选弹层，原生侧栏挤压输入框未在本项重构。见 `dev-log/2026-09-23-onboard-vault-candidates.md`。
+
+- [x] [RETIREMENT-ONLINE-REPORT-20260922] Existing retirement Task now includes all returned online/unreachable/unknown nodes in its frozen WeCom summary, without authorizing operations on deferred nodes. Final public-page manual run `b-mucl5nq6lxq`: six fresh reachable nodes, zero candidates, both roles done, sent once; persisted observations and notification body independently matched. Preset and Task revisions applied through normal APIs/review, no host restart or machine writes. Schedule remains disabled; report-only page still lacks text summaries and friendly timestamp formatting remains pending. See `dev-log/2026-09-22-retirement-online-report.md`.
+
+- [ ] [TASK-DETAIL-QUERY-038] 2026-09-22 详情摘要、最多10条执行头、内存缓存、当前回放会话计数、DAG游标分页/增量轮询及Trace十步分页已合入Studio并零活跃窗口部署。线上摘要33KB；Chrome本机1.97秒、公网静态缓存48 HIT时20.67秒，回放/Trace通过。全局插件故障隔离、进一步冷启动优化及真正按需历史加载尚未完成。部署和测试边界见 `dev-log/2026-09-22-task-detail-summary.md`。
+
+- [ ] [TASK-QUERY-PAGING-037] 0.31.7 已部署 Task/Agent 列表后端分页与摘要缓存；旧任务列表 3.21 MB 降至 8.7 KB，真实浏览器本机首显 3.33 秒、返回列表 0.03 秒，无旧全量 tasks 调用。保留批量操作、详情、Actions。剩余 DAG/事件/Trace 增量分页、全名册选择器及公网启动资源传输慢未完成。证据：`dev-log/2026-09-21-paged-query-layer.md`。
+
+- [ ] [TASK-FLEET-RETIREMENT-036] 0.31.6 新增最小权限「Fleet 节点退役管理员」。2026-09-21 修正 Fleet MCP 原始工具名映射并完成首个真实退役：Task Run `b-muarvddfoe2` 由 Agent 将连续不可达约 378.59 小时的 host-206 原子退役，复读确认 `enabled=false`、旧 `machine_access` 不存在、节点金库键为空、审计 `outcome=changed`；公网 API 与真实 Chrome 均确认 Fleet 页面不再包含该节点。三个节点专属金库键已精确删除，Runner 已停用，未 SSH 或改动目标机器。企微由独立通知员会话真实送达 1 个群；但原 static-chain 通知卡被现有“Task 通知必须经 reviewed outbox”围栏拒绝，故该 Batch 取消、定时仍停用，本项暂不冒充同一 Task 全链路完成。详见 `dev-log/2026-09-21-fleet-node-retirement.md`。
+
+- [x] [TASK-SESSION-RECENT-ALIAS-034] 0.30.30：Recent按原生活动时间跨文件夹显示，10条/更多/收起，保留隐藏规则、Pinned/Favorites及文件夹；dsh.vyibc.com复用原隧道DNS目标和既有Worker，仅新增别名DNS与路由。314测试无跳过；双域名真实浏览器深链、历史、切换、刷新及1440/390列表验收通过，无业务写入。Task/定时/Action哈希不变，见 `dev-log/2026-09-15-recent-sessions-alias.md`。
+
+- [ ] [TASK-SESSION-CAPABILITY-033] 0.30.29 按用户确认改为通用Agent默认继承、显式排除Skill/MCP/工具，去掉0.30.28硬编码浏览器限制；专用角色、原生鉴权及循环保护保留。双零部署，313测试无跳过通过；真实Qwen Plus只查询一次目录22.176秒结束，89注册工具与实际模型请求89项一致，排除为空，Task/定时/Action哈希不变。Qwen Flash曾未调用目录直接生成答案，不算成功验收。自动委派、CLI私有观测与独立搜索认证仍非本轮已完成能力。详见 `dev-log/2026-09-15-standard-inheritance.md`，旧版诊断保留于原日志。
+
+- [x] [TASK-SESSION-SHORTCUTS-032] 0.30.27 已于07:18:24Z在原生会话及Task双零活跃窗口部署。Session模块提供原侧栏置顶/收藏虚拟分组及SQLite独立标记，不移动复制会话、不新增菜单。308回归零跳过，公网真实菜单四次标记写入、刷新/取消/跳转、1440/390px和深浅色通过；测试标记已取消，无新crashed Run。任务定义/定时绑定/Task Actions哈希不变；执行报告/返回DAG/Esc/Agent/Board原交互回归通过。临时构建已清理；证据见 `dev-log/2026-09-15-session-shortcuts.md`。
+
+- [ ] [TASK-PATROL-FOLLOWUP-031] 0.30.26 已零活跃重载：任务卡自适应、回执续读、真实受阻通知、Fleet 处置/通知/深链及忙碌未开始与 Google 挑战区分已部署；303 测试零跳过及构建、公网1440/390px通过。Creator 修订 P-chat-b1ae15d569447b1beeec 已独立审查；同 Task 手动 b-chat-d335a8061b8f72f25505 于04:51:08Z完整收口（23卡done、10/13浏览器通过、6代理通过、8通知sent含12:53:19北京时间补发），业务仍unresolved。84/b2预检忙碌经可见只读Agent归类not_started，原计数保留，未实际续接；188/b1实际续接遇Google人工验证；187/b1独立验证unknown。原整点定时已恢复，下一次13:00北京时间，尚未观察此版本自动触发；不声称全部登录恢复。执行页冷加载50.4秒仍未解决；证据与后续见既有Creator dev-log。
+
+- [x] [TASK-EXECUTION-REPORT-030] 0.30.24：按用户要求将执行报告移至 `/tc/tasks/:id/runs/:batch/report` 独立页面，提供返回工作流和顶部页签；保留文字结论、产物预览/下载及巡查证据，返回保持同 Batch 的回放步数、选中节点、缩放与画布位置。任务/Agent 中心增加分层 Esc：先关闭预览、选择器、Sessions、移动行检查器或全屏，没有上层时等同 X；禁用关闭按钮与输入法状态仍受保护。293 项回归、候选与实际公网浏览器测试通过，原布局六尺寸和真实 Gate/报告/产物通过。仅前端更新，未重启服务、触发任务或改机器。见既有 Actions dev-log。
+
+- [x] [TASK-EXECUTION-LAYOUT-029] 用户批准 V2 后已接入 0.30.23：仅收紧执行页页头、统计、单屏高度，协作图占据剩余空间；原 Sessions 右侧抽屉/Trace/原会话、协作计划三页签、报告/巡查证据/Canonical 事件/运行边界保留，展开区互斥且内部滚动。293 项测试、六尺寸公网浏览器、真实 Gate/回放及旧 HTML 预览下载通过；同条结束执行前后快照不变。仅更新前端运行资源，无服务重启、目标机器或任务/权限/定时变更。首次公网加载仍约 21–25 秒，未把布局改造当作冷启动修复。详见既有 Actions dev-log 最新段。
+
+- [x] [TASK-EXECUTION-UI-PROTOTYPE-028] 用户纠正 V1 重构过多后，独立 V2 仅做单屏布局调整：保留 Sessions 右侧抽屉、Trace / 原会话入口、原位协作计划三页签、行检查器、报告、Canonical 事件、完整任务书和运行边界。仅压缩头部/统计、放大 DAG、限制展开区高度；六种尺寸公网浏览器测试通过。原型与范围见 prototype/task-execution-compact-v2*；未替换线上插件或操作任务/机器，V1 保留对照，后续用户已批准正式接入，进度见 029。
+
+- [x] [TASK-EXECUTION-UI-PROTOTYPE-027] 独立执行页 Focus V1 原型已发布公网；压缩头部和技术统计，主画布展示三角色协作，右侧按需查看进展/Trace/数据，顶部提供验收入口。支持虚构执行中/受阻/通过、数据库时刻逐步/自动回放、全屏保留详情、会话预览及多格式结果。1440/390px 公网浏览器验收通过，零 API/子资源请求；不改线上插件、任务定义、历史、定时或目标机器。代码 prototype/task-execution-focus-v1.html；证据见既有 Actions dev-log 末尾。此项只是设计评审原型，不能作为当前装机业务通过的证据。
+
+- [x] [TASK-ACTIONS-026] 0.30.22：Task 专属 Actions 的 SQLite CAS、原生 @Task 占位符/候选/刷新恢复、幂等 Batch 提交、安全输入快照和 Creator 待审查接入完成；293 项测试零跳过、构建、公网拦截回执及真实候选/配置浏览器测试通过。10:29:02Z 零活跃窗口重载，原 Fleet Task 仅 CAS 增加默认「装机与账号验收」Action。真实无效 IP 提交在 Batch 创建前拒绝；未提交装机。TaskSpec、角色、每小时定时及历史不变。混合前后端版本时保留旧入口，避免重载前按钮调用不存在的 API。见既有 Actions dev-log 最新段。
+
+- [x] [TASK-BROWSER-SESSION-025] 0.30.21：修复模型猜sessionId，改由宿主绑定真实身份，保留工具/Task围栏和删除证据校验；288测试及构建通过，已部署。公网会话agent-browser-manager-mu0xvbyb在187真实新增browser-3，从指定金库gemini_98caccf3导入一次，17次独立采样跨20m02.564s通过，再经删除Action仅清理新实例profile-3（150,286,336 bytes）。原1/2 PID、资料及登录保留，Fleet页面仅剩1/2，DSH会话完整显示结果。过程中修复版本误钉死、竞争等待无续接及Worker传输问题，失败回执保留，不声称首次无干预成功。Task/AgentSpec哈希及每小时定时不变；63会话已停止、无节点作业，继续暂停。见既有workflow-plan-login日志。
+
+- [x] [TASK-BROWSER-FLEET-SCOPE-024] 0.30.20：指定账号 Actions 使用金库 accountId、版本和持有浏览器元数据，不依赖在线来源，模板传入 MCP 强选择参数；节点范围由 linux-clash Fleet 名册授权提供。286测试及构建通过，07:20:17Z零活跃/原Task持久等待边界重载；公网1440/390px候选、角色隔离、回车、分页/失败及历史不变验收通过。可见Agent只读会话 agent-browser-manager-mu0waqf3 证明63可追加browser-3。AgentSpec/Task哈希及每小时定时不变；本轮未额外新增、删除或导入登录，不代表原巡查整体验收完成。见既有workflow-plan-login日志。
+
+- [ ] [TASK-LOGIN-VAULT-023] 0.30.19已在零活跃边界重启部署；285测试及构建通过。原巡查Task仅为6条精确预检拒绝追加不可变未导入分类，原始次数、Task/AgentSpec审查哈希和每小时历史不改。可见browser-manager会话完成6节点登录协议/严格域名脚本更新及真实HTTP证明；Fleet已启用金库下发，6个已发现Gemini账号均有匹配加密库存，账号/复制预览桌面手机通过。原Batch未结算导致整点不重叠启动；未强制导入健康浏览器，原Task整体验收未完成，见既有workflow-plan-login日志。
+
+- [ ] [TASK-PATROL-LIVENESS-022 · 真实返工进展] 原 Batch b-mtzs8atbjxv 已自主完成首轮评估、p2交接及第二轮闸门放行，started/findings/rework 三条通知均真实 sent，无开发者代替角色交卷。browser-manager 已一次授权复制并验证84/b1、187/b1；187操作 d4601bd71dc262f84167b899d50414e5 于12:39:38Z complete/loginVerified=true。12:40Z公网Chrome确认187两个不同账号均已验证、检测时间继续推进。下一步仍是同一Batch的后续独立20分钟稳定性复验与最终通知，尚未通过整项Task；每小时仍启用，部署后的自动整点触发尚未实测。此行更新下方022的早期b1未登录快照，不改写日志历史。
+
+- [ ] [TASK-PATROL-LIVENESS-022] 0.30.18：修复规划者反向等待其下游通知员 sent 导致的死锁，以及无未完成父依赖时反复新建 Session；超原预算的 cron 巡查在无活跃/待验操作、无人工输入等待时如实失败结算，保留全部历史和每小时定时。284项测试零跳过、构建和公网1440/390px检查通过，零活跃边界部署。旧 b-cron-c482a34302e27458d6e5e819 已真实失败结算；同原 Task 新手动执行 b-mtzs8atbjxv 已启动，started 通知 sent，最终业务验收仍在进行。187检测服务由可见浏览器管理员仅更新两文件并恢复后台刷新；b1明确 signed_out，b2 verified，浏览器PID/资料/共享服务不变。AgentSpec与两Task定义哈希不变；不能宣称全机群登录或本次Task已通过。见既有Creator dev-log最新段。
+
+- [x] [TASK-AGENT-ACTIONS-021] 0.30.17：修复原生 hero 显式选定角色后空白会话不显示 Actions，以及接受默认数量后登录方式候选未自动挂载。原生角色确认按 Session 保存 UI 标识，刷新保留、New Session/角色变化清除；默认继承仍不算选择，执行保持当前 Session。候选与焦点等待同一 DOM 修订，保留取消/迟到回复隔离。修复前两项公网回归均失败，修复后原生菜单、回车默认值、三选项、1440/390px、刷新/新会话、账号联动/失败/分页及防误发通过；281 项测试零跳过。静态客户端部署无 DSH 重启，AgentSpec/Actions/两业务 Task 与每小时定时哈希不变，未执行 Agent/目标操作。详见既有 Actions dev-log 的 0.30.17 段落。
+
+- [x] [TASK-AGENT-ACTIONS-020] 0.30.16：Action 参数支持配置默认值/Enter 接受规则、固定选项、只读动态候选、条件和依赖、整数/下限；机器可搜索及手填、新增默认 1、登录默认分配策略，指定账号时展示完整邮箱与来源 IP/浏览器，父参数改变清空旧账号。候选复用已有 MCP 授权/排除规则，过期发现记录只作待复验意图。补齐公网 catalog 等待期间完整草稿编辑的坐标追踪和渲染焦点恢复，最后字段不自动发送。278 项测试/构建通过，公网键盘、刷新/角色隔离、强制慢响应、账号联动、分页/失败、1440/390px 与明暗配色验收通过。零活跃边界部署，仅 CAS 更新 Actions sidecar，原 AgentSpec/两 Task/每小时定时哈希不变，无目标机器或登录操作。详见既有 dev-log/2026-09-12-agent-actions.md 的 0.30.16 段落。
+
+- [x] [TASK-AGENT-ACTIONS-019] 0.30.15：修复刷新后 @Action 丢失原生 claim/占位符状态而误走普通发送、复用空会话默认角色提前显示 Actions，以及草稿恢复/异步查询竞态；保留并合入之前 0.30.14 未提交的菜单方向键焦点与显式默认占位符修复。270 项回归/构建通过；公网键盘、三参数、刷新、Send 防误发、切换会话、空会话显式 Agent 选择与旧草稿恢复通过；最终同 Session 发送在网络前拦截验证，未实际调用业务 Agent。原两 Task/AgentSpec 哈希不变，无宿主重启或目标操作。原生宿主两个客户端的版本限定补丁/备份与验收证据见既有 dev-log/2026-09-12-agent-actions.md 的 0.30.15 段落。
+
+- [x] [TASK-AGENT-ACTIONS-018] 0.30.13：按用户纠正把 Actions 拆为独立 Tab，默认配置仍优先身份，切换保留草稿；严格核对当前 Session/角色、丢弃过时异步候选。移除 Action 调用表单，改为原生输入框模板与占位符，Enter/Tab 前进、Shift+Tab 返回，最后一项完成后另行发送；未填参数禁止键盘/按钮发送。262 项回归、构建及公网 1440/390px 原生输入、撤销/重做、IME、两次无工具回声与同会话保持通过；业务 AgentSpec 和两 Task 定义哈希不变，无目标机器操作。详见既有 dev-log/2026-09-12-agent-actions.md 的 0.30.13 段落。
+
+- [x] [TASK-AGENT-ACTIONS-017] 0.30.12：Agent Actions 持久快捷指令；当前角色会话 @ 优先显示该角色 Actions，新会话 Agent → Action/普通消息，参数校验/原文预览/显式发送。配置支持新增、编辑、复制、删除、重载与修订冲突保护；独立 sidecar，不修改 AgentSpec/权限/Task 审查哈希。257 项回归及构建通过，公网工具为空的测试角色真实发起两次回声，同一 Session 保持、取消不执行，1440/390px 和真实浏览器管理员五动作/暗色样式检查通过。零活跃后部署；仅安装浏览器管理员 Actions、无目标机器操作，原两业务 Task 和每小时计划保留。详细证据及已知边界见 dev-log/2026-09-12-agent-actions.md。
+
+- [x] [TASK-PATROL-OBSERVATION-016] 0.30.11：修复仅刷新旧回执消耗返工轮次、最后评估提前交接、采样期限漂移、ready后冗余返工、继承问题完成证据丢失及通过/未通过状态重叠；补齐MCP回执解析/代理同轮范围报错。250测试/构建通过，零活跃后部署；保持新鲜未登录授权、持久预算、20分钟4样本和全部历史。旧Batch b-chat-4c400a667d4b4abcbac7最终10/11、failed/unresolved记录保留，不以中间通过快照替代。原Task新手动Batch b-chat-ff196b85560e7b00bc15于2026-09-12 11:04:12 UTC真实done，14/14卡、11/11浏览器及6/6代理独立通过、3通知sent。DSH Agent仅对187/b1实际provision一次，来源84/b1；4样本跨20m49.231s，定时等待自动续执行，无开发者纠正/解除阻塞或目标机器操作。45项MCP授权/选择/幂等回归另通过；公网1440/390px、Trace、会话跳转和Fleet全11登录显示通过。验收后启用原每小时计划，下次2026-09-12 20:00北京时间，首次cron尚未发生，不宣称永久健康或自动触发已验证。206真实排除、不增浏览器健康Task。详见既有Creator dev-log末尾；本行取代旧007/014/015的运行时快照，不改写历史。
+
+- [ ] [TASK-PATROL-RECOVERY-015] 0.30.10：加入独立审查的recover、排除节点和completed-patrol定时启用策略；仅新鲜原生CDP失败允许冻结受限恢复，保留20分钟4独立样本/持久预算/通知送达，206真实不可达单独保留；执行UI区分已结束未通过与未结束。244测试/构建、公网1440/390px通过。原Creator修订P-chat-b44a2477ac7d83039a88已审查，仍复用原巡查Task，新Batch b-chat-843489163446c3f00418正在运行；宿主只增187/b2 recover权限，无开发者目标机器操作，定时仍关闭，不能称恢复或验收完成。见既有Creator dev-log末尾。
+
+- [ ] [TASK-PROXY-WORKFLOW-014] 0.30.9：代理MCP已接入原巡查Task；241测试/构建、公网桌面/390px验收通过，冷启动未优化。真实DSH Agent已修复84 line-100，五路径63.124.160.54；两浏览器由browser-manager各复制一次不同授权账号，独立4样本分别跨22m02s/21m46s通过，末次只读代理复验亦通过。原Task Batch b-chat-505cc3698915b4635bb1已收口：17卡完成、6通知sent，业务unresolved/failed（10/11浏览器通过，187/b2 cdp-unavailable、206未覆盖），不是执行协议失败。原Task与所有失败历史保留；两业务角色仅切至已验证Codex模型，其余配置哈希不变，经Creator新计划独立审查；定时仍关闭、无活跃操作。不宣称全机群已达标；187/206是剩余覆盖问题。完整回执、采样与浏览器证据见既有Creator dev-log末尾。
+
+- [ ] [TASK-PROXY-MCP-013] 0.30.8：已开发可独立启动的vyibc-proxy stdio MCP（inspect/verify/repair/status），SDK真实客户端握手/隔离调用、233全量测试及17远端模拟故障测试通过。复用Controller事务预检/替换/启用/回滚，受限恢复既有Controller；独立五路径出口证据、同机自修拦截、逐节点授权、幂等/持久锁/不确定结果保护、无凭据回显。回执查询失败不能解除旧操作锁，必须精确匹配终态回执。未写生产策略或MCP加载连接、未改Agent权限/Task历史/定时，未SSH目标机，不能称84已修复。待审查工具授权及Task执行支线/网络闸门接入；配置和限制见docs/proxy-mcp.md，证据见既有Creator dev-log最新段。
+
+- [ ] [TASK-PATROL-PROXY-012] 0.30.7：用户要求通过原巡查 Task 尝试协调 Clash 与登录，不直接操作机器。真实 Creator 会话 agent-task-create-agent-mtwlf6hg 已核对名册并指出编排缺口；修正 task_create_status 将受阻执行泛称 running 的反馈，新增原暂停 cron Task 的 revise 待审查/CAS更新、前后定义展示、历史冻结保护和重新手动验收门槛。222测试、构建、公网桌面/手机审查交互通过；草案P-chat-d8ad16b93f2514100edf因未实现网络闸门、规划者无状态查询工具和固化本轮资源/状态而退回，未批准或执行。未增加代理执行支线/跨Task互斥/网络证据闸门，不得将此基础改进当作84恢复。原巡查Task定义与2Batch在部署前后逐行哈希一致，cron仍关闭，无目标机器操作或权限变更。详细证据及后续能力缺口见既有 Creator dev-log 最新段。
+
+- [x] [TASK-PATROL-EVIDENCE-011] 0.30.6：巡查本轮独立验收与实时回执新鲜度分开；有效检查不因交接耗时到期变成未登录。后续未知/掉线/换号、验证操作拒绝/中断、新的修复操作仍使旧证据失效；修复后的完整稳定性窗口及新鲜未登录才可复制的约束保留。页面按回放快照区分检查事实、待刷新、明确未登录、证据不足、稳定性待验与未覆盖，支持待关注筛选和证据详情；旧 accepted/outcome/通知不改写。219测试、构建、公网旧执行/回放/手机/暗色及浏览器内新状态夹具通过；32Task/63Batch和8张证据相关表逐行哈希未变，未创建真实执行、未操作机器、未发企微，巡查定时保持关闭。详见 dev-log/2026-09-09-task-creator-review.md 最新段；这是插件验收，不是新的真实巡查通过。
+
+- [x] [TASK-EXECUTION-UX-010] 0.30.5：执行选择改为单行日期/状态与更多菜单，归档筛选按需展开；新增任务中心/卡片/选择器可达的执行历史页与十条SQL分页，支持任务/状态/编号/归档查询。暂停cron不再隐藏@入口，手动复用仍核对已审查输入/角色指纹并保持定时关闭；未归档/幂等/重叠/失败试跑门槛不放宽。210测试及公网桌面/手机/暗色、历史切换、筛选、受拦截@提交和浏览器内分页交互通过；未创建真实执行、未操作机器，巡查仍待业务验收。证据见 dev-log/2026-09-08-execution-labels.md 最新段。
+
+- [x] [TASK-WORKFLOW-REEXECUTE-009] 0.30.4：仅归档旧Batch b-chat-b4c6fcb369f0c20a9739，32Task及全部历史保留。首个新Batch b-chat-53c7651dd3a78824d506 虽通过业务20分钟验收，但Qwen未正式交卷而failed，历史保持不变；工具确实暴露、非token截断，已补同会话异步终态续接及默认prepare参数提示，208测试/构建通过，零运行后部署并推送145d2152。第二新Batch b-chat-dda870d91626c9e0a9e6于2026-09-10 10:23:52–10:53:36 UTC真实完成：装机十阶段通过，Runner八项签名检查通过；浏览器prepare changed=[]/未重启/资料保留、两登录reused=true，操作2fd4b727b7fde3d9210d17a05b0a20f5的双实例22/23样本分别覆盖1259718/1319737ms，stable=true，Qwen实际task_complete且宿主验收成功，三角色均done。此次模型主动轮询至终态，新增宿主唤醒分支仅单测覆盖，不声称实跑覆盖。公网浏览器确认3完成/0未完成、执行报告、Trace和原会话跳转，无页面异常/横向溢出。首失败Batch/旧归档/巡查Task不删不改，定时仍关闭；窗口通过不等于未来永不掉线。详见既有工作流dev-log最新段。
+
+- [x] [TASK-BOARD-ARCHIVE-008] 0.30.1：用户要求页面只显示仍需使用的任务；已精确归档30个旧Task，保留装机 T-chat-b4c6fcb369f0c20a9739 与巡查 T-chat-bbb714b2ba8439b69178。旧任务停用并从主列表/搜索/执行候选隐藏，全部历史执行、通知、计划及494个会话不删；两个主Task定义/状态不变，巡查仍关闭定时。201测试、构建、公网1600/390px两卡、旧任务搜索隐藏及历史链接禁执行验收通过。详见既有dev-log本日归档段。
+
+- [ ] [TASK-PATROL-SCHEDULE-007] 0.30.2：用户恢复模型后，同 Task 第二手动 Batch b-mtv9vz6v19v 于2026-09-10 08:35:57–09:03:30 UTC完成两轮真实只读巡查，最终 unresolved/failed。首轮11实例均取得独立 verified；187/b1读取竞态由linux-clash修复后真实复验通过。收口时6项证据过期；次轮95/b3因正在处理其他工作拒绝验证，保留206不可达/无读取授权覆盖缺口，无复制/重启/删除。六条独立企微阶段通知均sent；超预算返工通知曾先于计划拒绝发出，历史不改写。已补“已知覆盖缺口+未改动独立证据过期可如实未通过收口”及超预算返工通知护栏；204测试/构建通过，运行全部结束后部署，不将补丁测试算作新的业务验收。Qwen实际执行浏览器/通知员，Codex恢复后执行规划/评估；未实现自动模型fallback、未变更已审查角色。定时仍关闭，两个主Task与30个归档Task/全部历史保留。63新完整装机尚未启动；已询问是否保留原合同双浏览器20分钟验收，待答，不擅自减弱合同。详见既有dev-log最新段。
+
+- [x] [TASK-CREATOR-REVIEW-004] 0.28.1：结构化设计/独立审查/幂等放行/分页审查上线。两次错误完成报告保留；增强 MCP 登录证据分类及显式 browser-patrol-v1 宿主闸门。最终真实 Task T-chat-40a78cfa15b039ba4589 于 2026-09-09 07:10:56 UTC 自主 task_block、nudges=0；宿主从真实工具事件计算 11 实例=3 verified/6 unknown/2 skipped，未伪造绿色完成。173 项回归、公网桌面/390px审查与导航通过。见 `dev-log/2026-09-09-task-creator-review.md`。
+- [ ] [TASK-BROWSER-PATROL-COVERAGE-005] 0.28.2：Fleet 自动业务隔离已移除；真实巡查 Task T-chat-e5d640c5595bedcf83eb 第三 Run 已完成，登录复制均由 browser-manager 经 MCP 执行。188/browser-3 展示遗漏另经独立审查修复（见下一项）。全部已观测实例的回执保留，但不可达206无浏览器观测不等于不存在或验收通过；不宣称未观测范围全量达标，不重复63的20分钟验收。
+- [x] [TASK-BROWSER-OBSERVATION-006] 188/browser-3：Creator 生成并经独立审查的 P-chat-17143dab0c6d2d5c4b5e → Task T-chat-8c09e935a94ae56de699。Run2 仅修旧 HTTP 登录观察循环，保留三个PID/CDP/生图配置和登录；Run3 于09:14:12UTC 自行 task_complete，引用真实verify和独立fleetDisplay。公网Chrome60秒三次加载均显示三个Gemini账号；原两次blocked保留。MCP修复及78 Node/27 Python验收属于linux-clash仓库，本插件未改业务代码或重启。见现有dev-log。
+
+- [x] [TASK-BROWSER-LOGIN-002] Task T-chat-61d84a0199aabbe795dc 首次准备与 browser-1 单次复制完成，browser-2 复用。0.27.4 修复宿主提前结束后，第二 Batch b-chat-619ec90823195dd9e78b 于 2026-09-09 03:22:42 UTC 完成20分钟只读验收、各21样本、stable=true，浏览器管理员自行调用 task_complete。原失败 Run 和回执保留；不代表未来永不失效或完整装机已稳定。
+- [x] [TASK-BROWSER-POOL-003] 账号池规则在 linux-clash/browser-manager 实现，宿主策略明确排除指定账号、其余四个批准账号仍须实时验证；本插件不另造账号库。新 generation 会话 agent-browser-manager-mttkrxrj 仅调用两次 candidates，展示五账号、排除/未验证原因并保留两实例有效登录。75 项相关 Node 测试通过；没有为分散账号再次改动健康目标，未以只读查询冒充多账号实际复制验收。开发者只完善工具/角色，目标操作与任务收口由真实 DSH Agent 负责；20分钟自主收口证据见上一项。
+
+- [x] [TASK-CREATE-JSON-001] 0.27.3：修复自定义工作流目录中 undefined 导致的 lossless JSON 拒绝；162 项回归/构建通过。原 Creator 会话重试成功创建下述真实 Task，原始失败和旧计划均保留。
+
+- [ ] [TASK-BROWSER-REBUILD-001] Task T-chat-9fd1c8bfa45d890b9ce4 由浏览器管理员实际完成 63 browser-2 无备份删除、原槽位重建和一次授权登录复制；旧资料约 582 MiB 永久删除。双浏览器20分钟验收因 browser-1 signed_out 失败，Task/Run 均 blocked。browser-1 未被删除、重启或作为复制目标，但掉线原因未定；browser-2 仅短期已验证，不能宣称稳定。停止重试，不擅自修复 browser-1；本行取代下方旧计划的下一步指引，历史不改写。见现有 dev-log 最新段落。
+
+- [ ] [TASK-WORKFLOW-002] 0.27.2：旧 Task 精确备份删除，21 个其他 Task 和全部会话保留。新 Task T-chat-b4c6fcb369f0c20a9739 的装机/Runner 通过；浏览器五次真实尝试未通过最终验收。最新正常续接成功选中授权账号（嵌套元素已修复），随后 Google 要求交互验证；等待用户在 browser-2 完成，再在同 Task 做双浏览器20分钟验收。不能宣称装机工作流已完成。运行中阻塞保护及终态回执纠正已实现；162 项 DSH 回归/构建、55 Node/19 Python 及公网计划/Creator/历史导航/移动端验收通过。见 `dev-log/2026-09-08-workflow-plan-login.md`。
+
+- [x] [AGENT-HISTORY-001] 0.25.0：新会话 @ Agent 默认最新五条、展开/收起与全名册搜索；Agent 详情支持配置/会话/任务页签、服务端分页、创建者与实际参与者关联、北京时间和原会话跳转。保留草稿及返回页码；不读取完整会话日志、不操作目标机器。140 项测试及真实公网桌面/窄屏交互验收，见 `dev-log/2026-09-08-agent-history.md`。
+
+- [x] [TASK-CREATE-001] 新增通用 task-create-agent、Agent/Workflow @ 入口和幂等提交账本；复用既有 Task/Batch/Run 调度及角色权限。63 已通过三角色自动协作及原 Task 第二次执行；第二轮装机十阶段 reused、changed=0，原始上游交接完整传达。数据库回放、全屏检查器、Trace/原会话跳转和文字报告均经过真实浏览器测试。见 `../dev-log/2026-09-07-task-create-workflow.md`。
+
+- [x] [TASK-HISTORY-ID-001] 修复兼容模型空 tool-call ID 导致的 Chat/Trajectory 重复匹配及冷启动历史校验失败；保留原始日志，按流事件与 sourceEventSeqs 在读取时恢复关联。真实公网会话冷启动、40 次工具详情及 Trace 验收通过，见 `dev-log/2026-09-06-history-mcp-repair.md`。
+
+- [x] [TASK-INTAKE-REPORT-001] 支持单会话汇总接收、提前持久化 Session/入参回执、独立 item 决策与已接收请求去重；保留真实角色与对话，Fleet 第一阶段不等待修复。（0.23.0，生产浏览器验收见对应 dev-log）
+
+- [x] [TASK-PERF-001] 将 `dsh-task-console` 改为轻量启动入口，任务页面、DAG 与 Trace 在用户进入对应界面后再懒加载。（0.17.5）
+  - 现状基线：公网冷缓存测试中，HARNESS 完成加载约 71 秒；`dsh-task-console` 客户端传输约 167 KB，单项耗时约 31.6 秒。
+  - 约束：保持技术包名、Typert namespace、SQLite 数据与现有任务 URL 兼容。
+  - 验收：首屏只加载菜单注册所需的轻量代码；未打开 Board/Trace 时不下载其实现；分别记录冷缓存和热缓存的首屏时间及按需模块加载时间。
+  - 实测：本机真实 Chrome 禁用缓存后，轻入口约 1.25 秒注册、传输 6,958 B，未请求 601,209 B 的重模块；点击 Board 后约 1.0 秒呈现任务中心并加载重模块。公网任务详情约 20.1 秒可交互；总 HARNESS 时间仍会受到 Station、Skill/MCP Console 等其他大插件影响。
+  - 关联原型：`prototype/task-session-lightweight-v1.html`。
+
+- [x] [TASK-FLEET-001] 为“装机者”增加四个 IP-only 装机工具、固定 Skill 版本、工具级权限隔离、中央账本及 DSH→Cloud Workflow 幂等续跑桥。
+  - Stage 2 仅走受限 host-adapter；Stage 5/6/7/8/10 走控制面；Stage 1/3/4/9 为新鲜探测闸门。
+  - Cloud 成功后仍须新鲜宿主探测证明健康；运行中操作沿用相同 operation ID 和账本 attempt。
+  - 代码和离线回归完成，生产配置、迁移、隔离节点集成验收与部署尚未执行。
+- [x] [TASK-CONFIG-MIGRATION-035] 0.31.3 将迁移收口为配置快照：包内每个 Task 引用的 Agent 必须随包导出；导入先幂等更新全部 Agent，再导入无冲突 Task 并强制停用。MCP/Skill 缺失只作运行诊断，不阻止 Agent/Task 落库；同 ID Task 因可能已有执行历史继续保护。页面取消运行时安装等待，19项聚焦测试与生产构建通过；全量测试仍受本机既有 better-sqlite3 Node ABI 不匹配阻断。详见 `dev-log/2026-09-16-config-migration.md`。

@@ -52,6 +52,7 @@ import { ProxyWorkflow, proxyRequestId } from './proxy-workflow.ts'
 import { TaskNotifications, type NotificationStage } from './task-notifications.ts'
 import { patrolFollowup } from './patrol-followup.ts'
 import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation, browserOperationOutcome } from './workflow-acceptance.ts'
+import { validateFleetWorkflowEvidence, fullFleetRecipe } from './fleet-workflow-evidence.ts'
 import type { Artifact, Card } from './tasks.ts'
 import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
@@ -155,6 +156,26 @@ export class TaskConsoleService extends TypertRemoteService {
           return report
         }
         await validateWorkflowCompletion(input)
+        if (input.task.workflowRecipe?.id === fullFleetRecipe) {
+          const proof = await validateFleetWorkflowEvidence(input, {
+            evidence: async role => {
+              const run = [...this.runner.store.s.runs.values()].filter(r => r.batchId === input.batch.id && r.profileId === role)
+                .sort((a,b)=>Date.parse(b.startedAt)-Date.parse(a.startedAt))[0]
+              if (!run || (role === input.profileId ? run.sessionId !== input.sessionId || run.status !== 'running' : run.status !== 'done')) return
+              const ctx = this.ctx as any, live = ctx.get('sessions')?.get(run.sessionId)
+              const events = live?.events ?? (await ctx.get('sessionPersistence')?.inspect(run.sessionId))?.events ?? []
+              return {role,sessionId:run.sessionId,events}
+            },
+            read: async kind => {
+              const response = await fetch('https://fleet.vyibc.com/api/fleet' + (kind === 'fleet' ? '' : '/' + kind), {signal:AbortSignal.timeout(30000)})
+              if (!response.ok) throw Error(`Fleet ${kind} 验收读取失败`)
+              return response.json()
+            },
+          })
+          // Replace untrusted model claims with the host's evidence projection.
+          return {summary:`${proof!.scope === 'role-handoff' ? '本角色验收交接通过；完整装机尚未结束' : '完整 Fleet 接入验收通过'}。\n${JSON.stringify(proof)}`,
+            metadata:{...input.metadata,fleetAcceptance:proof}}
+        }
         const report = await this.patrolEvidence(input)
         if (report?.failure) throw new Error(report.failure)
         if (report?.summary && report.metadata) return { summary: report.summary, metadata: report.metadata }
@@ -620,7 +641,7 @@ export class TaskConsoleService extends TypertRemoteService {
     if (!specs.some(spec => (spec?.mcpTools?.['fleet-browser'] ?? []).some((t: string) => t === '*' || t === tool))) throw Error('当前角色没有此只读候选能力；未扩大工具权限')
     if (!host) throw Error('候选 MCP 尚未就绪，请稍后重试；没有执行任何目标操作')
     try {
-      const result = await fleetActionOptions(host.config, parameter, values, undefined, Boolean(catalog.taskId && this.creator.actions.task(catalog.taskId).workflowRecipe?.id === 'fleet-base-v2'))
+      const result = await fleetActionOptions(host.config, parameter, values, undefined, Boolean(catalog.taskId && ['fleet-base-v2','fleet-base-v3'].includes(this.creator.actions.task(catalog.taskId).workflowRecipe?.id ?? '')))
       const latest: ActionCatalog = catalog.taskId ? this.creator.actions.read(catalog.taskId) : JSON.parse(await this.agentActions(payload))
       if (latest.revision !== catalog.revision) throw Error('Action 已更新，请重新选择')
       return JSON.stringify(optionPage(result.items, query.search, query.page, result.notice))

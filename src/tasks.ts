@@ -17,6 +17,7 @@ export { actorOf, batchStatus, cardRun, describe, fold, foldTurns, migrate, read
 export type { Artifact, Batch, BlockKind, Card, CardStatus, Event, Participant, Run, RunOutcome, RunStatus, State, StepRow, TaskOrigin, TaskSpec, TaskTarget, TaskTurn, ToolRow, Trigger, TurnLedger, TurnRow } from './fold.ts'
 export { cronHuman, cronMatches, nextFire, parseCron, type Cron } from './cron.ts'
 import { parseCron, validTimeZone } from './cron.ts'
+import { fleetRoles, fullFleetRecipe } from './fleet-workflow-evidence.ts'
 
 // ── store ───────────────────────────────────────────────────────────────
 
@@ -241,8 +242,8 @@ export class EventStore {
     const next = this.queue.then(() => {
       const current = this.tasks.get(previous.id)
       if (!current || JSON.stringify(current) !== JSON.stringify(previous)) throw new Error('待更新工作流已变化，需重新审查')
-      if (current.enabled || current.archivedAt || current.trigger.kind !== 'cron' || task.trigger.kind !== 'cron' || task.enabled || task.id !== current.id)
-        throw new Error('只能审查更新已暂停、未归档的定时 Task')
+      if (current.enabled || current.archivedAt || JSON.stringify(current.trigger) !== JSON.stringify(task.trigger) || task.enabled || task.id !== current.id)
+        throw new Error('只能审查更新已暂停、未归档且时间表不变的 Task')
       const db = this.kernel.db
       const event: Event = { t: 'task/revised', at: new Date().toISOString(), taskId: task.id, task, previous, planId }
       this.kernel.write(() => {
@@ -382,6 +383,50 @@ export class EventStore {
       return { t: 'card/created' as const, at, taskId:task.id, batchId:batch.id, card }
     }, event => event)
     return id
+  }
+
+  /** A failed final readback may hand off only to its actual component owner. */
+  async expandFleetRepair(task: TaskSpec, batch: Batch, source: Card, expectedRunId: number, owner: typeof fleetRoles[number], reason: string, now = Date.now()): Promise<number> {
+    if (task.workflowRecipe?.id !== fullFleetRecipe || task.participants.map(p=>p.agentId).join(',') !== fleetRoles.join(',') || source.agentId !== 'fleet-runner-operator' || source.batchId !== batch.id || !fleetRoles.includes(owner)) throw Error('没有已审查的 Fleet 定向返工权限')
+    const seeds: Extract<Event,{t:'card/created'}>[] = []
+    const next = this.queue.then(() => {
+      const round = this.kernel.compose(() => {
+        const db = this.kernel.db, current = this.kernel.getTask(source.id)
+        if (current?.status !== 'running' || current.current_run_id !== expectedRunId || this.state.batches.get(batch.id)?.settled) throw Error('返工来源租约已变化')
+        if (db.prepare('SELECT 1 FROM task_links WHERE parent_id=? LIMIT 1').get(source.id)) throw Error('本次验收已创建返工，不能重复提交')
+        const count = (db.prepare("SELECT COUNT(*) AS n FROM task_events WHERE graph_id=? AND kind='fleet_repair_requested'").get(batch.id) as {n:number}).n
+        if (count >= 2 || !Number.isFinite(Date.parse(batch.firedAt)) || now >= Date.parse(batch.firedAt) + task.timeoutSec * fleetRoles.length * 1000) throw Error('完整 Fleet 验收已达两轮返工或本次总时间预算；保留失败原因并 task_block，不继续重试')
+        const round = count+1, at = new Date(now).toISOString(), epoch = toEpoch(at)
+        const gateId = `${batch.id}#fleet-g${round}`, repairId = `${batch.id}#fleet-repair${round}`
+        const ownerBrief = task.participants.find(p=>p.agentId===owner)!.brief ?? ''
+        const rows = [
+          {id:gateId,agentId:'__gate__',kind:'gate' as const,role:'gate' as const,round,deps:[source.id],brief:`第 ${round} 轮定向返工：${reason}`},
+          {id:repairId,agentId:owner,kind:'agent' as const,round,deps:[gateId],brief:`[HOST READBACK REPAIR]\n${reason}\n只检查和修复上述原因所属组件，健康项复用；不扩大权限或删除资料。\n${ownerBrief}`},
+          ...(owner === 'fleet-runner-operator' ? [] : [{id:`${batch.id}#fleet-verify${round}`,agentId:'fleet-runner-operator',kind:'agent' as const,round,deps:[repairId],brief:task.participants.find(p=>p.agentId==='fleet-runner-operator')!.brief}]),
+        ]
+        const position = (db.prepare('SELECT COALESCE(MAX(position),-1)+1 AS n FROM dsh_card_bindings WHERE batch_id=?').get(batch.id) as {n:number}).n
+        for (const [offset,row] of rows.entries()) {
+          const assignee = row.kind === 'gate' ? null : row.agentId, title = `${task.title} · ${row.agentId} · 返工 ${round}`
+          db.prepare('INSERT INTO dsh_card_bindings(card_id,spec_id,batch_id,position,brief) VALUES (?,?,?,?,?)').run(row.id,task.id,batch.id,position+offset,row.brief ?? null)
+          db.prepare(`INSERT INTO tasks(id,title,body,assignee,status,priority,created_by,created_at,workspace_kind,workspace_path,tenant,max_runtime_seconds,max_retries,node_kind,round,role)
+            VALUES (?,?,?,?,'todo',?,'dsh-task-console',?,'dir',?,?,?,?,?,?,?)`).run(row.id,title,row.brief ?? '',assignee,-position-offset,epoch,task.cwd,batch.id,task.timeoutSec,task.maxTries,row.kind,round,row.kind==='gate'?'gate':null)
+          this.kernel.recordEvent(row.id,'created',{title,body:row.brief,assignee,status:'todo',parents:row.deps,tenant:batch.id,node_kind:row.kind,role:row.kind==='gate'?'gate':null,round,created_at:epoch})
+          for (const parent of row.deps) {
+            db.prepare("INSERT INTO task_links(parent_id,child_id,kind,created_at) VALUES (?,?,'dependency',?)").run(parent,row.id,epoch)
+            this.kernel.recordEvent(row.id,'linked',{parent_id:parent,kind:'dependency'})
+          }
+          const event: Extract<Event,{t:'card/created'}> = {t:'card/created',at,taskId:task.id,batchId:batch.id,card:row}
+          db.prepare('INSERT INTO dsh_events(event_type,task_id,occurred_at,payload_json) VALUES (?,?,?,?)').run(event.t,task.id,at,JSON.stringify(event))
+          seeds.push(event)
+        }
+        this.kernel.recordEvent(source.id,'fleet_repair_requested',{owner,reason,round,gate_id:gateId,repair_id:repairId},expectedRunId)
+        return round
+      })
+      this.events.push(...seeds); this.state = fold(this.events)
+      return round
+    })
+    this.queue = next.then(()=>undefined,()=>undefined)
+    return next
   }
 
   /** Materialize one real rework round. Nothing is inferred by the browser. */
@@ -548,10 +593,10 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (task.origin?.reviewPlanId) lines.push('', '[HOST REVIEW RELEASE]',
     `本 Run 已由独立审查放行，审批计划 ${task.origin.reviewPlanId}。原始消息中“先生成计划、等待审查、不执行”描述的创建阶段已完成；现在执行下方已审查的业务范围。其他禁止事项、宿主权限及验收要求仍有效，不因批准而扩大。`)
   if (card.brief?.trim()) lines.push('', '[YOUR PART]', card.brief.trim())
-  if (task.workflowRecipe?.id === 'fleet-base-v2') lines.push('', '[FRESH EXECUTION / RECOVERY]',
+  if (['fleet-base-v2','fleet-base-v3'].includes(task.workflowRecipe?.id ?? '')) lines.push('', '[FRESH EXECUTION / RECOVERY]',
     '本次使用当前工具重新检查目标。其他执行或历史会话的 blocked/人工验证原因不代表当前仍故障；健康组件及有效登录只复用，不为重跑而重装或再次复制。',
     'Google 交互验证若当前仍真实存在，按回执 task_block，不能绕过。未安排 task_wait 或真实恢复触发时，不得承诺“完成验证后自动恢复”。本次新会话必须取得自己的完整验收回执。')
-  if (task.workflowRecipe?.id === 'fleet-base-v2' && card.agentId === 'browser-manager') lines.push('', '[BASE NODE BROWSER API]',
+  if (['fleet-base-v2','fleet-base-v3'].includes(task.workflowRecipe?.id ?? '') && card.agentId === 'browser-manager') lines.push('', '[BASE NODE BROWSER API]',
     '独立浏览器 API 的准备使用默认 browser_prepare（省略 component）。component=login-observation 仅修复已安装旧图片服务的检测循环；imageInstalled=false 的基础节点不能选它。legacy-login-observer-required 表示选错专项组件，不代表缺少图片服务或必须安装旧观察器。未知版本或真实权限错误仍应停止；不能通过省略 component 绕过一个原本明确授权的专项范围。')
   if (task.design) lines.push('', '[REVIEWED DECISION CONTRACT]', JSON.stringify(task.design, null, 2),
     '以上为已审查的业务决策契约：依据真实工具证据选分支，不能将 unknown 当失败或未登录；它不是自动执行的脚本。逐目标记录匹配分支、证据、动作和结果；隔离的失败不得遗漏或伪装成整体成功。重试上限不授予重复副作用或扩大权限。最终报告覆盖全部目标和验收条件；有未达标项必须明确列出。')

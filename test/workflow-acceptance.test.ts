@@ -24,6 +24,14 @@ test('managed workflow accepts actual same-session stability and current Fleet r
   const f = fixture(); await validateWorkflowCompletion(f.input, f.deps)
 })
 
+test('v3 retains independent Gemini stability and recognizes an existing Fleet alias', async () => {
+  const f=fixture();f.input.task.workflowRecipe.id='fleet-base-v3'
+  f.fleet.nodes[0].id='host-legacy';f.fleet.nodes[0].dashboardUrl='https://clash-192-0-2-10.vyibc.com/'
+  await validateWorkflowCompletion(f.input,f.deps)
+  f.job.result.requiredMs=60000
+  await assert.rejects(validateWorkflowCompletion(f.input,f.deps),/稳定性标准/)
+})
+
 test('async wake carries fresh scoped terminal facts, not stale running prose or private payloads', async () => {
   const f=fixture(),job={...f.job,updatedAt:new Date(f.deps.now()).toISOString(),secret:'never-forward',args:{...f.job.args,password:'never-forward'}}
   const text=(await browserOperationOutcome(f.input,{now:f.deps.now,jobs:async()=>[job]}))!

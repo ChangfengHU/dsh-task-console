@@ -240,3 +240,12 @@ test('rendered candidate and location commit atomically and incomplete later ren
  assert.throws(()=>workflow.complete(i),/render-still-pending/)
  assert.doesNotMatch(JSON.stringify(workflow.status(i).renderJobs),/trusted\/render/)
 })
+test('missing planning evidence fails before expensive host refresh; plan still requires actual fresh preflight',t=>{
+ const {workflow,input}=setup(t);workflow.enforceRuntime(input)
+ assert.throws(()=>workflow.assertPlanningPrerequisites(input),/studio-plan-requires-script-and-direct-reference/)
+ workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'完整台词。'}]})
+ workflow.recordReferenceReceipt(input,{referenceSha256:h('b'),sha256:h('d'),kind:'frames',ranges:[[0,2]]})
+ workflow.recordReferenceReceipt(input,{referenceSha256:h('b'),sha256:h('d'),kind:'audio',ranges:[[0,8]]})
+ assert.doesNotThrow(()=>workflow.assertPlanningPrerequisites(input));assert.throws(()=>workflow.plan(input),/preflight-required/)
+ capabilities(workflow,input.task);workflow.preflight(input.task);assert.equal(workflow.plan(input).ok,true)
+})

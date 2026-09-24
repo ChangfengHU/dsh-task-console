@@ -62,12 +62,16 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     ]
     return {prerequisitesReady:checks.every(c=>c.ok),checks,missing:checks.filter(c=>!c.ok).map(({id,tool,action})=>({id,tool,action})),instruction:'Repair only missing prerequisites, then query studio_status and resubmit the plan. Hashes, metadata, textual summaries and another session’s receipts cannot substitute for direct reference observations.'}
   }
-  plan(input:any){
-    this.key(input);if(input.card?.role!=='planner')throw Error('studio-planner-required');this.requirePreflight(input.task)
+  assertPlanningPrerequisites(input:any){
+    this.key(input);if(input.card?.role!=='planner')throw Error('studio-planner-required')
     if(this.read(input,'runtime_enforcement')===true){
       const readiness=this.planningPrerequisites(input)
       if(!readiness.prerequisitesReady)throw Error('studio-plan-requires-script-and-direct-reference: '+JSON.stringify({error_code:'studio-plan-requires-script-and-direct-reference',retryable:false,retryAfterRepair:true,requiresHuman:false,...readiness}))
     }
+  }
+  plan(input:any){
+    this.key(input);if(input.card?.role!=='planner')throw Error('studio-planner-required');this.requirePreflight(input.task)
+    this.assertPlanningPrerequisites(input)
     return {ok:true,status:'ready' as const}
   }
   enforceRenderProvenance(input:any){this.write(input,`render_provenance:${input.card.id}`,true)}

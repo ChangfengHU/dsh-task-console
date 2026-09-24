@@ -290,7 +290,7 @@ export class TaskConsoleService extends TypertRemoteService {
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
       beforePlanRound: async (input, items, proxyItems) => {
         if(input.task.design?.extension)return this.workflowExtensions.beforePlanRound(input,items,proxyItems)
-        if (input.task.design?.evidenceContract === 'studio-video-v1') { const w=new StudioWorkflow(this.runner.store);await refreshStudioCapabilities(w,input.task);w.preflight(input.task);w.plan(input);return }
+        if (input.task.design?.evidenceContract === 'studio-video-v1') { const w=new StudioWorkflow(this.runner.store);w.assertPlanningPrerequisites(input);await refreshStudioCapabilities(w,input.task);w.preflight(input.task);w.plan(input);return }
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2') return
         const patrol = await this.patrolWorkflow(input); patrol.snapshot(input)
         new TaskNotifications(this.runner.store).requireStage(input,input.card.round === 1 ? 'started' : 'rework')

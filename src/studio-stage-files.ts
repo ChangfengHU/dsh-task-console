@@ -12,6 +12,8 @@ const digest=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest(
 /** Bounded, read-only suggestions. Never import files or select creative assets. */
 async function stageRegistrationError(input:any,stage:string,code:string,field:string,reason:string):Promise<never>{
  const base=`stages/r${input.card.round}/${stage}/`,expectedPath=base+'manifest.json'
+ const outputIndex=/^outputs\[(\d+)\]$/.exec(field)?.[1]
+ const exampleOutputs=stage==='visual'?[base+'visual-plan.json',base+'pose.png']:stage==='sound'?[base+'sound-plan.json',base+'line.wav']:[base+'storyboard.json']
  const candidates:any[]=[];let scanned=0,probed=0,truncated=false,bytesRead=0
  const started=performance.now(),deadline=started+5000,abort=new AbortController(),timer=setTimeout(()=>abort.abort(),5000)
  const timeLeft=()=>Math.max(0,Math.floor(deadline-performance.now())),maxFileBytes=4*1024*1024,maxReadBytes=16*1024*1024
@@ -40,7 +42,7 @@ async function stageRegistrationError(input:any,stage:string,code:string,field:s
  }
  truncated=truncated||queue.length>0||timeLeft()<=0||abort.signal.aborted
  }catch{truncated=true}finally{clearTimeout(timer)}
- throw Error(code+': '+JSON.stringify({error_code:code,field,reason,stageDirectory:base,tool:'studio_register_stage',arguments:{path:expectedPath},manifestSchema:{stage,round:input.card.round,outputs:['project-relative existing file paths within '+base],summary:'actual work and unverified items'},eligibleExistingMedia:candidates,scan:{scanned,probed,bytesRead,elapsedMs:Math.round(performance.now()-started),deadlineMs:5000,maxFileBytes,maxReadBytes,truncated,complete:!truncated},retryable:false,retryAfterRepair:true,action:'Create/read the manifest at the exact arguments.path. outputs must explicitly list the actual image/audio files as well as required plan JSON; copying files or listing only JSON does not register media. Correct the indicated field, preserve required dialogue and visual requirements, then call studio_register_stage with {path}. Listed candidates are verified files only, not selected poses or complete coverage; choose and explicitly register the needed paths yourself. If required media is absent, obtain it or reconcile its original generation job; do not invent paths, create placeholders, delete requirements, or repeat the same manifest unchanged.',qualityApproved:false}))
+ throw Error(code+': '+JSON.stringify({error_code:code,field,...(outputIndex!==undefined?{outputIndex:Number(outputIndex)}:{}),reason,pathContract:{basis:'task-workspace-relative',relativeTo:'Task workspace root, not the stage directory or manifest parent',requiredPrefix:base,exampleOutputs,examplesArePlaceholders:true},stageDirectory:base,tool:'studio_register_stage',arguments:{path:expectedPath},manifestSchema:{stage,round:input.card.round,outputs:['project-relative existing file paths within '+base],summary:'actual work and unverified items'},eligibleExistingMedia:candidates,scan:{scanned,probed,bytesRead,elapsedMs:Math.round(performance.now()-started),deadlineMs:5000,maxFileBytes,maxReadBytes,truncated,complete:!truncated},retryable:false,retryAfterRepair:true,action:'Create/read the manifest at the exact arguments.path. outputs must explicitly list the actual image/audio files as well as required plan JSON; copying files or listing only JSON does not register media. Every output path is relative to the Task workspace root, not to the manifest or stage directory; keep the full stages/rN/stage/ prefix. For a legally reusable file outside this stage, explicitly copy it into the current stage directory and preserve the original before listing the new workspace-relative path. Do not assume a short filename is relative to the manifest. Correct the indicated field, preserve required dialogue and visual requirements, then call studio_register_stage with {path}. Listed candidates are verified files only, not selected poses or complete coverage; choose and explicitly register the needed paths yourself. If required media is absent, obtain it or reconcile its original generation job; do not invent paths, create placeholders, delete requirements, or repeat the same manifest unchanged.',qualityApproved:false}))
 }
 async function soundBinding(input:any,outputs:any[],workflow:any){
  const plans=[]
@@ -125,9 +127,17 @@ export async function registerStageFiles(input:any,pathValue:string,workflow:any
  const outputs=[]
  for(const [index,v] of value.outputs.entries()){
   let p:string
-  try{p=await studioPath(input.task.cwd,v,true)}catch(error:any){if(error?.code==='ENOENT')return stageRegistrationError(input,stage.id,'studio-stage-output-missing',`outputs[${index}]`,'The listed output file does not exist. Do not remove required dialogue or visual coverage to bypass this error.');throw error}
+  const invalid=(reason:string)=>stageRegistrationError(input,stage.id,'studio-stage-output-invalid',`outputs[${index}]`,reason)
+  try{p=await studioPath(input.task.cwd,v,true)}catch(error:any){
+   if(error?.code==='ENOENT')return stageRegistrationError(input,stage.id,'studio-stage-output-missing',`outputs[${index}]`,`The listed output does not exist when resolved from the Task workspace root. Use the full ${base} prefix, not a stage-relative basename. Do not remove required dialogue or visual coverage to bypass this error.`)
+   if(['studio-invalid-path','studio-path-outside-project','studio-sensitive-path','studio-file-required'].includes(error?.message))return invalid(`${error.message}: outputs must name existing non-sensitive files inside ${base}, resolved from the Task workspace root.`)
+   throw error
+  }
   const rel=local(p),size=(await stat(p)).size
-  if(!rel.startsWith(base)||rel===base+'manifest.json'||outputs.some(f=>f.path===rel)||size<1||size>500*1024*1024)throw Error('studio-stage-output-invalid')
+  if(!rel.startsWith(base))return invalid(`The existing output is outside the current stage directory ${base}. Copy a legally reusable file into this directory, preserve the original, and list the copied file using its full workspace-relative path. Do not rename only the manifest entry without creating the real file.`)
+  if(rel===base+'manifest.json')return invalid('The stage manifest cannot register itself as an output. Keep required actual plan and media files in outputs.')
+  if(outputs.some(f=>f.path===rel))return invalid('This entry resolves to a file already registered by an earlier outputs entry. Register each actual file once without dropping required content.')
+  if(size<1||size>500*1024*1024)return invalid('The output must be a non-empty existing file no larger than 500 MiB. A placeholder does not satisfy stage handoff.')
   const outputSha256=await fileSha256(p),media=await probeStageMedia(stage.id,p,outputs.length)
   if(await fileSha256(p)!==outputSha256)throw Error('studio-stage-file-changed')
   outputs.push({path:rel,sha256:outputSha256,bytes:size,...(media?{media}:{})})

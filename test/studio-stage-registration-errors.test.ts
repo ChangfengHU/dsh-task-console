@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,writeFile,readFile,rm,symlink,chmod,open} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,readFile,rm,symlink,chmod,open,copyFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {promisify} from 'node:util'
 import {execFile} from 'node:child_process'
 import {registerStageFiles} from '../src/studio-stage-files.ts'
-import {validateStudioStages,studioStageCardId} from '../src/studio-stages.ts'
+import {validateStudioStages,studioStageCardId,studioStageRows} from '../src/studio-stages.ts'
 const run=promisify(execFile)
 async function setup(t:any){
  const cwd=await mkdtemp(join(tmpdir(),'stage-errors-'));t.after(()=>rm(cwd,{recursive:true,force:true}));const receipts=new Map(),script={sha256:'a'.repeat(64),lines:[{id:'a',text:'你好'}]}
@@ -58,4 +58,34 @@ test('oversized diagnostic candidates are skipped without hashing or pretending 
  const s=await setup(t),base='stages/r1/visual/',p=await s.manifest('visual',[base+'plan.json']);await writeFile(join(s.cwd,base+'plan.json'),'{}')
  const file=await open(join(s.cwd,base+'large.png'),'w');try{await file.truncate(5*1024*1024)}finally{await file.close()}
  const d=await details(()=>registerStageFiles(s.input('visual'),p,s.workflow,s.db));assert.equal(d.scan.bytesRead,0);assert.equal(d.scan.probed,0);assert.equal(d.scan.truncated,true);assert.equal(d.scan.complete,false);assert.deepEqual(d.eligibleExistingMedia,[])
+})
+
+test('outside-stage asset and stage-relative basename identify the exact output; explicit copy and full paths succeed',async t=>{
+ const s=await setup(t),base='stages/r1/visual/',source='assets/pose.png',p=await s.manifest('visual',[source,base+'visual-plan.json'])
+ await mkdir(join(s.cwd,'assets'));await run('ffmpeg',['-v','error','-f','lavfi','-i','color=c=green:s=16x16','-frames:v','1','-threads','1','-y',join(s.cwd,source)])
+ await writeFile(join(s.cwd,base+'visual-plan.json'),'{}')
+ const original=await readFile(join(s.cwd,source)),manifestBefore=await readFile(join(s.cwd,p),'utf8')
+ const outside=await details(()=>registerStageFiles(s.input('visual'),p,s.workflow,s.db))
+ assert.equal(outside.error_code,'studio-stage-output-invalid');assert.equal(outside.field,'outputs[0]');assert.equal(outside.outputIndex,0)
+ assert.equal(outside.pathContract.basis,'task-workspace-relative');assert.equal(outside.pathContract.requiredPrefix,base)
+ assert.deepEqual(outside.pathContract.exampleOutputs,[base+'visual-plan.json',base+'pose.png']);assert.equal(outside.pathContract.examplesArePlaceholders,true)
+ assert.match(outside.reason,/outside the current stage/);assert.match(outside.reason,/preserve the original/)
+ assert.equal(s.receipts.has('visual'),false);assert.equal(await readFile(join(s.cwd,p),'utf8'),manifestBefore)
+ assert.deepEqual(await readFile(join(s.cwd,source)),original);await assert.rejects(readFile(join(s.cwd,base+'pose.png')),{code:'ENOENT'})
+ assert.ok(!JSON.stringify(outside).includes(s.cwd))
+ // The caller explicitly performs the repair; registration must never copy assets.
+ await copyFile(join(s.cwd,source),join(s.cwd,base+'pose.png'))
+ await s.manifest('visual',[base+'pose.png','visual-plan.json'])
+ const basenameBefore=await readFile(join(s.cwd,p),'utf8'),missing=await details(()=>registerStageFiles(s.input('visual'),p,s.workflow,s.db))
+ assert.equal(missing.error_code,'studio-stage-output-missing');assert.equal(missing.field,'outputs[1]');assert.equal(missing.outputIndex,1)
+ assert.match(missing.reason,/Task workspace root/);assert.match(missing.reason,/not a stage-relative basename/)
+ assert.equal(missing.pathContract.requiredPrefix,base);assert.equal(s.receipts.has('visual'),false)
+ assert.equal(await readFile(join(s.cwd,p),'utf8'),basenameBefore)
+ await s.manifest('visual',[base+'pose.png',base+'visual-plan.json'])
+ const receipt=await registerStageFiles(s.input('visual'),p,s.workflow,s.db)
+ assert.deepEqual(receipt.outputs.map((row:any)=>row.path),[base+'pose.png',base+'visual-plan.json'])
+ assert.equal(receipt.outputs[0].media.kind,'image');assert.equal(receipt.qualityApproved,false)
+ assert.deepEqual(await readFile(join(s.cwd,source)),original)
+ const brief=studioStageRows(s.input('visual').task,'B',1,'planner').find(row=>row.id==='B#s1-visual')!.brief
+ assert.match(brief,/相对 Task 工作区根目录/);assert.match(brief,/stages\/r1\/visual\/ 前缀/)
 })

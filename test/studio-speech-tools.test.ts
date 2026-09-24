@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,writeFile,rm} from 'node:fs/promises'
+import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {registerStudioSpeechTools} from '../src/studio-speech-tools.ts'
@@ -15,6 +15,19 @@ async function setup(t:any,real=false){
  return {cwd,source,film,toolsFor,register,checks,getPlan:()=>plan,changeCandidate:()=>c={...c,sha256:'x'},bad:()=>bad=true,stop:()=>active=false}
 }
 test('script is planner-owned frozen; plan must preserve all exact dialogue',async t=>{const s=await setup(t);await s.register();const p=await s.toolsFor('planner');await assert.rejects(p.studio_freeze_script.execute({lines:[{id:'1',text:'改了'}]}),/review-required/);const r=await s.toolsFor('reviewer');await assert.rejects(r.studio_register_speech_plan.execute({path:'plan.json'}),/role/);await writeFile(join(s.cwd,'plan.json'),JSON.stringify([{id:'1',text:'改了',start:0,end:1,sourcePath:'line.wav'}]));const e=await s.toolsFor('executor');await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/script-mismatch/)})
+test('planning wrappers and missing timing fields give actionable errors without replacing an existing registered plan',async t=>{
+ const s=await setup(t);await s.register();const previous=s.getPlan(),e=await s.toolsFor('executor')
+ for(const input of [{version:'sound-plan-v1',dialogue:[{id:'1',text:'你好'}]},[{id:'1',text:'你好'}]]){
+  const raw=JSON.stringify(input);await writeFile(join(s.cwd,'wrong.json'),raw)
+  await assert.rejects(e.studio_register_speech_plan.execute({path:'wrong.json'}),(error:any)=>{
+   const info=JSON.parse(error.message.slice(error.message.indexOf(': ')+2));assert.equal(info.registered,false)
+   if(Array.isArray(input)){assert.deepEqual(info.missing,['start','end','sourcePath']);assert.equal(info.field,'lines[0]')}
+   else {assert.match(info.error_code,/array-required/);assert.match(info.action,/already bound/)}
+   return true
+  })
+  assert.equal(s.getPlan(),previous);assert.equal(await readFile(join(s.cwd,'wrong.json'),'utf8'),raw)
+ }
+})
 test('speech result binds current candidate, plan, line, stage and actual audio hash',async t=>{const s=await setup(t);await s.register();const r=await s.toolsFor('reviewer');for(const stage of ['source','final']){const result=await r.studio_check_speech.execute({lineId:'1',stage,expectedText:'caller lie'});assert.equal(result.result.expected,'你好');assert.equal(result.planSha256,s.getPlan().planSha256);assert.equal(result.qualityApproved,false)}assert.equal(s.checks.length,2);s.bad();await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'final'}),/observation-invalid/);assert.equal(s.checks.length,2)})
 test('reject changed source, stale session and caller-selected unknown line',async t=>{const s=await setup(t);await s.register();const r=await s.toolsFor('reviewer');await assert.rejects(r.studio_check_speech.execute({lineId:'other',stage:'final'}),/line-required/);await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'final'},{agent:{session:{id:'executor'}}}),/session/);await writeFile(s.source,'changed');await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'source'}),/file-changed/);s.stop();await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'final'}),/stale/)})
 test('real FFmpeg source and final dialogue extraction',async t=>{const {execFile}=await import('node:child_process'),{promisify}=await import('node:util');try{await promisify(execFile)('ffmpeg',['-version'])}catch{t.skip('FFmpeg unavailable');return}const s=await setup(t,true);await s.register();const r=await s.toolsFor('reviewer');await r.studio_check_speech.execute({lineId:'1',stage:'source'});await r.studio_check_speech.execute({lineId:'1',stage:'final'});assert.equal(s.checks.length,2);assert.match(s.checks[0].audioSha256,/^[a-f0-9]{64}$/)})

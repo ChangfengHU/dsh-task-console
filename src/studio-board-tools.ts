@@ -5,7 +5,7 @@ import {lstat,mkdir,open,realpath} from 'node:fs/promises'
 import {extname,isAbsolute,join,relative,resolve,sep} from 'node:path'
 import {createHash} from 'node:crypto'
 import {isDeepStrictEqual} from 'node:util'
-import {boardFieldDiagnostics} from './studio-board-diagnostics.js'
+import {boardFieldDiagnostics,boardTimelineDiagnostics} from './studio-board-diagnostics.js'
 
 export const STUDIO_BOARD_TOOL_NAMES=['studio_compile_storyboard'] as const
 export interface StudioBoardOptions {input:any;workflow:any;isActive:()=>boolean;compile:(value:{boardPath:string;outputDirectory:string})=>Promise<any>}
@@ -153,7 +153,7 @@ export async function registerStudioBoardTools(ctx:any,o:StudioBoardOptions):Pro
   let result:any
   try{result=await o.compile({boardPath,outputDirectory:name})}catch(error){result={ok:false,reason:error instanceof Error?error.message:'compiler invocation failed'}}
   await verifyInput()
-  if(result?.ok!==true)return {ok:false,error:'studio-board-compile-failed',reason:safeReason(result?.reason,root),boardPath,boardSha256:digest,inputReused:existing,qualityApproved:false}
+  if(result?.ok!==true)return {ok:false,error:'studio-board-compile-failed',reason:safeReason(result?.reason,root),...(/^scene-(gap-overlap-or-overrun|coverage-incomplete):/.test(String(result?.reason??''))?{timingDiagnostics:boardTimelineDiagnostics(board)}:{}),boardPath,boardSha256:digest,inputReused:existing,qualityApproved:false}
   if(result.composition!==output||result.qualityApproved!==false||typeof result.indexSha256!=='string'||!/^[a-f0-9]{64}$/.test(result.indexSha256))throw Error('studio-board-receipt-invalid')
   await plainDirectory(output)
   const indexPath=join(output,'index.html');if((await lstat(indexPath)).isSymbolicLink())throw Error('studio-board-output-symlink')

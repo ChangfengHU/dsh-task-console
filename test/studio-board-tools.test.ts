@@ -5,9 +5,29 @@ import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {createHash} from 'node:crypto'
 import {registerStudioBoardTools,STUDIO_BOARD_TOOL_NAMES} from '../src/studio-board-tools.ts'
-import {boardFieldDiagnostics} from '../src/studio-board-diagnostics.ts'
+import {boardFieldDiagnostics,boardTimelineDiagnostics} from '../src/studio-board-diagnostics.ts'
 const sha=(v:string|Buffer)=>createHash('sha256').update(v).digest('hex')
 const board=()=>({schema:'studio-board-v1',duration:20,script:[{id:'L1',text:'原来的话'}],scenes:[],audio:[],font:'font.ttf',gsap:'gsap.min.js'})
+test('timeline diagnostics explain all observed gaps without mutating the board or revealing source metadata',()=>{
+ const b={duration:98.6,scenes:[{start:0,duration:12},{start:12,duration:2.789292},{start:22,duration:1.79375},{start:81,duration:1.963417},{start:96,duration:2.6}],audio:[{src:'secret-token-no-echo'}]}
+ const before=JSON.stringify(b),d=boardTimelineDiagnostics(b)
+ assert.equal(d.total,3);assert.deepEqual(d.issues.map(x=>x.kind),['gap','gap','gap']);assert.ok(Math.abs(d.issues[1].differenceSeconds-57.20625)<.000001)
+ assert.match(d.action,/not the length of one spoken sentence/);assert.match(d.action,/Do not remove scenes/);assert.equal(d.qualityApproved,false);assert.equal(JSON.stringify(b),before);assert.doesNotMatch(JSON.stringify(d),/secret-token/)
+})
+test('timeline diagnostics respect compiler tolerance and report bounds without auto-filling',()=>{
+ assert.equal(boardTimelineDiagnostics({duration:20,scenes:[{start:0,duration:12},{start:12,duration:8}]}).total,0)
+ assert.equal(boardTimelineDiagnostics({duration:20,scenes:[{start:0,duration:12},{start:12.0005,duration:7.9995}]}).total,0)
+ assert.equal(boardTimelineDiagnostics({duration:20,scenes:[{start:0,duration:12}]}).issues[0].kind,'incomplete-coverage')
+ assert.ok(boardTimelineDiagnostics({duration:20,scenes:[{start:0,duration:12},{start:11,duration:10}]}).issues.some(i=>i.kind==='overlap'))
+ const d=boardTimelineDiagnostics({duration:20,scenes:Array.from({length:60},()=>({start:30,duration:5}))});assert.equal(d.issues.length,32);assert.ok(d.total>32);assert.equal(d.truncated,true)
+})
+test('real tool returns aggregated timeline diagnosis only on the corresponding compiler failure',async t=>{
+ const s=await setup(t,{compile:async()=>({ok:false,reason:'scene-coverage-incomplete: finalEnd=12, board.duration=20'})})
+ const b={...board(),scenes:[{start:0,duration:12,layers:[{type:'image',role:'subject',src:'image.png',width:100,height:100}]}]}
+ const r=await s.execute({board:b});assert.equal(r.ok,false);assert.equal(r.timingDiagnostics.issues[0].finalEnd,12);assert.equal(r.timingDiagnostics.issues[0].compositionDuration,20);assert.equal(s.calls(),1)
+ assert.equal(await readFile(r.boardPath,'utf8'),JSON.stringify(b));assert.equal(r.qualityApproved,false)
+ const other=await setup(t,{compile:async()=>({ok:false,reason:'unrelated-source-error'})});assert.equal((await other.execute()).timingDiagnostics,undefined)
+})
 test('reported production field mistakes arrive together before writes, without changing the submitted board',async t=>{
  const s=await setup(t)
  const malformed={...board(),gsap:['assets/gsap.min.js'],font:['assets/font.ttf'],

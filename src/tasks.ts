@@ -603,6 +603,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
     '阶段交接仍调用 studio_register_stage({path:本轮manifest路径})，验证实际媒体和哈希；有未下载成功的必需素材就如实列出缺项。下载回执不是阶段完成或审美通过。')
   if(task.design?.evidenceContract==='studio-video-v1'&&card.role==='executor')lines.push('', '[STUDIO EXECUTION BOARD]',
     '采用结构化编译时先读本项目 STORYBOARD_EXECUTION.md 和当前 studio_compile_storyboard schema；规划分镜不是执行板。根字段为 schema=studio-board-v1、duration秒数、gsap、font、script、scenes、audio。沿用冻结台词，voice音轨逐条含lineId/text；场景需start/duration/layers，不能把frame描述当可执行图层。',
+    'scene.duration是视觉镜头持续时间，不是某句配音长度；台词、反应与无对白动作共同构成镜头，音轨时间单独按真实音频计算。编译前用短程序打印所有镜头start/duration/end及相邻差值，同时打印音轨边界，修正后复查。关键时刻之间不能留未渲染的空档；不能压缩整片、删剧情或静态填空来过检查。',
     '先读取 studio_status.executionAssets 中实际发现的本地GSAP/字体路径；若没有该字段则查现有工程文件。不能填包名、字体名或用Skill哈希猜运行库版本。根据同轮实际登记文件核对每个src；pending-generation不是存在的图片，缺失文件名应定位后处理，不能靠改绝对路径或反复重试解决。',
     '当前schema支持boardPath时，将完整执行板保存在项目内JSON，调用 studio_compile_storyboard({boardPath:相对JSON路径})，无需每次重新发送整份JSON；旧schema才用board对象。编译器负责创建输出目录，不预建目录、不先把源JSON写进输出目录，也不删除旧版规避output-exists。保持有效分镜，局部修正明确错误；失败编译不能直接交渲染。')
   if(task.design?.evidenceContract==='studio-video-v1'&&card.role==='executor')lines.push('', '[STUDIO REAL RENDER]',

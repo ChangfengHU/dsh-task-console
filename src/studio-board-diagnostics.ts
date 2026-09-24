@@ -51,3 +51,23 @@ export function boardFieldDiagnostics(board:any){
  })
  return {issues,total,truncated:total>issues.length}
 }
+
+/** Explain all numeric scene discontinuities together; never invent action or alter timings. */
+export function boardTimelineDiagnostics(board:any){
+ const issues:any[]=[];let total=0,cursor=0
+ const add=(value:any)=>{total++;if(issues.length<32)issues.push(value)}
+ const duration=Number.isFinite(board?.duration)?board.duration:null
+ const scenes=Array.isArray(board?.scenes)?board.scenes:[]
+ for(let i=0;i<scenes.length;i++){
+  const s=scenes[i],field=`board.scenes[${i}]`
+  if(!Number.isFinite(s?.start)||!Number.isFinite(s?.duration)){add({field,kind:'invalid-numeric-timing'});continue}
+  const end=s.start+s.duration,difference=s.start-cursor
+  if(Math.abs(difference)>.001)add({field,kind:difference>0?'gap':'overlap',previousEnd:cursor,start:s.start,differenceSeconds:difference})
+  if(s.start<0||s.duration<.1||!Number.isFinite(end))add({field,kind:'invalid-scene-range'})
+  else if(duration!==null&&end>duration+.001)add({field,kind:'overrun',end,compositionDuration:duration})
+  cursor=end
+ }
+ if(duration!==null&&Math.abs(cursor-duration)>.001)add({field:'board.scenes',kind:'incomplete-coverage',finalEnd:cursor,compositionDuration:duration})
+ return {issues,total,truncated:total>issues.length,scope:'numeric-visual-timeline-only; audio sources and visual quality are not validated',qualityApproved:false,
+  action:'scene.duration means visible scene time, not the length of one spoken sentence. Keep the full planned actions and complete film. Use a short program to inspect and repair all listed boundaries, then verify scene coverage and audio timing separately before compiling again. A key-moment gap is not a rendered scene. Do not remove scenes, shorten the film, or fill gaps with static placeholders to pass.'}
+}

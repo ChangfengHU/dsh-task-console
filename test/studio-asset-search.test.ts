@@ -28,3 +28,52 @@ test('empty multiword search exposes actionable continuation and explicitly sepa
  assert.deepEqual(r.assets,[]);assert.equal(r.studioSearch.exhausted,false)
  assert.equal(args.query,'college cheerful light hearted');assert.match(r.searchRecovery.catalogDiscovery.scope,/not matches/)
 })
+
+test('one invocation budgets exact and catalog separately, retains filters and both cursors',async()=>{
+ const args={query:'cheerful comedy',kind:'bgm',limit:5,tags_all:['light'],license_status:'known',archive_allowed:false,character_id:'x',bpm_min:80,bpm_max:120,cursor:'exact-start'}
+ const calls:any[]=[]
+ const source={id:'source',kind:'bgm',object:null,license:{status:'not_verified_for_new_project',archive_allowed:false}}
+ const r=assetSearchPage(await searchStudioAssets(args,async a=>{calls.push(a);return a.query?page([],'exact-'+calls.length):page([source],'catalog-next')},4))
+ assert.equal(calls.length,3);assert.deepEqual(calls[0],args)
+ const catalogArgs={...args};delete (catalogArgs as any).query;delete (catalogArgs as any).cursor
+ assert.deepEqual(calls[2],catalogArgs);assert.equal(calls[2].limit,5)
+ assert.deepEqual(r.assets,[]);assert.equal(r.next_cursor,'exact-2')
+ assert.deepEqual(r.catalogDiscovery.assets,[source]);assert.equal(r.catalogDiscovery.next_cursor,'catalog-next')
+ assert.equal(r.catalogDiscovery.availability[0].archiveState,'source_card');assert.equal(r.catalogDiscovery.availability[0].downloadVerified,false)
+ assert.equal(r.catalogDiscovery.availability[0].rightsApproved,false)
+ assert.equal(r.searchRecovery.continueCall.arguments.cursor,'exact-2')
+ assert.equal(r.catalogDiscovery.continueCall.arguments.cursor,'catalog-next')
+ assert.equal(r.studioSearch.totalRequests,3)
+})
+test('total budget never multiplies; query-free search has no second scan',async()=>{
+ let n=0
+ const r=assetSearchPage(await searchStudioAssets({kind:'bgm',query:'words'},async()=>page([],String(++n))))
+ assert.equal(n,20);assert.equal(r.studioSearch.pages,10);assert.equal(r.catalogDiscovery.pages,10)
+ assert.equal(r.next_cursor,'10');assert.equal(r.catalogDiscovery.next_cursor,'20')
+ n=0
+ const plain=assetSearchPage(await searchStudioAssets({kind:'bgm'},async()=>page([],String(++n)),4))
+ assert.equal(n,4);assert.equal(plain.catalogDiscovery,undefined)
+ const wrapped={structuredContent:{assets:[],next_cursor:'next',studioSearch:{pages:20}}}
+ n=0;assert.equal(await searchStudioAssets({query:'q'},async()=>{n++;return wrapped}),wrapped);assert.equal(n,1)
+})
+test('total deadline returns original retry cursor, dispatches no discovery or late followups',async()=>{
+ let calls=0,resolveLate:any
+ const r=assetSearchPage(await searchStudioAssets({query:'q',kind:'bgm',cursor:'start'},()=>{calls++;return new Promise(resolve=>{resolveLate=resolve})},20,{timeoutMs:15}))
+ assert.equal(r.studioSearch.timedOut,true);assert.equal(r.studioSearch.exhausted,false)
+ assert.equal(r.next_cursor,'start');assert.equal(r.searchRecovery.continueCall.arguments.cursor,'start');assert.equal(calls,1)
+ resolveLate(page([],'late'));await new Promise(resolve=>setTimeout(resolve,5));assert.equal(calls,1)
+})
+test('catalog failures retain exact continuation; archived and absent metadata remain unapproved',async()=>{
+ const r=assetSearchPage(await searchStudioAssets({query:'q'},async a=>{if(!a.query)throw Error('upstream private diagnostic');return page([],'exact-next')},2))
+ assert.equal(r.next_cursor,'exact-next');assert.equal(r.catalogDiscovery.available,false)
+ assert.ok(!JSON.stringify(r).includes('private diagnostic'))
+ const values=assetSearchPage(await searchStudioAssets({query:'q'},async a=>a.query?page([],null):page([{id:'archived',object:{sha256:'actual'},license:{status:'unknown'}},{id:'unknown'}],null),2))
+ assert.deepEqual(values.catalogDiscovery.availability.map((a:any)=>a.archiveState),['archived','unknown'])
+ assert.ok(values.catalogDiscovery.availability.every((a:any)=>a.rightsApproved===false&&a.downloadVerified===false))
+})
+test('host budget cannot exceed twenty requests or sixty seconds',async()=>{
+ let calls=0;const invoke=async()=>{calls++;return page([],null)}
+ await assert.rejects(searchStudioAssets({},invoke,21),/budget-invalid/)
+ await assert.rejects(searchStudioAssets({},invoke,20,{timeoutMs:60_001}),/budget-invalid/)
+ assert.equal(calls,0)
+})

@@ -7,6 +7,7 @@ import { registerStudioSpeechTools } from './studio-speech-tools.js'
 import { registerStudioBoardTools } from './studio-board-tools.js'
 import { StudioOperations } from './studio-operations.js'
 import { assertStudioImageRequest } from './studio-image-request.js'
+import { reconcileStudioImageOperation } from './studio-image-reconciliation.js'
 import { requireSettledStudioOperations } from './studio-stage-operations.js'
 import { assertFrozenVoiceSynthesis } from './studio-voice-script.js'
 import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard, downloadStudioAsset } from './studio-host.js'
@@ -1207,6 +1208,13 @@ export class TaskConsoleService extends TypertRemoteService {
 
   async recoverStudioCard(payload: string): Promise<string> {
     return JSON.stringify(await this.runner.recoverStudioCard(JSON.parse(payload)))
+  }
+
+  /** Console operator recovery only; never registered as an Agent tool. */
+  async reconcileStudioImageOperation(payload:string):Promise<string>{
+    const persistence=(this.ctx as any).get('sessionPersistence')
+    if(!persistence?.inspect)throw Error('studio-image-reconcile-original-session-required')
+    return JSON.stringify(await reconcileStudioImageOperation(this.runner.store,JSON.parse(payload),id=>persistence.inspect(id)))
   }
 
   async unblockCard(payload: string): Promise<string> {

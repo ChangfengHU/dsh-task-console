@@ -215,6 +215,7 @@ export type Event =
   | { t: 'artifact/registered'; at: string; taskId: string; artifact: Artifact }
   | { t: 'artifact/finalized'; at: string; taskId: string; batchId: string; artifactId: string; artifactCardId: string; cardId: string; runId: string; sha256: string }
   | { t: 'artifact/published'; at: string; taskId: string; artifactId: string; publicUrl: string }
+  | { t: 'batch/studio_revalidation'; at: string; taskId: string; batchId: string; cardId: string; expectedRunId: string; recoveryId: string; reason: string; revalidateFrom: string; restored: { id: string; status: 'ready' | 'todo' }[] }
   | { t: 'batch/studio_recovered'; at: string; taskId: string; batchId: string; cardId: string; expectedRunId: string; recoveryId: string; reason: string; restored: { id: string; status: 'ready' | 'todo' }[] }
   | { t: 'batch/settled'; at: string; taskId: string; batchId: string; outcome: 'done' | 'failed' | 'cancelled' }
   | { t: 'batch/archived'; at: string; taskId: string; batchId: string; archived: boolean }
@@ -354,6 +355,10 @@ export function fold(events: Event[]): State {
         break
       }
       case 'artifact/published': { const a = s.artifacts.get(e.artifactId); if (a) a.publicUrl = e.publicUrl; break }
+      case 'batch/studio_revalidation': {
+        for(const row of e.restored){const c=s.cards.get(row.id);if(c){c.status=row.status;c.error=undefined;c.endedAt=undefined;c.currentRunId=undefined;c.reviewNote=e.reason}}
+        break
+      }
       case 'batch/studio_recovered': {
         const b = s.batches.get(e.batchId); if (b) b.settled = undefined
         for (const r of e.restored) { const c = s.cards.get(r.id); if (c) { c.status = r.status; c.error = undefined; c.endedAt = undefined; c.currentRunId = undefined; c.consecutiveFailures = 0 } }
@@ -452,6 +457,7 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
     case 'artifact/registered': return `${card(e.artifact.cardId)} 登记产物:${e.artifact.name}`
     case 'artifact/finalized': return `${card(e.cardId)} 确认最终产物:${s.artifacts.get(e.artifactId)?.name ?? e.artifactId}`
     case 'artifact/published': return `产物已发布:${s.artifacts.get(e.artifactId)?.name ?? e.artifactId}`
+    case 'batch/studio_revalidation': return `阶段重新验证：${e.reason}`
     case 'batch/studio_recovered': return `平台故障恢复：${e.reason}`
     case 'batch/settled': return ({ done: '这次运行完成', failed: '这次运行失败', cancelled: '这次运行取消' })[e.outcome]
     case 'batch/archived': return e.archived ? '归档本次执行，原始记录保留' : '恢复本次执行的显示'

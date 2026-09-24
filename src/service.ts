@@ -1,3 +1,4 @@
+import {WorkflowExtensions,type WorkflowExtension} from './workflow-extensions.js'
 import { studioRenderJob } from './studio-render-host.js'
 import { inspectCapabilityContract } from './capability-contract.ts'
 import { taskAgentIds } from './task-design.ts'
@@ -84,6 +85,25 @@ const KNOWN_MODELS = [
 export class TaskConsoleService extends TypertRemoteService {
   static inject = ['loader', 'tools', 'agents', 'workspaceRegistry', 'permissionPresets']
 
+  private readonly workflowExtensions=new WorkflowExtensions((id,version)=>{
+    for(const batch of this.runner.store.s.batches.values()){
+      if(batch.settled||batch.archivedAt)continue
+      const task=this.runner.store.s.tasks.get(batch.taskId)
+      if(!task)return true
+      const binding=taskForBatch(task,batch).design?.extension
+      if(binding?.id===id&&binding.version===version)return true
+    }
+    return false
+  })
+
+  /** Trusted host integration only: deliberately absent from the RPC method table. */
+  async registerWorkflowExtension(extension:WorkflowExtension):Promise<()=>void>{
+    await this.ready
+    const db=this.runner.store.kernel.db
+    if(db.prepare("SELECT 1 FROM task_runs WHERE status='running' LIMIT 1").get()||db.prepare("SELECT 1 FROM tasks t JOIN dsh_card_bindings c ON c.card_id=t.id JOIN dsh_batches b ON b.id=c.batch_id WHERE b.settled_at IS NULL AND b.archived_at IS NULL AND t.status IN ('ready','running','review') LIMIT 1").get())throw Error('workflow-extension-registration-requires-quiescence')
+    return this.workflowExtensions.register(extension)
+  }
+
   readonly runner: TaskRunner
   readonly intake: TaskIntakeCoordinator
   readonly creator: TaskCreator
@@ -118,7 +138,7 @@ export class TaskConsoleService extends TypertRemoteService {
     return patrolFollowup(this.runner.store.kernel.db)
   }
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, config: {workflowExtensions?:WorkflowExtension[]} = {}) {
     super(ctx, NAMESPACE)
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
@@ -139,6 +159,10 @@ export class TaskConsoleService extends TypertRemoteService {
             reason:JSON.stringify({error_code:'agent-capability-drift',agentId:id,status:audit.status,missingTools:audit.missingTools,unexpectedTools:audit.unexpectedTools,missingDependencies:audit.missingDependencies,retryable:false,nextAction:'Review the capability diff and regenerate the authored preset without losing local edits. Resume in a new run after verification.'})
           }
         }
+        if(input.task.design?.extension){
+          try{return await this.workflowExtensions.beforeStart(input)}
+          catch(error){return {kind:'capability',reason:error instanceof Error?error.message:String(error)}}
+        }
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return
         const workflow = new StudioWorkflow(this.runner.store)
         await requireStudioStages(input,workflow,this.runner.store.kernel.db)
@@ -152,6 +176,7 @@ export class TaskConsoleService extends TypertRemoteService {
         if (!result.ok) return { kind: 'capability', reason: result.reason ?? 'blocked_quality_capability' }
       },
       beforeComplete: async input => {
+        if(input.task.design?.extension)return this.workflowExtensions.beforeComplete(input)
         if (input.task.design?.evidenceContract === 'studio-video-v1') {
           const workflow=new StudioWorkflow(this.runner.store),operations=new StudioOperations(this.runner.store).snapshot(input)
           if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task)
@@ -224,6 +249,7 @@ export class TaskConsoleService extends TypertRemoteService {
       operationOutcome: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? (input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input)),
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
       beforePlanRound: async (input, items, proxyItems) => {
+        if(input.task.design?.extension)return this.workflowExtensions.beforePlanRound(input,items,proxyItems)
         if (input.task.design?.evidenceContract === 'studio-video-v1') { const w=new StudioWorkflow(this.runner.store);await refreshStudioCapabilities(w,input.task);w.preflight(input.task);w.plan(input);return }
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2') return
         const patrol = await this.patrolWorkflow(input); patrol.snapshot(input)
@@ -247,7 +273,9 @@ export class TaskConsoleService extends TypertRemoteService {
       agents: () => this.intakeAgents(),
       decide: (signal, context, delivery) => decideTaskSignalWithAgent(this.ctx as any, signal, context, { ...delivery, markInternal: sessionId => this.markTaskSessionInternal(sessionId) }),
     })
-    this.creator = new TaskCreator(this.runner, () => this.intakeAgents())
+    // Startup registrations precede store recovery and the first dispatch.
+    for(const extension of config.workflowExtensions??[])this.workflowExtensions.register(extension)
+    this.creator = new TaskCreator(this.runner, () => this.intakeAgents(), design => design.extension ? {...design,extension:this.workflowExtensions.bind(design.extension)} : design)
     this.ready = this.runner.start()
       .then(() => { this.capabilities = new SessionCapabilities(ctx, async () => ({
       checkedAt: new Date().toISOString(), scope: 'environment-directory-not-execution-grant',
@@ -1036,6 +1064,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const raw = JSON.parse(payload)
     if(raw.saveOnly !== undefined && typeof raw.saveOnly !== 'boolean')throw Error('saveOnly 必须是布尔值')
     const task = validateTask(raw, ids)
+    if(task.design?.extension)task.design.extension=this.workflowExtensions.bind(task.design.extension)
     for (const p of rows) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
     await this.runner.store.append({ t: 'task/created', at: task.createdAt, taskId: task.id, task })
     if (task.trigger.kind === 'once' && !raw.saveOnly) await this.runner.fire(task.id, 'manual', {dispatch:'background'})

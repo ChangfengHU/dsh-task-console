@@ -36,7 +36,10 @@ export type TaskProposal = {
 
 export class TaskCreator {
   private queue: Promise<unknown> = Promise.resolve()
-  constructor(readonly runner: TaskRunner, readonly agents: () => Promise<IntakeAgent[]>) {}
+  constructor(readonly runner: TaskRunner, readonly agents: () => Promise<IntakeAgent[]>, readonly bindDesign: (design:TaskDesign)=>TaskDesign = design => {
+    if(design.extension)throw Error('workflow-extension-host-binding-unavailable')
+    return design
+  }) {}
   get actions() { return new TaskActions(this.runner) }
 
   catalog() {
@@ -49,7 +52,7 @@ export class TaskCreator {
 
   async context() {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
-      designFields: { scope:'required string, not an object; reusable target-selection policy, no fixed IP', branches:'required array of {id:string,when:string,action:string,evidence:string}', coordination:'required string describing actual role dependencies', failurePolicy:'{isolateItems:boolean,maxAttempts:integer 1..3,stopConditions:string[]}', acceptance:'required nonempty string[] of business evidence criteria', optional:'notifications only when requested; evidenceContract only for a matching catalog contract, not a Fleet recipe ID' },
+      designFields: { scope:'required string, not an object; reusable target-selection policy, no fixed IP', branches:'required array of {id:string,when:string,action:string,evidence:string}', coordination:'required string describing actual role dependencies', failurePolicy:'{isolateItems:boolean,maxAttempts:integer 1..3,stopConditions:string[]}', acceptance:'required nonempty string[] of business evidence criteria', optional:'extension:{id,version,policy} only for a trusted installed host extension; exact host/policy digests are frozen before review. notifications only when requested; evidenceContract only for a matching catalog contract, not a Fleet recipe ID' },
       fleetRecipeDesign: { recipe:'fleet-base-v3', use:'选择该配方且无额外设计约束时可省略 design，宿主将按 login 策略填入以下可审查默认设计。显式传入 design 时仍完整校验并独立审查，不覆盖自定义约束。', preserve:fleetRecipeDesign('preserve'), provisionGemini:fleetRecipeDesign('provision-gemini') },
       revisionCandidates: [...this.runner.store.tasks.values()].filter(t=>!t.enabled && !t.archivedAt && t.origin?.source === 'task-chat')
         .map(t=>({id:t.id,title:t.title,trigger:t.trigger,...(t.workflowRecipe ? {workflowRecipe:t.workflowRecipe} : {}),manualAvailable:t.trigger.kind === 'cron'})),
@@ -169,6 +172,7 @@ export class TaskCreator {
         db.prepare("UPDATE dsh_task_plans SET state='rejected',reviewed_at=?,review_reason=? WHERE id=? AND state='pending'").run(new Date().toISOString(), reason.trim(), id)
         return this.plan(id)
       }
+      if(p.task.design?.extension && digest(this.bindDesign(p.task.design))!==digest(p.task.design))throw Error('workflow-extension-reviewed-binding-changed')
       const selected = taskAgentIds(p.task).map(id => roster.find(r => r.id === id) ?? null)
       if (digest(selected) !== p.rosterHash) throw new Error('参与 Agent 的能力或配置已变化，需创建并审查新计划')
       if (p.decision === 'revise') {
@@ -321,12 +325,13 @@ export class TaskCreator {
         throw Error('定时业务目标仅允许在 create/revise 待审查计划中提供2至32000字符；复用不能改写')
       if (task.participants.length > 8 || task.participants.some(p => !ids.has(p.agentId))) throw new Error('工作流角色已失效或超出 8 位参与者上限')
       if (proposal.design) {
-        if (proposal.decision === 'reuse' && JSON.stringify(validateDesign(proposal.design)) !== JSON.stringify(task.design)) throw new Error('复用不能改写决策设计；请创建新的待审查计划')
+        if (proposal.decision === 'reuse' && JSON.stringify(this.bindDesign(validateDesign(proposal.design))) !== JSON.stringify(task.design)) throw new Error('复用不能改写决策设计；请创建新的待审查计划')
         const reusableDesign = proposal.decision !== 'reuse'
           ? JSON.parse(ips.reduce((s, ip) => s.split(ip).join('{{target}}'), JSON.stringify(proposal.design)))
           : proposal.design
-        task = { ...task, design: validateDesign(reusableDesign) }
+        task = { ...task, design: this.bindDesign(validateDesign(reusableDesign)) }
       }
+      if(task.design?.extension)task={...task,design:this.bindDesign(task.design)}
       if (task.design?.evidenceContract === 'browser-patrol-v2') {
         if (task.graphMode !== 'dynamic-rounds' || new Set(task.participants.map(p => p.agentId)).size !== 3) throw new Error('巡查v2需要三个不同的规划/执行/独立评估角色')
         const team = task.participants.map(p => roster.find(r => r.id === p.agentId)!)
@@ -359,7 +364,7 @@ export class TaskCreator {
         const notifier=roster.find(r=>r.id===agentId), tools=Object.values(notifier?.mcpTools ?? {}).flat().map(t=>t.replace(/-/g,'_'))
         if (!notifier || !tools.includes('vyibc_wecom_send_message') || tools.some(t=>!['vyibc_wecom_send_message','vyibc_wecom_list_groups','vyibc_wecom_status','vyibc_wecom_list_messages'].includes(t)) || notifier.tools.length || notifier.skills.length) throw new Error('通知员仅允许企微 MCP，不得包含业务、SSH、金库或其他工具/技能')
       }
-      const hash = digest({ proposal, text: scrub(input.text), cwd, ...(actionInput ? { action: actionInput.snapshot } : {}) })
+      const hash = digest({ proposal, text: scrub(input.text), cwd, ...(task.design?.extension ? { workflowExtension:task.design.extension } : {}), ...(actionInput ? { action: actionInput.snapshot } : {}) })
       if (old && old.payload_hash !== hash) throw new Error('同一提交已被接受；不能替换尚未派发的计划')
       if (old && store.s.batches.has(old.batch_id)) return this.status(old.task_id, old.batch_id)
       // Pausing cron does not disable manual use. The same reviewed definition and

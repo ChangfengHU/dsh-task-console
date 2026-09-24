@@ -1,3 +1,4 @@
+import {WorkflowExtensions} from '../src/workflow-extensions.js'
 import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -1508,4 +1509,105 @@ test('accepted background batch starts exactly once after host restart before di
     assert.equal(resumedStore.kernel.listRuns(batch.cardIds[0]).length,1)
     assert.equal(resumedStore.s.batches.get(batch.id)?.settled,undefined)
   } finally { resumedRunner.stop(); resumedStore.kernel.db.close() }
+})
+
+
+test('extension evidence gates the real runner handoff; model metadata cannot approve it',async()=>{
+ const extensions=new WorkflowExtensions();let proof=false
+ extensions.register({id:'audit-fixture',version:'1.0.0',hostApi:1,implementationSha256:'a'.repeat(64),validatePolicy:()=>({}),beforeComplete:async()=>{
+  if(!proof)throw Error('independent-hash-evidence-required')
+  return {summary:'Host verified fixture',metadata:{verifiedFixture:true}}
+ }})
+ const extension=extensions.bind({id:'audit-fixture',version:'1.0.0',policy:{}})
+ const {runner,store,host}=await setup({participants:[{agentId:'a'}],design:{extension} as any},{
+  beforeStart:i=>extensions.beforeStart(i),beforeComplete:i=>extensions.beforeComplete(i),beforePlanRound:(i,a,b)=>extensions.beforePlanRound(i,a,b),
+ })
+ const batch=await runner.fire('T','manual');await tick()
+ const session=[...host.sessions.keys()].at(-1)!;host.consumeFirst(session)
+ await assert.rejects(host.callTool(session,'task_complete',{summary:'I passed',metadata:{verifiedFixture:true}}),/independent-hash-evidence-required/)
+ assert.equal(store.all().filter(e=>e.t==='run/completed').length,0)
+ proof=true;await host.callTool(session,'task_complete',{summary:'client text'});host.endTurn(session);await tick()
+ const completion=store.all().find(e=>e.t==='run/completed') as any
+ assert.equal(completion.summary,'Host verified fixture')
+ assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'done')
+})
+
+test('restoring an extension task without its exact adapter blocks before model dispatch',async()=>{
+ const installed=new WorkflowExtensions()
+ installed.register({id:'audit-fixture',version:'1.0.0',hostApi:1,implementationSha256:'a'.repeat(64),validatePolicy:()=>({}),beforeComplete:async()=>({summary:'host',metadata:{}})})
+ const binding=installed.bind({id:'audit-fixture',version:'1.0.0',policy:{}}),missing=new WorkflowExtensions()
+ const {runner,store,host}=await setup({participants:[{agentId:'a'}],design:{extension:binding} as any},{beforeStart:async i=>{
+  try{return await missing.beforeStart(i)}catch(e){return {kind:'capability',reason:String(e)}}
+ }})
+ await runner.fire('T','manual');await tick()
+ assert.equal(host.sessions.size,0)
+ assert.ok(store.all().some((e:any)=>e.t==='run/blocked'&&/extension-version-unavailable/.test(e.reason)))
+})
+
+test('static extension cannot request human review to evade host validation',async()=>{
+ const {runner,store,host}=await setup({participants:[{agentId:'a'}],design:{extension:{id:'fixture'}} as any},{beforeComplete:async()=>{throw Error('evidence absent')}})
+ const batch=await runner.fire('T','manual'),sid=[...host.sessions.keys()][0];host.consumeFirst(sid)
+ await assert.rejects(host.callTool(sid,'task_request_review',{summary:'approve without proof'}),/human-review-bypass-forbidden/)
+ assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+ await assert.rejects(host.callTool(sid,'task_complete',{summary:'done'}),/evidence absent/)
+})
+
+test('historical extension review cards cannot be human-approved after template changes',async()=>{
+ const {runner,store,host,task}=await setup({participants:[{agentId:'a'}]})
+ const batch=await runner.fire('T','manual'),sid=[...host.sessions.keys()][0];host.consumeFirst(sid)
+ await host.callTool(sid,'task_request_review',{summary:'historical review'});host.endTurn(sid);await tick()
+ // Fixture simulates an old build's review card with an extension in its frozen
+ // definition, while the present-day template has no extension.
+ const {workflowDefinition}=await import('../src/workflow-plan.js')
+ const frozen=workflowDefinition({...task,design:{extension:{id:'fixture'}} as any})
+ store.s.batches.get(batch.id)!.turn={workflow:{id:'old-extension-definition',definition:frozen}} as any
+ await assert.rejects(runner.reviewCard(batch.cardIds[0],'approve','human override'),/human-review-bypass-forbidden/)
+ assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'review')
+ assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+})
+
+test('chat Creator freezes binding before review and ready extension batch restores exactly once',async()=>{
+ const registry=new WorkflowExtensions()
+ const extension={id:'restart-fixture',version:'1.0.0',hostApi:1 as const,implementationSha256:'c'.repeat(64),validatePolicy:(p:any)=>p,beforeComplete:async()=>({summary:'host verified',metadata:{}})}
+ registry.register(extension)
+ const {store,runner,root,host}=await setup({}, {beforeStart:i=>registry.beforeStart(i)})
+ const design={scope:'fixture',branches:[{id:'audit',when:'input exists',action:'read',evidence:'hashes'}],coordination:'serial',failurePolicy:{isolateItems:true,maxAttempts:1,stopConditions:['missing']},acceptance:['host verified'],extension:{id:extension.id,version:extension.version,policy:{file:'input.tgz'}}}
+ const creator=new TaskCreator(runner,async()=>[{id:'a',name:'A'} as any],d=>({...d,extension:registry.bind(d.extension)}))
+ const plan:any=await creator.prepare({decision:'create',reason:'fixture',title:'Restore extension',brief:'Read fixture',participants:[{agentId:'a'}],design},{agent:{session:{id:'extension-chat',deriveMessages:()=>[{role:'user',content:'Check fixture'}]}}},root)
+ const frozen=plan.definition.design.extension
+ assert.equal(frozen.implementationSha256,extension.implementationSha256);assert.match(frozen.policySha256,/^[a-f0-9]{64}$/)
+ assert.equal(store.s.batches.size,0)
+ const fire=runner.fire.bind(runner);runner.fire=(id,by,opts)=>fire(id,by,{...opts,dispatch:'background'})
+ const approved=await creator.review(plan.id,plan.hash,'approve','Check actual bytes');runner.stop()
+ assert.equal(host.sessions.size,0)
+ assert.deepEqual(store.tasks.get(approved.taskId!)?.design?.extension,frozen)
+ store.kernel.db.close()
+ // The startup installer supplies adapters BEFORE start loads and dispatches.
+ const restored=new EventStore(join(root,'store')),newHost=fakeHost(join(root,'presets')),newRegistry=new WorkflowExtensions()
+ newRegistry.register(extension)
+ const resumed=new TaskRunner(newHost.ctx,restored,{beforeStart:i=>newRegistry.beforeStart(i)})
+ try{
+  await resumed.start();await resumed.tick()
+  assert.equal(newHost.sessions.size,1)
+  const card=restored.s.batches.get(approved.batchId!)!.cardIds[0]
+  assert.equal(restored.kernel.listRuns(card).length,1)
+  assert.equal(restored.s.cards.get(card)?.status,'running')
+ }finally{resumed.stop();restored.kernel.db.close()}
+})
+
+test('chat approval refuses missing or changed extension without changing the reviewed plan',async()=>{
+ const registry=new WorkflowExtensions()
+ const drop=registry.register({id:'approval-fixture',version:'1.0.0',hostApi:1,implementationSha256:'d'.repeat(64),validatePolicy:(p:any)=>p,beforeComplete:async()=>({summary:'host',metadata:{}})})
+ const {store,runner,root,host}=await setup()
+ const design={scope:'fixture',branches:[{id:'audit',when:'input',action:'read',evidence:'hash'}],coordination:'serial',failurePolicy:{isolateItems:true,maxAttempts:1,stopConditions:['missing']},acceptance:['host'],extension:{id:'approval-fixture',version:'1.0.0',policy:{}}}
+ const proposal={decision:'create' as const,reason:'fixture',title:'Approve extension',brief:'Read fixture',participants:[{agentId:'a'}],design}
+ const exec={agent:{session:{id:'extension-approval',deriveMessages:()=>[{role:'user',content:'Check fixture'}]}}}
+ await assert.rejects(new TaskCreator(runner,async()=>[{id:'a'} as any]).prepare(proposal,exec,root),/host-binding-unavailable/)
+ const creator=new TaskCreator(runner,async()=>[{id:'a'} as any],d=>({...d,extension:registry.bind(d.extension)}))
+ const plan:any=await creator.prepare(proposal,exec,root);drop()
+ await assert.rejects(creator.review(plan.id,plan.hash,'approve','checked'),/version-unavailable/)
+ registry.register({id:'approval-fixture',version:'1.0.0',hostApi:1,implementationSha256:'e'.repeat(64),validatePolicy:(p:any)=>p,beforeComplete:async()=>({summary:'host',metadata:{}})})
+ await assert.rejects(creator.review(plan.id,plan.hash,'approve','checked'),/binding-mismatch/)
+ assert.equal(creator.plan(plan.id).state,'pending');assert.equal(creator.plan(plan.id).hash,plan.hash)
+ assert.equal(store.s.batches.size,0);assert.equal(host.sessions.size,0)
 })

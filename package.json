@@ -6,6 +6,7 @@
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
+    "./workflow-extensions": {"default":"./lib/workflow-extensions.js"},
     ".": {
       "default": "./lib/index.js"
     },

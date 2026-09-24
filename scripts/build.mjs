@@ -18,7 +18,7 @@ import { build } from 'esbuild'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 // An explicit staging directory lets browser tests validate assets before publishing.
@@ -33,6 +33,7 @@ const HOST_EXTERNAL = ['@deepseek-ai/cordis', '@deepseek-ai/dsh-*', '@deepseek-a
 await build({
   entryPoints: [
     join(root, 'src/index.ts'),
+    join(root, 'src/workflow-extensions.ts'),
     join(root, 'src/typert.host.ts'),
     join(root, 'src/studio-schema.ts'),
     join(root, 'src/studio-recovery-api.ts'),
@@ -53,6 +54,11 @@ await build({
   external: HOST_EXTERNAL,
   logLevel: 'info',
 })
+
+// No business adapter ships in this foundational build. A release packager must
+// include byte-verified adapter bundles before declaring them compatible.
+const {WORKFLOW_HOST_API}=await import(pathToFileURL(join(out,'workflow-extensions.js')).href)
+await writeFile(join(out,'workflow-compat.json'),JSON.stringify({schemaVersion:1,hostApi:WORKFLOW_HOST_API,extensions:[]},null,2)+'\n')
 
 async function writeClient(assetHash) {
 const client = await build({

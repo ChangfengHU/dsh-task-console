@@ -474,6 +474,7 @@ export class TaskRunner {
       try {
         const submit = async (kind: 'completed' | 'review', summary: string, paths: string[], metadata?: Record<string, unknown>, reviewer?: string) => {
           if (flight.terminal) throw new Error('这次运行已经提交了终态')
+          if (kind === 'review' && task.design?.extension) throw Error('workflow-extension-human-review-bypass-forbidden: use task_complete with host evidence or task_block')
           if (kind === 'review' && task.workflowRecipe?.id === 'fleet-base-v3') throw new Error('完整 Fleet 接入必须通过宿主证据验收后 task_complete；不能用人工批准替代缺失的业务证据。无法完成时 task_block 并保留原因。')
           const pending = await this.pendingOperation?.({ task, batch, card, sessionId, profileId })
           if (pending) throw new Error(`后台操作仍在运行，继续读取终态回执，不能提前提交验收：${pending}`)
@@ -870,6 +871,9 @@ export class TaskRunner {
     if (!card || card.status !== 'review' || !card.currentRunId && !card.runIds.length) throw new Error('这张卡不在待验收状态')
     const runId = card.runIds[card.runIds.length - 1]
     if (decision === 'approve') {
+      const batch=this.store.s.batches.get(card.batchId),base=this.store.tasks.get(card.taskId)
+      if(!batch||!base)throw Error('review-task-definition-missing')
+      if(taskForBatch(base,batch).design?.extension)throw Error('workflow-extension-human-review-bypass-forbidden: request changes and submit host evidence')
       const ok = await this.store.transition(
         () => this.store.kernel.completeTask(cardId, { summary: note.trim() || 'Human review approved.', metadata: { approval: 'human' } }),
         changed => changed ? { t: 'card/review_approved', at: this.now(), taskId: card.taskId, cardId, runId, ...(note.trim() ? { note: note.trim() } : {}) } : undefined,

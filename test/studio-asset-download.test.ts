@@ -49,3 +49,25 @@ test('native download rejects reviewer and stale sessions before callback',async
  const stageTool=definitions.get('studio_download_asset');await stageTool.execute({id:'a',path:'a.wav'},exec);assert.equal(calls,1)
  active=false;await assert.rejects(stageTool.execute({id:'a',path:'a.wav'},exec),/stale-run/);assert.equal(calls,1);stop()
 })
+
+const sourcePolicy={purpose:'video_soundtrack' as const,platforms:['user_review'],attributionWillBeIncluded:true as const,platformAllowsAttribution:true as const,noAdditionalRestrictions:true as const,changesDescription:'Trim and fade for the draft; include credit in PUBLICATION.md'}
+test('explicit source policy is sent through stdin and host binds real audio plus local author receipt',async t=>{
+ const {task,config,cwd}=await setup(t),data='source audio',path=join(cwd,'music.mp3'),receiptPath=path+'.source.json'
+ let count=0
+ const execute=async(_:string,argv:string[],__:any,___:any,stdin?:string)=>{
+  count++;assert.equal(argv.at(-1),'--source-policy-stdin');assert.deepEqual(JSON.parse(stdin!),sourcePolicy)
+  const receipt={schema:'studio-public-source-v1',assetId:'source-card',kind:'bgm',path,sha256:digest(data),bytes:data.length,isrc:'USUAN1400011',author:'Kevin MacLeod',title:'Test fixture',technical:{codec:'mp3',durationSeconds:125,measurement:'ffmpeg_full_decode_out_time'},attribution:'Fixture author credit',licenseUrl:'https://creativecommons.org/licenses/by/4.0/',qualityApproved:false,audioDecodeVerified:true,archivePermissionGranted:false,sourceCardRightsUnchanged:true,platformTermsIndependentlyVerified:false,projectUse:sourcePolicy,evidence:[`https://incompetech.com/music/royalty-free/index.html?isrc=USUAN1400011`,'https://incompetech.com/music/royalty-free/pieces.json','https://incompetech.com/music/royalty-free/licenses/'].map(url=>({url,sha256:'a'.repeat(64),bytes:100}))}
+  await writeFile(path,data);await writeFile(receiptPath,JSON.stringify(receipt))
+  return {ok:true,assetId:'source-card',path,sha256:digest(data),bytes:data.length,kind:'bgm',reused:false,receiptPath,receiptSha256:await fileSha256(receiptPath),sourceAcquisition:receipt}
+ }
+ const result=await downloadStudioAsset(task,{id:'source-card',path:'music.mp3',sourcePolicy},{config,execute})
+ assert.equal(result.receiptPath,'music.mp3.source.json');assert.equal(result.sourceAcquisition?.archivePermissionGranted,false);assert.equal(result.sourceAcquisition?.platformTermsIndependentlyVerified,false)
+ await assert.rejects(downloadStudioAsset(task,{id:'source-card',path:'music.mp3',sourcePolicy:{...sourcePolicy,noAdditionalRestrictions:false} as any},{config,execute}),/source-policy-invalid/);assert.equal(count,1)
+ await assert.rejects(downloadStudioAsset(task,{id:'source-card',path:'music.mp3',sourcePolicy},{config,execute:async(...args)=>{const r=await execute(...args);await writeFile(receiptPath,'{}');return r}}),/source-acquisition-receipt-invalid/)
+ await assert.rejects(downloadStudioAsset(task,{id:'source-card',path:'music.mp3',sourcePolicy},{config,execute:async(...args)=>{const r=await execute(...args);r.sourceAcquisition.archivePermissionGranted=true;await writeFile(receiptPath,JSON.stringify(r.sourceAcquisition));r.receiptSha256=await fileSha256(receiptPath);return r}}),/source-acquisition-receipt-invalid/)
+})
+test('public-source failures expose only bounded known codes and no provider messages',async t=>{
+ const {task,config}=await setup(t)
+ const result=await downloadStudioAsset(task,{id:'source-card',path:'music.mp3',sourcePolicy},{config,execute:async()=>({ok:false,error_code:'source_license_evidence_unverified',nextAction:'Bearer PRIVATE'})})
+ assert.equal(result.error_code,'source_license_evidence_unverified');assert.match(result.nextAction,/Do not repeat/);assert.doesNotMatch(JSON.stringify(result),/PRIVATE/)
+})

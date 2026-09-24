@@ -18,7 +18,7 @@ test('actual npm tarball contains verified isolated helper closure, no private p
  await cp(join(root,'package.json'),join(checkout,'package.json'));await symlink(join(root,'node_modules'),join(checkout,'node_modules'),'dir')
  const result=JSON.parse(execFileSync('npm',['pack','--json','--pack-destination',temp],{cwd:checkout,env,encoding:'utf8'}))[0]
  const paths=result.files.map(f=>f.path)
- assert.equal(paths.filter(p=>p.startsWith('studio/helpers/')).length,11)
+ assert.equal(paths.filter(p=>p.startsWith('studio/helpers/')).length,HELPERS.length)
  assert.ok(paths.includes('studio/manifest.json'))
  assert.ok(paths.includes('scripts/configure-studio.mjs'));assert.ok(paths.includes('scripts/prepare-package.mjs'))
  assert.ok(paths.includes('docs/studio-configuration.md'))

@@ -4,7 +4,7 @@ import {dirname,join,resolve} from 'node:path'
 import {fileURLToPath,pathToFileURL} from 'node:url'
 import {createHash} from 'node:crypto'
 import {execFileSync} from 'node:child_process'
-export const HELPERS=Object.freeze(['audio_observe_host.py','audio_review.py','audio_signals.py','compiler_host_bridge.py','compile_storyboard.py','vision_observe_host.py','observation_cache.py','render_job_host.py','speech_check_host.py','preflight_host.py','download_existing_asset.py'])
+export const HELPERS=Object.freeze(['audio_observe_host.py','audio_review.py','audio_signals.py','compiler_host_bridge.py','compile_storyboard.py','vision_observe_host.py','observation_cache.py','render_job_host.py','speech_check_host.py','preflight_host.py','download_existing_asset.py','acquire_incompetech_source.py'])
 export const REQUIRED_PROOFS=Object.freeze(['speech-calibration.json','speech-differential-regression.json'])
 export const ROLES=Object.freeze(['director','storyboard','visual','sound','editor','quality'])
 const ROLE_FILES=['roles/README.md','roles/manifest.json',...ROLES.map(role=>'roles/'+role+'/task-console.json')]

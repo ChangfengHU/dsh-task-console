@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
+import {execFile} from 'node:child_process'
+import {promisify} from 'node:util'
 import {validateStudioStages,studioStageRows,studioStageCardId} from '../src/studio-stages.ts'
 import {registerStageFiles,requireStudioStages,verifyStageReceipt} from '../src/studio-stage-files.ts'
 import {HermesKernel} from '../src/hermes-kernel.ts'
@@ -21,16 +23,16 @@ test('fixed dependency graph fans out and joins only after both real parents com
 })
 test('stage manifests bind real files, session, round and config; archived parents and tampering fail',async t=>{
  const cwd=await mkdtemp(join(tmpdir(),'stage-files-'));t.after(()=>rm(cwd,{recursive:true,force:true}));const receipts=new Map(),states=new Map()
- const db={prepare:()=>({get:(id:string)=>states.get(id)})},workflow={stageReceipt:(i:any,id:string)=>receipts.get(`${i.card.round}:${id}`),recordStageReceipt:(i:any,r:any)=>receipts.set(`${i.card.round}:${r.stage}`,r)}
+ const db={prepare:()=>({get:(id:string)=>states.get(id)})},workflow={script:()=>({sha256:'a'.repeat(64),lines:[{id:'line-1',text:'原始台词'}]}),stageReceipt:(i:any,id:string)=>receipts.get(`${i.card.round}:${id}`),recordStageReceipt:(i:any,r:any)=>receipts.set(`${i.card.round}:${r.stage}`,r)}
  const input=(id:string)=>({task:{cwd,design:{studioStages:stages}},batch:{id:'B'},card:{id:studioStageCardId('B',1,id as any),agentId:`video-${id}`,role:'studio-stage',round:1},sessionId:`session-${id}`})
- const make=async(id:string,ext:string)=>{const dir=`stages/r1/${id}`;await mkdir(join(cwd,dir),{recursive:true});await writeFile(join(cwd,dir,`asset.${ext}`),'fixture');const path=`${dir}/manifest.json`;await writeFile(join(cwd,path),JSON.stringify({stage:id,round:1,outputs:[`${dir}/asset.${ext}`],summary:'Artifact fixture; semantic review pending'}));return path}
+ const make=async(id:string,ext:string)=>{const dir=`stages/r1/${id}`;await mkdir(join(cwd,dir),{recursive:true});if(id==='storyboard')await writeFile(join(cwd,dir,`asset.${ext}`),JSON.stringify({scenes:[{sound:'line-1'}],scriptSha256:'a'.repeat(64)}));else await promisify(execFile)('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=16x16','-frames:v','1','-threads','1','-y',join(cwd,dir,`asset.${ext}`)]);const path=`${dir}/manifest.json`;await writeFile(join(cwd,path),JSON.stringify({stage:id,round:1,outputs:[`${dir}/asset.${ext}`],summary:'Artifact fixture; semantic review pending'}));return path}
  const story=await registerStageFiles(input('storyboard'),await make('storyboard','json'),workflow,db)
  assert.equal(story.qualityApproved,false);assert.match(story.outputs[0].sha256,/^[a-f0-9]{64}$/)
  const visual=await make('visual','png');await assert.rejects(registerStageFiles(input('visual'),visual,workflow,db),/dependency-required/)
  states.set('B#s1-storyboard',{status:'archived',tenant:'B',assignee:'video-storyboard'});await assert.rejects(registerStageFiles(input('visual'),visual,workflow,db),/dependency-required/)
  states.set('B#s1-storyboard',{status:'done',tenant:'other',assignee:'video-storyboard'});await assert.rejects(registerStageFiles(input('visual'),visual,workflow,db),/dependency-required/)
  states.set('B#s1-storyboard',{status:'done',tenant:'B',assignee:'video-storyboard'});await registerStageFiles(input('visual'),visual,workflow,db)
- await assert.rejects(verifyStageReceipt({...input('storyboard'),batch:{id:'different'}},story),/receipt-required/)
+ await assert.rejects(verifyStageReceipt({...input('storyboard'),batch:{id:'different'}},story,workflow),/receipt-required/)
  await writeFile(join(cwd,story.outputs[0].path),'changed');await assert.rejects(requireStudioStages(input('sound'),workflow,db),/file-changed/)
 })
 test('stage configuration rejects duplicate, missing or unknown stages',()=>{

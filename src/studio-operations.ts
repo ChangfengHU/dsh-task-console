@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
     const used={imageCalls:0,voiceSegments:0};for(const o of operations)used[o.kind as keyof typeof used]+=o.units
     return {used,limits:JSON.parse(row.limits),operations,unknown:operations.some((o:any)=>['dispatching','unknown'].includes(o.state))}
   }
-  async invoke(input:any,raw:string,args:any,invoke:(args:any)=>Promise<any>){
+  async invoke(input:any,raw:string,args:any,invoke:(args:any)=>Promise<any>,beforeDispatch?:()=>unknown){
     if(/(?:publish_video|post_video|upload_video|register_published_video)$/.test(raw))throw Error('studio-publication-not-authorized')
     const d=definition(raw,args)
     const stage=studioStageFor(input)
@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
     const intent=hash({raw,args:canonical(args)}),key=[input.task.id,input.batch.id,intent]
     const replay=this.db.prepare('SELECT * FROM dsh_studio_operations WHERE task_id=? AND batch_id=? AND intent=?').get(...key)
     if(replay){if(replay.result)return JSON.parse(replay.result);throw Error('studio-submission-unknown: reconcile original operation; do not resubmit')}
+    // Semantic checks apply only to new work: never block saved receipts or polling,
+    // and reject before reserving budget so local validation cannot become unknown.
+    const checked=beforeDispatch?.()
+    if(checked&&typeof (checked as any).then==='function')throw Error('studio-dispatch-validator-must-be-synchronous')
     this.db.transaction(()=>{const s=this.snapshot(input);if(s.unknown)throw Error('studio-prior-submission-unknown');if(s.used[d.kind as keyof typeof s.used]+d.units>s.limits[d.kind])throw Error('studio-generation-budget-exhausted');this.db.prepare('INSERT INTO dsh_studio_operations VALUES(?,?,?,?,?,?,?,?,?)').run(...key,raw,d.kind,d.units,'dispatching',null,null)})()
     try {
       const result=await invoke(args),value=unpack(result),id=job(value),status=terminal(value),failed=rejected(result,value)||!!status&&failedStates.has(status)

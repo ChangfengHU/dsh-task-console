@@ -72,3 +72,58 @@ test('producer reference observations are role stamped and cannot substitute ind
  workflow.recordReview(reviewer,{candidateSha256:candidate.sha256,referenceSha256:h('b'),revision:1,checks:DEFAULT_DIMENSIONS.map((dimension:string)=>({dimension,status:'pass',finding:'Cannot borrow producer reference.',ranges:[[0,100]],evidenceReceiptIds:[ref.id]})),issues:[]})
  assert.throws(()=>workflow.complete(input),/quality-gate-failed/)
 })
+
+test('planning error names only missing prerequisites and matching repair tools; summaries cannot repair audio',t=>{
+ const {workflow,input}=setup(t);capabilities(workflow,input.task);workflow.preflight(input.task);workflow.enforceRuntime(input)
+ const details=()=>{try{workflow.plan(input);assert.fail('expected planning gate')}catch(error){assert.match((error as Error).message,/^studio-plan-requires-script-and-direct-reference: /);return JSON.parse((error as Error).message.split(': ').slice(1).join(': '))}}
+ const initial=details();assert.deepEqual(initial.missing.map((v:any)=>v.tool),['studio_freeze_script','studio_reference_frames','studio_reference_audio']);assert.equal(initial.retryable,false);assert.equal(initial.retryAfterRepair,true)
+ workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'完整台词。'}]})
+ workflow.recordReferenceReceipt(input,{referenceSha256:h('b'),sha256:h('d'),kind:'frames',ranges:[[0,2]]})
+ input.metadata={audioSha256:h('d'),referenceSummary:'I heard the reference.',referenceAudioReviewed:true}
+ const missing=details();assert.deepEqual(missing.missing.map((v:any)=>v.id),['current_session_reference_audio']);assert.equal(missing.missing[0].tool,'studio_reference_audio');assert.match(missing.instruction,/another session/)
+ const before=workflow.status(input).planning;assert.equal(before?.ready,false);assert.equal(before?.preflightReady,true);assert.deepEqual(before?.missing,missing.missing)
+ workflow.recordReferenceReceipt(input,{referenceSha256:h('b'),sha256:h('d'),kind:'audio',ranges:[[0,8]]})
+ assert.deepEqual(workflow.plan(input),{ok:true,status:'ready'});assert.equal(workflow.status(input).planning?.ready,true)
+})
+
+test('planning readiness cannot borrow another session, batch or changed policy reference observations',t=>{
+ const {workflow,input}=setup(t);capabilities(workflow,input.task);workflow.preflight(input.task);workflow.enforceRuntime(input)
+ workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'完整台词。'}]})
+ for(const kind of ['frames','audio'])workflow.recordReferenceReceipt({...input,sessionId:'old-planner'},{referenceSha256:h('b'),sha256:h('d'),kind,ranges:[[0,2]]})
+ assert.deepEqual(workflow.status(input).planning?.missing.map((v:any)=>v.id),['current_session_reference_frames','current_session_reference_audio'])
+ for(const kind of ['frames','audio'])workflow.recordReferenceReceipt({...input,batch:{id:'other-batch'}},{referenceSha256:h('b'),sha256:h('d'),kind,ranges:[[0,2]]})
+ assert.equal(workflow.status(input).planning?.prerequisitesReady,false)
+ for(const kind of ['frames','audio'])workflow.recordReferenceReceipt(input,{referenceSha256:h('b'),sha256:h('d'),kind,ranges:[[0,2]]})
+ assert.equal(workflow.status(input).planning?.ready,true)
+ input.task.design.studio.referenceSha256=h('e');capabilities(workflow,input.task);workflow.preflight(input.task)
+ assert.equal(workflow.status(input).planning?.prerequisitesReady,false);assert.throws(()=>workflow.plan(input),/current_session_reference_audio/)
+})
+
+test('planning readiness distinguishes repaired prerequisites from unavailable preflight and stays planner-scoped',t=>{
+ const {workflow,input}=setup(t);workflow.enforceRuntime(input);workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'完整台词。'}]})
+ for(const kind of ['frames','audio'])workflow.recordReferenceReceipt(input,{referenceSha256:h('b'),sha256:h('d'),kind,ranges:[[0,2]]})
+ const p=workflow.status(input).planning;assert.equal(p?.prerequisitesReady,true);assert.equal(p?.preflightReady,false);assert.equal(p?.ready,false)
+ assert.throws(()=>workflow.plan(input),/blocked_quality_capability/)
+ assert.equal(workflow.status({...input,card:{role:'executor'}}).planning,undefined)
+})
+
+test('identical candidate registration retries preserve review, speech plan and receipts',t=>{
+ const {workflow,input}=setup(t),{candidate}=proof(workflow,input),producer={...input,card:{role:'executor'},sessionId:'producer'}
+ workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'完整台词。'}]})
+ workflow.recordSpeechPlan(producer,{candidateSha256:candidate.sha256,scriptSha256:h('c'),planSha256:h('f'),lines:[{id:'1',text:'完整台词。'}]})
+ const before=workflow.status(input),stored=workflow.recordCandidate(producer,{...candidate})
+ assert.deepEqual(stored.candidate,candidate);assert.deepEqual(workflow.status(input),before)
+ const reversed=Object.fromEntries(Object.entries(candidate).reverse());assert.deepEqual(workflow.recordCandidate(producer,reversed),stored)
+ assert.equal(workflow.complete(input).metadata.workflowOutcome,'machine_assessed_candidate')
+ for(const field of ['sha256','manifestSha256','referenceSha256','durationSeconds','width','height','fps'])assert.throws(()=>workflow.recordCandidate(producer,{...candidate,[field]:typeof (candidate as any)[field]==='number'?1:h('e')}),/revision-must-increase/)
+ assert.deepEqual(workflow.status(input),before)
+})
+
+test('candidate retry cannot transfer to a restored session or another round, card or policy',t=>{
+ const {workflow,input}=setup(t),producer={...input,card:{id:'producer-r1',round:1,role:'executor'},sessionId:'producer'}
+ const candidate={sha256:h('a'),manifestSha256:h('c'),referenceSha256:h('b'),revision:1,durationSeconds:100,width:1080,height:1920,fps:30}
+ workflow.recordCandidate(producer,candidate)
+ for(const changed of [{...producer,sessionId:'restored-producer'},{...producer,card:{...producer.card,round:2}},{...producer,card:{...producer.card,id:'different-card'}}])assert.throws(()=>workflow.recordCandidate(changed,{...candidate}),/revision-must-increase/)
+ assert.equal(workflow.status({...producer,batch:{id:'other-batch'}}).candidate,null)
+ input.task.design.studio.characterId='different-character';assert.throws(()=>workflow.recordCandidate(producer,{...candidate}),/revision-must-increase/)
+})

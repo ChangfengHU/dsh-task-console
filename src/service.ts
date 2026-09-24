@@ -1,9 +1,14 @@
+import { studioRenderJob } from './studio-render-host.js'
+import { inspectCapabilityContract } from './capability-contract.ts'
+import { taskAgentIds } from './task-design.ts'
 import {registerStageFiles,requireStudioStages,verifyStageReceipt} from './studio-stage-files.js'
 import {studioStageFor} from './studio-stages.js'
 import { registerStudioSpeechTools } from './studio-speech-tools.js'
 import { registerStudioBoardTools } from './studio-board-tools.js'
 import { StudioOperations } from './studio-operations.js'
-import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard } from './studio-host.js'
+import { requireSettledStudioOperations } from './studio-stage-operations.js'
+import { assertFrozenVoiceSynthesis } from './studio-voice-script.js'
+import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard, downloadStudioAsset } from './studio-host.js'
 import { registerStudioTools } from './studio-tools.js'
 import { StudioWorkflow } from './studio-workflow.js'
 import { registerStudioSkillGate } from './studio-skill-gate.js'
@@ -117,11 +122,21 @@ export class TaskConsoleService extends TypertRemoteService {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
       registerStudioTools: async (agentCtx,input,isActive,submitReview) => {
         const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
-        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
+        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,renderJob:(action,args)=>studioRenderJob(input.task,action,args),downloadAsset:args=>downloadStudioAsset(input.task,args),registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
         let skillGate:()=>void=()=>{},speech:()=>void=()=>{},board:()=>void=()=>{}
         try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});board=await registerStudioBoardTools(agentCtx,{input,workflow,isActive,compile:args=>compileStudioStoryboard(input.task,args)});return ()=>{board();speech();skillGate();media()} } catch(e){board();speech();skillGate();media();throw e}
       },
       beforeStart: async input => {
+        const ids=input.card.role==='planner' ? taskAgentIds(input.task) : [input.profileId]
+        for(const id of ids){
+          const audit=JSON.parse(await this.agentCapabilityStatus(JSON.stringify({id})))
+          // Legacy authored presets remain usable only when their actual fence matches;
+          // they are never labelled live-verified or certified by this compatibility path.
+          if(['composition-missing','tool-drift','dependency-missing','contract-drift','local-edit'].includes(audit.status))return {
+            kind:'capability' as const,
+            reason:JSON.stringify({error_code:'agent-capability-drift',agentId:id,status:audit.status,missingTools:audit.missingTools,unexpectedTools:audit.unexpectedTools,missingDependencies:audit.missingDependencies,retryable:false,nextAction:'Review the capability diff and regenerate the authored preset without losing local edits. Resume in a new run after verification.'})
+          }
+        }
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return
         const workflow = new StudioWorkflow(this.runner.store)
         await requireStudioStages(input,workflow,this.runner.store.kernel.db)
@@ -138,13 +153,13 @@ export class TaskConsoleService extends TypertRemoteService {
         if (input.task.design?.evidenceContract === 'studio-video-v1') {
           const workflow=new StudioWorkflow(this.runner.store),operations=new StudioOperations(this.runner.store).snapshot(input)
           if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task)
-          if(input.card.role!=='studio-stage'&&(operations.unknown||operations.operations.some((o:any)=>o.state==='submitted')))throw Error('studio-generation-reconcile-required: query original jobs before handoff')
+          requireSettledStudioOperations(input,operations)
           const candidate=workflow.status(input).candidate
           workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
           if(input.card.role==='studio-stage'){
             const stage=studioStageFor(input)!,receipt=workflow.stageReceipt(input,stage.id)
             await requireStudioStages(input,workflow,this.runner.store.kernel.db)
-            await verifyStageReceipt(input,receipt)
+            await verifyStageReceipt(input,receipt,workflow)
             if(receipt.sessionId!==input.sessionId)throw Error('studio-stage-session-mismatch')
             return {summary:receipt.summary,metadata:{workflowOutcome:'stage_handoff',stage:stage.id,manifest:receipt.manifest,outputs:receipt.outputs,qualityApproved:false}}
           }
@@ -256,7 +271,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const task=taskForBatch(base,batch),input={task,batch,card,sessionId,profileId:run.profileId??card.agentId}
     if(task.design?.evidenceContract==='studio-video-v1') {
       const operations=new StudioOperations(this.runner.store),workflow=new StudioWorkflow(this.runner.store)
-      try { return await operations.invoke(input,raw,args,invoke) }
+      try { return await operations.invoke(input,raw,args,invoke,()=>{assertFrozenVoiceSynthesis(raw,args,workflow.script(input))}) }
       finally {
         // Include retained unknown reservations, not only successful job receipts.
         const budget=operations.snapshot(input),candidate=workflow.status(input).candidate
@@ -496,11 +511,12 @@ export class TaskConsoleService extends TypertRemoteService {
       for (const row of skillRows) skills.add(row.name)
       const agents = envelope.payload.agents.map(row => {
         const missingSkills = row.spec.skills.filter(name => !skills.has(name))
+        const manifest=renderComposition(row.spec,this.hostMcp(),this.hostToolNames()).capabilities!
         const missingMcp = Object.keys(row.spec.mcpTools).filter(name => !mcp.has(name))
-        return { id: row.spec.id, name: row.spec.name, conflict: existingAgents.has(row.spec.id), missingSkills, missingMcp, ready: !missingSkills.length && !missingMcp.length }
+        return { id: row.spec.id, name: row.spec.name, conflict: existingAgents.has(row.spec.id), missingSkills, missingMcp, missingCapabilities:manifest.missing, readinessScope:'definition-only', liveVerified:false, ready: !missingSkills.length && !manifest.missing.length }
       })
       const available = new Set(envelope.payload.agents.map(row => row.spec.id))
-      const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: row.participants.map(p => p.agentId).filter(id => !available.has(id)), scheduleDisabled: row.trigger.kind === 'cron' }))
+      const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: taskAgentIds(row).filter(id => !available.has(id) && !existingAgents.has(id)), scheduleDisabled: row.trigger.kind === 'cron' }))
       const runtime = envelope.runtime ? {
         missingMcp: envelope.runtime.mcps.map(row => row.serverName).filter(name => !mcp.has(name)),
         missingSkills: envelope.runtime.skills.map(row => row.id).filter(name => !skills.has(name)),
@@ -677,6 +693,18 @@ export class TaskConsoleService extends TypertRemoteService {
     const spec = validateSpec(JSON.parse(payload))
     const preview = renderComposition(spec, this.hostMcp(), this.hostToolNames())
     return JSON.stringify({ ...preview, yml: mask(preview.yml) } satisfies Preview)
+  }
+
+  /** Read-only drift audit. A green configuration is not a passed live invocation. */
+  async agentCapabilityStatus(payload:string):Promise<string>{
+    const {id}=JSON.parse(payload)
+    if(typeof id!=='string'||!id.trim())throw Error('Agent id required')
+    const presets=(this.ctx as any).get('agentPresets'),preset=await presets?.resolve(id)
+    if(!preset)throw Error('Agent not found')
+    const dir=dirname(String(preset.path)),spec=await readSpec(dir)
+    if(!spec)return JSON.stringify({id,ready:false,status:'unmanaged',scope:'configuration-only',liveVerified:false})
+    const expected=renderComposition(spec,this.hostMcp(),this.hostToolNames()).capabilities!
+    return JSON.stringify({id,...await inspectCapabilityContract(dir,expected)})
   }
 
   async saveAgent(payload: string): Promise<string> {
@@ -1008,7 +1036,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const task = validateTask(raw, ids)
     for (const p of rows) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
     await this.runner.store.append({ t: 'task/created', at: task.createdAt, taskId: task.id, task })
-    if (task.trigger.kind === 'once' && !raw.saveOnly) await this.runner.fire(task.id, 'manual')
+    if (task.trigger.kind === 'once' && !raw.saveOnly) await this.runner.fire(task.id, 'manual', {dispatch:'background'})
     return JSON.stringify({ id: task.id })
   }
 
@@ -1064,10 +1092,11 @@ export class TaskConsoleService extends TypertRemoteService {
   }
 
   async fireTask(payload: string): Promise<string> {
-    const { id, by } = JSON.parse(payload) as { id: string; by?: 'manual' | 'retry' }
+    const { id, by, requestId } = JSON.parse(payload) as { id: string; by?: 'manual' | 'retry'; requestId?:string }
+    if(requestId!==undefined&&!/^[a-zA-Z0-9-]{16,80}$/.test(requestId))throw Error('Invalid execution requestId')
     const presets = (this.ctx as any).get('agentPresets')
     for (const p of presets ? (await presets.list() as any[]) : []) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
-    const batch = await this.runner.fire(id, by === 'retry' ? 'retry' : 'manual')
+    const batch = await this.runner.fire(id, by === 'retry' ? 'retry' : 'manual', {dispatch:'background',...(requestId?{batchId:'b-manual-'+requestId}:{})})
     return JSON.stringify({ runId: batch.id, batchId: batch.id })
   }
 

@@ -22,7 +22,15 @@ export function TaskRunAction({ task, api, toast }: { task: TaskSpec; api: Tasks
         if (!text?.trim()) return
         const next = await api.launchWorkflow(task.id, text.trim(), crypto.randomUUID())
         go(`tasks/${task.id}/runs/${next.batchId}`)
-      } else { const next = await api.fireTask(task.id); go(`tasks/${task.id}/runs/${next.runId}`) }
+      } else {
+        // Keep an ambiguous submission identity across reloads; retry reads the same batch.
+        const key='dsh-task-submit:'+task.id
+        let requestId=sessionStorage.getItem(key)
+        if(!requestId){requestId=crypto.randomUUID();sessionStorage.setItem(key,requestId)}
+        const next = await api.fireTask(task.id,'manual',requestId)
+        sessionStorage.removeItem(key)
+        go(`tasks/${task.id}/runs/${next.runId}`)
+      }
       toast('已创建新执行，历史记录保留')
     } catch (error) { toast(error instanceof Error ? error.message : String(error)) }
     finally { submitting.current = false; setBusy(false) }

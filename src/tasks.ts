@@ -594,7 +594,16 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (task.targets?.length) lines.push('', '[TARGETS — RESOURCE METADATA ONLY]', task.targets.map(target => `${target.kind}:${target.id}${target.label ? ` (${target.label})` : ''}`).join('\n'))
   if (task.origin?.reviewPlanId) lines.push('', '[HOST REVIEW RELEASE]',
     `本 Run 已由独立审查放行，审批计划 ${task.origin.reviewPlanId}。原始消息中“先生成计划、等待审查、不执行”描述的创建阶段已完成；现在执行下方已审查的业务范围。其他禁止事项、宿主权限及验收要求仍有效，不因批准而扩大。`)
-  if(task.design?.studioStages)lines.push('', '[STUDIO STAGES]', `当前轮次 ${card.round}。studio_status.stages列出本轮实际登记清单。读取stages/r${card.round}/中上游文件再行动；合成阶段必须汇聚分镜、视觉、声音三个交接，不能凭Gate完成就猜素材存在。阶段完成不等于整片通过。`)
+  if(task.design?.studioStages)lines.push('', '[STUDIO STAGES]', `当前轮次 ${card.round}。studio_status.state.stages列出本轮实际登记清单。读取stages/r${card.round}/中上游文件再行动；合成阶段必须汇聚分镜、视觉、声音三个交接，不能凭Gate完成就猜素材存在。阶段完成不等于整片通过。`)
+  if(task.design?.evidenceContract==='studio-video-v1'&&['executor','studio-stage'].includes(card.role??''))lines.push('', '[STUDIO MEDIA ACQUISITION]',
+    '素材库检索结果先用已连接素材 MCP 的 asset_get(id) 查看实际归档及来源信息（工具名以当前 schema 为准），使用返回的真实素材 ID。获取已归档文件调用 studio_download_asset({id:实际素材ID,path:新的项目相对路径})；文件扩展名必须与归档一致，声音/视觉专家写入当前 stages/r<round>/<stage>/，合成角色写入项目素材目录。宿主负责认证，不自行拼接 /api/media/assets/{id}/file 或其他 /file URL，不读取、替换或输出凭据。',
+    '只有下载返回 ok=true、path、sha256、bytes 后才把实际文件作为输入；kind、标签、封面或来源卡不证明有音频文件，下载成功也不证明许可或质量。source-only 表示只有来源资料，不能把页面/来源卡当音频：选择有归档文件的合适素材，或按原始来源核实许可后获取真实媒体。不要循环重试同一个 source-only ID。',
+    'asset-file-auth-failed、installed-asset-auth-unavailable、studio-asset-download-host-not-configured 属于宿主依赖问题；保留 error_code 和 httpStatus，先 studio_status 核对可用状态，报告该下载工具的确切故障，不用 bootstrap token 或猜测地址绕过。output-exists-with-other-bytes 时保留旧文件、使用新路径；output-extension-mismatch 时按归档扩展名更正输出路径。失败或完整性校验失败的响应不能改名成 .wav/.mp3/.png，也不能加入已完成清单。',
+    '阶段交接仍调用 studio_register_stage({path:本轮manifest路径})，验证实际媒体和哈希；有未下载成功的必需素材就如实列出缺项。下载回执不是阶段完成或审美通过。')
+  if(task.design?.evidenceContract==='studio-video-v1'&&card.role==='executor')lines.push('', '[STUDIO REAL RENDER]',
+    '先检查同轮实际素材、冻结台词及当前渲染依赖，再使用已安装并可用的 HyperFrames/FFmpeg 执行能力产出真实视频；只能按当前会话实际工具 schema 调用渲染工具或执行能力；缺少时不臆造接口、名称或参数。渲染命令返回执行编号时持续查询该编号；结果未知先对账，不盲目重复启动。',
+    '渲染缺依赖或命令失败时先 studio_status 核对宿主能力，记录失败命令、退出码、脱敏错误和受影响步骤；能够在授权范围修复则修复，否则 task_block(reason,kind="capability") 如实交接确切故障。preflight 通过不覆盖之后真实发生的渲染失败。',
+    '禁止 touch 空 .mp4、把文本/占位文件改名成视频，或以黑屏/单色占位片作为候选完成任务。已有坏文件应保留失败记录，修复后生成新真实产物；只有成功渲染的实际 MP4 和真实 manifest 才能调用 studio_register_candidate({path,manifestPath,revision})。文件存在或命令成功不等于质量通过，仍须独立视听检查。')
   if (card.brief?.trim()) lines.push('', '[YOUR PART]', card.brief.trim())
   if (['fleet-base-v2','fleet-base-v3'].includes(task.workflowRecipe?.id ?? '')) lines.push('', '[FRESH EXECUTION / RECOVERY]',
     '本次使用当前工具重新检查目标。其他执行或历史会话的 blocked/人工验证原因不代表当前仍故障；健康组件及有效登录只复用，不为重跑而重装或再次复制。',

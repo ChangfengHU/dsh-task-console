@@ -31,7 +31,7 @@ export interface TasksApi {
   setBatchArchived: (taskId: string, batchId: string, archived: boolean) => Promise<void>
   deleteTask: (id: string) => Promise<void>
   deleteTasks: (ids: string[]) => Promise<void>
-  fireTask: (id: string, by?: 'manual' | 'retry') => Promise<{ runId: string }>
+  fireTask: (id: string, by?: 'manual' | 'retry', requestId?:string) => Promise<{ runId: string }>
   taskSchedule: (id: string, page: number) => Promise<any>
   cancelRun: (runId: string) => Promise<void>
   taskSnapshot: (id: string, batchId?: string) => Promise<TaskSnapshot>

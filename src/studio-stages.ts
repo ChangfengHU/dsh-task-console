@@ -24,6 +24,6 @@ export function studioStageRows(task:any,batchId:string,round:number,plannerId:s
  return (task.design?.studioStages ?? []).map((s:StudioStage) => ({
   id:studioStageCardId(batchId,round,s.id),agentId:s.agentId,kind:'agent' as const,role:'studio-stage' as const,round,
   deps:s.id==='storyboard'?[plannerId]:[studioStageCardId(batchId,round,'storyboard')],
-  brief:`${s.brief}\n本阶段=${s.id}，轮次=${round}。输出写入 stages/r${round}/${s.id}/，不得改写其他阶段或旧版。读取同轮上游交接。完成后写 manifest.json，格式 {"stage":"${s.id}","round":${round},"outputs":["stages/r${round}/${s.id}/实际文件"],"summary":"实际完成内容及未验证项"}。调用 studio_register_stage(path)，成功后 task_complete；本阶段交接不代表整片或审美通过。返修轮先查问题，仅修改必要素材，可复制未受影响产物并记录复用依据。`
+  brief:`${s.brief}\n本阶段=${s.id}，轮次=${round}。输出写入 stages/r${round}/${s.id}/，不得改写其他阶段或旧版。读取同轮上游交接。${s.id==='storyboard'?'先从 studio_status.state.script 读取冻结台词。分镜根字段 scriptSha256 必须为该记录的 sha256，script 数组按原样保存完整 {id,text}；镜头可无台词或引用相应台词ID，不能重写原文。发现剧情冲突应如实反馈，不自行解冻。':s.id==='sound'?'配音前读取 studio_status.state.script，逐句核对分镜引用。冻结记录是台词原文的依据；有冲突先报告，不能直接按冲突台词提交付费生成。':''}完成后写 manifest.json，格式 {"stage":"${s.id}","round":${round},"outputs":["stages/r${round}/${s.id}/实际文件"],"summary":"实际完成内容及未验证项"}。调用 studio_register_stage(path)，成功后 task_complete；本阶段交接不代表整片或审美通过。返修轮先查问题，仅修改必要素材，可复制未受影响产物并记录复用依据。`
  }))
 }

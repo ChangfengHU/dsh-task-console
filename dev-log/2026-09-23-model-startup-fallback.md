@@ -362,3 +362,12 @@ At09:01Z another release switched to6b8e1a4ca791; its bundle includes7e38e84 as
 an ancestor and preserves Fleet changes. Service briefly unavailable then recovered;
 native running sessions zero. Integrate this newer Studio rendering source/config
 before deploying further host changes. Existing frontend9ecf721 remains active.
+
+Merged6b8e1a4 without conflicts, retaining its capability audits, durable rendering
+and asynchronous dispatch. An existing budget test needed the newly required
+frozen-dialogue fixture; the notification/browser concurrency test now waits
+boundedly for asynchronous ready→running rather than a fixed80ms sleep. No
+production gate weakened. Serial full regression passed615/618,0 failures,
+3 existing skips in80.27s; build passed. Candidate must preserve6b8e1a4's newer
+studio-host configuration. Role capability audits currently report unverified-
+legacy with no missing/unexpected tools or dependencies, not live certification.

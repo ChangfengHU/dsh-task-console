@@ -171,3 +171,18 @@ test('partial manifest cannot mint full source receipt until every range has bee
  const b=await s.tools.studio_read_text.execute({path:'manifest.json',offset:1,limit:1,expectedSha256:a.sha256});assert.equal(b.receipt.kind,'source');assert.equal(b.completeRead,true)
 })
 test('range errors expose probed duration and allowed window',async t=>{const s=await setup(t);await assert.rejects(s.tools.studio_inspect_frames.execute({start:99,end:101}),/durationSeconds=100.*maxWindowSeconds=2/)})
+
+test('actual candidate registration is repeatable through file tool and rejects changed manifest',async t=>{
+ const {execFile}=await import('node:child_process'),{promisify}=await import('node:util'),run=promisify(execFile)
+ const {default:Database}=await import('better-sqlite3'),{StudioWorkflow}=await import('../src/studio-workflow.js')
+ const db=new Database(':memory:');t.after(()=>db.close());const workflow=new StudioWorkflow({kernel:{db}})
+ const s=await setup(t,'executor'),tools:any={},input:any={task:{id:'retry-task',cwd:s.cwd,design:{evidenceContract:'studio-video-v1',studio:{characterId:'test-character',referenceSha256:'a'.repeat(64),referenceUrl:'https://cdn.vyibc.com/reference.mp4'}}},batch:{id:'batch'},card:{id:'producer-r1',role:'executor',round:1},sessionId:'producer'}
+ const path=join(s.cwd,'film.mp4');await run('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=108x192:r=30','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','1','-pix_fmt','yuv420p','-y',path])
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input,workflow,isActive:()=>true})
+ const args={path:'film.mp4',manifestPath:'manifest.json',revision:1},first=await tools.studio_register_candidate.execute(args)
+ const state=()=>db.prepare('SELECT * FROM dsh_studio_state ORDER BY kind').all()
+ const before=state();assert.deepEqual(await tools.studio_register_candidate.execute(args),first);assert.deepEqual(state(),before)
+ assert.equal(workflow.candidateLocation(input).sha256,await fileSha256(path))
+ await writeFile(join(s.cwd,'manifest.json'),'{"changed":true}');await assert.rejects(tools.studio_register_candidate.execute(args),/revision-must-increase/);assert.deepEqual(state(),before)
+ input.sessionId='restored-producer';await writeFile(join(s.cwd,'manifest.json'),'{}');await assert.rejects(tools.studio_register_candidate.execute(args),/revision-must-increase/)
+})

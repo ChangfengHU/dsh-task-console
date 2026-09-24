@@ -390,3 +390,38 @@ envelope and explicitly reject the invented rows shape. All9 focused evidence
 tests and candidate build pass. No Fleet/target writes or live reload occurred.
 Public236 still has desktopOnly rows, HTTP521 capability error and unknown
 reachability; those are actual missing acceptance, not this envelope bug.
+
+### 2026-09-24: original Task upgraded through public review, still paused
+
+After the exit-envelope fix, full serial regression passed621/624 tests with
+3 existing skips and0 failures. While Studio1120/1121 remained live, continued
+Creator session agent-task-create-agent-mufarotk with the exact tested explicit
+design (live host does not yet advertise the new optional default). The first
+turn only called context and fabricated a plan ID in prose. The missing submit
+was caught from native events and the database, not accepted as completion.
+After explicit correction, actual task_create_submit persisted
+P-chat-81237bbff2216cf72aff with hash
+8859dd0be5ee0f2e2e7df9ab301415cd206d19102d24e42ef3225428f0dd1ac6.
+Independent field comparison matched fleetRecipeDesign(provision-gemini), exact
+three-role composeRecipe output, original budgets and same-Task revision.
+
+Public Chrome loaded the review in35.37s with0 page errors and approved this
+exact plan via its real review control. Readback confirms original Task
+T-chat-b4c6fcb369f0c20a9739 is now fleet-base-v3/provision-gemini, still disabled;
+trigger, Actions and all eight listed execution IDs are unchanged. No Batch or
+236 operation was launched. Preserve original role module pins during deployment:
+installer7e38e84 module is byte-identical to the current candidate, and changing
+participant config unnecessarily would invalidate the independent roster review.
+
+The real review screenshots exposed misleading UI: revision approval said
+"批准并执行", a once Task showed cron wording, and a recipe-owned evidence gate
+was labelled absent because it was not in design.evidenceContract. Only these
+labels and the existing return-to-Task destination are corrected; layouts,
+previous-plan details, roles, JSON, Actions and history remain. Seven focused
+tests and build pass. Public-browser candidate asset interception against the
+real approved plan verifies the paused label and v3 gate, with desktop/mobile
+screenshots and0 page errors; this is preview, not a production UI deployment.
+Evidence: /tmp/dsh-fleet-review-81237-before.png,
+/tmp/dsh-fleet-review-81237-approved.png,
+/tmp/dsh-fleet-review-candidate-1440.png and -390.png.
+Production switch and actual236 full plus repeat acceptance remain pending.

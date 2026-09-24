@@ -158,6 +158,7 @@ test('real service scope refreshes studio status budget on success and unknown s
   const run={taskId:task.id,batchId:batch.id,cardId:card.id,sessionId:'task-live-producer',status:'running'}
   const store:any={kernel:{db},tasks:new Map([[task.id,task]]),s:{runs:new Map([['run',run]]),batches:new Map([[batch.id,batch]]),cards:new Map([[card.id,card]])}}
   const input={task,batch,card,sessionId:run.sessionId},ops=new StudioOperations(store),workflow=new StudioWorkflow(store)
+  workflow.recordScript({...input,card:{...card,role:'planner'}},{sha256:'c'.repeat(64),lines:['one','two','three'].map(text=>({id:text,text}))})
   ops.configure(input,{imageCalls:6,voiceSegments:80})
   const service:any=Object.create(TaskConsoleService.prototype);service.runner={store}
   const exec={agent:{session:{id:run.sessionId}}}

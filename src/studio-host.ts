@@ -35,30 +35,74 @@ async function execute(script:string,args:string[],task:any,config:any,stdin?:st
  child.on('close',(code,signal)=>{if(overflow)return finish(Error('studio-host-output-too-large'));try{const result=JSON.parse(output);if(signal||code!==0&&result?.ok!==false)return finish(Error('studio-host-subprocess-failed'));finish(undefined,result)}catch{finish(Error('studio-host-output-invalid'))}})
  })
 }
-const cache=new Map<string,{at:number,value:any}>()
+const PREFLIGHT_LIFETIME=15*60_000
+interface PreflightSnapshot {value:any;checkedAt:number;expiresAt:number;files:Record<string,string>}
+const cache=new Map<string,PreflightSnapshot>()
 // Parallel stage startup shares one host probe; each caller still verifies its files.
-const preflights=new Map<string,Promise<any>>()
-async function sharedPreflight(key:string,run:()=>Promise<any>){
- const cached=cache.get(key);if(cached&&Date.now()-cached.at<60_000)return cached.value
+const preflights=new Map<string,Promise<PreflightSnapshot>>()
+const identities=new Map<string,Promise<unknown>>()
+const preflightEnvironment=()=>Object.fromEntries(['STUDIO_RENDER_RUNTIME','FFMPEG_PATH','PATH','PUPPETEER_EXECUTABLE_PATH','STUDIO_DSH_PROFILE'].map(k=>[k,process.env[k]??null]))
+async function sharedIdentity(key:string,config:any){
+ const pending=identities.get(key);if(pending)return pending
+ const request=preflightIdentity(config);identities.set(key,request)
+ try{return await request}finally{if(identities.get(key)===request)identities.delete(key)}
+}
+async function preflightIdentity(config:any){
+ const runtime=process.env.STUDIO_RENDER_RUNTIME??'/home/claude/dsh-studio-migration/render-runtime'
+ const paths=[config.preflightScript,...[runtime,config.renderRuntime].filter((v,i,a)=>v&&a.indexOf(v)===i).flatMap(root=>[
+  join(root,'node_modules/hyperframes/package.json'),join(root,'node_modules/hyperframes/bin/hyperframes.mjs'),join(root,'node_modules/ffmpeg-static/ffmpeg')]),
+  process.env.FFMPEG_PATH??'', '/usr/bin/node','/usr/bin/google-chrome','/usr/bin/ffprobe',
+  process.env.STUDIO_DSH_PROFILE??'/home/claude/.dsh/profiles/web/cordis.patch.yml',config.vaultTokenFile].filter(Boolean)
+ // Metadata detects replacement of large host binaries without rereading them
+ // on every handoff; helper/package bytes also bind same-path code updates.
+ const files=await Promise.all(paths.map(async path=>{try{const [info,actual]=await Promise.all([stat(path),realpath(path)]);return [path,actual,info.dev,info.ino,info.size,info.mtimeMs,info.ctimeMs,
+  path===config.preflightScript||path.endsWith('/package.json')?await fileSha256(path):null]}catch{return [path,'unavailable']}}))
+ return {files,environment:preflightEnvironment()}
+}
+async function preflightFiles(value:any,task:any):Promise<Record<string,string>>{
+ const files:Record<string,string>={}
+ if(value?.ok===false)throw Error('preflight failed')
+ for(const name of ['character','reference','frames','hyperframes']){
+  const p=value?.capabilities?.[name]
+  if(p?.ok!==true||!p.proofPath)throw Error('preflight incomplete')
+  if(name==='hyperframes'&&(p.hyperframes_verified!==true||p.scope!=='actual_hyperframes_smoke_render'))throw Error('render proof invalid')
+  if((name==='character'&&p.characterId!==task.design?.studio?.characterId)||(name==='reference'&&p.sha256!==task.design?.studio?.referenceSha256))throw Error('preflight policy changed')
+  if(name==='character')publicCharacterReference({id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256,...(p.profileAssetId?{assetId:p.profileAssetId}:{}),...(p.sourceUrl!==undefined?{sourceUrl:p.sourceUrl,sourceSha256:p.sourceSha256}:{})})
+  const assets=name==='character'?[[p.imagePath,p.imageSha256],[p.profilePath,p.sha256]]:[[p.path,p.sha256]]
+  for(const [path,expected] of assets){const actual=await fileSha256(path);if(actual!==expected)throw Error('preflight asset changed');files[path]=actual}
+  files[p.proofPath]=await fileSha256(p.proofPath)
+ }
+ return files
+}
+async function sharedPreflight(key:string,task:any,run:()=>Promise<any>){
+ const cached=cache.get(key),now=Date.now()
+ if(cached&&now>=cached.checkedAt&&now<cached.expiresAt){
+  try{for(const [path,expected] of Object.entries(cached.files))if(await fileSha256(path)!==expected)throw Error('preflight proof changed');if(Date.now()>=cached.expiresAt)throw Error('preflight expired during verification');return cached}catch{cache.delete(key)}
+ }else if(cached)cache.delete(key)
  const pending=preflights.get(key);if(pending)return pending
- const request=Promise.resolve().then(run).then(value=>{
-  if(value?.ok!==false)cache.set(key,{at:Date.now(),value})
-  return value
+ const checkedAt=Date.now()
+ const request=Promise.resolve().then(run).then(async value=>{
+  const snapshot:PreflightSnapshot={value:structuredClone(value),checkedAt,expiresAt:checkedAt+PREFLIGHT_LIFETIME,files:{}}
+  try{snapshot.files=await preflightFiles(value,task);if(Date.now()<snapshot.expiresAt)cache.set(key,snapshot)}catch{/* Failed or incomplete evidence is never reused. */}
+  return snapshot
  })
  preflights.set(key,request)
  try{return await request}finally{if(preflights.get(key)===request)preflights.delete(key)}
 }
 export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any,deps:HostDeps={}){
  const config=deps.config??await configuration(),exec=deps.execute??execute,now=Date.now(),checkedAt=new Date(now).toISOString(),expiresAt=new Date(now+15*60_000).toISOString()
- const record=(name:string,status:string,proofSha256?:string,reason?:string,method?:string)=>(workflow as any).recordCapability(task,{name,status,checkedAt,expiresAt,...(proofSha256?{proofSha256}:{}),...(reason?{reason}:{}),...(method?{method}:{})})
+ const record=(name:string,status:string,proofSha256?:string,reason?:string,method?:string,timing?:PreflightSnapshot)=>(workflow as any).recordCapability(task,{name,status,checkedAt:timing?new Date(timing.checkedAt).toISOString():checkedAt,expiresAt:timing?new Date(timing.expiresAt).toISOString():expiresAt,...(proofSha256?{proofSha256}:{}),...(reason?{reason}:{}),...(method?{method}:{})})
  let result:any,reference:any,characterReferences:any[]=[]
- if(config.preflightScript){const key=hash(JSON.stringify({id:task.id,cwd:task.cwd,studio:task.design?.studio,config}))
-  try{result=await sharedPreflight(key,()=>exec(config.preflightScript,[],task,config,JSON.stringify(task)))}catch{result={capabilities:{}}}
+ if(config.preflightScript){const scope=JSON.stringify({id:task.id,cwd:task.cwd,studio:task.design?.studio,config,environment:preflightEnvironment()}),key=hash(JSON.stringify({scope,host:await sharedIdentity(scope,config)}))
+  let snapshot:PreflightSnapshot|undefined
+  try{snapshot=await sharedPreflight(key,task,()=>exec(config.preflightScript,[],task,config,JSON.stringify(task)));result=snapshot.value}catch{result={capabilities:{}}}
   for(const [name,source] of [['character','character'],['reference','reference'],['frames','frames'],['render','hyperframes']]){const p=result?.capabilities?.[source];try{
    if(p?.ok!==true||!p.proofPath)throw Error('preflight unavailable');if(source==='hyperframes'&&(p.hyperframes_verified!==true||p.scope!=='actual_hyperframes_smoke_render'))throw Error('actual HyperFrames proof required')
    if(source==='character'){if(p.characterId!==task.design.studio.characterId||await fileSha256(p.imagePath)!==p.imageSha256||await fileSha256(p.profilePath)!==p.sha256)throw Error('character lock mismatch');const ref={id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256,...(p.profileAssetId?{assetId:p.profileAssetId}:{}),...(p.sourceUrl!==undefined?{sourceUrl:p.sourceUrl,sourceSha256:p.sourceSha256}:{})};publicCharacterReference(ref);characterReferences=[ref]}
    else {if(await fileSha256(p.path)!==p.sha256)throw Error('preflight asset changed');if(source==='reference'){if(p.sha256!==task.design.studio.referenceSha256)throw Error('reference lock mismatch');reference={path:p.path,sha256:p.sha256}}}
-   record(name,'passed',await fileSha256(p.proofPath),undefined,'host_preflight')
+   const proofHash=await fileSha256(p.proofPath)
+   if(snapshot?.files[p.proofPath]&&snapshot.files[p.proofPath]!==proofHash)throw Error('preflight proof changed')
+   record(name,'passed',proofHash,undefined,'host_preflight',snapshot)
   }catch{record(name,'failed',undefined,`actual ${source} preflight missing or invalid`)}}
  }else for(const name of ['character','reference','frames','render'])record(name,'unknown',undefined,'host preflight script not configured')
  // Calibration evidence is separate from an endpoint listing or a successful observation.

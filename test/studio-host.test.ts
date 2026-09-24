@@ -18,16 +18,18 @@ test('vision host binds observations to exact ordered hashes and rejects provide
 
 
 test('parallel stage refresh shares one host probe without caching a failed outcome',async t=>{
- const s=await setup(t);let calls=0,release!:()=>void
+ const s=await setup(t);let calls=0,release!:()=>void,started!:()=>void
  const barrier=new Promise<void>(resolve=>{release=resolve})
- const opts={config:{preflightScript:'parallel'},execute:async()=>{calls++;await barrier;return {ok:false,capabilities:{}}}}
+ const executing=new Promise<void>(resolve=>{started=resolve})
+ const opts={config:{preflightScript:'parallel'},execute:async()=>{calls++;started();await barrier;return {ok:false,capabilities:{}}}}
  const pending=[refreshStudioCapabilities(s.workflow,s.task,opts),refreshStudioCapabilities(s.workflow,s.task,opts)]
- await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,1);release();await Promise.all(pending)
+ await executing;assert.equal(calls,1);release();await Promise.all(pending)
  await refreshStudioCapabilities(s.workflow,s.task,opts);assert.equal(calls,2)
 })
 test('host configuration changes invalidate probe reuse and a thrown probe can be retried',async t=>{
  const s=await setup(t);let calls=0
- const execute=async()=>{calls++;if(calls===1)throw Error('temporary');return {ok:true,capabilities:{}}}
+ const p={ok:true,path:s.path,sha256:s.sha256,proofPath:s.proofPath}
+ const execute=async()=>{calls++;if(calls===1)throw Error('temporary');return {ok:true,capabilities:{reference:p,frames:p,hyperframes:{...p,hyperframes_verified:true,scope:'actual_hyperframes_smoke_render'},character:{...p,characterId:'c',imagePath:s.path,imageSha256:s.sha256,profilePath:s.path}}}}
  const config={preflightScript:'changing',renderRuntime:'/runtime-a'}
  await refreshStudioCapabilities(s.workflow,s.task,{config,execute});await refreshStudioCapabilities(s.workflow,s.task,{config,execute});assert.equal(calls,2)
  await refreshStudioCapabilities(s.workflow,s.task,{config,execute});assert.equal(calls,2)

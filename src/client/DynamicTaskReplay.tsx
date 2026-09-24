@@ -17,6 +17,7 @@ import { executionLabel } from '../execution-label.ts'
 import { workflowView } from '../workflow-plan.ts'
 import { WorkflowPlan } from './WorkflowPlan.tsx'
 import { ExecutionReport } from './ExecutionReport.tsx'
+import { executionProgress } from '../execution-progress.ts'
 
 const epoch = (value?: number | null) => value ? new Date(value * 1000).toLocaleTimeString('zh-CN', { hour12: false }) : '—'
 const STATUS: Record<string, string> = { todo: '等依赖', ready: '就绪', scheduled: '定时等待', running: '运行中', blocked: '阻塞', review: '待验收', done: '完成', archived: '归档', triage: '需处理' }
@@ -245,7 +246,9 @@ export function DynamicTaskReplay({ api, agents, task, batches, archivedTotal, b
   const workflowDone = task.graphMode !== 'dynamic-rounds' && data.batch.outcome === 'done' && frame.tasks.length === data.live.tasks.length && frame.tasks.every(row => row.status === 'done')
   const finalSummary = workflowDone
     ? frame.tasks.map(row => `${nameOf(row.assignee)}\n${frame.runs.filter(run => run.task_id === row.id).at(-1)?.summary ?? '没有提交文字结果'}`).join('\n\n────────\n\n')
-    : [...frame.tasks].filter(row => row.role === 'planner').flatMap(row => frame.runs.filter(run => run.task_id === row.id)).filter(run => run.summary).at(-1)?.summary ?? undefined
+    : task.graphMode !== 'dynamic-rounds'
+      ? executionProgress(frame, cursor === null || (data.batch.settledAt ?? Infinity) <= (current?.created_at ?? 0) ? data.batch.outcome : null, nameOf)
+      : [...frame.tasks].filter(row => row.role === 'planner').flatMap(row => frame.runs.filter(run => run.task_id === row.id)).filter(run => run.summary).at(-1)?.summary ?? undefined
   const done = frame.tasks.filter(row => row.status === 'done').length
   const rounds = frame.tasks.filter(row => row.node_kind === 'gate').length
   const authoring = workflowView(task, batches.find(batch => batch.id === batchId)).sessions

@@ -39,3 +39,16 @@ test('legacy matching config remains unverified; model/spec changes invalidate e
  await rm(join(path,CAPABILITY_LOCK))
  assert.equal((await inspectCapabilityContract(path,preview.capabilities!)).status,'unverified-legacy')
 })
+
+test('studio download permission reaches sound/executor manifests and a legacy missing fence is detected',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'download-capabilities-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ for(const id of ['sound-specialist','video-executor']){
+  const spec=validateSpec({...base,id}),{path,preview}=await writePreset(spec,[],[],root),expected=preview.capabilities!
+  assert.ok(expected.native.find(n=>n.id==='studio-runtime')?.tools.includes('studio_download_asset'))
+  assert.ok(expected.allowedTools.includes('studio_download_asset'));assert.equal((await inspectCapabilityContract(path,expected)).ready,true)
+  await rm(join(path,CAPABILITY_LOCK));await writeFile(join(path,'agent.cordis.yml'),preview.yml.replace(/^\s+- studio_download_asset\n/m,''))
+  const drift=await inspectCapabilityContract(path,expected);assert.equal(drift.ready,false);assert.equal(drift.status,'tool-drift');assert.deepEqual(drift.missingTools,['studio_download_asset'])
+ }
+ const plain=renderComposition(validateSpec({...base,id:'non-studio-agent',tools:[]}),[]).capabilities!
+ assert.equal(plain.allowedTools.includes('studio_download_asset'),false)
+})

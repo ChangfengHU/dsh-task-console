@@ -36,7 +36,7 @@ export const ID_RE = /^[a-z0-9][a-z0-9-]*$/
 /** Native tools the editor offers, each mapping to one composition row. */
 export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: string[] })[] = [
   { id: 'studio-runtime', label: 'Studio Task evidence', group: '视频工作室', writes: false,
-    description: '仅 studio-video-v1 Task 内注册，按运行角色限制候选登记、只读取证及提交审查；普通会话不可用。',
+    description: '仅 studio-video-v1 Task 内注册；执行者/素材专家可按真实素材 ID 经宿主认证下载归档文件，按角色限制阶段/候选登记、取证及审查；来源卡不是媒体，下载不代表质量通过，普通会话不可用。',
     schemaNames: [...STUDIO_TOOL_NAMES,...STUDIO_SPEECH_TOOL_NAMES,...STUDIO_BOARD_TOOL_NAMES], rows: '# Studio tools are registered by the active Task runner, never by standalone chat.' },
   { id: 'task-create-runtime', label: 'Task creation', group: '任务', writes: true,
     description: '读取真实角色，生成待审查计划并查询审查与执行；不提供放行或业务运维工具，不提升参与者权限。',

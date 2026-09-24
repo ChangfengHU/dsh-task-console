@@ -95,7 +95,12 @@ export async function registerStudioBoardTools(ctx:any,o:StudioBoardOptions):Pro
   const name=args.outputDirectory??'composition-'+sha(encoded).slice(0,16)
   if(!/^[A-Za-z0-9._-]{1,80}$/.test(name)||name==='.'||name==='..')throw Error('studio-board-output-name-invalid')
   const board=JSON.parse(encoded),script=workflow.script(input),policy=input.task.design?.studio
-  if(!script||!isDeepStrictEqual(board.script,script.lines))throw Error('studio-board-script-mismatch')
+  if(!script||!isDeepStrictEqual(board.script,script.lines))throw Error('studio-board-script-mismatch: '+JSON.stringify({
+   error_code:'studio-board-script-mismatch',field:'board.script',dispatched:false,
+   reason:script?'execution-script-differs-from-frozen-lines':'planner-has-not-frozen-script',
+   ...(script?{expectedLines:script.lines}:{}),
+   action:script?'Copy these exact ordered {id,text} entries into board.script; do not add timing, speaker or metadata fields to them. Keep the same lineId/text in each voice track. Correct the execution board, not the frozen script; preserve the planned scenes and full dialogue.':'The planner must freeze the complete dialogue first; no compiler output was created.',
+  }))
   if(!policy||policy.width!==1080||policy.height!==1920||policy.fps!==30||(board.width??1080)!==policy.width||(board.height??1920)!==policy.height||(board.fps??30)!==policy.fps)throw Error('studio-board-dimensions-mismatch')
   if(board.schema!=='studio-board-v1')throw Error('studio-board-execution-schema-required: '+JSON.stringify({
    error_code:'studio-board-execution-schema-required',requiredSchema:'studio-board-v1',

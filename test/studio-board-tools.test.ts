@@ -99,3 +99,15 @@ test('compiler errors preserve safe project-relative filenames but redact extern
   const result=await s.execute();assert.match(result.reason,/\[path\]/);assert.doesNotMatch(result.reason,/outside|private|credentials|secretvalue|hiddenvalue|example|\.env|\.boss/)
  }
 })
+
+
+test('script mismatch exposes the exact frozen lines without dispatching or changing either source',async t=>{
+ const s=await setup(t),wrong={...board(),script:[{id:'L1',text:'原来的话',speaker:'character'}]}
+ await writeFile(join(s.cwd,'execution.json'),JSON.stringify(wrong))
+ await assert.rejects(s.tool.execute({boardPath:'execution.json'}),(error:any)=>{
+  const info=JSON.parse(error.message.slice(error.message.indexOf(': ')+2))
+  assert.equal(info.dispatched,false);assert.equal(info.field,'board.script');assert.deepEqual(info.expectedLines,board().script);assert.match(info.action,/not the frozen script/);return true
+ })
+ assert.equal(s.calls(),0);assert.deepEqual(JSON.parse(await readFile(join(s.cwd,'execution.json'),'utf8')),wrong)
+ assert.deepEqual(await readdir(s.cwd),['execution.json'])
+})

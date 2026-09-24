@@ -44,3 +44,18 @@ test('real host subprocess gets task scope and opt-in cache only from host confi
  const disabled=await observeStudioAudio(s.task,args,{config:{audioScript:script,vaultTokenFile:'fixture'}})
  assert.equal(disabled.scope.STUDIO_OBSERVATION_CACHE_ROOT,'')
 })
+
+test('observer error exposes bounded stream completion diagnostics and correction guidance',async t=>{
+ const s=await setup(t),args={images:[{path:s.path,sha256:s.sha256,time:1}],purpose:'preview' as const},config={visionScript:'vision',vaultTokenFile:'file'}
+ await assert.rejects(observeStudioVision(s.task,args,{config,execute:async()=>({ok:false,error_type:'VisionError',error_stage:'provider',error_code:'finish_reason_not_stop',diagnostics:{done:true,finish_reason:'length',received_chars:100,received_bytes:500,body:'private-secret'},body:'private-secret'})}),(e:any)=>{
+  assert.match(e.message,/studio-vision-failed:provider:VisionError/)
+  const detail=JSON.parse(e.message.slice(e.message.indexOf('; ')+2));assert.equal(detail.code,'finish_reason_not_stop');assert.equal(detail.finishReason,'length');assert.equal(detail.receivedChars,100);assert.match(detail.nextAction,/truncated.*Do not use partial evidence/);assert.ok(!e.message.includes('private-secret'));return true
+ })
+})
+test('observer network diagnostic preserves DNS and TLS classes but drops arbitrary data',async t=>{
+ const s=await setup(t),args={wavPath:s.path,start:0,end:1},config={audioScript:'audio',vaultTokenFile:'file'}
+ for(const reason of ['gaierror','SSLCertVerificationError'])await assert.rejects(observeStudioAudio(s.task,args,{config,execute:async()=>({ok:false,error_stage:'provider',error_type:'URLError',reason_type:reason,reason_errno:-3,error_code:'secret-url',diagnostics:{done:'secret',finish_reason:'secret',received_bytes:-1},body:'secret'})}),(e:any)=>{
+  const detail=JSON.parse(e.message.slice(e.message.indexOf('; ')+2));assert.equal(detail.reasonType,reason);assert.equal(detail.errno,-3);assert.equal(detail.receivedBytes,undefined);assert.ok(!e.message.includes('secret'))
+  assert.match(detail.nextAction,reason==='gaierror'?/at most once/:/never disable certificate verification/);return true
+ })
+})

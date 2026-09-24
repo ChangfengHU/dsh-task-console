@@ -42,8 +42,7 @@ test('parallel write remains blocked until successful skill result; a new sessio
  assert.match(f.guard('write',{},'other'),/session-mismatch/)
  f.setInactive();assert.match(f.guard('write'),/stale-run/)
 })
-test('reviewer not gated; disposal owns both listeners',()=>{
- assert.equal(fixture('reviewer').guard('studio_submit_review'),undefined)
+test('disposal owns both listeners',()=>{
  const f=fixture();f.stop();assert.equal(f.disposed,2)
 })
 test('unavailable guard fails closed for producer',()=>{
@@ -74,12 +73,12 @@ test('stage identity cannot be omitted or impersonated to bypass instruction gat
  assert.throws(()=>registerStudioSkillGate({},{input,isActive:()=>true,record:()=>{}}),/capability-required/)
 })
 
-for(const id of ['executor','storyboard','visual','sound'] as const)test(`real native ToolRuntime ${id} unlocks writes only after successful instruction results`,async()=>{
+for(const id of ['planner','reviewer','executor','storyboard','visual','sound'] as const)test(`real native ToolRuntime ${id} unlocks writes only after successful instruction results`,async()=>{
  const require=createRequire(import.meta.url)
  const {Context}=await import(pathToFileURL(require.resolve('@deepseek-ai/cordis',{paths:[dirname(require.resolve('@deepseek-ai/dsh-tools'))]})).href)
  const ctx=new Context();ctx.provide('systemPrompt',{tools:()=>{}})
  const runtime=new ToolRuntime(ctx),agent={ctx,session:{id:'native-skill-test'}},records:any[]=[]
- const input=id==='executor'?{task:{design:{evidenceContract:'studio-video-v1'}},card:{role:'executor'},sessionId:agent.session.id}:{...stageInput(id),sessionId:agent.session.id}
+ const input=['planner','reviewer','executor'].includes(id)?{task:{design:{evidenceContract:'studio-video-v1'}},card:{role:id},sessionId:agent.session.id}:{...stageInput(id),sessionId:agent.session.id}
  const required=requiredStudioSkills(input)
  const stop=registerStudioSkillGate({tools:runtime,on:ctx.on.bind(ctx)},{input,isActive:()=>true,record:r=>records.push(r)})
  let writes=0
@@ -92,4 +91,15 @@ for(const id of ['executor','storyboard','visual','sound'] as const)test(`real n
   for(const name of required)assert.equal((await run('skill',{name})).isError,false)
   assert.equal(records.length,required.length);assert.equal((await run('write')).isError,false);assert.equal(writes,1)
  }finally{stop();d1();d2()}
+})
+
+for(const [role,skillName,submission] of [['planner','studio-director','task_plan_round'],['reviewer','studio-quality','studio_submit_review']])test(`${role} must load its actual method before planning or QA submission`,()=>{
+ const f=fixture(role)
+ for(const name of [submission,'task_complete','task_finalize'])assert.match(f.guard(name),/required-skills-not-loaded/)
+ for(const name of ['skill','read','studio_status','task_block'])assert.equal(f.guard(name),undefined)
+ f.load(skillName,{isError:false,content:[{type:'text',text:'Skill catalog entry only'}]})
+ assert.match(f.guard(submission),/required-skills-not-loaded/)
+ f.load(skillName,undefined,'another-session');assert.equal(f.records.length,0)
+ f.load(skillName);assert.equal(f.guard(submission),undefined);assert.equal(f.records.length,1)
+ assert.match(fixture(role).guard(submission),/required-skills-not-loaded/)
 })

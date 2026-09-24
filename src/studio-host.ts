@@ -76,9 +76,23 @@ export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any
 function audioFailure(result:any,prefix:string){
  if(result?.ok===true)return
  const stage=['input','vault','provider'].includes(result?.error_stage)?result.error_stage:'unknown'
- const type=['HTTPError','ValueError','PermissionError','RuntimeError','TimeoutError','URLError','FileNotFoundError'].includes(result?.error_type)?result.error_type:'Error'
+ const type=['HTTPError','ValueError','PermissionError','RuntimeError','TimeoutError','URLError','FileNotFoundError','VisionError'].includes(result?.error_type)?result.error_type:'Error'
  const status=Number.isInteger(result?.http_status)&&result.http_status>=100&&result.http_status<=599?`-http-${result.http_status}`:''
- throw Error(`${prefix}-failed:${stage}:${type}${status}`)
+ // Preserve bounded diagnostic enums, never provider text, exception strings or URLs.
+ const details:any={}
+ if(['invalid_png_header','png_dimensions_out_of_bounds','image_transport_timeout','image_transport_failed','stream_size_limit','sse_json_invalid','sse_object_invalid','provider_error_event','choices_invalid','choice_invalid','unexpected_choice','delta_invalid','unexpected_tool_call','text_delta_invalid','observation_size_limit','stream_done_missing','finish_reason_not_stop','observation_empty','stream_timeout','stream_read_failed','credential_echo_rejected','provider_timeout','provider_request_failed','input_or_vault_failure'].includes(result?.error_code))details.code=result.error_code
+ if(['gaierror','TimeoutError','ConnectionRefusedError','ConnectionResetError','SSLError','SSLEOFError','SSLCertVerificationError','OSError'].includes(result?.reason_type)){
+  details.reasonType=result.reason_type
+  if(Number.isInteger(result.reason_errno)&&Math.abs(result.reason_errno)<=4096)details.errno=result.reason_errno
+ }
+ const diagnostic=result?.diagnostics
+ if(typeof diagnostic?.done==='boolean')details.done=diagnostic.done
+ if(['stop','length','content_filter','tool_calls','function_call','unknown'].includes(diagnostic?.finish_reason))details.finishReason=diagnostic.finish_reason
+ for(const [from,to] of [['received_chars','receivedChars'],['received_bytes','receivedBytes']])if(Number.isInteger(diagnostic?.[from])&&diagnostic[from]>=0&&diagnostic[from]<=10_000_000)details[to]=diagnostic[from]
+ if(Object.keys(details).length){
+  details.nextAction=result?.http_status===401||result?.http_status===403?'Authorization failed. Repair host credentials; do not repeat the provider request or treat the observation as evidence.':details.code==='finish_reason_not_stop'&&details.finishReason==='length'?'Observation output was truncated. Do not use partial evidence. Narrow the observation scope or shorten the requested interval once; if it repeats, report a capability failure. Do not alter the film or lower QA criteria.':details.reasonType==='SSLCertVerificationError'?'TLS verification failed. Repair the host trust configuration; never disable certificate verification.':'Observation failed, not a quality finding. Retry the same observation at most once for a transient failure; on repetition report the capability gap and preserve prior valid evidence. Do not loop indefinitely.'
+ }
+ throw Error(`${prefix}-failed:${stage}:${type}${status}${Object.keys(details).length?'; '+JSON.stringify(details):''}`)
 }
 export async function observeStudioAudio(task:any,args:{wavPath:string,start:number,end:number},deps:HostDeps={}){
  const config=deps.config??await configuration();if(!config.audioScript||!config.vaultTokenFile)throw Error('studio-audio-host-not-configured');const result=await(deps.execute??execute)(config.audioScript,[args.wavPath,'--start-seconds',String(args.start),'--end-seconds',String(args.end)],task,config)

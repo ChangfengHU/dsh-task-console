@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
     this.db.transaction(()=>{
       const s=this.snapshot(input)
       if(s.unknown)throw Error('studio-prior-submission-unknown')
+      if(d.kind==='imageCalls'&&s.limits.imageBatches===undefined)throw Error('studio-image-batch-budget-missing: '+JSON.stringify({
+        error_code:'studio-image-batch-budget-missing',dispatched:false,reservedUnits:0,retryable:false,
+        usedBatches:s.operations.filter((o:any)=>o.kind==='imageCalls').length,
+        action:'This legacy frozen task has no structured image batch allowance. New image submissions are disabled; remaining image units do not authorize another batch. Existing job polling and receipt replay remain available. Reuse verified assets. Set an explicit imageBatches allowance when creating future tasks; never rewrite this batch or reset its paid history.',
+      }))
       if(d.kind==='imageCalls'&&s.limits.imageBatches!==undefined&&(s.used as any).imageBatches>=s.limits.imageBatches)throw Error('studio-generation-batch-limit: '+JSON.stringify({
         error_code:'studio-generation-batch-limit',usedBatches:(s.used as any).imageBatches,limitBatches:s.limits.imageBatches,remainingBatches:0,
         remainingImageUnits:Math.max(0,s.limits.imageCalls-s.used.imageCalls),dispatched:false,reservedUnits:0,

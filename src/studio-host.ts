@@ -2,12 +2,30 @@ import { readFile, realpath, stat } from 'node:fs/promises'
 import { join,dirname,resolve,relative,isAbsolute,sep } from 'node:path'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { fileSha256 } from './studio-tools.js'
+import { fileSha256,studioPath } from './studio-tools.js'
 import type { StudioWorkflow } from './studio-workflow.js'
 const hash=(v:string)=>createHash('sha256').update(v).digest('hex')
 // Host deployment configuration, never a model-supplied task field.
 async function configuration(): Promise<any> {try{return JSON.parse(await readFile(new URL('../studio-host.json',import.meta.url),'utf8'))}catch{return {}}}
 interface HostDeps {config?:any;execute?:(script:string,args:string[],task:any,config:any,stdin?:string)=>Promise<any>}
+/** Existing library blobs only. Installed MCP authorizes the ID before private transfer. */
+export async function downloadStudioAsset(task:any,args:{id:string;path:string},deps:HostDeps={}){
+ const config=deps.config??await configuration()
+ if(!config.assetDownloadScript||!/^[a-f0-9]{64}$/.test(config.assetDownloadSha256??'')||!config.vaultTokenFile)throw Error('studio-asset-download-host-not-configured')
+ if(await fileSha256(config.assetDownloadScript)!==config.assetDownloadSha256)throw Error('studio-asset-download-helper-changed')
+ if(!/^[A-Za-z0-9_-]{1,160}$/.test(args.id??''))throw Error('studio-asset-id-invalid')
+ if(typeof args.path!=='string'||!args.path||isAbsolute(args.path)||args.path.includes('\0')||args.path.split(/[\\/]/).some(p=>p.startsWith('.')||/credential|secret|token|password|private.?key/i.test(p)))throw Error('studio-asset-output-invalid')
+ const root=await realpath(task.cwd)
+ const result=await(deps.execute??execute)(config.assetDownloadScript,['--project-root',root,'--id',args.id,'--output',args.path],task,config)
+ if(result?.ok!==true){
+  const codes:Record<string,string>={asset_metadata_only:'source-only',output_exists_with_other_bytes:'output-exists-with-other-bytes',installed_asset_transport_missing:'installed-asset-auth-unavailable',installed_asset_transport_unsupported:'installed-asset-auth-unavailable',asset_lookup_failed:'asset-lookup-failed',proxy_authorization_denied:'asset-file-auth-failed',download_integrity_failed:'download-integrity-failed',invalid_asset_metadata:'invalid-asset-metadata',invalid_archived_asset:'invalid-asset-metadata',private_reference_not_for_production:'private-reference-not-for-production',output_extension_mismatch:'output-extension-mismatch'}
+  const code=codes[result?.error_code]??'asset-download-failed'
+  return {ok:false,error_code:code,...(Number.isInteger(result?.httpStatus)&&result.httpStatus>=100&&result.httpStatus<=599?{httpStatus:result.httpStatus}:{}),nextAction:code==='source-only'?'This is a source card, not an archived file. Read its original source and verify permission to obtain media; do not invent a library file URL.':code==='asset-file-auth-failed'?'The host was denied access to the existing Fleet Media proxy. Verify the host configuration; do not substitute bootstrap tokens or expose credentials.':'Inspect the asset metadata and download status; preserve old files and use a new output path with the archived extension if necessary. Never expose credentials.',qualityApproved:false}
+ }
+ const path=await studioPath(root,args.path,true),size=(await stat(path)).size
+ if(result.assetId!==args.id||result.path!==path||!Number.isInteger(result.bytes)||result.bytes!==size||size<1||size>20_000_000||!/^[a-f0-9]{64}$/.test(result.sha256??'')||await fileSha256(path)!==result.sha256||!['image','voice','sfx','bgm','reference'].includes(result.kind)||typeof result.reused!=='boolean')throw Error('studio-asset-download-receipt-invalid')
+ return {ok:true,assetId:args.id,path:relative(root,path),sha256:result.sha256,bytes:size,kind:result.kind,reused:result.reused,newGeneration:0,qualityApproved:false}
+}
 async function execute(script:string,args:string[],task:any,config:any,stdin?:string):Promise<any>{
  return new Promise((resolve,reject)=>{const child=spawn('python3',[script,...args],{env:{...process.env,STUDIO_PROJECT_ROOT:task.cwd,STUDIO_VAULT_TOKEN_FILE:config.vaultTokenFile??''},stdio:['pipe','pipe','ignore']});let output='',overflow=false,done=false
  const finish=(err?:Error,result?:any)=>{if(done)return;done=true;clearTimeout(timer);if(err)reject(err);else resolve(result)}

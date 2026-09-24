@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
     if(limits.imageBatches!==undefined)(used as any).imageBatches=operations.filter((o:any)=>o.kind==='imageCalls').length
     return {used,limits,operations,unknown:operations.some((o:any)=>['dispatching','unknown'].includes(o.state))}
   }
-  async invoke(input:any,raw:string,args:any,invoke:(args:any)=>Promise<any>,beforeDispatch?:()=>unknown){
+  async invoke(input:any,raw:string,args:any,invoke:(args:any)=>Promise<any>,beforeDispatch?:()=>unknown,prepareDispatch?:()=>Promise<unknown>){
     if(/(?:publish_video|post_video|upload_video|register_published_video)$/.test(raw))throw Error('studio-publication-not-authorized')
     if(/vyibc-image_list_results$/.test(raw))throw Error('studio-image-global-results-not-a-job-receipt: poll get_task with the original submitted taskId and use only its succeeded items by idx. A running item is not completed. The global latest-results feed can contain other tasks; use the asset library for intentional reuse instead.')
     const d=definition(raw,args)
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
     if(replay){if(replay.result)return replayResult(JSON.parse(replay.result),replay);throw Error('studio-submission-unknown: reconcile original operation; do not resubmit')}
     // Semantic checks apply only to new work: never block saved receipts or polling,
     // and reject before reserving budget so local validation cannot become unknown.
-    this.db.transaction(()=>{
+    const validate=()=>{
       const s=this.snapshot(input)
       if(s.unknown)throw Error('studio-prior-submission-unknown')
       if(d.kind==='imageCalls'&&s.limits.imageBatches===undefined)throw Error('studio-image-batch-budget-missing: '+JSON.stringify({
@@ -103,8 +103,20 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
       // only when this request can actually reserve its required units.
       const checked=beforeDispatch?.()
       if(checked&&typeof (checked as any).then==='function')throw Error('studio-dispatch-validator-must-be-synchronous')
+    }
+    if(prepareDispatch){
+      this.db.transaction(validate)()
+      await prepareDispatch()
+      if(intent!==hash({raw,args:canonical(args)}))throw Error('studio-submission-input-changed')
+    }
+    const raced=this.db.transaction(()=>{
+      const previous=this.db.prepare('SELECT * FROM dsh_studio_operations WHERE task_id=? AND batch_id=? AND intent=?').get(...key)
+      if(previous)return previous
+      validate()
       this.db.prepare('INSERT INTO dsh_studio_operations VALUES(?,?,?,?,?,?,?,?,?)').run(...key,raw,d.kind,d.units,'dispatching',null,null)
+      return undefined
     })()
+    if(raced){if(raced.result)return replayResult(JSON.parse(raced.result),raced);throw Error('studio-submission-unknown: reconcile original operation; do not resubmit')}
     try {
       const result=await invoke(args),value=unpack(result),id=job(value),status=terminal(value),failed=rejected(result,value)||!!status&&failedStates.has(status)
       const encoded=JSON.stringify(result)

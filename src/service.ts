@@ -11,7 +11,7 @@ import { registerStudioSpeechTools } from './studio-speech-tools.js'
 import { registerStudioBoardTools } from './studio-board-tools.js'
 import { StudioOperations } from './studio-operations.js'
 import { searchStudioAssets } from './studio-asset-search.js'
-import { assertStudioImageRequest } from './studio-image-request.js'
+import { assertStudioImageRequest, prepareStudioImageRequest } from './studio-image-request.js'
 import { reconcileStudioImageOperation } from './studio-image-reconciliation.js'
 import { requireSettledStudioOperations } from './studio-stage-operations.js'
 import { assertFrozenVoiceSynthesis } from './studio-voice-script.js'
@@ -342,7 +342,15 @@ export class TaskConsoleService extends TypertRemoteService {
     if(task.design?.evidenceContract==='studio-video-v1') {
       const operations=new StudioOperations(this.runner.store),workflow=new StudioWorkflow(this.runner.store)
       const dispatch=raw==='asset_search'?(value:any)=>searchStudioAssets(value,invoke):invoke
-      try { return await operations.invoke(input,raw,args,dispatch,()=>{assertPreparationWritable(this.runner.store.kernel.db,input);assertFrozenVoiceSynthesis(raw,args,workflow.script(input));assertStudioImageRequest(raw,args)}) }
+      // Copy caller arguments before an asynchronous reference probe; reserve only
+      // after checking the same live claim and frozen input again.
+      args=structuredClone(args)
+      const validate=()=>{
+        const current=this.runner.store.kernel.getTask(card.id),latestBatch=this.runner.store.s.batches.get(batch.id)
+        if((this.runner as any).stopped||current?.status!=='running'||current.current_run_id!==this.runner.store.coreRunId(run.id)||!current.claim_expires||current.claim_expires<=Math.floor(Date.now()/1000)||!latestBatch||latestBatch.settled||latestBatch.archivedAt)throw Error('studio-generation-stale-run')
+        assertPreparationWritable(this.runner.store.kernel.db,input);assertFrozenVoiceSynthesis(raw,args,workflow.script(input));assertStudioImageRequest(raw,args)
+      }
+      try { return await operations.invoke(input,raw,args,dispatch,validate,/generate_image$/.test(raw)?()=>prepareStudioImageRequest(raw,args):undefined) }
       finally {
         // Include retained unknown reservations, not only successful job receipts.
         const budget=operations.snapshot(input),candidate=workflow.status(input).candidate

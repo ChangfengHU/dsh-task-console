@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { apply } from '../src/agent-tool-fence.ts'
+import { apply, deniedToolGuidance } from '../src/agent-tool-fence.ts'
+
+test('denied native image tool points to granted studio inspection without admitting it',()=>{
+ let guard:any
+ apply({tools:{schemas:()=>[{name:'read_image'}],restrict:()=>{},guard:(g:any)=>guard=g}} as any,{selected:['studio_character_image','studio_preview_image']})
+ const denied=guard({name:'read_image'})
+ assert.match(denied,/not been granted/);assert.match(denied,/studio_character_image/);assert.match(denied,/studio_preview_image/)
+ assert.equal(guard({name:'studio_character_image'}),undefined)
+ assert.equal(deniedToolGuidance('read_image',new Set()),'This Agent has not been granted that tool.')
+ assert.equal(deniedToolGuidance('unrelated',new Set(['studio_character_image'])),'This Agent has not been granted that tool.')
+})
 
 test('selected-tool fence hides current inherited tools and guards later registrations', () => {
   let filter: { allow?: string[]; deny?: string[] } | undefined

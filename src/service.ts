@@ -6,6 +6,7 @@ import {studioStageFor} from './studio-stages.js'
 import { registerStudioSpeechTools } from './studio-speech-tools.js'
 import { registerStudioBoardTools } from './studio-board-tools.js'
 import { StudioOperations } from './studio-operations.js'
+import { assertStudioImageRequest } from './studio-image-request.js'
 import { requireSettledStudioOperations } from './studio-stage-operations.js'
 import { assertFrozenVoiceSynthesis } from './studio-voice-script.js'
 import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard, downloadStudioAsset } from './studio-host.js'
@@ -271,7 +272,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const task=taskForBatch(base,batch),input={task,batch,card,sessionId,profileId:run.profileId??card.agentId}
     if(task.design?.evidenceContract==='studio-video-v1') {
       const operations=new StudioOperations(this.runner.store),workflow=new StudioWorkflow(this.runner.store)
-      try { return await operations.invoke(input,raw,args,invoke,()=>{assertFrozenVoiceSynthesis(raw,args,workflow.script(input))}) }
+      try { return await operations.invoke(input,raw,args,invoke,()=>{assertFrozenVoiceSynthesis(raw,args,workflow.script(input));assertStudioImageRequest(raw,args)}) }
       finally {
         // Include retained unknown reservations, not only successful job receipts.
         const budget=operations.snapshot(input),candidate=workflow.status(input).candidate

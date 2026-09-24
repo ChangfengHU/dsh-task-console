@@ -10,7 +10,7 @@ function unpack(result:any,depth=0):any {
   return result
 }
 function job(value:any):string|undefined{return value?.job_id??value?.jobId??value?.task_id??value?.taskId??value?.job?.id??value?.task?.id}
-const definition=(name:string,args:any)=>/generate_image$/.test(name)?{kind:'imageCalls',units:Math.max(1,Array.isArray(args?.prompts)?args.prompts.length:1)}:/(?:synthesize|retry_segments)$/.test(name)?{kind:'voiceSegments',units:Math.max(1,Array.isArray(args?.segments)?args.segments.length:1)}:null
+const definition=(name:string,args:any)=>/generate_image$/.test(name)?{kind:'imageCalls',units:Math.max(1,(Array.isArray(args?.prompts)?args.prompts.length:0)+(args?.prompt?1:0))}:/(?:synthesize|retry_segments)$/.test(name)?{kind:'voiceSegments',units:Math.max(1,Array.isArray(args?.segments)?args.segments.length:1)}:null
 const terminal=(value:any):string|undefined=>{const s=value?.status??value?.state??value?.job?.status??value?.task?.status;return typeof s==='string'?s.toLowerCase():undefined}
 const done=new Set(['completed','complete','succeeded','success','done'])
 const failedStates=new Set(['failed','cancelled','canceled'])

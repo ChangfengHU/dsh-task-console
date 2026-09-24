@@ -7,7 +7,7 @@
       "taskRole": "planner",
       "agentId": "studio-role-director-v1",
       "path": "director/task-console.json",
-      "sha256": "51b671e7c5517757b7b182f7ca326e059fab4d1a8d0f2f00bd3377b1c7f0e8d8",
+      "sha256": "bb3e6bc30d9e927c908968f7151c103b11d0ed2abbf738e465edeee6ecdf972f",
       "requiredHostTools": [
         "studio_status",
         "studio_character_profile",
@@ -55,7 +55,7 @@
       "taskRole": "studio-stage",
       "agentId": "studio-role-sound-v1",
       "path": "sound/task-console.json",
-      "sha256": "d63a1559bf48d329df70e8419e76ef7ee9f22832e85939111bac9a486f9f12d9",
+      "sha256": "4e1ee1f2dcee5a453fe85bffc07d20e13bb1ee81d9ee4b69846919b97d437589",
       "requiredHostTools": [
         "studio_status",
         "studio_character_profile",

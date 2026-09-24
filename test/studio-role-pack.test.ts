@@ -48,3 +48,10 @@ test('manifest cannot redirect a role outside the pack or drop required dependen
  manifest.roles[0].path='../task-console.json';await writeFile(path,JSON.stringify(manifest));await assert.rejects(loadStudioRolePack(target),/role-entry/)
  manifest.roles[0].path='director/task-console.json';manifest.requiredSkills=[];await writeFile(path,JSON.stringify(manifest));await assert.rejects(loadStudioRolePack(target),/dependency-manifest/)
 })
+
+test('director and sound roles separate spoken text from performance notes without claiming emotion controls',async()=>{
+ const pack=await loadStudioRolePack(),by=Object.fromEntries(pack.roles.map(row=>[row.role,row.spec]))
+ assert.match(by.director.persona,/lines.*text/);assert.match(by.director.persona,/按lineId关联的分镜/)
+ assert.match(by.sound.persona,/不擅自去括号、删词/);assert.match(by.sound.persona,/emotion_api=false/)
+ assert.match(by.sound.persona,/真实试听/)
+})

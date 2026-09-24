@@ -2,24 +2,30 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
-import {join} from 'node:path'
+import {join,dirname} from 'node:path'
+import {createRequire} from 'node:module'
+import {pathToFileURL} from 'node:url'
+import {ToolRuntime,defineTool} from '@deepseek-ai/dsh-tools'
 import {TaskRunner} from '../src/runner.ts'
 import {EventStore} from '../src/tasks.ts'
 import {StudioProgress,studioProgressPending} from '../src/studio-progress.ts'
 
-async function fixture(t:any,options:{disposeFails?:boolean,legacy?:boolean}={}){
+async function fixture(t:any,options:{disposeFails?:boolean,legacy?:boolean,native?:boolean,taskPatch?:any}={}){
  const root=await mkdtemp(join(tmpdir(),'studio-progress-')),preset=join(root,'a');await mkdir(preset)
  await writeFile(join(preset,'task-console.json'),JSON.stringify({id:'a',name:'A',description:'',persona:'',model:'p/m',effort:'',tools:[],mcpTools:{},skills:[]}))
+ const require=createRequire(import.meta.url)
+ const {Context}=await import(pathToFileURL(require.resolve('@deepseek-ai/cordis',{paths:[dirname(require.resolve('@deepseek-ai/dsh-tools'))]})).href)
  const listeners:any[]=[],sessions:any[]=[]
- const ctx:any={on:(name:string,fn:any)=>{listeners.push(fn);return()=>{}},effect:()=>{},get:(key:string)=>key==='agentPresets'?{resolve:async()=>({id:'a',path:join(preset,'agent.cordis.yml')}),mount:async()=>{}}:key==='permissionPresets'?{set:()=>{}}:key==='agentDefaultModel'?{currentSelection:()=>({provider:'p',model:'m'})}:undefined,agents:{create:async(opts:any)=>{
+ const ctx:any={on:(name:string,fn:any)=>{listeners.push(fn);return()=>{}},effect:()=>{},get:(key:string)=>key==='agentPresets'?{resolve:async(id:string)=>({id,path:join(preset,'agent.cordis.yml')}),mount:async()=>{}}:key==='permissionPresets'?{set:()=>{}}:key==='agentDefaultModel'?{currentSelection:()=>({provider:'p',model:'m'})}:undefined,agents:{create:async(opts:any)=>{
   const hooks=new Map(),guards:any[]=[],rec:any={hooks,guards,disposed:false,messages:[],cwd:opts.meta.cwd}
-  const agentCtx={on:(name:string,fn:any)=>{hooks.set(name,fn);return()=>hooks.delete(name)},tools:{register:()=>()=>{},guard:(fn:any)=>{guards.push(fn);return()=>guards.splice(guards.indexOf(fn),1)}}}
+  let agentCtx:any={on:(name:string,fn:any)=>{hooks.set(name,fn);return()=>hooks.delete(name)},tools:{register:()=>()=>{},guard:(fn:any)=>{guards.push(fn);return()=>guards.splice(guards.indexOf(fn),1)}}}
+  if(options.native){agentCtx=new Context();agentCtx.provide('systemPrompt',{tools:()=>{}});rec.runtime=new ToolRuntime(agentCtx)}
   rec.agent={ctx:agentCtx,session:{id:opts.sessionId},followup:(m:any)=>rec.messages.push(m)};sessions.push(rec);await opts.setup({})
   return{agent:rec.agent,dispose:async()=>{if(options.disposeFails)throw Error('fixture stop failed');await rec.beforeDispose?.();rec.disposed=true}}
  }}}
  const store=new EventStore(join(root,'store')),runner=new TaskRunner(ctx,store,{registerStudioTools:async()=>()=>{}})
  await runner.start();t.after(async()=>{runner.stop();store.kernel.db.close();await rm(root,{recursive:true,force:true})})
- const task:any={id:'T',title:'fixture',brief:'fixture',trigger:{kind:'once'},participants:[{agentId:'a'}],cwd:root,timeoutSec:7200,onFail:'retry',maxTries:3,enabled:true,createdAt:'x',design:{evidenceContract:'studio-video-v1',...(!options.legacy?{progressPolicy:'studio-bounded-v1'}:{})}}
+ const task:any={id:'T',title:'fixture',brief:'fixture',trigger:{kind:'once'},participants:[{agentId:'a'}],cwd:root,timeoutSec:7200,onFail:'retry',maxTries:3,enabled:true,createdAt:'x',design:{evidenceContract:'studio-video-v1',failurePolicy:{maxAttempts:3},...(!options.legacy?{progressPolicy:'studio-bounded-v1'}:{})},...options.taskPatch}
  await store.append({t:'task/created',at:'x',taskId:'T',task});const batch=await runner.fire('T','manual')
  const end=async(rec:any)=>{const f=[...(runner as any).flights.values()].find((x:any)=>x.sessionId===rec.agent.session.id);await (runner as any).onTurnEnd(f,{kind:'error',error:{code:'STUDIO_PROGRESS_GUARD'}})}
  const steps=async(rec:any)=>{for(let i=1;i<=80;i++)await rec.hooks.get('agent/pre-step')({agent:rec.agent,turn:0,step:i},async()=>({kind:'enter'}));await assert.rejects(()=>rec.hooks.get('agent/pre-step')({agent:rec.agent,turn:0,step:81},async()=>({kind:'enter'})),/STUDIO_PROGRESS_GUARD/)}
@@ -87,4 +93,51 @@ test('an in-flight paid job becoming unknown during session disposal is reconcil
  await f.steps(rec);await f.end(rec)
  assert.equal(f.sessions.length,1);assert.equal(f.store.s.cards.get(f.batch.cardIds[0])?.status,'blocked')
  assert.match(f.store.s.runs.values().next().value!.question!,/original-image/)
+})
+
+
+async function nativeCall(rec:any,name:string,args:any,id=name){return rec.runtime.execute({name,arguments:args,agent:rec.agent,callId:id,signal:new AbortController().signal})}
+async function nativeBoundary(rec:any){return rec.agent.ctx.waterfall('agent/pre-step',{agent:rec.agent,turn:0,step:14,signal:new AbortController().signal},async()=>({kind:'enter',messages:[]}))}
+
+for(const action of ['task_plan_round','task_complete','task_request_review','task_block','task_wait'])test(`native SDK ${action} accepted terminal rejects the next step without failure/retry and keeps paid tools fenced`,async t=>{
+ const dynamic=action==='task_plan_round'
+ const f=await fixture(t,{native:true,taskPatch:{...(dynamic?{graphMode:'dynamic-rounds',participants:[{agentId:'a'},{agentId:'b'},{agentId:'c'}]}:{}),...(action==='task_wait'?{trigger:{kind:'cron',expr:'0 0 * * *'}}:{})}})
+ const rec=f.sessions[0],cardId=f.batch.cardIds[0],cardCount=f.store.s.cards.size
+ let paid=0
+ const disposePaid=rec.runtime.register(defineTool({name:'fixture_paid',description:'must not run after accepted terminal',parameters:{},output:{schema:{type:'object',additionalProperties:true},render:()=>[]},execute:()=>{paid++;return {ok:true}}}))
+ t.after(disposePaid)
+ const args=action==='task_block'?{reason:'actual fixture blocker',kind:'capability'}:action==='task_wait'?{until:new Date(Date.now()+120000).toISOString(),reason:'fixture durable wait'}:{summary:'verified fixture handoff'}
+ const result=await nativeCall(rec,action,args);assert.equal(result.isError,false,JSON.stringify(result));assert.equal(result.value.ok,true)
+ if(dynamic)assert.ok(f.store.s.cards.size>cardCount)
+ assert.deepEqual(await nativeBoundary(rec),{kind:'reject'})
+ assert.equal((await nativeCall(rec,'fixture_paid',{})).isError,true);assert.equal(paid,0)
+ // Drivers may label a rejected boundary as interrupted. The exact accepted
+ // terminal is authoritative; the fake driver only supplies its final event.
+ await f.end(rec)
+ const run=f.store.s.runs.values().next().value!
+ assert.notEqual(run.status,'failed');assert.equal(f.store.s.cards.get(cardId)?.consecutiveFailures,0)
+ assert.equal(f.store.kernel.listRuns(cardId).length,1);assert.equal(rec.disposed,true)
+ if(dynamic){assert.equal(f.store.s.cards.size,cardCount+4);assert.equal(run.status,'done');assert.equal(run.outcome,'completed')}
+ if(action==='task_complete'){assert.equal(run.status,'done');assert.equal(run.outcome,'completed')}
+ if(action==='task_request_review'){assert.equal(run.status,'done');assert.equal(run.outcome,'review')}
+ if(action==='task_block')assert.equal(run.status,'blocked')
+ if(action==='task_wait'){assert.equal(run.status,'blocked');assert.equal(f.store.kernel.getTask(cardId)?.status,'scheduled')}
+})
+
+test('native SDK rejected terminator does not gain a successful terminal boundary',async t=>{
+ const f=await fixture(t,{native:true}),rec=f.sessions[0]
+ const result=await nativeCall(rec,'task_complete',{summary:''});assert.equal(result.value.ok,false)
+ assert.equal((await nativeBoundary(rec)).kind,'enter')
+ await f.end(rec)
+ assert.equal(f.store.s.runs.values().next().value!.status,'failed')
+ assert.equal(f.store.kernel.listRuns(f.batch.cardIds[0]).length,2)
+})
+
+test('accepted terminal cannot mask a superseded kernel claim',async t=>{
+ const f=await fixture(t,{native:true}),rec=f.sessions[0],cardId=f.batch.cardIds[0]
+ await nativeCall(rec,'task_complete',{summary:'accepted'})
+ const old=f.store.kernel.getTask(cardId)!.current_run_id!
+ f.store.kernel.db.prepare('UPDATE tasks SET current_run_id=? WHERE id=?').run(old+100,cardId)
+ await assert.rejects(()=>nativeBoundary(rec),/STUDIO_PROGRESS_GUARD: stale-run/)
+ assert.equal((await nativeCall(rec,'task_complete',{summary:'again'},'late')).isError,true)
 })

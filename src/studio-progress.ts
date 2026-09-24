@@ -77,7 +77,7 @@ export class StudioProgress {
 
 /** Same native boundaries as the standard chat guard; result listeners only
  * record. The pre-step exception really stops the next model request. */
-export function registerStudioProgress(ctx:any,progress:StudioProgress,sessionId:string,isActive:()=>boolean){
+export function registerStudioProgress(ctx:any,progress:StudioProgress,sessionId:string,isActive:()=>boolean,acceptTerminalBoundary:()=>boolean=()=>false){
  if(typeof ctx.on!=='function'||typeof ctx.tools?.guard!=='function')throw Error('studio-progress-hooks-unavailable')
  const same=(exec:any)=>exec.agent?.session?.id===sessionId
  const guard=ctx.tools.guard((exec:any)=>{
@@ -88,7 +88,12 @@ export function registerStudioProgress(ctx:any,progress:StudioProgress,sessionId
  const observe=ctx.on('tools/result',(exec:any,result:any)=>{if(same(exec)&&isActive())progress.result(exec,result)})
  const step=ctx.on('agent/pre-step',async(input:any,next:any)=>{
   const decision=await next();if(!same(input)||decision.kind==='reject')return decision
-  if(!isActive())throw Error('STUDIO_PROGRESS_GUARD: stale-run')
+  if(!isActive()){
+   // A successfully accepted terminator closes the turn without another model
+   // request. It is distinct from a superseded run; tools remain fenced above.
+   if(!progress.state.reason&&acceptTerminalBoundary())return {kind:'reject'}
+   throw Error('STUDIO_PROGRESS_GUARD: stale-run')
+  }
   const reason=progress.step(input.turn,input.step)
   if(reason)throw Error(`STUDIO_PROGRESS_GUARD: ${reason}`)
   return decision

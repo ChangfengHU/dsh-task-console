@@ -38,6 +38,7 @@ interface Flight {
   progress?:StudioProgress
   progressStopping?:boolean
   progressDisposed?:boolean
+  progressTerminalBoundary?:boolean
   executionBinding?: BatchExecutionBinding
   boundFallback?: BoundFallback|null
   sessionCreationAttempted?: boolean
@@ -748,7 +749,11 @@ export class TaskRunner {
         flight.disposeTools = () => { disposeStudio(); disposeWorker?.() }
       }
       if(flight.progress){
-        const old=flight.disposeTools,dispose=registerStudioProgress(flight.handle.agent.ctx,flight.progress,sessionId,()=>!this.stopped&&this.flights.get(sessionId)===flight&&!flight.progressStopping&&!flight.terminal)
+        const old=flight.disposeTools,dispose=registerStudioProgress(flight.handle.agent.ctx,flight.progress,sessionId,()=>!this.stopped&&this.flights.get(sessionId)===flight&&!flight.progressStopping&&!flight.terminal,()=>{
+          const accepted=this.ownsAcceptedProgressTerminal(flight)
+          if(accepted)flight.progressTerminalBoundary=true
+          return accepted
+        })
         flight.disposeTools=()=>{dispose();old?.()}
       }
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }
@@ -854,11 +859,28 @@ export class TaskRunner {
     }
   }
 
+  private ownsAcceptedProgressTerminal(f:Flight):boolean {
+    if(this.stopped||this.flights.get(f.sessionId)!==f||!f.terminal||f.progressStopping||f.progress?.state.reason||preparationBarrier(this.store.kernel.db,f.cardId))return false
+    const card=this.store.s.cards.get(f.cardId),batch=card&&this.store.s.batches.get(card.batchId),current=this.store.kernel.getTask(f.cardId)
+    if(!batch||batch.settled||batch.archivedAt||!current)return false
+    if(f.terminal.kind==='deferred'){
+      // deferTask already closes the kernel run. The exact durable wakeup, not
+      // a missing current run, proves that this session accepted the wait.
+      const wake=this.store.kernel.db.prepare("SELECT run_id FROM dsh_task_wakeups WHERE card_id=? AND state='pending'").get(f.cardId) as any
+      return current.status==='scheduled'&&current.current_run_id===null&&wake?.run_id===f.coreRunId
+    }
+    return current.status==='running'&&current.current_run_id===f.coreRunId
+  }
+
   private async onTurnEnd(f: Flight, reason: any): Promise<void> {
     if (!this.flights.has(f.sessionId)) return
     if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
     if(f.progressStopping)return
     if(f.progress?.state.reason){await this.finishProgress(f);return}
+    // Native pre-step rejection after an accepted terminator is a normal close,
+    // even if the driver labels its rejected boundary as interrupted. Never
+    // convert an unrelated failure or superseded kernel run into completion.
+    if(f.progressTerminalBoundary&&this.ownsAcceptedProgressTerminal(f))reason={kind:'completed'}
     if (reason && reason.kind !== 'completed') {
       const fallback = f.executionBinding?f.boundFallback:this.modelFallback
       if (fallback && startupFallbackAllowed(reason, { used: f.fallbackUsed, toolCalled: f.toolCalled, terminal: f.terminal, provider: f.modelProvider }, fallback.fromProvider)) {

@@ -21,7 +21,7 @@ export const STUDIO_TASK_REQUEST_CONTRACT={
  roles:[...STUDIO_TASK_ROLE_KEYS],defaults:{durationMin:90,durationMax:110,maxRepairRounds:2},
  maxRepairRounds:{type:'integer',minimum:0,maximum:2,meaning:'At most three production rounds including the initial candidate; requests for more repairs are rejected, never reduced silently.'},
  fixed:{width:1080,height:1920,fps:30,dialogueLanguage:'zh-CN',visualCoverage:'requirements-v1',publish:false,executionBinding:'agent-runtime-v1'},
- execution:{timeoutSec:7200,onFail:'retry',maxTries:3},topic:{maxCharacters:2000,blank:'autonomous selection using character and authorized available sources'},
+ execution:{timeoutSec:7200,onFail:'retry',maxTries:3},topic:{maxCharacters:2000,blank:'autonomous selection using character and authorized available sources',input:'Use an explicitly supplied topic. When the user delegates topic discovery, omit this field and leave selection to the director; the Task Creator must not silently fix its own theme or attribute it to the user.'},
  generationLimits:{required:['imageCalls','imageBatches','voiceSegments'],imageCalls:{minimum:0,maximum:6,meaning:'generated image/prompt items'},imageBatches:{minimum:0,maximum:6,meaning:'generation submissions'},voiceSegments:{minimum:0,maximum:80,meaning:'synthesized voice segments'},default:null},
  reference:'Use the selected source metadata candidate URL on HTTPS cdn.vyibc.com and its declared expected SHA-256; no query/fragment/credentials or invented values. Unverified metadata may enter a pending-review draft. Host preflight must download and match actual bytes before production, followed by actual reference observation. Metadata and a matching hash do not establish baseline approval.',
  character:'Caller must resolve an authorized existing characterId. Full profile is verified at host preflight; current policy does not pin a requested profile version/SHA.',
@@ -48,7 +48,7 @@ export function composeStudioTaskDraft(raw:unknown,context:StudioDraftContext){
  const topic=request.topic?.trim()??'',roles={...request.roles},limits=policy.generationLimits!
  const brief=[
   `制作一部中文对白、中文字幕的角色卡通视频，目标${policy.durationMin}至${policy.durationMax}秒，1080×1920、30fps。角色与参考候选以任务策略和宿主实际冻结档案为准，不从会话历史猜测。来源声明的预期SHA必须先经宿主下载比对，再实际观察；元数据或哈希相符不代表用户认可基准。`,
-  topic?`本次主题（用户资料）：${topic}`:'主题留空：编导结合完整角色人格、授权参考和可获得的资料比较候选并自主选择，不冒称热门、全站排名或保证吸粉；资料不可用时准确说明。',
+  topic?`本次候选主题：${topic}`:'主题留空：编导结合完整角色人格、授权参考和可获得的资料比较候选并自主选择，不冒称热门、全站排名或保证吸粉；资料不可用时准确说明。',
   '先读取完整角色人格、身份图、常用场景、表情动作与音色策略及经宿主核验的参考片，单独核对基准认可状态。形成完整故事、可表演分场与精确台词，再冻结；不能用几句梗概、空白或重复静帧凑目标片长。对白与非对白段均有表达目的，开头建立具体矛盾，结尾完成情绪与视听收束。',
   '六角色按真实Task Link协作：编导→分镜→视觉和声音并行→交接闸门→动画合成→独立质检→编导。分镜列逐镜需求；视觉区分整张参考表和独立姿势，实际检查裁切、锚点、边缘、比例和代表合成；声音按冻结原文生成并测量真实时长。素材不足或剧情根本问题正式回交，不删除要求过检查。',
   `授权上限：${limits.imageCalls}个生成图片项、${limits.imageBatches}次图片提交、${limits.voiceSegments}个配音片段。每prompt计图片项，每generate_image提交计一批；同设置多项可用prompts组织，但不扩大额度。失败/未知请求仍占预算，对账原作业，不换编号盲重试；额度为0即不得新增对应生成。`,

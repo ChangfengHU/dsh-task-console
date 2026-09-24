@@ -681,6 +681,7 @@ test('Creator review persists a frozen plan without a Task, fences changed appro
     assert.equal(host.sessions.size, 0); profileHash = 'v1'
     const restarted = new TaskCreator(runner, async () => [{ id: 'a', name: 'a', profileHash } as any])
     const approved = await restarted.review(plan.id, plan.hash, 'approve', 'Scope and outcomes checked')
+    await tick()
     assert.equal(approved.state, 'dispatched'); assert.equal(host.sessions.size, 1)
     assert.equal((await restarted.review(plan.id, plan.hash, 'approve', 'duplicate')).batchId, approved.batchId)
     assert.equal(host.sessions.size, 1); assert.equal(store.s.batches.size, 1)
@@ -1453,6 +1454,28 @@ test('background fire acknowledges durable batch while host preflight is suspend
   assert.equal(store.kernel.listRuns(first.cardIds[0]).length,1)
 })
 
+test('Creator approval returns a durable batch before suspended preflight and duplicate approvals dispatch once',async()=>{
+ let release!:()=>void,entered!:()=>void,calls=0
+ const suspended=new Promise<void>(r=>{release=r}),didEnter=new Promise<void>(r=>{entered=r})
+ const {runner,store,host,root}=await setup({}, {beforeStart:async()=>{calls++;entered();await suspended}})
+ const creator=new TaskCreator(runner,async()=>[{id:'a',name:'A'} as any])
+ const proposal={decision:'create' as const,reason:'fixture latency',title:'Background review',brief:'Read fixture',participants:[{agentId:'a'}],design:{scope:'fixture read',branches:[{id:'read',when:'authorized',action:'read',evidence:'receipt'}],coordination:'serial',failurePolicy:{isolateItems:true,maxAttempts:1,stopConditions:['missing permission']},acceptance:['actual receipt']}}
+ const plan=await creator.prepare(proposal,{agent:{session:{id:'background-review',deriveMessages:()=>[{role:'user',content:'Read fixture after independent approval'}]}}},root)
+ let timer:ReturnType<typeof setTimeout>|undefined
+ try{
+  const approved=await Promise.race([creator.review(plan.id,plan.hash,'approve','Independent fixture approval'),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('Approval waited for preflight')),3000)})])
+  clearTimeout(timer)
+  assert.equal(approved.state,'dispatched');assert.ok(store.tasks.has(approved.taskId!));assert.equal(host.sessions.size,0)
+  assert.equal(store.kernel.db.prepare('SELECT COUNT(*) AS n FROM dsh_batches').get().n,1)
+  assert.equal(store.s.batches.get(approved.batchId!)?.turn?.origin?.reviewPlanId,plan.id)
+  await didEnter
+  const retries=await Promise.all([creator.review(plan.id,plan.hash,'approve','Replay'),creator.review(plan.id,plan.hash,'approve','Concurrent replay')])
+  assert.ok(retries.every(result=>result.batchId===approved.batchId));assert.equal(calls,1);assert.equal(host.sessions.size,0)
+  release();await tick()
+  assert.equal(host.sessions.size,1);assert.equal(store.kernel.listRuns(store.s.batches.get(approved.batchId!)!.cardIds[0]).length,1)
+ }finally{clearTimeout(timer);release();runner.stop()}
+})
+
 test('background batch survives stop before callback and restart still performs initial preset preflight', async () => {
   const {runner,store,root,host} = await setup({participants:[{agentId:'a'}]})
   const batch = await runner.fire('T','manual',{batchId:'b-background-restart',dispatch:'background'})
@@ -1580,7 +1603,6 @@ test('chat Creator freezes binding before review and ready extension batch resto
  const frozen=plan.definition.design.extension
  assert.equal(frozen.implementationSha256,extension.implementationSha256);assert.match(frozen.policySha256,/^[a-f0-9]{64}$/)
  assert.equal(store.s.batches.size,0)
- const fire=runner.fire.bind(runner);runner.fire=(id,by,opts)=>fire(id,by,{...opts,dispatch:'background'})
  const approved=await creator.review(plan.id,plan.hash,'approve','Check actual bytes');runner.stop()
  assert.equal(host.sessions.size,0)
  assert.deepEqual(store.tasks.get(approved.taskId!)?.design?.extension,frozen)

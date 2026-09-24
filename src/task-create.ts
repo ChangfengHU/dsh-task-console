@@ -237,7 +237,9 @@ export class TaskCreator {
         db.prepare("UPDATE dsh_task_plans SET state='awaiting_trial',task_id=? WHERE id=? AND state='approved'").run(p.task.id, id)
         return this.plan(id)
       }
-      await this.runner.fire(p.task.id, 'manual', { batchId: p.batchId, turn })
+      // fire persists the batch before queueing the existing runner dispatcher.
+      // Approval must not wait for host preflight or provider session startup.
+      await this.runner.fire(p.task.id, 'manual', { batchId: p.batchId, turn, dispatch: 'background' })
       db.prepare("UPDATE dsh_task_plans SET state='dispatched',task_id=?,batch_id=? WHERE id=? AND state='approved'").run(p.task.id, p.batchId, id)
       return this.plan(id)
     })

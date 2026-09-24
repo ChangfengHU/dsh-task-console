@@ -7,6 +7,7 @@ import { batchStatus, cardRun, validateTask, type TaskSpec, type TaskTurn } from
 import type { TaskRunner } from './runner.ts'
 import type { IntakeAgent } from './task-intake.ts'
 import { workflowDefinition } from './workflow-plan.ts'
+import { validateStudioPolicy as studioEvidenceDefaults } from './studio-evidence.mjs'
 import { composeRecipe, fleetRecipeDesign, workflowRecipes, type WorkflowRecipe } from './workflow-recipes.ts'
 import { validateDesign, taskAgentIds, type TaskDesign } from './task-design.ts'
 import { TaskActions, validateTaskActions, type TaskActionInput } from './task-actions.ts'
@@ -53,6 +54,17 @@ export class TaskCreator {
   async context() {
     return { workflowExtensions:this.extensions(), agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
       designFields: { scope:'required string, not an object; reusable target-selection policy, no fixed IP', branches:'required array of {id:string,when:string,action:string,evidence:string}', coordination:'required string describing actual role dependencies', failurePolicy:'{isolateItems:boolean,maxAttempts:integer 1..3,stopConditions:string[]}', acceptance:'required nonempty string[] of business evidence criteria', optional:'extension:{id,version,policy} only for a trusted installed host extension; exact host/policy digests are frozen before review. notifications only when requested; evidenceContract only for a matching catalog contract, not a Fleet recipe ID' },
+      studioCreationContract: {
+        kind:'discovery-only', executableRecipe:false, automaticallyStarts:false,
+        route:'Use task_create_submit with decision=create, reason, title, brief, graphMode=dynamic-rounds, participants, actions and complete design. This is an accepted contract, not an installed one-click Studio recipe or Signal intake route.',
+        design:{evidenceContract:'studio-video-v1',executionBinding:'agent-runtime-v1',studioStages:['storyboard','visual','sound']},
+        executionBinding:'Opt in for new definitions on this supporting host only. The runner captures actual role/model/skill/runtime bindings at batch start; callers cannot supply a fabricated execution snapshot. Existing tasks are not upgraded by reading this context.',
+        roles:{participants:['planner','executor','reviewer'],specialists:['storyboard','visual','sound'],selection:'Select six different installed agent IDs from context.agents with the actual needed tools and skills. participants is ordered director, editor, independent reviewer. design.studioStages contains {id,agentId,brief} for all three specialists, separate from the main roles.'},
+        studio:{requiredInputs:['characterId','referenceUrl','referenceSha256','generationLimits'],defaults:(()=>{const p=studioEvidenceDefaults({}).policy;return {width:p.width,height:p.height,fps:p.fps,durationMin:p.durationMin,durationMax:p.durationMax,maxRepairRounds:p.maxRepairRounds,requiredDimensions:p.requiredDimensions}})(),recommendedContracts:{dialogueLanguage:'zh-CN',visualCoverage:'requirements-v1'},publish:false,
+          sources:'Resolve the authorized character ID and approved reference first. referenceUrl must be HTTPS on cdn.vyibc.com without query, fragment or credentials; referenceSha256 must match the real approved file. No private asset IDs or invented reference hashes are supplied here.',
+          generationLimits:'Explicitly set {imageCalls,voiceSegments,imageBatches}: imageCalls counts generated image/prompt items (0..6), imageBatches counts submissions (0..6), voiceSegments counts synthesis segments (0..80). These are distinct budgets, not a requested asset count; choose within user authorization, never silently increase.'},
+        quality:'Complete design scope, branches, coordination, failurePolicy and acceptance remain mandatory. Actual stage files, frozen dialogue, reference comparison, complete audio and continuous-motion evidence are required by the runtime. Valid schema, successful render and completed handoff do not approve quality. Preview delivery does not authorize social publication.',
+      },
       fleetRecipeDesign: { recipe:'fleet-base-v3', use:'选择该配方且无额外设计约束时可省略 design，宿主将按 login 策略填入以下可审查默认设计。显式传入 design 时仍完整校验并独立审查，不覆盖自定义约束。', preserve:fleetRecipeDesign('preserve'), provisionGemini:fleetRecipeDesign('provision-gemini') },
       revisionCandidates: [...this.runner.store.tasks.values()].filter(t=>!t.enabled && !t.archivedAt && t.origin?.source === 'task-chat')
         .map(t=>({id:t.id,title:t.title,trigger:t.trigger,...(t.workflowRecipe ? {workflowRecipe:t.workflowRecipe} : {}),manualAvailable:t.trigger.kind === 'cron'})),
@@ -332,6 +344,9 @@ export class TaskCreator {
         task = { ...task, design: this.bindDesign(validateDesign(reusableDesign)) }
       }
       if(task.design?.extension)task={...task,design:this.bindDesign(task.design)}
+      // Validate cross-field/roster constraints after the final design is attached.
+      // Do not replace the existing lifecycle/origin with validateTask defaults.
+      validateTask(task,ids)
       if (task.design?.evidenceContract === 'browser-patrol-v2') {
         if (task.graphMode !== 'dynamic-rounds' || new Set(task.participants.map(p => p.agentId)).size !== 3) throw new Error('巡查v2需要三个不同的规划/执行/独立评估角色')
         const team = task.participants.map(p => roster.find(r => r.id === p.agentId)!)

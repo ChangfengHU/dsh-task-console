@@ -1,5 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import Database from 'better-sqlite3'
+import {StudioWorkflow} from '../src/studio-workflow.js'
 import {registerStudioSkillGate,REQUIRED_PRODUCTION_SKILLS,REQUIRED_STAGE_SKILLS,requiredStudioSkills} from '../src/studio-skill-gate.ts'
 import {createRequire} from 'node:module'
 import {dirname} from 'node:path'
@@ -79,8 +81,11 @@ for(const id of ['planner','reviewer','executor','storyboard','visual','sound'] 
  const ctx=new Context();ctx.provide('systemPrompt',{tools:()=>{}})
  const runtime=new ToolRuntime(ctx),agent={ctx,session:{id:'native-skill-test'}},records:any[]=[]
  const input=['planner','reviewer','executor'].includes(id)?{task:{design:{evidenceContract:'studio-video-v1'}},card:{role:id},sessionId:agent.session.id}:{...stageInput(id),sessionId:agent.session.id}
+ Object.assign(input.task,{id:'native-skill-task',design:{...input.task.design,studio:{characterId:'test-character',referenceSha256:'b'.repeat(64),referenceUrl:'https://cdn.vyibc.com/reference.mp4'}}})
+ Object.assign(input,{batch:{id:'batch'}})
+ const db=new Database(':memory:'),workflow=new StudioWorkflow({kernel:{db}})
  const required=requiredStudioSkills(input)
- const stop=registerStudioSkillGate({tools:runtime,on:ctx.on.bind(ctx)},{input,isActive:()=>true,record:r=>records.push(r)})
+ const stop=registerStudioSkillGate({tools:runtime,on:ctx.on.bind(ctx)},{input,isActive:()=>true,record:r=>{workflow.recordSkillLoad(input,r);records.push(r)}})
  let writes=0
  const d1=runtime.register(defineTool({name:'write',description:'fixture',parameters:{},output:{schema:{type:'object',additionalProperties:true},render:()=>[]},execute:()=>{writes++;return {}}}))
  const d2=runtime.register(defineTool({name:'skill',description:'fixture',parameters:{name:{type:'string',required:true}},output:{schema:{type:'string'},render:(_a:any,text:string)=>[{type:'text',text}]},execute:(a:any)=>{if(a.name==='missing')throw Error('not found');return `<skill_content name="${a.name}"><skill_instructions>Actual installed instructions.</skill_instructions></skill_content>`}}))
@@ -89,8 +94,8 @@ for(const id of ['planner','reviewer','executor','storyboard','visual','sound'] 
   assert.equal((await run('write')).isError,true);assert.equal(writes,0)
   assert.equal((await run('skill',{name:'missing'})).isError,true);assert.equal(records.length,0)
   for(const name of required)assert.equal((await run('skill',{name})).isError,false)
-  assert.equal(records.length,required.length);assert.equal((await run('write')).isError,false);assert.equal(writes,1)
- }finally{stop();d1();d2()}
+  assert.equal(records.length,required.length);assert.deepEqual(workflow.status(input).skillLoads.map((r:any)=>r.name),required);assert.equal((await run('write')).isError,false);assert.equal(writes,1)
+ }finally{stop();d1();d2();db.close()}
 })
 
 for(const [role,skillName,submission] of [['planner','studio-director','task_plan_round'],['reviewer','studio-quality','studio_submit_review']])test(`${role} must load its actual method before planning or QA submission`,()=>{

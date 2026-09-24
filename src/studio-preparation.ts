@@ -1,3 +1,4 @@
+import {StudioOperations} from './studio-operations.js'
 import {readFileSync} from 'node:fs'
 import {createHash,randomUUID} from 'node:crypto'
 import {studioStageFor} from './studio-stages.js'
@@ -21,7 +22,7 @@ export class StudioPreparation {
  readonly db:any
  constructor(private store:any){this.db=store.kernel.db;this.db.exec(`CREATE TABLE IF NOT EXISTS dsh_studio_preparation(id TEXT PRIMARY KEY,task_id TEXT,batch_id TEXT,round INTEGER,state TEXT,payload TEXT,UNIQUE(task_id,batch_id,round)); CREATE TABLE IF NOT EXISTS dsh_studio_preparation_members(card_id TEXT,request_id TEXT,PRIMARY KEY(card_id,request_id)); CREATE TABLE IF NOT EXISTS dsh_studio_session_stops(session_id TEXT PRIMARY KEY,core_run_id INTEGER,method TEXT,stopped_at TEXT);`)}
  rows(batchId?:string){return this.db.prepare('SELECT payload FROM dsh_studio_preparation'+(batchId?' WHERE batch_id=?':'')+' ORDER BY rowid').all(...(batchId?[batchId]:[])).map((r:any)=>JSON.parse(r.payload))}
- publicRows(batchId:string){return this.rows(batchId).map(({id,round,state,reason,evidence,scriptSha256,plannerId,sourceCardId,createdAt,releasedAt}:any)=>({id,round,state,reason,evidence,scriptSha256,plannerId,sourceCardId,createdAt,releasedAt}))}
+ publicRows(batchId:string){return this.rows(batchId).map(({id,round,state,reason,evidence,scriptSha256,plannerId,sourceCardId,createdAt,releasedAt,budgetAtRelease}:any)=>({id,round,state,reason,evidence,scriptSha256,plannerId,sourceCardId,createdAt,releasedAt,...(budgetAtRelease?{budgetAtRelease}:{})}))}
  private save(r:any){this.db.prepare('INSERT INTO dsh_studio_preparation VALUES(?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET state=excluded.state,payload=excluded.payload').run(r.id,r.taskId,r.batchId,r.round,r.state,JSON.stringify(r))}
  private currentScript(i:any){const r=this.db.prepare("SELECT payload FROM dsh_studio_state WHERE task_id=? AND batch_id=? AND kind='script'").get(i.task.id,i.batch.id);return r&&JSON.parse(r.payload)}
  private live(i:any){
@@ -105,7 +106,9 @@ export class StudioPreparation {
    const deps=[`${r.batchId}#p${r.round}`],at=Math.floor(Date.now()/1000)
    if(this.store.kernel.getTask(deps[0])?.status!=='done')throw Error('studio-preparation-original-planner-not-done')
    this.db.prepare("INSERT INTO task_links(parent_id,child_id,kind,created_at) VALUES(?,?,'dependency',?)").run(deps[0],r.plannerId,at)
-   const handoff=`[PREPARATION REVISION ${r.id}]\n${r.reason}\nEvidence: ${r.evidence.path} SHA256=${r.evidence.sha256}\nOriginal script SHA256=${r.scriptSha256}. Revise with studio_freeze_script; create new round ${r.round+1} through task_plan_round. Same batch and remaining generation allowance. Old outputs require explicit revalidation; do not delete history.`
+   const actualBudget=new StudioOperations(this.store).snapshot({task:{id:r.taskId},batch:{id:r.batchId}})
+   r.budgetAtRelease={source:'host-operation-ledger',used:actualBudget.used,limits:actualBudget.limits,remaining:Object.fromEntries(Object.entries(actualBudget.limits).map(([key,limit])=>[key,Math.max(0,Number(limit)-Number((actualBudget.used as any)[key]??0))])),budgetReset:false}
+   const handoff=`[PREPARATION REVISION ${r.id}]\nAuthoritative host generation ledger at release: ${JSON.stringify(r.budgetAtRelease)}. Query studio_status for current counters before deciding new work. Failed submissions stay charged; downloaded/reused assets are not new generation calls. Revision NEVER adds allowance.\nAgent-reported reason (not host-verified budget/diagnosis): ${r.reason}\nEvidence: ${r.evidence.path} SHA256=${r.evidence.sha256}\nOriginal script SHA256=${r.scriptSha256}. Revise with studio_freeze_script; create new round ${r.round+1} through task_plan_round. Same batch and remaining generation allowance. Old outputs require explicit revalidation; do not delete history.`
    this.db.prepare('UPDATE tasks SET body=body||? WHERE id=?').run('\n\n'+handoff,r.plannerId)
    this.store.kernel.recordEvent(r.plannerId,'studio_preparation_revision_released',{requestId:r.id,parents:deps,reason:r.reason,supersededCards:r.cardIds})
    r.state='released';r.releasedAt=new Date().toISOString();this.save(r)

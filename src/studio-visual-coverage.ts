@@ -17,12 +17,17 @@ export function bindVisualCoverage(board:any,plan:any,outputs:any[],boardSha256:
  if(plan?.schema!=='visual-plan-v1'||plan.storyboardSha256!==boardSha256||!Array.isArray(plan.items))fail('visual-plan-v1 must bind the actual registered storyboard SHA and items.')
  if(!Array.isArray(plan.missing)||plan.missing.length)fail('An explicit empty missing list is required; missing assets prevent completed handoff.')
  const files=new Map(outputs.filter(f=>f.media?.kind==='image'||/\.(png|jpe?g|webp)$/i.test(f.path)).map(f=>[f.path,f])),seen=new Set<string>()
- for(const item of plan.items){
-  if(!requirements.some(r=>r.id===item?.requirementId)||seen.has(item.requirementId)||!files.has(item.path))fail('Every visual item must bind one unique requirement to an actual registered image file.')
-  if(typeof item.usage!=='string'||!item.usage.trim())fail('State each item usage/crop/action; reused files need shot-specific intent.')
-  seen.add(item.requirementId)
- }
+ const issues:{field:string;reason:string}[]=[]
+ plan.items.forEach((item:any,index:number)=>{
+  const field=`items[${index}]`
+  if(!requirements.some(r=>r.id===item?.requirementId))issues.push({field:field+'.requirementId',reason:'Unknown requirement; use an id from the registered storyboard. Extra background/prop files may stay in manifest.outputs and the asset index without inventing requirement IDs.'})
+  else if(seen.has(item.requirementId))issues.push({field:field+'.requirementId',reason:'Duplicate; one unique requirement binding is required.'})
+  else seen.add(item.requirementId)
+  if(!files.has(item?.path))issues.push({field:field+'.path',reason:'No exact registered image path match. Paths are project-relative, not relative to the visual plan directory; use the full registered output path.'})
+  if(typeof item?.usage!=='string'||!item.usage.trim())issues.push({field:field+'.usage',reason:'State actual item usage/crop/action; reuse is allowed with shot-specific intent.'})
+ })
  const missing=requirements.filter(r=>!seen.has(r.id))
- if(missing.length)fail('Unfulfilled requirement ids: '+missing.map(r=>r.id).join(', '))
+ if(missing.length)issues.push({field:'items',reason:'Unfulfilled requirement ids: '+missing.map(r=>r.id).join(', ')})
+ if(issues.length)fail(JSON.stringify({error_code:'studio-visual-binding-invalid',issues:issues.slice(0,32),totalIssues:issues.length,expectedRequirementIds:requirements.map(r=>r.id),registeredImagePaths:[...files.keys()].slice(0,24),requiresNewGeneration:false,requiresHuman:false,retryAfterRepair:true,instruction:'These are binding diagnostics, not proof that new generation or extra budget is needed. Reuse and actual crops are allowed. Repair the listed fields against registered files, while preserving required content. Copied contact sheets are not already-extracted poses; any claimed crop/adaptation must actually exist or be reproducibly specified for composition. Preparation revision preserves the original budget; it cannot grant extra image calls.'}))
  return {storyboardSha256:boardSha256,requirements,items:plan.items.map((x:any)=>({requirementId:x.requirementId,path:x.path,sha256:files.get(x.path).sha256,usage:x.usage})),qualityApproved:false}
 }

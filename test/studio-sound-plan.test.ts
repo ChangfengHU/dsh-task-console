@@ -27,3 +27,8 @@ test('rejects stale script, altered dialogue, malformed cues, false source claim
  for(const [error,change] of cases){const p=plan();change(p);assert.throws(()=>bind(p),new RegExp(error))}
  const p=plan();p.lines[0].sourceDurationSeconds=0.32;assert.equal(bind(p).tracks.length,1)
 })
+
+test('complete speech accepts 8.605 and 10 seconds but refuses longer source or span',()=>{
+ for(const duration of [8.605,10]){const p=plan();p.lines[0].end=duration;p.lines[0].sourceDurationSeconds=duration;assert.equal(bind(p,[{...output,media:{...output.media,durationSeconds:duration}}]).tracks.length,1)}
+ for(const [sourceDuration,end] of [[10.001,10],[10,10.001]]){const p=plan();p.lines[0].end=end;p.lines[0].sourceDurationSeconds=sourceDuration;assert.throws(()=>bind(p,[{...output,media:{...output.media,durationSeconds:sourceDuration}}]),/<= 10 seconds/)}
+})

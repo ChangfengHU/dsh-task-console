@@ -1,3 +1,4 @@
+import {STUDIO_SPEECH_MAX_SECONDS} from './studio-speech-limits.js'
 import {posix} from 'node:path'
 import type {FrozenDialogue} from './studio-storyboard-script.js'
 const object=(v:any)=>v&&typeof v==='object'&&!Array.isArray(v)
@@ -24,7 +25,7 @@ export function bindSoundPlan(plan:any,script:FrozenDialogue,outputs:any[],planF
    // When sourcePath exists, path may be a later edit destination; only the source is delivered here.
    const file=files.get(posix.normalize(source))
    if(!file||file.media?.kind!=='audio'||!HASH.test(file.sha256??'')||!Number.isFinite(file.media.durationSeconds)||file.media.durationSeconds<=0)soundPlanError(field,'Source must match a registered, host-probed audio output of this stage.')
-   if(role==='voice'&&(file.media.durationSeconds>8||cue.end-cue.start>8+1e-9))soundPlanError(field,'Speech source and final span must each be <= 8 seconds for the current observer. Request studio_request_preparation_revision with this plan as evidence if the frozen utterance needs restructuring; do not truncate words or silently rewrite it.')
+   if(role==='voice'&&(file.media.durationSeconds>STUDIO_SPEECH_MAX_SECONDS||cue.end-cue.start>STUDIO_SPEECH_MAX_SECONDS+1e-9))soundPlanError(field,`Speech source and final span must each be <= ${STUDIO_SPEECH_MAX_SECONDS} seconds for the current observer. Request studio_request_preparation_revision with this plan as evidence if the frozen utterance needs restructuring; do not truncate words or silently rewrite it.`)
    if(cue.sourceSha256!==undefined&&cue.sourceSha256!==file.sha256)soundPlanError(field,'Declared source hash differs from host hash.')
    // 50 ms allows container rounding; it does not assert cue playback coverage or spoken content.
    if(cue.sourceDurationSeconds!==undefined&&(!Number.isFinite(cue.sourceDurationSeconds)||cue.sourceDurationSeconds<=0||Math.abs(cue.sourceDurationSeconds-file.media.durationSeconds)>0.05))soundPlanError(field,'Declared source duration differs from probe by more than 50 ms.')

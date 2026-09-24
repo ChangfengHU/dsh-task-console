@@ -133,3 +133,17 @@ test('revision during beforeStart confirms no session was ever created and does 
  assert.equal(creates,0);const actual=prep.rows()[0];assert.ok(actual.stoppedSessions.some((sid:string)=>sid.startsWith('task-')))
  prep.markStopped(r.id,'B#s1-sound-session');await prep.release(r.id);assert.equal(prep.rows()[0].state,'released')
 })
+
+test('release distinguishes a false agent budget claim from the unchanged host ledger',async t=>{
+ const {s,input,prep,ops}=await setup(t)
+ const visual={...input,card:s.s.cards.get('B#s1-visual'),sessionId:'B#s1-visual-session'}
+ await ops.invoke(visual,'vyibc-image_generate_image',{prompt:'fixture'},async()=>({taskId:'image-one',status:'failed'}))
+ const before=ops.snapshot(input)
+ const r=await prep.request(input,{reason:'5/6 used; need extra budget',evidence:{path:'plan.json',sha256:sha},scriptSha256:sha})
+ for(const sid of r.sessionsToStop)prep.markStopped(r.id,sid)
+ const released=await prep.release(r.id)
+ assert.equal(released.budgetAtRelease.used.imageCalls,1);assert.equal(released.budgetAtRelease.remaining.imageCalls,5)
+ assert.equal(released.budgetAtRelease.remaining.imageBatches,1);assert.equal(released.budgetAtRelease.budgetReset,false)
+ assert.match(released.handoff,/Agent-reported reason \(not host-verified/);assert.match(released.handoff,/Revision NEVER adds allowance/)
+ assert.deepEqual(ops.snapshot(input),before);assert.deepEqual(prep.publicRows('B')[0].budgetAtRelease,released.budgetAtRelease)
+})

@@ -16,3 +16,12 @@ test('coverage binds actual file hashes and board; does not assert aesthetic app
  assert.throws(()=>bindVisualCoverage(board,plan,files.slice(0,1),'boardhash'),/registered image/)
  assert.throws(()=>visualRequirements({...board,scenes:[...board.scenes,{id:'s3'}]}),/s3 has no/)
 })
+
+test('path scope and extra requirements return distinct actionable diagnostics without demanding generation',()=>{
+ const wrong={...plan,items:[{...plan.items[0],path:'assets/face.png'},plan.items[1],{requirementId:'extra-prop',path:'room.png',usage:'prop'}]}
+ assert.throws(()=>bindVisualCoverage(board,wrong,files,'boardhash'),(e:any)=>{
+  const msg=e.message;assert.match(msg,/items\[0\].path/);assert.match(msg,/items\[2\].requirementId/);assert.match(msg,/project-relative/);assert.match(msg,/requiresNewGeneration\":false/);assert.match(msg,/cannot grant extra image calls/);return true
+ })
+ // Fix only the mismatches; no image generation and no removal of actual files.
+ assert.equal(bindVisualCoverage(board,plan,files,'boardhash').items.length,2)
+})

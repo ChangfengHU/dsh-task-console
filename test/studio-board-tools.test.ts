@@ -111,3 +111,13 @@ test('script mismatch exposes the exact frozen lines without dispatching or chan
  assert.equal(s.calls(),0);assert.deepEqual(JSON.parse(await readFile(join(s.cwd,'execution.json'),'utf8')),wrong)
  assert.deepEqual(await readdir(s.cwd),['execution.json'])
 })
+
+
+test('planning schema is diagnosed before dependent frozen-script checks; grouped audio is not a track list',async t=>{
+ const s=await setup(t)
+ await assert.rejects(s.execute({board:{version:'studio-board-v1',scriptSha256:'a'.repeat(64),audio:{dialogue:board().script},scenes:[]}}),/execution-schema-required/)
+ await assert.rejects(s.execute({board:{...board(),audio:{voice:[],music:[],sfx:[]}}}),(error:any)=>{
+  const info=JSON.parse(error.message.slice(error.message.indexOf(': ')+2));assert.equal(info.field,'board.audio');assert.equal(info.dispatched,false);assert.match(info.action,/flat array/);return true
+ })
+ assert.equal(s.calls(),0);assert.deepEqual(await readdir(s.cwd),[])
+})

@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [FLEET-FULL-ACCEPTANCE-20260924] 开发 v3 完整接入配方（装机者→浏览器管理员→Runner）、原始工具证据与 Fleet 回读门槛、基础工具范围标识，以及暂停 once Task 的独立审查原地升级。旧 v1/v2 历史不改。当前236仍仅基础接入；尚未升级线上原 Task、Skill/角色、Studio 集成部署或进行236真实三角色/重复幂等验收。当前全量测试与部署边界见 `dev-log/2026-09-23-model-startup-fallback.md` 2026-09-24段。
+- [ ] [FLEET-FULL-ACCEPTANCE-20260924] v3 三角色完整证据、定向返工与暂停 once Task 审查升级代码已完成并集成 Studio。Skill/装机者及 Creator 提示词已同步；原 Task 保持暂停 v2，旧受阻执行取消但历史保留。两份真实 Creator 草案审查不通过，未放行目标。最新 a089737 候选含可审查默认设计并保留 Studio b1c3c04，全量串行回归通过，待零活跃窗口部署；目前其他 Studio Run1119 活跃，不能重载。236真实三角色及第二次幂等验收仍未开始，不能宣布完整装机完成。详见 `dev-log/2026-09-23-model-startup-fallback.md` 最新段。
 
 - [x] [MANUAL-FLEET-WITHDRAW-20260923] Fleet c3ff0b7 deployed;31 Fleet tests and22 preset/Action tests pass. Browser-selected fleet-ops Action performed real236 withdrawal in session agent-fleet-ops-mue2yyrn, audit6088. Public Fleet card absent; D1 membership0/enabledRunners0; Vault value digest unchanged, access inventory unchanged; VNC page and Clash health remain200. Installer session agent-fleet-installer-mudto47m first completed all10 stages in onb-92f512d5-0bf2-4e0b-b3b1-66426c0c4b7e. Final236 state is intentionally withdrawn, not uninstalled. No developer target SSH or global reload. Full receipts in existing model-startup-fallback log.
 

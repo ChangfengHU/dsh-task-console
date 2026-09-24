@@ -306,3 +306,62 @@ then discovered newer deployed Studioff7eed66461f. The55ea995 candidate MUST NOT
 deployed over it. Import the live source.bundle, merge its newer stage/UI logic,
 repeat tests, and recheck zero native/SQLite activity before any live edit.
 No target action, live Task revision or production switch has occurred.
+
+### 2026-09-24: integrated deployment, live Creator failures and reviewed defaults
+
+Integrated the actual ff7eed Studio baseline, deployed6157899 at a verified zero
+native/SQLite activity boundary, then deployed9ecf721/7e38e84 fixes without
+overwriting main's unrelated dirty lib files. The scoped installer Skill/persona
+now distinguishes base provisioning from full acceptance. Creator's old v2
+persona and invalid object-vs-string design guidance were corrected while
+preserving its custom suffix, grants, model and Actions. Original Task
+T-chat-b4c6fcb369f0c20a9739 remains paused v2. Old unsettled
+b-chat-c80f18f2b92cf417a283 was cancelled through the normal Console API; no
+Task, native Session or failed evidence was deleted.
+
+Actual Creator execution exposed undefined workflowRecipe fields rejected by
+native lossless JSON serialization. Conditional field emission fixes this; a
+paused non-recipe context round-trip regression and actual successful context
+call verify it. Shared Studio DAG labels were also incorrectly applied to Fleet
+cards; labels now depend on the actual Studio evidence contract. Public Chrome
+Task checks loaded in46.36s/49.13s with zero page errors and verified non-Studio
+role labels. Public cold loading remains slow, not declared solved.
+
+Creator session agent-task-create-agent-mufarotk produced plans
+P-chat-9034da23fcaf9e409e75 and P-chat-4de6a7854fa5fd158047. Both were independently
+rejected: they mixed unrelated patrol roles/waits or invented tool evidence fields.
+No target operation was released. d2dd457 adds an explicitly selectable host
+default design for fleet-base-v3 only: omitting design selects the matching
+preserve/provision-gemini contract; explicit custom designs remain validated and
+unchanged. All plans still require independent approval. This is not a prompt-only
+claim that arbitrary plans become executable.
+
+Concurrent Studio6b8e1a4 (which already contains7e38e84) and laterb1c3c04 were
+imported from their release source bundles and merged, not rolled back. Candidate
+a089737846a6d55adf2458d443aee40e67164e45 is pushed on
+fix/model-fallback-studio-20260923; staged release lives at
+/home/claude/dsh-studio-migration/task-console-fleet-a089737846a6.
+It preserves the newer Studio host configuration and recovery logic. Current
+live host remains task-console-studio-b1c3c04fb9f4 with the9ecf721 Fleet frontend;
+installer and Creator scoped tool paths still reference7e38e84. Do not infer that
+staging a089 activated its default-plan support.
+
+Verification: the6b8e1a4 merge passed618 tests (615 pass,3 existing skips) serially.
+Test-only fixture fixes supplied the real frozen voice script and replaced a fixed
+80ms notification sleep with a bounded ready-state wait. b1c3c04 then passed27
+focused recovery/fold tests, build, and a final all-test serial dot-reporter run
+with exit0. Tests use the existing installed compiler/calibration fixtures and
+Node22; no dependency installation occurred. Live capability audits for the four
+roles have no missing/unexpected tools or dependencies, but remain explicitly
+unverified-legacy, not business readiness proof.
+
+Next deployment was correctly deferred: unrelated Studio Run1119 and native
+task-t-mue3kz9c-b-mue73n1r9ck-2-t3 remain running with advancing heartbeat.
+Recheck both native Sessions and SQLite claims before any profile edit. Preserve
+any newer live release before activation. After a safe switch, continue the same
+Creator session using the explicit default design, independently review the
+same-Task revision, then launch236 through the public browser and repeat once.
+Fresh public Fleet read still showed desktopOnly browser rows, missing browser
+service/HTTP521 and unknown reachability; no full-node success has been observed.
+The developer never SSHed236. Build/worktree/release candidates and screenshots
+are retained for deployment/acceptance/rollback, not safe to clean while pending.

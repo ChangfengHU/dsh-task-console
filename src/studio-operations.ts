@@ -10,7 +10,7 @@ function unpack(result:any,depth=0):any {
   return result
 }
 function job(value:any):string|undefined{return value?.job_id??value?.jobId??value?.task_id??value?.taskId??value?.job?.id??value?.task?.id}
-const definition=(name:string,args:any)=>/generate_image$/.test(name)?{kind:'imageCalls',units:Math.max(1,Array.isArray(args?.prompts)?args.prompts.length:1)}:/(?:synthesize|retry_segments)$/.test(name)?{kind:'voiceSegments',units:Math.max(1,Array.isArray(args?.segments)?args.segments.length:1)}:null
+const definition=(name:string,args:any)=>/generate_image$/.test(name)?{kind:'imageCalls',units:Math.max(1,(Array.isArray(args?.prompts)?args.prompts.length:0)+(args?.prompt?1:0))}:/(?:synthesize|retry_segments)$/.test(name)?{kind:'voiceSegments',units:Math.max(1,Array.isArray(args?.segments)?args.segments.length:1)}:null
 const terminal=(value:any):string|undefined=>{const s=value?.status??value?.state??value?.job?.status??value?.task?.status;return typeof s==='string'?s.toLowerCase():undefined}
 const done=new Set(['completed','complete','succeeded','success','done'])
 const failedStates=new Set(['failed','cancelled','canceled'])
@@ -58,7 +58,18 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
     // and reject before reserving budget so local validation cannot become unknown.
     const checked=beforeDispatch?.()
     if(checked&&typeof (checked as any).then==='function')throw Error('studio-dispatch-validator-must-be-synchronous')
-    this.db.transaction(()=>{const s=this.snapshot(input);if(s.unknown)throw Error('studio-prior-submission-unknown');if(s.used[d.kind as keyof typeof s.used]+d.units>s.limits[d.kind])throw Error('studio-generation-budget-exhausted');this.db.prepare('INSERT INTO dsh_studio_operations VALUES(?,?,?,?,?,?,?,?,?)').run(...key,raw,d.kind,d.units,'dispatching',null,null)})()
+    this.db.transaction(()=>{
+      const s=this.snapshot(input)
+      if(s.unknown)throw Error('studio-prior-submission-unknown')
+      const used=s.used[d.kind as keyof typeof s.used],limit=s.limits[d.kind],remaining=Math.max(0,limit-used)
+      if(d.units>remaining)throw Error('studio-generation-budget-exhausted: '+JSON.stringify({
+        error_code:remaining>0?'studio-generation-request-exceeds-remaining':'studio-generation-budget-exhausted',
+        kind:d.kind,requestedUnits:d.units,usedUnits:used,limitUnits:limit,remainingUnits:remaining,
+        dispatched:false,reservedUnits:0,retryable:false,retryAfterRepair:remaining>0,
+        action:remaining>0?'This request is too large; the remaining allowance is not zero. Each image prompt or voice segment counts as one unit, even in a single batch call. Reuse valid assets, then submit only necessary units within the remaining allowance. Do not repeat the same oversized request or create another task to reset the budget.':'No allowance remains for new generation. Reuse verified existing assets and report unmet requirements. Do not reset the task budget or retry paid work under another ID.',
+      }))
+      this.db.prepare('INSERT INTO dsh_studio_operations VALUES(?,?,?,?,?,?,?,?,?)').run(...key,raw,d.kind,d.units,'dispatching',null,null)
+    })()
     try {
       const result=await invoke(args),value=unpack(result),id=job(value),status=terminal(value),failed=rejected(result,value)||!!status&&failedStates.has(status)
       const encoded=JSON.stringify(result)

@@ -13,6 +13,31 @@ test('unrecognized success receipt remains unknown',async t=>{const {ops,input}=
 test('explicit rejection replayed without refund or retry',async t=>{const {ops,input}=setup(t);let n=0;const f=async()=>{n++;return receipt({ok:false,error:'denied'})};await ops.invoke(input,'vyibc-voice_synthesize',args,f);await ops.invoke(input,'vyibc-voice_synthesize',args,f);assert.equal(n,1);assert.equal(ops.snapshot(input).operations[0].state,'failed');assert.equal(ops.snapshot(input).used.voiceSegments,1)})
 test('reviewer generation cancellation forbidden; uncertain retry forbidden',async t=>{const {ops,input}=setup(t);let n=0;const f=async()=>{n++;return {}};for(const raw of ['vyibc-voice_synthesize','vyibc-image_generate_image','vyibc-voice_cancel'])await assert.rejects(ops.invoke({...input,card:{role:'reviewer'}},raw,args,f),/executor-only/);await assert.rejects(ops.invoke(input,'vyibc-voice_retry_segments',{...args,retry_uncertain:true},f),/uncertain-retry/);assert.equal(n,0)})
 test('batch prompts and segments charge all units before dispatch',async t=>{const {ops,input}=setup(t,{imageCalls:2,voiceSegments:1});let n=0;const f=async()=>{n++;return {}};await assert.rejects(ops.invoke(input,'vyibc-image_generate_image',{prompts:['a','b','c']},f),/budget-exhausted/);await assert.rejects(ops.invoke(input,'vyibc-voice_synthesize',{segments:[{},{}]},f),/budget-exhausted/);assert.equal(n,0);assert.equal(ops.snapshot(input).used.imageCalls,0)})
+test('oversized batch reports remaining allowance and permits a smaller request without double reservation',async t=>{
+ const {db,ops,input}=setup(t);let dispatched=0
+ const send=async()=>receipt({task_id:`image-${++dispatched}`,status:'completed'})
+ await ops.invoke(input,'vyibc-image_generate_image',{prompts:['a','b','c','d']},send)
+ const before=ops.snapshot(input)
+ await assert.rejects(ops.invoke(input,'vyibc-image_generate_image',{prompts:['e','f','g']},send),(error:any)=>{
+  const details=JSON.parse(error.message.slice(error.message.indexOf(': ')+2))
+  assert.equal(details.error_code,'studio-generation-request-exceeds-remaining')
+  assert.equal(details.requestedUnits,3);assert.equal(details.remainingUnits,2)
+  assert.equal(details.dispatched,false);assert.equal(details.reservedUnits,0)
+  assert.equal(details.retryable,false);assert.equal(details.retryAfterRepair,true)
+  return true
+ })
+ assert.deepEqual(ops.snapshot(input),before);assert.equal(dispatched,1)
+ const restarted=new StudioOperations({kernel:{db}})
+ await restarted.invoke(input,'vyibc-image_generate_image',{prompts:['e','f']},send)
+ assert.equal(dispatched,2);assert.equal(restarted.snapshot(input).used.imageCalls,6)
+ await assert.rejects(restarted.invoke(input,'vyibc-image_generate_image',{prompt:'g'},send),(error:any)=>{
+  const details=JSON.parse(error.message.slice(error.message.indexOf(': ')+2))
+  assert.equal(details.error_code,'studio-generation-budget-exhausted')
+  assert.equal(details.remainingUnits,0);assert.equal(details.retryAfterRepair,false)
+  return true
+ })
+ assert.equal(dispatched,2);assert.equal(restarted.snapshot(input).used.imageCalls,6)
+})
 test('limits immutable and property order independent',t=>{const {ops,input}=setup(t);ops.configure(input,{voiceSegments:30,imageCalls:6});assert.throws(()=>ops.configure(input,{voiceSegments:31,imageCalls:6}),/cannot-change/);assert.throws(()=>ops.configure(input,{imageCalls:-1,voiceSegments:30}),/budget-required/)})
 test('recognized poll advances receipt status without consuming units',async t=>{const {ops,input}=setup(t);await ops.invoke(input,'vyibc-voice_synthesize',args,async()=>receipt({job_id:'j1',status:'queued'}));await ops.invoke(input,'vyibc-voice_status',{job_id:'j1'},async()=>({structuredContent:{job_id:'j1',status:'done'}}));assert.equal(ops.snapshot(input).operations[0].state,'completed');assert.equal(ops.snapshot(input).used.voiceSegments,1)})
 test('wrong job, failed poll, unrelated tool cannot mark completion',async t=>{const {ops,input}=setup(t);await ops.invoke(input,'vyibc-voice_synthesize',args,async()=>receipt({job_id:'j1'}));await ops.invoke(input,'vyibc-voice_status',{job_id:'j1'},async()=>receipt({job_id:'j2',status:'done'}));await ops.invoke(input,'vyibc-voice_status',{job_id:'j1'},async()=>({isError:true,structuredContent:{status:'done'}}));await ops.invoke(input,'other_tool',{job_id:'j1'},async()=>receipt({status:'done'}));assert.equal(ops.snapshot(input).operations[0].state,'submitted')})

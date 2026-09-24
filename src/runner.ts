@@ -757,6 +757,7 @@ export class TaskRunner {
         }
       } catch { await this.finish(f, 'run/failed', 'failed', '无法核验后台操作状态，未宣称完成'); return }
     }
+    if (!this.flights.has(f.sessionId)) return // Cancellation may win while reading terminal evidence.
     if (outcomeNotice) {
       // Completing an asynchronous operation is normal workflow progress, not
       // a failure to submit. Multi-stage workers may park more than once.

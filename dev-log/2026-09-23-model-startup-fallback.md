@@ -581,3 +581,15 @@ replay tests3/3 passed after adding the wait-event test. Real public Chrome open
 the existing failed Batch's Sessions drawer and navigated1125 via Trace, exact
 session URL and zero page errors. No target mutation or live reload. The screenshot
 initially captured Trace loading, so payload-render acceptance is checked separately.
+
+Trace payload-render check now passed (25 actual steps,20 MCP calls, original
+TIMEOUT visible, three pages; no page errors). Post-await cancellation is also
+guarded when reading terminal operation evidence, with a deferred-promise test:
+cancellation must never wake a disposed Agent.
+
+Live backend inspection corrected the earlier release assumption: current profile
+selects Studio03640979 (frontend stillFleet1a14133), including new image receipt
+reconciliation. Imported its source.bundle and merged into the pushed integration
+branch5ffecb9, preserving all12 changed Studio files. First integrated tests failed
+because worktree-relative compiler/calibration paths were absent; rerun uses the
+existing deployed config paths, without installing dependencies or skipping tests.

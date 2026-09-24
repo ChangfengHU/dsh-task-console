@@ -678,6 +678,20 @@ test('timeout recovery refuses unknown/terminal operations, caller cancellation 
   }
 })
 
+test('cancelling while reading a completed operation never wakes a disposed Agent',async()=>{
+  let pending=true,resolveOutcome!: (value:string)=>void
+  const {host,runner,store}=await setup({participants:[{agentId:'a'}],onFail:'stop',maxTries:1},{pendingOperation:async()=>pending?'running':undefined,operationOutcome:()=>new Promise(resolve=>{resolveOutcome=resolve})})
+  const batch=await runner.fire('T','manual');await tick()
+  const [sid,rec]=[...host.sessions.entries()][0];host.consumeFirst(sid)
+  host.endTurn(sid);await tick()
+  pending=false;host.endTurn(sid);await tick()
+  await runner.cancelBatch(batch.id)
+  resolveOutcome('completed receipt');await tick()
+  assert.equal(rec.followups.length,1)
+  assert.equal(rec.disposed,true)
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'cancelled')
+})
+
 test('the block gate can replace stale model prose with observed evidence without erasing tool history', async()=>{
   const {host,runner,store}=await setup({onFail:'stop',maxTries:1},{beforeBlock:()=>({reason:'Actual provider challenge',kind:'needs_input'})})
   try {

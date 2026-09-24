@@ -61,3 +61,12 @@ test('planning document and missing root duration receive actionable errors befo
  })
  assert.equal(s.calls(),0);assert.deepEqual(await readdir(s.cwd),[])
 })
+
+
+test('precreated source directory is preserved and the error tells the caller not to create output',async t=>{
+ const s=await setup(t),dir=join(s.cwd,'composition-r1');await mkdir(dir);await writeFile(join(dir,'board.json'),'source to preserve')
+ await assert.rejects(s.execute(),(e:any)=>{
+  const d=JSON.parse(e.message.slice(e.message.indexOf(': ')+2));assert.equal(d.dispatched,false);assert.match(d.action,/without creating it first/);return true
+ })
+ assert.equal(await readFile(join(dir,'board.json'),'utf8'),'source to preserve');assert.equal(s.calls(),0)
+})

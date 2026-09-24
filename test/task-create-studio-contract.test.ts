@@ -17,9 +17,9 @@ async function setup(t:any){
  const proposal:any={decision:'create',reason:'explicit request',title:'Fixture video',brief:'Produce the scoped fixture video',graphMode:'dynamic-rounds',participants:roleIds.slice(0,3).map(agentId=>({agentId})),design}
  return {cwd,store,creator,context,proposal}
 }
-test('Studio discovery uses accepted fields without private defaults or claiming an executable recipe',async t=>{
+test('Studio discovery exposes host composition without private defaults or automatic execution',async t=>{
  const s=await setup(t),c=s.context.studioCreationContract
- assert.equal(c.kind,'discovery-only');assert.equal(c.executableRecipe,false);assert.equal(c.automaticallyStarts,false)
+ assert.equal(c.kind,'host-composed-draft');assert.equal(c.executableRecipe,false);assert.equal(c.automaticallyStarts,false)
  assert.equal(c.design.executionBinding,'agent-runtime-v1');assert.equal(c.studio.publish,false)
  assert.deepEqual(c.studio.requiredInputs,['characterId','referenceUrl','referenceSha256','generationLimits'])
  for(const privateField of ['characterId','referenceUrl','referenceSha256'])assert.equal(privateField in c.studio.defaults,false)

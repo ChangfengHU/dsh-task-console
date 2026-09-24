@@ -33,3 +33,13 @@ The Task Console RPC namespace exposes `studioRoleInstallPlan()` and `studioRole
 An identical existing role is kept. Customized, damaged or symlinked roles are reported as conflicts and preserved. Missing skills, unavailable MCP tool enumeration and absent transport references remain explicit blockers; installation does not silently remove tools. Model selection inherits the host default. Installation copies role definitions and selected skills with the existing preset writer, and references host MCP entries without copying credentials.
 
 This installs definitions only. Provider health, rendering, observation calibration, Task creation and final video quality remain separate checks. No Task or publication is started. These RPCs do not yet add a setup button to the browser UI.
+
+## Create a Studio plan in an ordinary Creator session
+
+Read `task_create_context` for the actual installed roster and the same-source `studioCreationContract.request`. Use `task_create_studio_sources({query})` to find real character IDs, then `{characterId}` to read the full current profile and reference candidates. This read-only tool uses the host's existing `vyibc-cartoon-assets` connection; the model cannot supply transport credentials or a different endpoint.
+
+A reference card must be linked to that character, have `kind: reference`, use an HTTPS `cdn.vyibc.com` source URL, and contain `technical.studio_reference` with `schema: studio-reference-v1`, `character_id`, and the video's explicit `sha256`. A card's own ID/hash is not the video hash. Missing references are returned as missing. Metadata discovery neither selects a baseline nor approves its quality or publication rights; actual reference bytes and observations must still be checked.
+
+Submit `task_create_submit` with a JSON plan containing only `decision: create`, `reason`, and `studioRequest`. The request supplies the resolved character/reference, six distinct installed role IDs, and explicit authorized generation limits; the topic may be omitted for autonomous selection. The host builds the complete pending plan and a reusable topic Action. The composer supports zero to two repair rounds, does not silently lower larger requests, and preserves bounded execution retries. Independent plan review remains required; submission does not start production or authorize publication.
+
+Existing Creator presets with a frozen tool fence need an explicit capability audit and regeneration before opening a new session with the new source-discovery tool. A bundle upgrade alone does not grant newly added tools to an old saved preset. Preserve authored customizations when regenerating; report unexpected drift instead of overwriting it.

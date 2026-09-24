@@ -1,5 +1,6 @@
 import type {StudioConfigBinding} from './studio-config.js'
 import {planStudioRoleInstall,applyStudioRoleInstall,type StudioRoleInstallOptions} from './studio-role-install.js'
+import {discoverStudioSourcesFromHost} from './studio-source-host.js'
 import {StudioPreparation,assertPreparationWritable} from './studio-preparation.js'
 import {pollStudioOperation} from './studio-operation-poll.js'
 import {WorkflowEvidence} from './workflow-evidence.js'
@@ -798,6 +799,14 @@ export class TaskConsoleService extends TypertRemoteService {
     if (shipped) throw new Error(`"${spec.id}" 是出厂 preset,不能覆盖;换个 id`)
     const { path, preview } = await writePreset(spec, this.hostMcp(), await scanSkills(), userPresetRoot(), this.hostToolNames())
     return JSON.stringify({ path, preview: { ...preview, yml: mask(preview.yml) } })
+  }
+
+  /** Only the selected Creator native tool calls this; not an arbitrary-transport RPC. */
+  async studioSourceDiscovery(args:{query?:string;characterId?:string},exec:any){
+    const sessionId=exec?.agent?.session?.id??exec?.agent?.session?.header?.id
+    if(typeof sessionId!=='string'||!sessionId)throw Error('studio-source-live-session-required')
+    await this.ready
+    return discoverStudioSourcesFromHost(args,this.hostMcp())
   }
 
   /** Installation authority comes only from the host registry and local inventory. */

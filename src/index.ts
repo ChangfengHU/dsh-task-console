@@ -1,5 +1,8 @@
 export {loadStudioRolePack,inspectStudioRoleDependencies,STUDIO_ROLE_IDS,type StudioRolePack,type StudioRoleTemplate,type StudioPackRole,type StudioDependencyInventory} from './studio-role-pack.js'
 export {planStudioRoleInstall,applyStudioRoleInstall,type StudioRoleInstallOptions} from './studio-role-install.js'
+export {resolveStudioSources,type StudioSourceTool} from './studio-source-discovery.js'
+export {discoverStudioSourcesFromHost} from './studio-source-host.js'
+export {composeStudioTaskDraft,STUDIO_TASK_REQUEST_CONTRACT,type StudioTaskRequest,type StudioDraftContext} from './studio-task-draft.js'
 /**
  * `dsh-task-console` — host half.
  *

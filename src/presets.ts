@@ -41,7 +41,7 @@ export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: s
     schemaNames: [...STUDIO_TOOL_NAMES,...STUDIO_SPEECH_TOOL_NAMES,...STUDIO_BOARD_TOOL_NAMES], rows: '# Studio tools are registered by the active Task runner, never by standalone chat.' },
   { id: 'task-create-runtime', label: 'Task creation', group: '任务', writes: true,
     description: '读取真实角色，生成待审查计划并查询审查与执行；不提供放行或业务运维工具，不提升参与者权限。',
-    schemaNames: ['task_create_context', 'task_create_submit', 'task_create_plan_status', 'task_create_status'],
+    schemaNames: ['task_create_context', 'task_create_studio_sources', 'task_create_submit', 'task_create_plan_status', 'task_create_status'],
     rows: "- id: task-create-runtime\n  name: 'dsh-task-console/task-create-tools'" },
   { id: 'ask-user', label: 'ask_user_question', group: '交互', writes: false,
     description: '停下来问人。没有它,拿不准的事只能失败重来。',

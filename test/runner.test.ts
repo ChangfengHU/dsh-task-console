@@ -65,6 +65,11 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
   return { host, store, runner, task, root }
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
+async function untilReady(check: () => boolean) {
+  const deadline=Date.now()+3000
+  while(!check() && Date.now()<deadline) await tick()
+  assert.ok(check(),'expected asynchronous transition within 3 seconds')
+}
 
 test('startup fallback retains run/session and permissions, retries once, and releases scoped hooks', async () => {
   const { runner, store, host } = await setup({ participants:[{agentId:'a'}], onFail:'stop', maxTries:1 })
@@ -586,6 +591,93 @@ test('idle model turns retain live async operations without burning nudges or ex
   } finally {runner.stop();store.kernel.db.close();await (await import('node:fs/promises')).rm(root,{recursive:true,force:true})}
 })
 
+test('model timeout preserves one live background operation and resumes the same Run without fallback or replay', async()=>{
+  let pending=true
+  const {host,runner,store}=await setup({participants:[{agentId:'a'}],onFail:'stop',maxTries:1},{
+    pendingOperation:async()=>pending?'verified owner operation running':undefined,
+    operationOutcome:async()=> 'operation-1 complete; read original receipt, do not import again',
+  })
+  runner.modelFallback={fromProvider:'p',provider:'qwen',model:'plus'}
+  const batch=await runner.fire('T','manual');await tick()
+  const [sid,rec]=[...host.sessions.entries()][0];host.consumeFirst(sid)
+  host.emit(sid,{type:'tool/call',data:{name:'browser_login_acceptance',callId:'fixture'}})
+  const flight=(runner as any).flights.get(sid),watchdog=flight.timer,claim=flight.claimLock
+  const event={type:'turn/end',data:{reason:{kind:'error',error:{code:'TIMEOUT'}}}}
+  host.emit(sid,event);host.emit(sid,event);await tick()
+  const waiter=flight.idleTimer
+  host.emit(sid,event);await tick()
+  assert.equal(flight.idleTimer,waiter,'duplicate end event does not cancel the host wait')
+  assert.equal(flight.timer,watchdog)
+  assert.equal(flight.claimLock,claim)
+  assert.equal(rec.disposed,false)
+  assert.equal(rec.followups.length,1,'no immediate model retry or fallback')
+  assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+  assert.equal(store.kernel.listEvents(batch.cardIds[0]).filter(e=>e.kind==='model_wait_interrupted').length,1)
+  assert.equal(store.kernel.listEvents(batch.cardIds[0]).filter(e=>e.kind==='model_fallback').length,0)
+  pending=false;host.endTurn(sid);await tick()
+  assert.equal(flight.operationTimeoutRecovery,'used')
+  assert.equal(rec.followups.length,2)
+  assert.match(rec.followups[1].content[0].text,/read original receipt/)
+  assert.equal(store.s.runs.size,1)
+  assert.equal(host.sessions.size,1)
+  assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running','terminal operation is not task acceptance')
+  pending=true;host.emit(sid,event);await tick()
+  assert.equal(rec.disposed,true,'one recovery only; does not extend the budget indefinitely')
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'failed')
+})
+
+test('multiple background completions do not consume submission nudges; empty turns still fail', async()=>{
+  let pending=true
+  const {host,runner,store}=await setup({participants:[{agentId:'a'}],onFail:'stop',maxTries:1},{pendingOperation:async()=>pending?'running':undefined,operationOutcome:async()=> 'read original operation receipt'})
+  const batch=await runner.fire('T','manual');await tick()
+  const [sid,rec]=[...host.sessions.entries()][0];host.consumeFirst(sid)
+  for(let i=0;i<3;i++){
+    pending=true;host.endTurn(sid);await tick()
+    pending=false;host.endTurn(sid);await tick()
+    assert.equal(rec.followups.length,i+2)
+    assert.match(rec.followups.at(-1).content[0].text,/BACKGROUND OPERATION FINISHED/)
+    assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+    assert.equal([...store.s.runs.values()][0].nudges??0,0)
+  }
+  host.endTurn(sid);await tick()
+  assert.equal([...store.s.runs.values()][0].nudges,1)
+  host.endTurn(sid);await tick()
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'failed')
+})
+
+test('cancelling during a pending-operation timeout check cannot resurrect the Run', async()=>{
+  let resolvePending!: (value: string) => void
+  const {host,runner,store}=await setup({participants:[{agentId:'a'}],onFail:'stop',maxTries:1},{pendingOperation:()=>new Promise(resolve=>{resolvePending=resolve})})
+  const batch=await runner.fire('T','manual');await tick()
+  const [sid,rec]=[...host.sessions.entries()][0];host.consumeFirst(sid)
+  host.emit(sid,{type:'tool/call',data:{name:'browser_status',callId:'fixture'}})
+  host.emit(sid,{type:'turn/end',data:{reason:{kind:'error',error:{code:'TIMEOUT'}}}});await tick()
+  await runner.cancelBatch(batch.id)
+  resolvePending('operation still running');await tick()
+  assert.equal(rec.disposed,true)
+  assert.equal(rec.followups.length,1)
+  assert.equal((runner as any).flights.size,0)
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'cancelled')
+  assert.equal(store.kernel.listEvents(batch.cardIds[0]).some(e=>e.kind==='model_wait_interrupted'),false)
+})
+
+test('timeout recovery refuses unknown/terminal operations, caller cancellation and business errors', async()=>{
+  for(const mode of ['absent','probe-error','aborted','tool-error','no-tool']){
+    const {host,runner,store}=await setup({participants:[{agentId:'a'}],onFail:'stop',maxTries:1},{pendingOperation:async()=>{
+      if(mode==='probe-error')throw Error('unavailable')
+      return mode==='absent'?undefined:'operation running'
+    }})
+    const batch=await runner.fire('T','manual');await tick()
+    const [sid,rec]=[...host.sessions.entries()][0];host.consumeFirst(sid)
+    if(mode!=='no-tool')host.emit(sid,{type:'tool/call',data:{name:'browser_status',callId:'fixture'}})
+    host.emit(sid,{type:'turn/end',data:{reason:{kind:'error',error:{code:mode==='aborted'?'ABORTED':mode==='tool-error'?'TOOL_ERROR':'TIMEOUT'}}}});await tick()
+    assert.equal(rec.disposed,true,mode)
+    assert.equal(rec.followups.length,1,mode)
+    assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'failed',mode)
+    assert.equal(store.kernel.listEvents(batch.cardIds[0]).some(e=>e.kind==='model_wait_interrupted'),false)
+  }
+})
+
 test('the block gate can replace stale model prose with observed evidence without erasing tool history', async()=>{
   const {host,runner,store}=await setup({onFail:'stop',maxTries:1},{beforeBlock:()=>({reason:'Actual provider challenge',kind:'needs_input'})})
   try {
@@ -849,9 +941,11 @@ test('Fleet repair budget and source CAS reject extra or stale graph mutation at
   const {host,store,runner,task}=await setup({...recipe,workflowRecipe:{id:'fleet-base-v3',login:'preserve'},timeoutSec:300})
   const batch=await runner.fire(task.id,'manual')
   for(let i=0;i<2;i++){
+    await untilReady(()=>[...host.sessions.values()].filter(s=>!s.disposed).length===1 && host.sessions.size===i+1)
     const sid=[...host.sessions.entries()].find(([,s])=>!s.disposed)![0]
     host.consumeFirst(sid);await host.callTool(sid,'task_complete',{summary:'checked'});host.endTurn(sid);await tick()
   }
+  await untilReady(()=>host.sessions.size===3 && [...store.s.cards.values()].some(c=>c.agentId==='fleet-runner-operator' && c.status==='running'))
   const source=[...store.s.cards.values()].find(c=>c.agentId==='fleet-runner-operator')!,core=store.kernel.getTask(source.id)!
   const count=()=>store.kernel.db.prepare('SELECT COUNT(*) AS n FROM tasks').get() as {n:number}
   await assert.rejects(store.expandFleetRepair(task,batch,source,core.current_run_id!+1,'browser-manager','stale'),/租约/)
@@ -1295,12 +1389,15 @@ test('runner: automated same-card review uses reviewer profile, changes_requeste
   const batch = await runner.fire('T', 'manual'); const cardId = `${batch.id}#0`
   let session = [...host.sessions.keys()].at(-1)!; host.consumeFirst(session)
   await host.callTool(session, 'task_request_review', { summary: 'round 1', reviewer: 'b', metadata: { tests: 9 } }); host.endTurn(session); await tick()
+  await untilReady(()=>host.sessions.size===2)
   assert.equal(store.kernel.getTask(cardId)!.assignee, 'b')
   session = [...host.sessions.keys()].at(-1)!; host.consumeFirst(session)
   await host.callTool(session, 'task_request_changes', { reason: '补 AC1 测试' }); host.endTurn(session); await tick()
+  await untilReady(()=>host.sessions.size===3)
   assert.equal(store.kernel.getTask(cardId)!.assignee, 'a')
   session = [...host.sessions.keys()].at(-1)!; assert.match(host.sessions.get(session)!.followups[0].content[0].text, /补 AC1 测试/); host.consumeFirst(session)
   await host.callTool(session, 'task_request_review', { summary: 'round 2: 10 passed', reviewer: 'b' }); host.endTurn(session); await tick()
+  await untilReady(()=>host.sessions.size===4)
   session = [...host.sessions.keys()].at(-1)!; host.consumeFirst(session)
   await host.callTool(session, 'task_complete', { summary: 'approved' }); host.endTurn(session); await tick()
   assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')

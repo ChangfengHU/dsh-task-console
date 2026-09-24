@@ -19,3 +19,12 @@ test('repeated provider cursor stops; provider errors and unrecognized schema ar
  const error={isError:true,content:[{type:'text',text:'denied'}]};assert.equal(await searchStudioAssets({},async()=>error),error)
  const unknown={other:1};assert.equal(await searchStudioAssets({},async()=>unknown),unknown)
 })
+
+test('empty multiword search exposes actionable continuation and explicitly separate catalog discovery',async()=>{
+ const args={kind:'bgm',query:'college cheerful light hearted',character_id:'x',tags_all:['campus'],limit:5,cursor:'old'}
+ const r=assetSearchPage(await searchStudioAssets(args,async()=>page([],'next'),1))
+ assert.deepEqual(r.searchRecovery.continueCall.arguments,{...args,cursor:'next'})
+ assert.deepEqual(r.searchRecovery.catalogDiscovery.arguments,{kind:'bgm',character_id:'x',tags_all:['campus'],limit:5})
+ assert.deepEqual(r.assets,[]);assert.equal(r.studioSearch.exhausted,false)
+ assert.equal(args.query,'college cheerful light hearted');assert.match(r.searchRecovery.catalogDiscovery.scope,/not matches/)
+})

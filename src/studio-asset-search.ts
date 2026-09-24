@@ -17,7 +17,14 @@ export async function searchStudioAssets(args:any,invoke:(args:any)=>Promise<any
   if(next!==null&&next!==undefined&&typeof next!=='string')throw Error('studio-asset-search-invalid-cursor')
   const repeated=!!next&&seen.has(next),stop=value.assets.length>0||!next||repeated||pages===maxPages
   if(stop){
-   const payload={...value,scanned,studioSearch:{pages,exhausted:!next,partial:!!next,cursorRepeated:repeated,
+   const discoveryArgs={...args};delete discoveryArgs.query;delete discoveryArgs.cursor
+   const recovery=value.assets.length===0?{
+    nextAction:repeated?'report_provider_cursor_problem':next?'continue_same_search_or_inspect_catalog':'inspect_catalog',
+    ...(next&&!repeated?{continueCall:{tool:'asset_search',arguments:{...args,cursor:next}}}:{}),
+    ...(typeof args.query==='string'&&args.query.trim()?{catalogDiscovery:{tool:'asset_search',arguments:discoveryArgs,scope:'Explicit separate discovery without query; all other filters and credential scope preserved. These would be catalog candidates, not matches for the original query.'}}:{}),
+    guidance:'This is page-filtered catalog search, not semantic web search. Do not keep swapping long multiword mood descriptions after empty pages. Continue the exact cursor, or inspect the catalog with query omitted and choose from actual titles/tags; inspect rights and audio before choosing.'
+   }:undefined
+   const payload={...(recovery?{searchRecovery:recovery}:{}),...value,scanned,studioSearch:{pages,exhausted:!next,partial:!!next,cursorRepeated:repeated,
     instruction:repeated?'The provider repeated its cursor. Do not loop or claim complete search; report the provider issue.':next?'Continue with the returned next_cursor and identical filters if more results are needed. Empty partial pages do not mean the library is empty.':'Search exhausted for these exact filters. If empty, use one keyword or omit query while retaining kind to inspect catalog tags. Do not repeat reordered multiword queries. Inspect asset details, rights and actual audio before use; registration is not approval.'}}
    return {content:[{type:'text',text:JSON.stringify(payload)}],structuredContent:payload}
   }

@@ -43,6 +43,29 @@ export function readStudioOperationStatus(db:any,input:any){
     operations,qualityApproved:false}
 }
 
+/** Current allowance, read directly from immutable limits and reservations.
+ * Status must not rely on a previous stage's cached budget report. */
+export function readStudioGenerationAllowance(db:any,input:any){
+ const unavailable={available:false,source:'studio-operation-ledger',canSubmitImages:false,canSubmitVoice:false,reason:'No valid frozen generation limits are available; do not infer permission from a Task brief.',qualityApproved:false}
+ const tables=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('dsh_studio_limits','dsh_studio_operations')").all()
+ if(tables.length!==2)return unavailable
+ const row=db.prepare('SELECT limits FROM dsh_studio_limits WHERE task_id=? AND batch_id=?').get(input.task.id,input.batch.id)
+ if(!row)return unavailable
+ let limits:any;try{limits=JSON.parse(row.limits)}catch{return unavailable}
+ if(!limits||Object.keys(limits).some(k=>!['imageCalls','imageBatches','voiceSegments'].includes(k))||!['imageCalls','voiceSegments'].every(k=>Number.isInteger(limits[k])&&limits[k]>=0)||limits.imageBatches!==undefined&&(!Number.isInteger(limits.imageBatches)||limits.imageBatches<0))return unavailable
+ const rows=db.prepare('SELECT kind,units,state FROM dsh_studio_operations WHERE task_id=? AND batch_id=?').all(input.task.id,input.batch.id)
+ if(rows.some((r:any)=>!['imageCalls','voiceSegments'].includes(r.kind)||!Number.isInteger(r.units)||r.units<1))return unavailable
+ const remaining=(limit:number,used:number)=>({limit,used,remaining:Math.max(0,limit-used)})
+ const imageItems=remaining(limits.imageCalls,rows.filter((r:any)=>r.kind==='imageCalls').reduce((n:number,r:any)=>n+r.units,0))
+ const imageSubmissions=limits.imageBatches===undefined?null:remaining(limits.imageBatches,rows.filter((r:any)=>r.kind==='imageCalls').length)
+ const voiceSegments=remaining(limits.voiceSegments,rows.filter((r:any)=>r.kind==='voiceSegments').reduce((n:number,r:any)=>n+r.units,0))
+ const submissionUnknown=rows.some((r:any)=>['dispatching','unknown'].includes(r.state))
+ const canSubmitImages=!submissionUnknown&&imageItems.remaining>0&&!!imageSubmissions&&imageSubmissions.remaining>0
+ return {available:true,source:'studio-operation-ledger',scope:'current-task-and-batch',imageItems,imageSubmissions,voiceSegments,submissionUnknown,canSubmitImages,canSubmitVoice:!submissionUnknown&&voiceSegments.remaining>0,
+  imageAction:submissionUnknown?'Reconcile the original uncertain submission before any new paid work.':!imageSubmissions?'Legacy batch has no frozen submission limit; new image generation is not authorized.':!canSubmitImages?'No new image generation is available. Reuse or derive verified existing images; do not plan new image calls, reset budget, or mark missing visuals complete.':'Plan against BOTH item and submission allowances. Multiple prompts[] in one generate_image call use one submission; each prompt uses one image item. A single-image call also uses one whole submission.',
+  notice:'All reserved, failed and completed submissions retain their charge. This is current budget availability, not role permission, a provider call or quality approval.',qualityApproved:false}
+}
+
 /** Add host provenance without rewriting the saved provider receipt or its schema.
  * A historical queued response is not a newly queued job or a fresh status poll.
  */

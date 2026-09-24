@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import Database from 'better-sqlite3'
-import {StudioOperations,readStudioOperationStatus} from '../src/studio-operations.ts'
+import {StudioOperations,readStudioOperationStatus,readStudioGenerationAllowance} from '../src/studio-operations.ts'
 import {StudioWorkflow} from '../src/studio-workflow.ts'
 import {registerStudioTools} from '../src/studio-tools.ts'
 import {mkdtemp,rm} from 'node:fs/promises'
@@ -81,4 +81,49 @@ test('actual studio_status returns current batch voice handoff even before capab
  assert.equal(jobs.operations[0].jobId,'current-voice-job');assert.equal(jobs.providerPolled,false)
  assert.equal(jobs.operations[0].nextCalls[1].tool,'vyibc-voice_result')
  assert.deepEqual(s.db.prepare('SELECT * FROM dsh_studio_operations').all(),before)
+})
+
+
+test('current allowance counts failed/reserved batches and denies new images despite spare items',t=>{
+ const s=setup(t)
+ s.db.prepare('UPDATE dsh_studio_limits SET limits=? WHERE task_id=? AND batch_id=?').run(JSON.stringify({imageCalls:6,imageBatches:2,voiceSegments:30}),'task','batch')
+ s.insert('a','vyibc-image_generate_image','failed','a')
+ s.insert('b','vyibc-image_generate_image','completed','b')
+ s.insert('v','vyibc-voice_synthesize','completed','v')
+ s.insert('foreign','vyibc-image_generate_image','submitted','foreign','task','other')
+ const changes=s.db.prepare('SELECT total_changes() n').get().n
+ const a=readStudioGenerationAllowance(s.db,s.input)
+ assert.equal(a.available,true);assert.deepEqual(a.imageItems,{limit:6,used:2,remaining:4});assert.deepEqual(a.imageSubmissions,{limit:2,used:2,remaining:0})
+ assert.equal(a.canSubmitImages,false);assert.equal(a.canSubmitVoice,true);assert.match(a.imageAction!,/No new image generation/)
+ assert.equal(s.db.prepare('SELECT total_changes() n').get().n,changes)
+ s.db.prepare("UPDATE dsh_studio_operations SET state='unknown' WHERE intent='v'").run()
+ assert.equal(readStudioGenerationAllowance(s.db,s.input).canSubmitVoice,false)
+})
+
+test('allowance handles batches with multiple image items and absent legacy limits truthfully',t=>{
+ const s=setup(t);s.insert('a','vyibc-image_generate_image','submitted','a')
+ s.db.prepare("UPDATE dsh_studio_operations SET units=4 WHERE intent='a'").run()
+ let a=readStudioGenerationAllowance(s.db,s.input)
+ assert.equal(a.imageItems!.remaining,2);assert.equal(a.imageSubmissions!.used,1);assert.equal(a.canSubmitImages,true);assert.match(a.imageAction!,/prompts/)
+ s.db.prepare('UPDATE dsh_studio_limits SET limits=?').run(JSON.stringify({imageCalls:6,voiceSegments:30}))
+ a=readStudioGenerationAllowance(s.db,s.input);assert.equal(a.imageSubmissions,null);assert.equal(a.canSubmitImages,false);assert.equal(a.canSubmitVoice,true)
+ s.db.prepare('UPDATE dsh_studio_limits SET limits=?').run('invalid')
+ assert.equal(readStudioGenerationAllowance(s.db,s.input).available,false)
+})
+
+test('fresh status does not invent limits or create tables and overrides stale stage budget through top-level allowance',async t=>{
+ const empty=new Database(':memory:');t.after(()=>empty.close())
+ assert.equal(readStudioGenerationAllowance(empty,{task:{id:'none'},batch:{id:'none'}}).available,false)
+ assert.equal(empty.prepare('SELECT COUNT(*) n FROM sqlite_master').get().n,0)
+ const s=setup(t),cwd=await mkdtemp(join(tmpdir(),'studio-budget-status-'));t.after(()=>rm(cwd,{recursive:true,force:true}))
+ s.insert('a','vyibc-image_generate_image','failed','a');s.insert('b','vyibc-image_generate_image','completed','b')
+ s.db.prepare('UPDATE dsh_studio_limits SET limits=?').run(JSON.stringify({imageCalls:6,imageBatches:2,voiceSegments:30}))
+ const workflow=new StudioWorkflow({kernel:{db:s.db}})
+ const input={...s.input,task:{...s.input.task,cwd,design:{evidenceContract:'studio-video-v1',studio:{characterId:'character',referenceSha256:'b'.repeat(64),referenceUrl:'https://cdn.vyibc.com/approved.mp4'}}},card:{role:'planner'},sessionId:'planner-session'}
+ workflow.recordBudget(input,{used:{imageCalls:0,imageBatches:0,voiceSegments:0},limits:{imageCalls:6,imageBatches:2,voiceSegments:30},exceeded:false})
+ const tools:any={};await registerStudioTools({tools:{register:(tool:any)=>{tools[tool.name]=tool;return()=>{}}}},{input,workflow,isActive:()=>true})
+ const response=await tools.studio_status.execute({})
+ assert.equal(response.generationAllowance.canSubmitImages,false);assert.equal(response.generationAllowance.imageItems.remaining,4)
+ assert.deepEqual(response.generationAllowance,response.state.generationAllowance)
+ assert.equal(response.state.budget.used.imageCalls,0)
 })

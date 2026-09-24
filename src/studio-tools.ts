@@ -72,7 +72,7 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   // snapshot at both levels, avoiding split results at an expiration boundary.
   preflight=state.preflight??workflow.preflight(input.task)
   const artifacts=state.candidate?(()=>{const loc=workflow.candidateLocation(input);return {manifestPath:relative(input.task.cwd,loc.manifestPath),videoPath:relative(input.task.cwd,loc.path)}})():null
-  return {preflight,state:{...state,preflight},artifacts,executionAssets:await studioExecutionAssets(input.task.cwd),reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(publicCharacterReference),characterProfile:await studioCharacterProfileSummary(input.task,options.characterProfile)}
+  return {preflight,generationAllowance:state.generationAllowance??null,state:{...state,preflight},artifacts,executionAssets:await studioExecutionAssets(input.task.cwd),reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(publicCharacterReference),characterProfile:await studioCharacterProfileSummary(input.task,options.characterProfile)}
  })
  register('studio_character_profile','Planner/producer/reviewer/preparation specialist: read the complete UTF-8 JSON character_get response from the exact host-locked profile file. No arguments, hidden-path override, provider call or refresh. Includes personality, scene plans and voice recommendations as recorded; design plans do not prove assets were generated.',{},async()=>{
   requireRole(['planner','executor','reviewer','studio-stage'])

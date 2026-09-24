@@ -87,3 +87,15 @@ test('file-backed compile rejects ambiguous inputs, escaping sources and malform
  await writeFile(join(s.cwd,'big.json'),' '.repeat(1024*1024+1));await assert.rejects(s.tool.execute({boardPath:'big.json'}),/input-too-large/)
  assert.equal(s.calls(),0)
 })
+
+
+test('compiler errors preserve safe project-relative filenames but redact external paths and credentials',async t=>{
+ for(const suffix of ['assets/missing.wav','stages/r1/visual/许小满.png']){
+  const s=await setup(t,{compile:async({cwd}:any)=>({ok:false,reason:`[Errno 2] No such file or directory: '${cwd}/${suffix}'`})})
+  const result=await s.execute();assert.ok(result.reason.includes('[project]/'+suffix));assert.ok(!result.reason.includes(s.cwd))
+ }
+ for(const path of ['/etc/private/config','/home/other/private.json','../outside/file.wav','.boss/token','.env.production','assets/credentials.json']){
+  const s=await setup(t,{compile:async({cwd}:any)=>({ok:false,reason:`failed '${path.startsWith('/')?path:cwd+'/'+path}' token=secretvalue Bearer hiddenvalue https://example.com/private?key=value`})})
+  const result=await s.execute();assert.match(result.reason,/\[path\]/);assert.doesNotMatch(result.reason,/outside|private|credentials|secretvalue|hiddenvalue|example|\.env|\.boss/)
+ }
+})

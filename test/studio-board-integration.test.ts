@@ -119,7 +119,7 @@ test('real missing-media rejection leaves no output and can retry the same immut
  const f=await fixture(t),board=storyboard();board.audio[0].src='assets/missing.wav'
  const failed=await f.execute(board)
  assert.equal(failed.ok,false);assert.equal(failed.qualityApproved,false)
- assert.equal(failed.error,'studio-board-compile-failed');assert.match(failed.reason,/No such file or directory/)
+ assert.equal(failed.error,'studio-board-compile-failed');assert.match(failed.reason,/No such file or directory/);assert.ok(failed.reason.includes('[project]/assets/missing.wav'))
  assert.equal(await readFile(failed.boardPath,'utf8'),JSON.stringify(board))
  assert.deepEqual((await readdir(f.cwd)).sort(),['.studio-boards','assets'])
  await writeFile(join(f.cwd,'assets/missing.wav'),wave())

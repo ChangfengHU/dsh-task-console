@@ -12,7 +12,22 @@ const sha=(value:Buffer|string)=>createHash('sha256').update(value).digest('hex'
 const missing=(error:any)=>error?.code==='ENOENT'
 async function plainDirectory(path:string){const info=await lstat(path);if(!info.isDirectory()||info.isSymbolicLink()||await realpath(path)!==path)throw Error('studio-board-directory-symlink-or-invalid')}
 async function fileBytes(path:string){const f=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);try{if(!(await f.stat()).isFile())throw Error('studio-board-file-required');return await f.readFile()}finally{await f.close()}}
-function safeReason(value:unknown,root:string){return String(value??'compiler did not produce a successful receipt').replaceAll(root,'[project]').replace(/https?:\/\/\S+/g,'[url]').replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/\b(token|secret|password|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi,'$1=[redacted]').replace(/(?:\/[A-Za-z0-9._-]+){2,}/g,'[path]').replace(/[\r\n\t]+/g,' ').slice(0,240)}
+function safeReason(value:unknown,root:string){
+ // Redact in one path pass: replacing root first then redacting paths also hid
+ // the actionable project-relative filename from ENOENT errors.
+ const clean=String(value??'compiler did not produce a successful receipt')
+  .replace(/https?:\/\/\S+/g,'[url]')
+  .replace(/Bearer\s+\S+/gi,'Bearer [redacted]')
+  .replace(/\b(token|secret|password|api[_-]?key)\s*[:=]\s*[^\s,;]+/gi,'$1=[redacted]')
+ return clean.replace(/(?<![\w.:-])\/[^\s'"<>()\[\],;]+/g,path=>{
+  if(path===root)return '[project]'
+  if(!path.startsWith(root+sep))return '[path]'
+  const suffix=path.slice(root.length+1),within=relative(root,resolve(path))
+  if(!within||within==='..'||within.startsWith('..'+sep)||isAbsolute(within)||
+   /(?:^|\/)(?:\.env(?:\.[^/]*)?|\.ssh|\.boss|[^/]*(?:token|secret|password|credential|api[_-]?key)[^/]*)(?:\/|$)/i.test(suffix))return '[path]'
+  return '[project]/'+suffix
+ }).replace(/[\r\n\t]+/g,' ').slice(0,240)
+}
 
 const exactKeys=(value:any,keys:string[])=>value&&typeof value==='object'&&!Array.isArray(value)&&isDeepStrictEqual(Object.keys(value).sort(),[...keys].sort())
 const htmlEscape=(value:string)=>value.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#x27;')

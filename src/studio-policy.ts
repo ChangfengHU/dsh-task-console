@@ -3,6 +3,7 @@ import { validateStudioPolicy as validateEvidencePolicy } from './studio-evidenc
 /** Task-frozen reference contract, no platform publication. */
 export interface StudioPolicy {
   characterId: string
+  dialogueLanguage?: 'zh-CN'
   width: number
   height: number
   fps: number
@@ -18,7 +19,7 @@ export interface StudioPolicy {
 export function validateStudioPolicy(value: unknown): StudioPolicy {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('studio 必须是明确的视频策略对象')
   const v = value as Record<string, unknown>
-  const allowed = ['generationLimits','characterId','width','height','fps','durationMin','durationMax','maxRepairRounds','referenceSha256','referenceUrl','requiredDimensions','publish']
+  const allowed = ['dialogueLanguage','generationLimits','characterId','width','height','fps','durationMin','durationMax','maxRepairRounds','referenceSha256','referenceUrl','requiredDimensions','publish']
   if (Object.keys(v).some(key => !allowed.includes(key))) throw Error('studio 包含未知字段')
   if (v.publish !== undefined && v.publish !== false) throw Error('studio-video-v1 不授权发布；publish 只能为 false')
   let referenceUrl: URL

@@ -1,4 +1,5 @@
 import {StudioRenderLedger} from './studio-render-ledger.js'
+import {assertScriptLanguage} from './studio-script-language.js'
 import {createHash,randomUUID} from 'node:crypto'
 import {validateStudioPolicy} from './studio-policy.js'
 import {evaluateStudioReview} from './studio-evidence.mjs'
@@ -168,6 +169,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   recordScript(input:any,value:any){
     if(input.card?.role!=='planner'||!HASH.test(value.sha256??'')||!Array.isArray(value.lines)||!value.lines.length||value.lines.length>80)throw Error('studio-script-invalid')
     const ids=new Set();for(const line of value.lines){if(typeof line.id!=='string'||!line.id||ids.has(line.id)||typeof line.text!=='string'||!line.text.trim()||line.text.length>300)throw Error('studio-script-lines-invalid');ids.add(line.id)}
+    assertScriptLanguage(this.policy(input.task),value.lines)
     const previous=this.script(input),review=this.read(input,'review'),candidate=this.read(input,'candidate')?.candidate
     if(previous&&previous.sha256!==value.sha256&&(!review||review.candidateSha256!==candidate?.sha256||!review.issues?.some((i:any)=>['major','blocker'].includes(i.severity))))throw Error('studio-script-change-requires-independent-review')
     this.write(input,'script',value)

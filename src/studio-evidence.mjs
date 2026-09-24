@@ -14,6 +14,7 @@ export function validateStudioPolicy(value) {
     requiredDimensions: input.requiredDimensions ?? [...DEFAULT_DIMENSIONS]};
   if (!object(value)) issues.push('policy: expected object');
   if (!nonempty(policy.characterId)) issues.push('policy.characterId: required');
+  if (policy.dialogueLanguage !== undefined && policy.dialogueLanguage !== 'zh-CN') issues.push('policy.dialogueLanguage: supported explicit contract is zh-CN; omit for legacy unrestricted tasks');
   if (!hash(policy.referenceSha256)) issues.push('policy.referenceSha256: expected SHA-256');
   for (const key of ['width','height','fps']) if (!finite(policy[key]) || policy[key] <= 0) issues.push(`policy.${key}: expected positive number`);
   if (!Number.isInteger(policy.width) || !Number.isInteger(policy.height)) issues.push('policy: dimensions must be integers');

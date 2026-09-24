@@ -49,6 +49,8 @@ export const METHODS = [
   ['startAgentSession', 1], ['sessionTurns', 1], ['agentHistory', 1],
   ['sessionShortcuts', 0], ['setSessionShortcut', 1],
   ['sessionCapabilities', 1], ['agentCapabilityStatus', 1],
+  // Plan is read-only; apply's JSON payload contains only expectedPlanSha256.
+  ['studioRoleInstallPlan', 0], ['studioRoleInstallApply', 1],
   ['exportConfig', 0], ['createConfigBootstrap', 1], ['previewConfigImport', 1], ['applyConfigImport', 1], ['installConfigRuntime', 1], ['configRuntimeStatus', 1],
   ['agentActions', 1], ['saveAgentActions', 1], ['prepareAgentAction', 1], ['agentActionOptions', 1],
   ['workflowCatalog', 0], ['launchWorkflow', 1],

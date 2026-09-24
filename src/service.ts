@@ -1,4 +1,5 @@
 import type {StudioConfigBinding} from './studio-config.js'
+import {planStudioRoleInstall,applyStudioRoleInstall,type StudioRoleInstallOptions} from './studio-role-install.js'
 import {StudioPreparation,assertPreparationWritable} from './studio-preparation.js'
 import {pollStudioOperation} from './studio-operation-poll.js'
 import {WorkflowEvidence} from './workflow-evidence.js'
@@ -8,8 +9,8 @@ import { inspectCapabilityContract } from './capability-contract.ts'
 import { taskAgentIds } from './task-design.ts'
 import {registerStageFiles,requireStudioStages,verifyStageReceipt} from './studio-stage-files.js'
 import {studioStageFor} from './studio-stages.js'
-import { registerStudioSpeechTools } from './studio-speech-tools.js'
-import { registerStudioBoardTools } from './studio-board-tools.js'
+import { registerStudioSpeechTools,STUDIO_SPEECH_TOOL_NAMES } from './studio-speech-tools.js'
+import { registerStudioBoardTools,STUDIO_BOARD_TOOL_NAMES } from './studio-board-tools.js'
 import { StudioOperations } from './studio-operations.js'
 import { searchStudioAssets } from './studio-asset-search.js'
 import { assertStudioImageRequest, prepareStudioImageRequest } from './studio-image-request.js'
@@ -17,7 +18,7 @@ import { reconcileStudioImageOperation } from './studio-image-reconciliation.js'
 import { requireSettledStudioOperations } from './studio-stage-operations.js'
 import { assertFrozenVoiceSynthesis } from './studio-voice-script.js'
 import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard, downloadStudioAsset } from './studio-host.js'
-import { registerStudioTools } from './studio-tools.js'
+import { registerStudioTools,STUDIO_TOOL_NAMES } from './studio-tools.js'
 import { StudioWorkflow } from './studio-workflow.js'
 import { registerStudioSkillGate } from './studio-skill-gate.js'
 /**
@@ -797,6 +798,34 @@ export class TaskConsoleService extends TypertRemoteService {
     if (shipped) throw new Error(`"${spec.id}" 是出厂 preset,不能覆盖;换个 id`)
     const { path, preview } = await writePreset(spec, this.hostMcp(), await scanSkills(), userPresetRoot(), this.hostToolNames())
     return JSON.stringify({ path, preview: { ...preview, yml: mask(preview.yml) } })
+  }
+
+  /** Installation authority comes only from the host registry and local inventory. */
+  private async studioRoleInstallOptions():Promise<StudioRoleInstallOptions>{
+    const presets=(this.ctx as any).get('agentPresets')
+    let rows:any,hostMcp:HostMcp[]|undefined
+    try{rows=await presets?.list?.()}catch{/* Preserve unverified registry diagnostics. */}
+    try{hostMcp=this.hostMcp()}catch{/* Missing discovery is not an empty verified inventory. */}
+    return {presetRoot:userPresetRoot(),library:await scanSkills(),hostMcp,
+      // This is the bundled Task tool repertoire, not a live/provider readiness claim.
+      hostTools:[...STUDIO_TOOL_NAMES,...STUDIO_SPEECH_TOOL_NAMES,...STUDIO_BOARD_TOOL_NAMES],
+      defaultModelAvailable:!!this.defaultModel(),authorable:presets?presets.authorable!==false:undefined,
+      systemAgentIds:Array.isArray(rows)?rows.filter(r=>r?.trust==='system').map(r=>r.id):undefined}
+  }
+
+  /** Read-only plan for the bundled six roles; never installs, grants or starts a Task. */
+  async studioRoleInstallPlan():Promise<string>{
+    await this.ready
+    return JSON.stringify(await planStudioRoleInstall(await this.studioRoleInstallOptions()))
+  }
+
+  /** Explicit apply of one reviewed plan hash. Browser-selected paths/grants are forbidden. */
+  async studioRoleInstallApply(payload:string):Promise<string>{
+    let request:any
+    try{request=JSON.parse(payload)}catch{throw Error('studio-role-install-request-invalid')}
+    if(!request||typeof request!=='object'||Array.isArray(request)||Object.keys(request).length!==1||Object.keys(request)[0]!=='expectedPlanSha256'||typeof request.expectedPlanSha256!=='string'||!/^[a-f0-9]{64}$/.test(request.expectedPlanSha256))throw Error('studio-role-install-request-invalid')
+    await this.ready
+    return JSON.stringify(await applyStudioRoleInstall(await this.studioRoleInstallOptions(),request.expectedPlanSha256))
   }
 
   async deleteAgent(payload: string): Promise<string> {

@@ -25,3 +25,11 @@ config:
 The command also prints this exact configuration field. The host rejects a missing or malformed explicitly selected file. Omitting the field retains the legacy package-adjacent lookup.
 
 If genuine calibration evidence is available, supply both `--calibration-path` and `--regression-path`. Missing proof files are reported as missing; present files remain unverified until the existing host calibration checks validate their contents. The command never creates calibration records or declares a render, provider, role installation or video-quality check passed. Node/Chrome/ffprobe availability and actual rendering still need host verification.
+
+## Install the six role definitions
+
+The Task Console RPC namespace exposes `studioRoleInstallPlan()` and `studioRoleInstallApply({expectedPlanSha256})`. Use the host's ordinary JSON RPC envelope. The first method returns a read-only plan and its hash; the second recomputes that plan before creating missing roles. It accepts only the plan hash: preset paths, skill roots, MCP references and registry authority come from the host, not request parameters.
+
+An identical existing role is kept. Customized, damaged or symlinked roles are reported as conflicts and preserved. Missing skills, unavailable MCP tool enumeration and absent transport references remain explicit blockers; installation does not silently remove tools. Model selection inherits the host default. Installation copies role definitions and selected skills with the existing preset writer, and references host MCP entries without copying credentials.
+
+This installs definitions only. Provider health, rendering, observation calibration, Task creation and final video quality remain separate checks. No Task or publication is started. These RPCs do not yet add a setup button to the browser UI.

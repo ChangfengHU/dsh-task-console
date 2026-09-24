@@ -1,4 +1,5 @@
 export {loadStudioRolePack,inspectStudioRoleDependencies,STUDIO_ROLE_IDS,type StudioRolePack,type StudioRoleTemplate,type StudioPackRole,type StudioDependencyInventory} from './studio-role-pack.js'
+export {planStudioRoleInstall,applyStudioRoleInstall,type StudioRoleInstallOptions} from './studio-role-install.js'
 /**
  * `dsh-task-console` — host half.
  *

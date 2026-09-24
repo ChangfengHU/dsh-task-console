@@ -1,3 +1,4 @@
+import {assertStudioProgressWritable} from './studio-progress.js'
 import type {StudioConfigBinding} from './studio-config.js'
 import {planStudioRoleInstall,applyStudioRoleInstall,type StudioRoleInstallOptions} from './studio-role-install.js'
 import {discoverStudioSourcesFromHost} from './studio-source-host.js'
@@ -165,7 +166,7 @@ export class TaskConsoleService extends TypertRemoteService {
         const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task,studioHostDeps)
         if(input.card.role==='executor')workflow.enforceRenderProvenance(input)
         const renderJob=async(action:'start'|'status',args:any)=>{
-          const assertActive=()=>{const c=this.runner.store.kernel.getTask(input.card.id),r=[...this.runner.store.s.runs.values()].find(r=>r.cardId===input.card.id&&r.sessionId===input.sessionId&&r.status==='running');if(!isActive()||!r||c?.status!=='running'||c.current_run_id!==this.runner.store.coreRunId(r.id)||!c.claim_expires||c.claim_expires<=Math.floor(Date.now()/1000))throw Error('studio-render-stale-run')}
+          const assertActive=()=>{const c=this.runner.store.kernel.getTask(input.card.id),r=[...this.runner.store.s.runs.values()].find(r=>r.cardId===input.card.id&&r.sessionId===input.sessionId&&r.status==='running');if(!isActive()||!r||c?.status!=='running'||c.current_run_id!==this.runner.store.coreRunId(r.id)||!c.claim_expires||c.claim_expires<=Math.floor(Date.now()/1000))throw Error('studio-render-stale-run');assertStudioProgressWritable(this.runner.store.kernel.db,input,this.runner.store.coreRunId(r.id))}
           assertActive();if(action==='start')assertPreparationWritable(this.runner.store.kernel.db,input);const config=action==='start'?await studioRenderConfiguration(studioHostDeps.configPath):undefined;assertActive();if(action==='start')assertPreparationWritable(this.runner.store.kernel.db,input);const intent=workflow.renderLedger.prepare(input,action,args,config)
           // Recover a known job without starting another renderer; a lost first
           // reply retries the helper's same durable intent and reserved output.
@@ -352,6 +353,7 @@ export class TaskConsoleService extends TypertRemoteService {
       const validate=()=>{
         const current=this.runner.store.kernel.getTask(card.id),latestBatch=this.runner.store.s.batches.get(batch.id)
         if((this.runner as any).stopped||current?.status!=='running'||current.current_run_id!==this.runner.store.coreRunId(run.id)||!current.claim_expires||current.claim_expires<=Math.floor(Date.now()/1000)||!latestBatch||latestBatch.settled||latestBatch.archivedAt)throw Error('studio-generation-stale-run')
+        assertStudioProgressWritable(this.runner.store.kernel.db,input,this.runner.store.coreRunId(run.id))
         assertPreparationWritable(this.runner.store.kernel.db,input);assertFrozenVoiceSynthesis(raw,args,workflow.script(input));assertStudioImageRequest(raw,args)
       }
       try { return await operations.invoke(input,raw,args,dispatch,validate,/generate_image$/.test(raw)?()=>prepareStudioImageRequest(raw,args):undefined) }

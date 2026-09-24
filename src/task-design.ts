@@ -6,6 +6,7 @@ import { validateStudioPolicy, type StudioPolicy } from './studio-policy.js'
 export interface TaskDesign {
   executionBinding?: 'agent-runtime-v1'
   workspaceMode?: 'studio-batch-v1'
+  progressPolicy?: 'studio-bounded-v1'
   extension?:WorkflowSelection
   evidenceContract?: 'browser-patrol-v1' | 'browser-patrol-v2' | 'studio-video-v1'
   studio?: StudioPolicy
@@ -22,7 +23,7 @@ export interface TaskDesign {
 
 export function validateDesign(value: unknown): TaskDesign {
   const d = value as TaskDesign
-  if (d && Object.keys(d).some(key => !['workspaceMode','executionBinding','extension','evidenceContract','studio','studioStages','browserPatrol','notifications','proxy','scope','branches','coordination','failurePolicy','acceptance'].includes(key)))
+  if (d && Object.keys(d).some(key => !['progressPolicy','workspaceMode','executionBinding','extension','evidenceContract','studio','studioStages','browserPatrol','notifications','proxy','scope','branches','coordination','failurePolicy','acceptance'].includes(key)))
     throw new Error('计划包含当前插件不支持的设计字段；不能将未实现的代理支线或跨任务 Gate 当成可执行能力')
   const text = (v: unknown, name: string) => {
     if (typeof v !== 'string' || !v.trim() || v.length > 4000) throw new Error(`计划 ${name} 必须是非空文本（最多4000字符）`)
@@ -38,6 +39,7 @@ export function validateDesign(value: unknown): TaskDesign {
   const extension=d.extension===undefined?undefined:validateWorkflowSelection(d.extension)
   if(extension&&[d.evidenceContract,d.studio,d.studioStages,d.browserPatrol,d.notifications,d.proxy].some(v=>v!==undefined))throw Error('workflow-extension-cannot-mix-legacy-domain-fields')
   const isStudio = d.evidenceContract === 'studio-video-v1'
+  if(d.progressPolicy!==undefined&&(!isStudio||d.progressPolicy!=='studio-bounded-v1'))throw Error('unsupported-studio-progress-policy')
   if(d.workspaceMode!==undefined&&(!isStudio||d.workspaceMode!=='studio-batch-v1'))throw Error('unsupported-studio-workspace-mode')
   if (d.studio !== undefined && !isStudio) throw Error('studio 字段仅适用于 studio-video-v1')
   if (isStudio && (d.browserPatrol !== undefined || d.notifications !== undefined || d.proxy !== undefined)) throw Error('studio-video-v1 不支持巡查、代理或通知支线')
@@ -92,7 +94,7 @@ export function validateDesign(value: unknown): TaskDesign {
   const maxAttempts = isStudio ? 8 : 3
   if (typeof d.failurePolicy?.isolateItems !== 'boolean' || !Number.isInteger(d.failurePolicy.maxAttempts) || d.failurePolicy.maxAttempts < 1 || d.failurePolicy.maxAttempts > maxAttempts)
     throw new Error(`failurePolicy 需要 isolateItems 和 1至${maxAttempts} 的 maxAttempts；它不授权重复有副作用的操作`)
-  return { ...(d.workspaceMode?{workspaceMode:d.workspaceMode}:{}), ...(d.executionBinding?{executionBinding:d.executionBinding}:{}), ...(extension?{extension}:{}), ...(studioStages ? {studioStages} : {}), ...(studio ? {studio} : {}), ...(d.evidenceContract ? { evidenceContract: d.evidenceContract } : {}), ...(browserPatrol ? { browserPatrol } : {}), ...(notifications ? { notifications } : {}), ...(proxy ? {proxy} : {}), scope: text(d.scope, 'scope'), branches, coordination: text(d.coordination, 'coordination'),
+  return { ...(d.progressPolicy?{progressPolicy:d.progressPolicy}:{}), ...(d.workspaceMode?{workspaceMode:d.workspaceMode}:{}), ...(d.executionBinding?{executionBinding:d.executionBinding}:{}), ...(extension?{extension}:{}), ...(studioStages ? {studioStages} : {}), ...(studio ? {studio} : {}), ...(d.evidenceContract ? { evidenceContract: d.evidenceContract } : {}), ...(browserPatrol ? { browserPatrol } : {}), ...(notifications ? { notifications } : {}), ...(proxy ? {proxy} : {}), scope: text(d.scope, 'scope'), branches, coordination: text(d.coordination, 'coordination'),
     failurePolicy: { isolateItems: d.failurePolicy.isolateItems, maxAttempts: d.failurePolicy.maxAttempts, stopConditions: list(d.failurePolicy.stopConditions, 'stopConditions') },
     acceptance: list(d.acceptance, 'acceptance') }
 }

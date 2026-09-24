@@ -9,6 +9,7 @@ test('ordinary request composes deterministic validated six-role save-only draft
  const r=request(),copy=structuredClone(r),first=composeStudioTaskDraft(r,context),next=composeStudioTaskDraft(r,context)
  assert.deepEqual(first,next);assert.deepEqual(r,copy);assert.equal(first.draft.id,context.taskId);assert.equal(first.draft.createdAt,context.createdAt);assert.equal(first.draft.saveOnly,true)
  assert.equal(first.draft.design?.workspaceMode,'studio-batch-v1')
+ assert.equal(first.draft.design?.progressPolicy,'studio-bounded-v1')
  assert.equal(first.createdTask,false);assert.equal(first.startedTask,false);assert.equal(first.qualityApproved,false);assert.equal(first.resolution.verifiedByComposer,false);assert.equal(first.resolution.characterProfileVersionPinned,false)
  const task=first.draft;assert.equal(task.design?.evidenceContract,'studio-video-v1');assert.equal(task.design?.executionBinding,'agent-runtime-v1');assert.equal(task.design?.studio?.publish,false);assert.equal(task.design?.studio?.visualCoverage,'requirements-v1');assert.equal(task.design?.studio?.dialogueLanguage,'zh-CN')
  assert.deepEqual(task.participants.map(p=>p.agentId),[roles.director,roles.editor,roles.quality]);assert.deepEqual(task.design?.studioStages?.map(s=>s.agentId),[roles.storyboard,roles.visual,roles.sound]);assert.equal(task.design?.failurePolicy.maxAttempts,3)
@@ -60,4 +61,14 @@ test('source-declared expected hash can enter pending review without claiming do
  assert.match(result.resolution.notice,/actual reference observation is still required/)
  assert.match(result.draft.brief,/元数据或哈希相符不代表用户认可基准/)
  assert.throws(()=>composeStudioTaskDraft({...input,referenceSha256:undefined},context),/source-declared expected SHA-256/)
+})
+
+
+test('progress policy is explicit, validated, and absent on legacy definitions',()=>{
+ const draft=composeStudioTaskDraft(request(),context).draft
+ const roster=new Set(context.installedAgentIds)
+ assert.equal(validateTask(draft,roster).design?.progressPolicy,'studio-bounded-v1')
+ assert.throws(()=>validateTask({...draft,design:{...draft.design,progressPolicy:'invented'}} as any,roster),/unsupported-studio-progress-policy/)
+ const legacy=structuredClone(draft);delete legacy.design!.progressPolicy
+ assert.equal(validateTask(legacy,roster).design?.progressPolicy,undefined)
 })

@@ -1,3 +1,4 @@
+import {StudioProgress,registerStudioProgress,studioProgressPending,studioProgressResume} from './studio-progress.js'
 import {StudioInterventions} from './studio-interventions.js'
 import {captureExecutionBinding,verifyExecutionBinding,withBoundPreset,executionRuntimeIdentity,ExecutionBindingError,type BatchExecutionBinding,type BoundFallback} from './batch-execution-binding.ts'
 import {workflowDefinition} from './workflow-plan.ts'
@@ -34,6 +35,9 @@ import { startupFallbackAllowed, installFallbackSelection } from './model-fallba
 import { FleetRepairRequired, fullFleetRecipe, fleetRoles } from './fleet-workflow-evidence.ts'
 
 interface Flight {
+  progress?:StudioProgress
+  progressStopping?:boolean
+  progressDisposed?:boolean
   executionBinding?: BatchExecutionBinding
   boundFallback?: BoundFallback|null
   sessionCreationAttempted?: boolean
@@ -186,7 +190,7 @@ export class TaskRunner {
     this.backgroundTick = undefined
     this.backgroundBatches.clear()
     this.disposeListener?.()
-    for (const f of this.flights.values()) { this.disarm(f); this.stopHeartbeat(f); f.disposeFallback?.(); f.disposeTools?.() }
+    for (const f of this.flights.values()) { this.disarm(f); this.stopHeartbeat(f); f.disposeFallback?.(); if(!f.progressStopping||f.progressDisposed)f.disposeTools?.() }
   }
 
   private now(): string { return new Date(this.clock()).toISOString() }
@@ -214,6 +218,7 @@ export class TaskRunner {
   }
 
   private async disposePreparationHandle(f:Flight):Promise<void> {
+    if(f.progressDisposed)return
     const task=this.store.tasks.get(f.taskId),studio=task?.design?.evidenceContract==='studio-video-v1'
     this.preparationRetiring.set(f.sessionId,f)
     if(studio&&f.sessionCreationAttempted&&typeof f.handle?.dispose!=='function')throw Error('studio-preparation-stop-unavailable')
@@ -355,6 +360,17 @@ export class TaskRunner {
       const template = this.store.tasks.get(c.taskId); if (!template || template.archivedAt) continue
       const batch = this.store.s.batches.get(c.batchId); if (!batch || batch.settled || batch.archivedAt) continue
       const task = taskForBatch(template, batch)
+      if(task.design?.progressPolicy==='studio-bounded-v1'){
+        const prior=this.store.kernel.db.prepare("SELECT payload FROM task_events WHERE task_id=? AND kind='studio_progress_stopped' ORDER BY id DESC LIMIT 1").get(c.id) as any
+        if(prior){
+          let blocked:string|undefined
+          try{const stopped=JSON.parse(prior.payload);blocked=stopped.stopConfirmed!==true?'studio-progress-session-stop-unconfirmed':studioProgressPending(this.store.kernel.db,{task,batch,card:c})}catch{blocked='studio-progress-operation-state-unavailable'}
+          if(blocked){
+            await this.store.transition(()=>this.store.kernel.blockTask(c.id,{reason:blocked!,kind:'capability'}),ok=>ok?{t:'run/blocked',at:this.now(),taskId:task.id,runId:c.runIds.at(-1)!,kind:'capability',reason:blocked!,terminal:true}:undefined)
+            continue
+          }
+        }
+      }
       if (c.consecutiveFailures > 0 && (c.role === 'notifier' || task.onFail !== 'retry' || c.consecutiveFailures >= task.maxTries)) {
         const failure = c.error ?? `连续失败 ${c.consecutiveFailures} 次`
         await this.store.transition(
@@ -534,7 +550,7 @@ export class TaskRunner {
     card.deps.forEach(collect)
     for (const d of [...prior.values()].sort((a, b) => a.index - b.index)) upstream.push({ agentName: await this.displayName(d.agentId), summary: d.summary ?? '' })
     const previousWait = this.store.kernel.db.prepare('SELECT reason,wake_at FROM dsh_task_wakeups WHERE card_id=?').get(card.id) as any
-    const resumeFacts = card.runIds.length ? await this.operationOutcome?.({task,batch,card,sessionId,profileId}) : undefined
+    const resumeFacts = [card.runIds.length ? await this.operationOutcome?.({task,batch,card,sessionId,profileId}) : undefined,task.design?.progressPolicy==='studio-bounded-v1'?studioProgressResume(this.store.kernel,card.id,task.cwd):undefined].filter(Boolean).join('\n')
     const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}${resumeFacts ? '\n[RESUME FACTS]\n'+resumeFacts : ''}${previousWait ? `\n[RESUMED DURABLE WAIT]\nDue: ${new Date(previousWait.wake_at).toISOString()}\n${previousWait.reason}\nContinue verification; do not repeat completed side effects.` : ''}`
     const messageId = randomUUID()
     const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview)
@@ -551,6 +567,7 @@ export class TaskRunner {
       flight.deadline ?? this.clock() + task.timeoutSec * 1000,
       Date.parse(batch.firedAt) + task.timeoutSec * fleetRoles.length * 1000,
     )
+    if(task.design?.progressPolicy==='studio-bounded-v1')flight.progress=new StudioProgress(this.store.kernel,card.id,claim.run.id)
     this.flights.set(sessionId, flight)
     this.startHeartbeat(flight)
     const assertStartupActive=()=>{const current=this.store.kernel.getTask(card.id);if(this.stopped||this.flights.get(sessionId)!==flight||current?.current_run_id!==flight.coreRunId||preparationBarrier(this.store.kernel.db,card.id))throw Error('studio-preparation-startup-superseded')}
@@ -601,7 +618,7 @@ export class TaskRunner {
         const toolClaim = this.store.kernel.getTask(card.id)?.claim_lock
         const assertToolActive = () => {
           const current=this.store.kernel.getTask(card.id),currentBatch=this.store.s.batches.get(batch.id)
-          if(this.stopped||this.flights.get(sessionId)!==flight||flight.terminal||current?.status!=='running'||current.current_run_id!==flight.coreRunId||current.claim_lock!==toolClaim||!current.claim_expires||current.claim_expires<=Math.floor(this.clock()/1000)||!currentBatch||currentBatch.settled||currentBatch.archivedAt)throw Error('task-run-no-longer-active')
+          if(this.stopped||this.flights.get(sessionId)!==flight||flight.terminal||flight.progressStopping||flight.progress?.state.reason||current?.status!=='running'||current.current_run_id!==flight.coreRunId||current.claim_lock!==toolClaim||!current.claim_expires||current.claim_expires<=Math.floor(this.clock()/1000)||!currentBatch||currentBatch.settled||currentBatch.archivedAt)throw Error('task-run-no-longer-active')
         }
         const submit = async (kind: 'completed' | 'review', summary: string, paths: string[], metadata?: Record<string, unknown>, reviewer?: string) => {
           if (flight.terminal) throw new Error('这次运行已经提交了终态')
@@ -720,15 +737,19 @@ export class TaskRunner {
       if(task.design?.extension){
         if(!this.registerWorkflowTools&&task.design.extension.hostApi===2)throw Error('workflow-runtime-tools-unavailable')
         if(this.registerWorkflowTools){
-          const old=flight.disposeTools,dispose=await this.registerWorkflowTools(flight.handle.agent.ctx,{task,batch,card,sessionId,profileId},()=>!this.stopped&&this.flights.get(sessionId)===flight&&!flight.terminal)
+          const old=flight.disposeTools,dispose=await this.registerWorkflowTools(flight.handle.agent.ctx,{task,batch,card,sessionId,profileId},()=>!this.stopped&&this.flights.get(sessionId)===flight&&!flight.terminal&&!flight.progressStopping&&!flight.progress?.state.reason)
           flight.disposeTools=()=>{dispose();old?.()}
         }
       }
       if (task.design?.evidenceContract === 'studio-video-v1') {
         if (!this.registerStudioTools) throw Error('studio-runtime-tools-unavailable')
         const disposeWorker = flight.disposeTools
-        const disposeStudio = await this.registerStudioTools(flight.handle.agent.ctx, {task,batch,card,sessionId,profileId}, () => !this.stopped && this.flights.get(sessionId) === flight && !flight.terminal, submitStudioReview!)
+        const disposeStudio = await this.registerStudioTools(flight.handle.agent.ctx, {task,batch,card,sessionId,profileId}, () => !this.stopped && this.flights.get(sessionId) === flight && !flight.terminal&&!flight.progressStopping&&!flight.progress?.state.reason, submitStudioReview!)
         flight.disposeTools = () => { disposeStudio(); disposeWorker?.() }
+      }
+      if(flight.progress){
+        const old=flight.disposeTools,dispose=registerStudioProgress(flight.handle.agent.ctx,flight.progress,sessionId,()=>!this.stopped&&this.flights.get(sessionId)===flight&&!flight.progressStopping&&!flight.terminal)
+        flight.disposeTools=()=>{dispose();old?.()}
       }
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }
       try {
@@ -836,6 +857,8 @@ export class TaskRunner {
   private async onTurnEnd(f: Flight, reason: any): Promise<void> {
     if (!this.flights.has(f.sessionId)) return
     if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
+    if(f.progressStopping)return
+    if(f.progress?.state.reason){await this.finishProgress(f);return}
     if (reason && reason.kind !== 'completed') {
       const fallback = f.executionBinding?f.boundFallback:this.modelFallback
       if (fallback && startupFallbackAllowed(reason, { used: f.fallbackUsed, toolCalled: f.toolCalled, terminal: f.terminal, provider: f.modelProvider }, fallback.fromProvider)) {
@@ -904,6 +927,31 @@ export class TaskRunner {
       return
     }
     await this.finish(f, 'run/failed', 'protocol_violation', `经过 ${maxNudges} 次协议纠正仍未调用 task_complete / task_block`)
+  }
+
+  /** Stop first with guards still installed; only a confirmed stop may retry. */
+  private async finishProgress(f:Flight):Promise<void>{
+    if(f.progressStopping||!f.progress||!this.flights.has(f.sessionId))return
+    f.progressStopping=true
+    this.disarm(f);this.stopHeartbeat(f)
+    const card=this.store.s.cards.get(f.cardId)!,batch=this.store.s.batches.get(card.batchId)!,task=taskForBatch(this.store.tasks.get(f.taskId)!,batch)
+    const facts=JSON.parse(f.progress.summary(task.cwd))
+    const record=(stopConfirmed:boolean,blocked?:string)=>this.store.kernel.recordEvent(f.cardId,'studio_progress_stopped',{schemaVersion:1,policy:'studio-bounded-v1',sessionId:f.sessionId,stopConfirmed,...facts,...(blocked?{blocked}: {})},f.coreRunId)
+    record(false)
+    try{await this.disposePreparationHandle(f);f.progressDisposed=true}
+    catch{
+      // Keep the tools/pre-step fence installed. No new run may be claimed until
+      // host stop is independently confirmed; absence from flights is no proof.
+      record(false,'session-stop-unconfirmed')
+      const reason='studio-progress-session-stop-unconfirmed: '+JSON.stringify(facts)
+      await this.store.transition(()=>this.store.kernel.blockTask(f.cardId,{expectedRunId:f.coreRunId,reason,kind:'capability'}),ok=>ok?{t:'run/blocked',at:this.now(),taskId:f.taskId,runId:f.runId,kind:'capability',reason,terminal:true}:undefined)
+      return
+    }
+    let pending:string|undefined
+    try{pending=studioProgressPending(this.store.kernel.db,{task,batch,card})}catch{pending='studio-progress-operation-state-unavailable; reconcile original operations before unblocking'}
+    record(true,pending)
+    if(pending){await this.finishBlocked(f,'STUDIO_PROGRESS_GUARD: '+JSON.stringify(facts)+'\n'+pending,'capability');return}
+    await this.finish(f,'run/failed','failed','STUDIO_PROGRESS_GUARD: '+JSON.stringify(facts))
   }
 
   private async finish(f: Flight, t: 'run/completed' | 'run/review_requested' | 'run/failed' | 'run/timed_out' | 'run/cancelled', outcome: string, error?: string, summary?: string, giveUpNow = false, metadata?: Record<string, unknown>, reviewer?: string): Promise<void> {

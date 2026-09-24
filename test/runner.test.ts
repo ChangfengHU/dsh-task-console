@@ -1298,3 +1298,89 @@ test('studio preparation Task Links are materialized in the same batch and retai
  assert.deepEqual(store.kernel.parentIds(`${batch.id}#s1-sound`),[`${batch.id}#s1-storyboard`])
  assert.ok(rows.every(r=>r.tenant===batch.id));runner.stop()
 })
+
+test('background fire acknowledges durable batch while host preflight is suspended and stable-ID retries claim once', async () => {
+  let release!: () => void, entered!: () => void, calls = 0
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const didEnter = new Promise<void>(resolve => { entered = resolve })
+  const {runner,store,host} = await setup({participants:[{agentId:'a'}]}, {
+    beforeStart: async () => { calls++; entered(); await pending },
+  })
+  const options = {batchId:'b-background-ack',dispatch:'background' as const}
+  const [first,retry] = await Promise.all([runner.fire('T','manual',options),runner.fire('T','manual',options)])
+  assert.equal(first.id,retry.id)
+  assert.equal(store.s.batches.size,1)
+  assert.equal(store.kernel.db.prepare('SELECT COUNT(*) AS n FROM dsh_batches').get().n,1)
+  assert.equal(host.sessions.size,0)
+  await didEnter
+  assert.equal(calls,1)
+  assert.equal(store.kernel.listRuns(first.cardIds[0]).length,1)
+  const again = await runner.fire('T','manual',options)
+  assert.equal(again.id,first.id)
+  await tick()
+  assert.equal(calls,1,'the in-flight claim fences duplicate dispatch')
+  release(); await tick()
+  assert.equal(host.sessions.size,1)
+  assert.equal(store.kernel.listRuns(first.cardIds[0]).length,1)
+})
+
+test('background batch survives stop before callback and restart still performs initial preset preflight', async () => {
+  const {runner,store,root,host} = await setup({participants:[{agentId:'a'}]})
+  const batch = await runner.fire('T','manual',{batchId:'b-background-restart',dispatch:'background'})
+  runner.stop()
+  assert.equal(host.sessions.size,0)
+  store.kernel.db.close()
+  const restartedStore = new EventStore(join(root,'store'))
+  const restartedHost = fakeHost(join(root,'presets'))
+  let checked = 0
+  const get = restartedHost.ctx.get
+  restartedHost.ctx.get = (key: string) => key === 'agentPresets' ? {
+    ...get(key), resolve: async () => { checked++; throw Error('missing after restart') },
+  } : get(key)
+  const restartedRunner = new TaskRunner(restartedHost.ctx,restartedStore)
+  try {
+    await restartedRunner.start()
+    assert.equal(checked,1)
+    assert.equal(restartedHost.sessions.size,0)
+    assert.equal(restartedStore.s.batches.size,1)
+    assert.equal(restartedStore.s.batches.get(batch.id)?.settled?.outcome,'failed')
+    assert.match(restartedStore.s.cards.get(batch.cardIds[0])?.error ?? '',/preset a 不在名册上/)
+  } finally { restartedRunner.stop(); restartedStore.kernel.db.close() }
+})
+
+test('background dispatch rejection is durable, leaves queued work intact, and subsequent dispatch resumes once', async () => {
+  const {runner,store,host} = await setup({participants:[{agentId:'a'}]})
+  const original = runner.tick.bind(runner)
+  runner.tick = async () => { throw Error('fixture dispatch unavailable') }
+  const batch = await runner.fire('T','manual',{batchId:'b-background-failure',dispatch:'background'})
+  await tick()
+  const event = store.kernel.listEvents(batch.cardIds[0]).find(e => e.kind === 'dispatch_failed')
+  assert.ok(event)
+  assert.match(event.payload ?? '',/fixture dispatch unavailable/)
+  assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'ready')
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  assert.equal(host.sessions.size,0)
+  runner.tick = original
+  await runner.fire('T','manual',{batchId:batch.id,dispatch:'background'})
+  await tick()
+  assert.equal(host.sessions.size,1)
+  assert.equal(store.kernel.listRuns(batch.cardIds[0]).length,1)
+})
+
+test('accepted background batch starts exactly once after host restart before dispatch', async () => {
+  const {runner,store,root} = await setup({participants:[{agentId:'a'}]})
+  const batch = await runner.fire('T','manual',{batchId:'b-background-resume',dispatch:'background'})
+  runner.stop(); store.kernel.db.close()
+  const resumedStore = new EventStore(join(root,'store'))
+  const resumedHost = fakeHost(join(root,'presets'))
+  const resumedRunner = new TaskRunner(resumedHost.ctx,resumedStore)
+  try {
+    await resumedRunner.start()
+    await resumedRunner.fire('T','manual',{batchId:batch.id,dispatch:'background'})
+    await tick()
+    assert.equal(resumedStore.s.batches.size,1)
+    assert.equal(resumedHost.sessions.size,1)
+    assert.equal(resumedStore.kernel.listRuns(batch.cardIds[0]).length,1)
+    assert.equal(resumedStore.s.batches.get(batch.id)?.settled,undefined)
+  } finally { resumedRunner.stop(); resumedStore.kernel.db.close() }
+})

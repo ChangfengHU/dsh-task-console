@@ -83,6 +83,8 @@ export interface FireOptions {
   /** Signal-specific objective and dynamically selected Agent team. */
   turn?: TaskTurn
   scheduleClaim?: ScheduleClaim
+  /** Acknowledge after the batch is durable; preflight and claiming run off-request. */
+  dispatch?: 'await' | 'background'
 }
 
 export class TaskRunner {
@@ -94,6 +96,8 @@ export class TaskRunner {
   schedule!: ScheduleLedger
   private disposeListener?: () => void
   private ticking = false
+  private backgroundTick?: ReturnType<typeof setImmediate>
+  private backgroundBatches = new Set<string>()
   private dispatchSuspended = 0
   readonly maxInProgress: number
   private readonly clock: () => number
@@ -146,7 +150,7 @@ export class TaskRunner {
     }
     await this.settleBatches()
     this.disposeListener = (this.ctx as any).on('session/event', (session: any, event: any) => this.onSessionEvent(session, event))
-    this.ticker = setInterval(() => { void this.tick() }, 60_000)
+    this.ticker = setInterval(() => { this.queueDispatch() }, 60_000)
     ;(this.ticker as any).unref?.()
     ;(this.ctx as any).effect?.(() => () => this.stop(), 'task-console: runner')
     await this.tick()
@@ -154,6 +158,9 @@ export class TaskRunner {
 
   stop(): void {
     if (this.ticker) clearInterval(this.ticker)
+    if (this.backgroundTick) clearImmediate(this.backgroundTick)
+    this.backgroundTick = undefined
+    this.backgroundBatches.clear()
     this.disposeListener?.()
     for (const f of this.flights.values()) { this.disarm(f); this.stopHeartbeat(f); f.disposeFallback?.(); f.disposeTools?.() }
   }
@@ -179,6 +186,31 @@ export class TaskRunner {
       await this.fireDueCron()
       await this.dispatch()
     } finally { this.ticking = false }
+  }
+
+  /** The durable ready rows, not this callback, are the recoverable work queue. */
+  private queueDispatch(batchId?: string): void {
+    if (batchId) this.backgroundBatches.add(batchId)
+    if (this.backgroundTick) return
+    this.backgroundTick = setImmediate(() => {
+      this.backgroundTick = undefined
+      const requested = [...this.backgroundBatches]
+      this.backgroundBatches.clear()
+      void this.tick().catch(error => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn('[task-console] background dispatch failed:', message)
+        // An infrastructure error is not a successful run or a reason to replay
+        // paid work. Keep durable rows intact and expose the failed dispatch.
+        const batches = requested.length ? requested.map(id => this.store.s.batches.get(id)).filter(Boolean) as Batch[]
+          : [...this.store.s.batches.values()].filter(b => !b.settled && !b.archivedAt)
+        for (const batch of batches) {
+          const cardId = batch.cardIds.find(id => !['done','failed','cancelled'].includes(this.store.s.cards.get(id)?.status ?? '')) ?? batch.cardIds[0]
+          if (!cardId) continue
+          try { this.store.kernel.recordEvent(cardId, 'dispatch_failed', { code: 'task_dispatch_failed', message, batch_id: batch.id, retry: 'next_scheduler_tick' }) }
+          catch { console.warn('[task-console] dispatch failure could not be persisted for', batch.id) }
+        }
+      })
+    })
   }
 
   /** A parked hourly patrol cannot suppress every future occurrence forever. */
@@ -275,6 +307,12 @@ export class TaskRunner {
         )
         await this.settleBatches(); continue
       }
+      // The first preflight is part of dispatch, so acknowledgement does not
+      // wait for it, and restart cannot bypass it on a durable unclaimed batch.
+      if (c.index === 0 && c.runIds.length === 0) {
+        const problem = await this.preflight(task)
+        if (problem) { await this.failInitialPreflight(task, c, problem); continue }
+      }
       await this.startRun(task, batch, c)
       inProgress++
     }
@@ -322,6 +360,7 @@ export class TaskRunner {
     const existing = this.store.s.batches.get(batchId)
     if (existing) {
       if (existing.taskId !== taskId) throw new Error('batchId 已被其他任务使用')
+      if (options.dispatch === 'background' && !existing.settled && !existing.archivedAt) this.queueDispatch(batchId)
       return existing
     }
     if (template.trigger.kind === 'cron' && !options.turn && this.scheduledTurn) options = { ...options, turn: await this.scheduledTurn(template, batchId) }
@@ -334,27 +373,26 @@ export class TaskRunner {
       ? [{ id: `${batchId}#p1`, agentId: task.participants[0].agentId, ...(task.participants[0].brief ? { brief: task.participants[0].brief } : {}), deps: [], kind: 'agent' as const, role: 'planner' as const, round: 1 }]
       : task.participants.map((p, i) => ({ id: `${batchId}#${i}`, agentId: p.agentId, ...(p.brief ? { brief: p.brief } : {}), deps: i ? [`${batchId}#${i - 1}`] : [] }))
     await this.store.createBatch(template, { t: 'batch/fired', at: this.now(), taskId, batch: { id: batchId, by, cards, ...(options.turn ? { turn: options.turn } : {}) } }, options.scheduleClaim)
-    const problem = await this.preflight(task)
-    if (problem) {
-      const first = cards[0]
-      const runId = `${first.id}#1`
-      const failure = `预检不过:${problem}`
-      const claim = await this.store.claimCard(first.id, runId, '', 1)
-      if (claim) {
-        await this.store.transition(
-          () => this.store.kernel.failRun(first.id, { expectedRunId: claim.run.id, outcome: 'failed', error: failure }),
-          result => result.ok ? { t: 'run/failed', at: this.now(), taskId, runId, outcome: 'failed', error: failure } : undefined,
-        )
-        await this.store.transition(
-          () => this.store.kernel.giveUpTask(first.id, failure),
-          ok => ok ? { t: 'card/gave_up', at: this.now(), taskId, cardId: first.id, error: failure } : undefined,
-        )
-      }
-      await this.settleBatches()
-    } else {
-      await this.tick()
-    }
+    if (options.dispatch === 'background') this.queueDispatch(batchId)
+    else await this.tick()
     return this.store.s.batches.get(batchId)!
+  }
+
+  private async failInitialPreflight(task: TaskSpec, first: Card, problem: string): Promise<void> {
+    const runId = `${first.id}#1`
+    const failure = `预检不过:${problem}`
+    const claim = await this.store.claimCard(first.id, runId, '', 1)
+    if (claim) {
+      await this.store.transition(
+        () => this.store.kernel.failRun(first.id, { expectedRunId: claim.run.id, outcome: 'failed', error: failure }),
+        result => result.ok ? { t: 'run/failed', at: this.now(), taskId: task.id, runId, outcome: 'failed', error: failure } : undefined,
+      )
+      await this.store.transition(
+        () => this.store.kernel.giveUpTask(first.id, failure),
+        ok => ok ? { t: 'card/gave_up', at: this.now(), taskId: task.id, cardId: first.id, error: failure } : undefined,
+      )
+    }
+    await this.settleBatches()
   }
 
   private async preflight(task: TaskSpec): Promise<string | null> {

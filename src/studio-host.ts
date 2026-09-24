@@ -35,12 +35,24 @@ async function execute(script:string,args:string[],task:any,config:any,stdin?:st
  })
 }
 const cache=new Map<string,{at:number,value:any}>()
+// Parallel stage startup shares one host probe; each caller still verifies its files.
+const preflights=new Map<string,Promise<any>>()
+async function sharedPreflight(key:string,run:()=>Promise<any>){
+ const cached=cache.get(key);if(cached&&Date.now()-cached.at<60_000)return cached.value
+ const pending=preflights.get(key);if(pending)return pending
+ const request=Promise.resolve().then(run).then(value=>{
+  if(value?.ok!==false)cache.set(key,{at:Date.now(),value})
+  return value
+ })
+ preflights.set(key,request)
+ try{return await request}finally{if(preflights.get(key)===request)preflights.delete(key)}
+}
 export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any,deps:HostDeps={}){
  const config=deps.config??await configuration(),exec=deps.execute??execute,now=Date.now(),checkedAt=new Date(now).toISOString(),expiresAt=new Date(now+15*60_000).toISOString()
  const record=(name:string,status:string,proofSha256?:string,reason?:string,method?:string)=>(workflow as any).recordCapability(task,{name,status,checkedAt,expiresAt,...(proofSha256?{proofSha256}:{}),...(reason?{reason}:{}),...(method?{method}:{})})
  let result:any,reference:any,characterReferences:any[]=[]
- if(config.preflightScript){const key=hash(JSON.stringify({id:task.id,cwd:task.cwd,studio:task.design?.studio,script:config.preflightScript})),old=cache.get(key)
-  try{result=old&&now-old.at<60_000?old.value:await exec(config.preflightScript,[],task,config,JSON.stringify(task));if(!old||result!==old.value)cache.set(key,{at:Date.now(),value:result})}catch{result={capabilities:{}}}
+ if(config.preflightScript){const key=hash(JSON.stringify({id:task.id,cwd:task.cwd,studio:task.design?.studio,config}))
+  try{result=await sharedPreflight(key,()=>exec(config.preflightScript,[],task,config,JSON.stringify(task)))}catch{result={capabilities:{}}}
   for(const [name,source] of [['character','character'],['reference','reference'],['frames','frames'],['render','hyperframes']]){const p=result?.capabilities?.[source];try{
    if(p?.ok!==true||!p.proofPath)throw Error('preflight unavailable');if(source==='hyperframes'&&(p.hyperframes_verified!==true||p.scope!=='actual_hyperframes_smoke_render'))throw Error('actual HyperFrames proof required')
    if(source==='character'){if(p.characterId!==task.design.studio.characterId||await fileSha256(p.imagePath)!==p.imageSha256||await fileSha256(p.profilePath)!==p.sha256)throw Error('character lock mismatch');characterReferences=[{id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256}]}

@@ -59,7 +59,7 @@ async function replayReceipt(root:string,output:string,board:any){
 export async function registerStudioBoardTools(ctx:any,o:StudioBoardOptions):Promise<()=>void>{
  const {input,workflow}=o
  const check=(exec?:any)=>{if(!o.isActive())throw Error('studio-stale-run');if(exec?.agent?.session?.id&&exec.agent.session.id!==input.sessionId)throw Error('studio-session-mismatch')}
- const tool=defineTool({name:'studio_compile_storyboard',description:'Executor only: pass a structured storyboard object to the fixed local compiler. Saves immutable input, writes a new composition directory and verifies HTML hash. Fix named fields without deleting planned scenes/actions. Does not render, synthesize media or approve quality.',parameters:{board:{type:'object',description:'Actual studio-board-v1 object, not serialized text. Image layer example: {"type":"image","role":"character","src":"assets/character.png","width":400,"height":800}. role is a direct property; tags is unsupported. Full contract: STORYBOARD_EXECUTION.md.',additionalProperties:true,required:true},outputDirectory:{type:'string',required:true}},output:{schema:{type:'object',additionalProperties:true},render:(_:any,value:any)=>[{type:'text',text:JSON.stringify(value)}]},execute:async(args:any,exec:any)=>{
+ const tool=defineTool({name:'studio_compile_storyboard',description:'Executor only: pass a structured storyboard object to the fixed local compiler. Saves immutable input, writes a new composition directory and verifies HTML hash. Fix named fields without deleting planned scenes/actions. Does not render, synthesize media or approve quality.',parameters:{board:{type:'object',description:'Execution object with required root schema:"studio-board-v1", numeric duration (seconds), gsap, font, script, scenes and audio. Not the planning document or serialized text. Scenes use start/duration/layers. Image layer example: {"type":"image","role":"character","src":"assets/character.png","width":400,"height":800}. role is a direct property; tags is unsupported. Full contract: STORYBOARD_EXECUTION.md.',additionalProperties:true,required:true},outputDirectory:{type:'string',required:true}},output:{schema:{type:'object',additionalProperties:true},render:(_:any,value:any)=>[{type:'text',text:JSON.stringify(value)}]},execute:async(args:any,exec:any)=>{
   check(exec);if(input.card?.role!=='executor')throw Error('studio-role-denied')
   if(Object.keys(args).some(key=>!['board','outputDirectory'].includes(key)))throw Error('studio-board-unknown-argument')
   const name=args.outputDirectory
@@ -69,7 +69,17 @@ export async function registerStudioBoardTools(ctx:any,o:StudioBoardOptions):Pro
   const board=JSON.parse(encoded),script=workflow.script(input),policy=input.task.design?.studio
   if(!script||!isDeepStrictEqual(board.script,script.lines))throw Error('studio-board-script-mismatch')
   if(!policy||policy.width!==1080||policy.height!==1920||policy.fps!==30||(board.width??1080)!==policy.width||(board.height??1920)!==policy.height||(board.fps??30)!==policy.fps)throw Error('studio-board-dimensions-mismatch')
-  if(!Number.isFinite(board.duration)||!Number.isFinite(policy.durationMin)||!Number.isFinite(policy.durationMax)||board.duration<policy.durationMin||board.duration>policy.durationMax)throw Error('studio-board-duration-outside-policy')
+  if(board.schema!=='studio-board-v1')throw Error('studio-board-execution-schema-required: '+JSON.stringify({
+   error_code:'studio-board-execution-schema-required',requiredSchema:'studio-board-v1',
+   requiredRootFields:['schema','duration','gsap','font','script','scenes','audio'],
+   action:'Pass the execution board described by STORYBOARD_EXECUTION.md. A planning document with version/dimensions/frame descriptions is not a renderable board. Keep the planned scenes, actions and frozen dialogue; express scenes as start/duration/layers and actual audio sources. Do not delete content to satisfy the schema.',
+  }))
+  if(!Number.isFinite(board.duration)||!Number.isFinite(policy.durationMin)||!Number.isFinite(policy.durationMax)||board.duration<policy.durationMin||board.duration>policy.durationMax)throw Error('studio-board-duration-outside-policy: '+JSON.stringify({
+   error_code:'studio-board-duration-outside-policy',reason:Number.isFinite(board.duration)?'duration-outside-range':'root-duration-required',
+   field:'board.duration',received:typeof board.duration==='number'||typeof board.duration==='string'?board.duration:null,
+   minimum:policy.durationMin,maximum:policy.durationMax,
+   action:'Set a numeric duration in seconds at the execution board root, aligned with the complete scene timeline and task duration policy. durationMin/durationMax inside dimensions do not supply it. Preserve the full script and scene content; do not pad empty frames or trim dialogue to fit.',
+  }))
   const root=resolve(input.task.cwd);await plainDirectory(root)
   const base=join(root,'.studio-boards'),output=join(root,name),digest=sha(encoded),boardPath=join(base,digest+'.json')
   // lstat catches dangling output symlinks too. Only complete, matching compiler

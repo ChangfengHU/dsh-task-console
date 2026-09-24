@@ -47,3 +47,17 @@ test('post-callback stale, input mutation and script change cannot return succes
 test('successful callback claims are verified against paths, symlinks and HTML hash',async t=>{
  for(const mode of ['wrong-path','directory-symlink','index-symlink','wrong-hash','quality-claim']){const s=await setup(t,{compile:async({root,cwd,value}:any)=>{const composition=join(cwd,value.outputDirectory);if(mode==='directory-symlink'){await mkdir(join(root,'outside'));await symlink(join(root,'outside'),composition)}else await mkdir(composition);if(mode==='index-symlink'){await writeFile(join(root,'outside.html'),'html');await symlink(join(root,'outside.html'),join(composition,'index.html'))}else await writeFile(join(composition,'index.html'),'html');return {ok:true,composition:mode==='wrong-path'?root:composition,indexSha256:mode==='wrong-hash'?'0'.repeat(64):sha('html'),qualityApproved:mode==='quality-claim'}}});await assert.rejects(s.execute(),/receipt-invalid|directory-symlink|output-symlink|hash-mismatch/);assert.equal((await lstat(join(s.cwd,'.studio-boards'))).isDirectory(),true)}
 })
+
+
+test('planning document and missing root duration receive actionable errors before writing or compiling',async t=>{
+ const s=await setup(t),planning={version:'studio-board-v1',dimensions:{durationMin:18,durationMax:25},script:board().script}
+ await assert.rejects(s.execute({board:planning}),(e:any)=>{
+  assert.match(e.message,/execution-schema-required/);const d=JSON.parse(e.message.slice(e.message.indexOf(': ')+2))
+  assert.ok(d.requiredRootFields.includes('duration'));assert.match(d.action,/Keep the planned scenes/);return true
+ })
+ const withoutDuration={...board()};delete (withoutDuration as any).duration
+ await assert.rejects(s.execute({board:withoutDuration}),(e:any)=>{
+  const d=JSON.parse(e.message.slice(e.message.indexOf(': ')+2));assert.equal(d.reason,'root-duration-required');assert.equal(d.received,null);assert.equal(d.minimum,18);assert.equal(d.maximum,25);return true
+ })
+ assert.equal(s.calls(),0);assert.deepEqual(await readdir(s.cwd),[])
+})

@@ -76,6 +76,10 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
       if(samePayload&&previous.producerSessionId===input.sessionId&&previous.policyHash===policyHash&&(previous.producerRound??null)===producerRound&&(previous.producerCardId??null)===producerCardId)return previous
       throw Error('studio-candidate-revision-must-increase')
     }
+    // A new production round must not relabel the prior MP4 as a repaired film.
+    // Same-run acknowledgement replay above is still idempotent; metadata-only
+    // updates in the same round remain possible with a higher revision.
+    if(previous&&candidate.sha256===previous.candidate.sha256&&Number.isInteger(producerRound)&&Number.isInteger(previous.producerRound)&&producerRound!==previous.producerRound)throw Error('studio-candidate-prior-round-video-reused: this MP4 is byte-identical to the prior production round. Query the existing render job until terminal and register its actual output path/SHA. Do not upload or relabel the old candidate as a repair; if production failed, report that failure.')
     const stored={candidate,producerSessionId:input.sessionId,producerRound,producerCardId,policyHash}
     this.write(input,'candidate',stored);return stored
   }

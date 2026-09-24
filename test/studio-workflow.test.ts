@@ -209,3 +209,16 @@ test('review integrity errors guide receipt repair without repeating observation
  })
  assert.deepEqual(workflow.status(input).review,before)
 })
+
+ test('later production round cannot relabel the prior video while same-round retry remains safe',t=>{
+  const {workflow,input}=setup(t)
+  const producer={...input,card:{id:'e1',role:'executor',round:1},sessionId:'first-editor'}
+  const candidate={sha256:h('a'),manifestSha256:h('c'),referenceSha256:h('b'),revision:1,durationSeconds:100,width:1080,height:1920,fps:30}
+  workflow.recordCandidate(producer,candidate)
+  const unchanged=workflow.status(input).candidate
+  const next={...producer,card:{id:'e2',role:'executor',round:2},sessionId:'next-editor'}
+  assert.throws(()=>workflow.recordCandidate(next,{...candidate,manifestSha256:h('d'),revision:2}),/prior-round-video-reused/)
+  assert.deepEqual(workflow.status(input).candidate,unchanged)
+  assert.doesNotThrow(()=>workflow.recordCandidate(producer,candidate))
+  assert.doesNotThrow(()=>workflow.recordCandidate(next,{...candidate,sha256:h('e'),revision:2}))
+ })

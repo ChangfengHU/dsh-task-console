@@ -2,7 +2,7 @@ import {DEFAULT_DIMENSIONS} from './studio-evidence.mjs'
 /** The model receives the same required fields that the evidence gate checks. */
 export const STUDIO_REVIEW_PARAMETERS={
  checks:{type:'array',required:true,description:'One check for every baseline dimension. Use only your actual same-candidate receipt IDs. Unchecked dimensions are pending, never invented pass.',items:{type:'object',properties:{
-  dimension:{type:'string',required:true,enum:[...DEFAULT_DIMENSIONS]},
+  dimension:{type:'string',required:true,enum:[...DEFAULT_DIMENSIONS],description:'Required evidence: technical=probe; editorial/identity/composition/motion/captions/reference=frames; intelligibility/performance/mix=audio; ending=frames AND audio over the SAME stated ranges; source_records=source. Performance here means vocal expression; facial/body acting belongs in motion. Source metadata or another session\'s IDs cannot replace observations. Use pending for unchecked dimensions on a grounded rejection.'},
   status:{type:'string',required:true,enum:['pass','fail','pending'],description:'Severity belongs in issues; blocker/major/partial are not check statuses.'},
   finding:{type:'string',required:true,description:'What the observations actually establish, including limits; do not infer whole-film coverage.'},
   ranges:{type:'array',required:true,items:{type:'array',items:{type:'number'}},description:'[[startSeconds,endSeconds],...], each covered by the supplied evidence for this dimension. Pending still states its intended unchecked range.'},

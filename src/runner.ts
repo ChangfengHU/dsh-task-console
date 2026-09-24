@@ -1,4 +1,6 @@
 import {StudioInterventions} from './studio-interventions.js'
+import {captureExecutionBinding,verifyExecutionBinding,withBoundPreset,executionRuntimeIdentity,ExecutionBindingError,type BatchExecutionBinding,type BoundFallback} from './batch-execution-binding.ts'
+import {workflowDefinition} from './workflow-plan.ts'
 import {StudioPreparation,preparationBarrier,preparationOriginExited} from './studio-preparation.js'
 import { recoverStudioFailure, type StudioRecoveryInput } from './studio-recovery.ts'
 /**
@@ -14,7 +16,7 @@ import { recoverStudioFailure, type StudioRecoveryInput } from './studio-recover
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { randomUUID } from 'node:crypto'
+import { randomUUID,createHash } from 'node:crypto'
 import { realpath } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { applyAgentPermission } from './agent-session.ts'
@@ -31,6 +33,8 @@ import { startupFallbackAllowed, installFallbackSelection } from './model-fallba
 import { FleetRepairRequired, fullFleetRecipe, fleetRoles } from './fleet-workflow-evidence.ts'
 
 interface Flight {
+  executionBinding?: BatchExecutionBinding
+  boundFallback?: BoundFallback|null
   sessionCreationAttempted?: boolean
   modelProvider?: string
   fallbackUsed?: boolean
@@ -60,6 +64,8 @@ interface Flight {
 }
 
 export interface RunnerOptions {
+  /** Host-owned identity reader; tests may provide an isolated runtime fixture. */
+  executionRuntimeIdentity?:()=>Promise<string>
   maxInProgress?: number
   now?: () => number
   onBatchSettled?: (batch: Batch) => void | Promise<void>
@@ -94,6 +100,7 @@ export interface FireOptions {
 }
 
 export class TaskRunner {
+  private readonly executionIdentity:()=>Promise<string>
   modelFallback?: { fromProvider: string; provider: string; model: string }
   private readonly ctx: Context
   readonly store: EventStore
@@ -126,6 +133,7 @@ export class TaskRunner {
   private readonly notify?: RunnerOptions['notify']
 
   constructor(ctx: Context, store: EventStore, opts: RunnerOptions = {}) {
+    this.executionIdentity=opts.executionRuntimeIdentity??executionRuntimeIdentity
     this.ctx = ctx; this.store = store
     this.maxInProgress = opts.maxInProgress ?? 3
     this.clock = opts.now ?? (() => Date.now())
@@ -411,11 +419,17 @@ export class TaskRunner {
       return existing
     }
     if (template.trigger.kind === 'cron' && !options.turn && this.scheduledTurn) options = { ...options, turn: await this.scheduledTurn(template, batchId) }
+    if(options.turn?.executionBinding)throw new ExecutionBindingError('host-created-only')
     const task = taskForTurn(template, options.turn)
     if (!options.turn && (template.origin?.signalId || [...this.store.s.batches.values()].some(b => b.taskId === taskId && b.turn?.origin?.signalId))) {
       throw new Error('外部 Signal 任务请从来源系统重新提交，由 Task Agent 重新核对目标与角色；不能重跑旧模板。')
     }
     if (task.graphMode === 'dynamic-rounds' && task.participants.length !== 3) throw new Error('动态回合必须有规划者、执行者、评估者')
+    if(task.design?.executionBinding==='agent-runtime-v1'){
+      const definition=workflowDefinition(task)
+      const turn=options.turn??{objective:task.brief,participants:task.participants,cwd:task.cwd,workflow:{id:createHash('sha256').update(JSON.stringify(definition)).digest('hex'),definition}}
+      options={...options,turn:{...turn,executionBinding:await captureExecutionBinding(this.ctx,task,batchId,this.modelFallback,this.executionIdentity)}}
+    }
     const cards = task.graphMode === 'dynamic-rounds'
       ? [{ id: `${batchId}#p1`, agentId: task.participants[0].agentId, ...(task.participants[0].brief ? { brief: task.participants[0].brief } : {}), deps: [], kind: 'agent' as const, role: 'planner' as const, round: 1 }]
       : task.participants.map((p, i) => ({ id: `${batchId}#${i}`, agentId: p.agentId, ...(p.brief ? { brief: p.brief } : {}), deps: i ? [`${batchId}#${i - 1}`] : [] }))
@@ -460,11 +474,13 @@ export class TaskRunner {
     if (!coreTask || !['ready', 'review'].includes(coreTask.status)||preparationBarrier(this.store.kernel.db,card.id)) return
     const fromReview = coreTask.status === 'review'
     const profileId = coreTask.assignee ?? card.agentId
-    const preset = await presets.resolve(profileId)
-    const spec = await readSpec(dirname(String(preset.path)))
+    const binding=batch.turn?.executionBinding
+    let preset:any,spec:Awaited<ReturnType<typeof readSpec>>,bindingStartupError=false
+    try{preset=await presets.resolve(profileId);spec=await readSpec(dirname(String(preset.path)))}catch(e){if(!binding)throw e;bindingStartupError=true;preset={id:profileId,name:profileId};spec=null}
     const agentName = spec?.name ?? preset.name ?? preset.id
     let selection: any = (() => { try { return (this.ctx as any).get('agentDefaultModel')?.currentSelection?.() } catch { return undefined } })()
     if (spec?.model?.includes('/')) { const [provider, ...rest] = spec.model.split('/'); selection = { provider, model: rest.join('/'), ...(spec.effort ? { reasoningEffort: spec.effort } : {}) } }
+    if(binding)selection=Array.isArray(binding.agents)?binding.agents.find(a=>a?.id===profileId)?.selection:undefined
 
     const attempt = this.store.kernel.listRuns(card.id).length + 1
     const runId = `${card.id}#${attempt}`
@@ -488,6 +504,7 @@ export class TaskRunner {
     const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview)
     if (!claim) return
     const flight: Flight = {
+      ...(binding?{executionBinding:binding,boundFallback:binding.fallback}:{}),
       modelProvider: selection?.provider,
       runId, cardId: card.id, taskId: task.id, sessionId, messageId, consumed: false,
       handle: undefined, lastText: '', timeoutSec: card.role === 'notifier' ? 300 : task.timeoutSec,
@@ -503,18 +520,37 @@ export class TaskRunner {
     const assertStartupActive=()=>{const current=this.store.kernel.getTask(card.id);if(this.stopped||this.flights.get(sessionId)!==flight||current?.current_run_id!==flight.coreRunId||preparationBarrier(this.store.kernel.db,card.id))throw Error('studio-preparation-startup-superseded')}
     try {
       assertStartupActive()
+      if(binding){
+        if(bindingStartupError)throw new ExecutionBindingError('preset-unavailable')
+        await verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity)
+      }
       // Host preflight runs after a durable claim, before any model or paid work.
       const blocked = await this.beforeStart?.({ task, batch, card, sessionId, profileId })
       if (blocked) { await this.finishBlocked(flight, blocked.reason, blocked.kind); return }
       assertStartupActive()
       // The normalized CAS claim is durable before a DSH session is created.
       flight.sessionCreationAttempted=true
-      flight.handle = await (this.ctx as any).agents.create({
-        sessionId,
-        ...(selection ? { agentOptions: selection } : {}),
-        meta: { cwd: task.cwd, agentPreset: preset.id },
-        setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
-      })
+      const createSession=async()=>{
+        let setupFailure:ExecutionBindingError|undefined
+        flight.handle = await (this.ctx as any).agents.create({
+          sessionId,
+          ...(selection ? { agentOptions: selection } : {}),
+          meta: { cwd: task.cwd, agentPreset: preset.id,...(binding?{executionBindingSha256:binding.sha256}: {}) },
+          setup: async (agentCtx: object) => {
+            if(!binding){await presets.mount(agentCtx,preset.id);return}
+            // Return the created handle before rejecting setup so finishBlocked
+            // can dispose it. No prompt is dispatched until verification passes.
+            try{
+              await verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity)
+              await presets.mount(agentCtx,preset.id)
+              await verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity)
+            }catch(error){setupFailure=error instanceof ExecutionBindingError?error:new ExecutionBindingError('mount-unavailable')}
+          },
+        })
+        if(setupFailure)throw setupFailure
+      }
+      if(binding)await withBoundPreset(this.ctx,binding,task.id,batch.id,profileId,createSession,this.executionIdentity)
+      else await createSession()
       assertStartupActive()
       applyAgentPermission(this.ctx, spec, flight.handle.agent.session)
       await this.onSessionCreated?.(sessionId)
@@ -663,11 +699,19 @@ export class TaskRunner {
         await ws?.attachSession?.(sessionId)
       } catch { /* cosmetic */ }
       assertStartupActive()
+      if(binding){
+        const observed=await verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity)
+        this.store.kernel.recordEvent(card.id,'execution_binding_verified',{bindingSha256:binding.sha256,runtimeSha256:binding.runtimeSha256,agentId:profileId,selection:observed.selection,permission:observed.permission,specSha256:observed.specSha256,compositionSha256:observed.compositionSha256,capabilitySha256:observed.capabilitySha256,skillsSha256:observed.skillsSha256},flight.coreRunId)
+      }
       flight.handle.agent.followup({ id: messageId, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
       this.store.kernel.recordEvent(card.id, 'prompt_dispatched', { message_id: messageId }, flight.coreRunId)
       await this.append({ t: 'run/prompt_dispatched', taskId: task.id, runId, messageId })
       this.arm(flight)
     } catch (error) {
+      if(error instanceof ExecutionBindingError){
+        this.store.kernel.recordEvent(card.id,'execution_binding_rejected',{bindingSha256:binding?.sha256??null,code:error.message},flight.coreRunId)
+        await this.finishBlocked(flight,error.message,'capability');return
+      }
       try { await this.disposePreparationHandle(flight) } catch { /* no stop receipt on failure */ }
       this.flights.delete(sessionId)
       this.stopHeartbeat(flight)
@@ -754,11 +798,13 @@ export class TaskRunner {
     if (!this.flights.has(f.sessionId)) return
     if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
     if (reason && reason.kind !== 'completed') {
-      const fallback = this.modelFallback
+      const fallback = f.executionBinding?f.boundFallback:this.modelFallback
       if (fallback && startupFallbackAllowed(reason, { used: f.fallbackUsed, toolCalled: f.toolCalled, terminal: f.terminal, provider: f.modelProvider }, fallback.fromProvider)) {
         f.fallbackUsed = true // Reserve once before async resolution or duplicate events.
         try {
+          if(f.executionBinding)await verifyExecutionBinding(this.ctx,f.executionBinding,f.taskId,this.store.s.cards.get(f.cardId)!.batchId,f.profileId,this.executionIdentity)
           const resolved = await (this.ctx as any).get('llm').resolveCallConfig({ provider: fallback.provider, model: fallback.model })
+          if(f.executionBinding&&(resolved.provider!==fallback.provider||resolved.model!==fallback.model))throw new ExecutionBindingError('fallback-resolution-drift')
           if (!this.flights.has(f.sessionId)) return
           f.disposeFallback = installFallbackSelection(f.handle.agent.ctx, { provider: resolved.provider, model: resolved.model })
           const fact = { from: f.modelProvider, to: `${resolved.provider}/${resolved.model}`, code: reason.error.code, stage: 'before-tools' }
@@ -766,7 +812,11 @@ export class TaskRunner {
           f.modelProvider = resolved.provider
           f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: `[HOST MODEL FALLBACK]\n主模型启动失败（${fact.code}），尚未调用任何工具。已切换至 ${fact.to}。在同一任务、会话与原权限范围继续原始请求；不是新任务，不得改变验收条件。` }], source: { kind: 'user' } })
           return
-        } catch {
+        } catch (error) {
+          if(error instanceof ExecutionBindingError){
+            this.store.kernel.recordEvent(f.cardId,'execution_binding_rejected',{bindingSha256:f.executionBinding?.sha256??null,code:error.message},f.coreRunId)
+            await this.finishBlocked(f,error.message,'capability');return
+          }
           this.store.kernel.recordEvent(f.cardId, 'model_fallback_unavailable', { provider: fallback.provider, model: fallback.model }, f.coreRunId)
         }
       }

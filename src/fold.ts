@@ -49,6 +49,8 @@ export interface TaskOrigin {
  * accidentally inherited from the first incident that created the Task.
  */
 export interface TaskTurn {
+  /** Host-created only at an opted-in batch fire; legacy turns have no binding. */
+  executionBinding?: import('./batch-execution-binding.ts').BatchExecutionBinding
   action?: import('./task-actions.ts').TaskActionSnapshot
   objective: string
   participants: Participant[]

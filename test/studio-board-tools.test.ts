@@ -5,8 +5,29 @@ import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {createHash} from 'node:crypto'
 import {registerStudioBoardTools,STUDIO_BOARD_TOOL_NAMES} from '../src/studio-board-tools.ts'
+import {boardFieldDiagnostics} from '../src/studio-board-diagnostics.ts'
 const sha=(v:string|Buffer)=>createHash('sha256').update(v).digest('hex')
 const board=()=>({schema:'studio-board-v1',duration:20,script:[{id:'L1',text:'原来的话'}],scenes:[],audio:[],font:'font.ttf',gsap:'gsap.min.js'})
+test('reported production field mistakes arrive together before writes, without changing the submitted board',async t=>{
+ const s=await setup(t)
+ const malformed={...board(),gsap:['assets/gsap.min.js'],font:['assets/font.ttf'],
+  scenes:[{id:'shot',title:'intent to preserve',start:0,duration:20,layers:[{type:'image',role:'character',src:'assets/person.png',width:300,height:500,anchorX:150,positionX:540,scale:1.2}]}],
+  audio:[{type:'voice',src:'voice.wav',role:'dialogue',start:0,lineId:'L1',text:'原来的话'},{type:'sfx',src:'effect.wav',start:2}]}
+ const original=JSON.stringify(malformed)
+ await writeFile(join(s.cwd,'draft.json'),original)
+ await assert.rejects(s.tool.execute({boardPath:'draft.json'}),(e:any)=>{
+  const d=JSON.parse(e.message.slice(e.message.indexOf(': ')+2));assert.equal(d.error_code,'studio-board-field-errors');assert.equal(d.dispatched,false)
+  for(const field of ['board.gsap','board.font','board.scenes[0]','board.scenes[0].layers[0]','board.audio[0].role','board.audio[1].role'])assert.ok(d.issues.some((i:any)=>i.field===field),field)
+  assert.match(d.action,/Preserve/);return true
+ })
+ assert.equal(s.calls(),0);assert.equal(await readFile(join(s.cwd,'draft.json'),'utf8'),original);assert.deepEqual(await readdir(s.cwd),['draft.json'])
+})
+test('diagnostics bound output, omit unknown input strings and accept documented nested motion',()=>{
+ const valid={...board(),scenes:[{start:0,duration:20,layers:[{type:'image',role:'subject',src:'image.png',width:100,height:100,initial:{scale:1},motion:[{at:0,duration:2,to:{x:20},ease:'none'}]}]}],audio:[{src:'voice.wav',role:'voice',start:0,lineId:'L1',text:'原来的话'}]}
+ assert.equal(boardFieldDiagnostics(valid).total,0)
+ const d=boardFieldDiagnostics({...valid,scenes:Array.from({length:60},()=>({start:0,duration:1,layers:[{type:'image',width:100,height:100,'secret-value-no-echo':true,initial:{scale:'bad'}}]}))})
+ assert.equal(d.issues.length,32);assert.ok(d.total>32);assert.equal(d.truncated,true);assert.doesNotMatch(JSON.stringify(d),/secret-value-no-echo/)
+})
 async function setup(t:any,options:any={}){
  const root=await mkdtemp(join(tmpdir(),'studio-board-'));t.after(()=>rm(root,{recursive:true,force:true}));const cwd=join(root,'project');await mkdir(cwd)
  let active=true,tool:any,calls=0,disposed=false,script={lines:board().script};const policy={width:1080,height:1920,fps:30,durationMin:18,durationMax:25,...options.policy}

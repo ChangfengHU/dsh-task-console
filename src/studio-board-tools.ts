@@ -5,6 +5,7 @@ import {lstat,mkdir,open,realpath} from 'node:fs/promises'
 import {extname,isAbsolute,join,relative,resolve,sep} from 'node:path'
 import {createHash} from 'node:crypto'
 import {isDeepStrictEqual} from 'node:util'
+import {boardFieldDiagnostics} from './studio-board-diagnostics.js'
 
 export const STUDIO_BOARD_TOOL_NAMES=['studio_compile_storyboard'] as const
 export interface StudioBoardOptions {input:any;workflow:any;isActive:()=>boolean;compile:(value:{boardPath:string;outputDirectory:string})=>Promise<any>}
@@ -116,6 +117,11 @@ export async function registerStudioBoardTools(ctx:any,o:StudioBoardOptions):Pro
    field:'board.duration',received:typeof board.duration==='number'||typeof board.duration==='string'?board.duration:null,
    minimum:policy.durationMin,maximum:policy.durationMax,
    action:'Set a numeric duration in seconds at the execution board root, aligned with the complete scene timeline and task duration policy. durationMin/durationMax inside dimensions do not supply it. Preserve the full script and scene content; do not pad empty frames or trim dialogue to fit.',
+  }))
+  const diagnostics=boardFieldDiagnostics(board)
+  if(diagnostics.total)throw Error('studio-board-field-errors: '+JSON.stringify({
+   error_code:'studio-board-field-errors',dispatched:false,...diagnostics,
+   action:'Correct these fields together using STORYBOARD_EXECUTION.md. Preserve the source board, planned scenes, actions and frozen dialogue; write a corrected revision. Do not remove content merely to compile. No output or media generation was dispatched. These are structural diagnostics only; the compiler still checks real media and timing.',
   }))
   const base=join(root,'.studio-boards'),output=join(root,name),digest=sha(encoded),boardPath=join(base,digest+'.json')
   // lstat catches dangling output symlinks too. Only complete, matching compiler

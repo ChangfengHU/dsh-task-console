@@ -40,3 +40,21 @@ test('stage configuration rejects duplicate, missing or unknown stages',()=>{
  assert.throws(()=>validateStudioStages([...stages.slice(0,2),stages[0]]),/invalid/)
  assert.throws(()=>validateStudioStages(stages.map(s=>({...s,agentId:'same'}))),/distinct/)
 })
+test('new visual contract rejects incomplete handoff and binds real registered storyboard/image files',async t=>{
+ const cwd=await mkdtemp(join(tmpdir(),'stage-coverage-'));t.after(()=>rm(cwd,{recursive:true,force:true}));const receipts=new Map(),states=new Map()
+ const db={prepare:()=>({get:(id:string)=>states.get(id)})},workflow={script:()=>({sha256:'a'.repeat(64),lines:[{id:'line-1',text:'原始台词'}]}),stageReceipt:(i:any,id:string)=>receipts.get(`${i.card.round}:${id}`),recordStageReceipt:(i:any,r:any)=>receipts.set(`${i.card.round}:${r.stage}`,r)}
+ const input=(id:string)=>({task:{cwd,design:{studioStages:stages,studio:{visualCoverage:'requirements-v1'}}},batch:{id:'B'},card:{id:studioStageCardId('B',1,id as any),agentId:`video-${id}`,role:'studio-stage',round:1},sessionId:`session-${id}`})
+ const boardPath='stages/r1/storyboard/storyboard.json',imagePath='stages/r1/visual/face.png',planPath='stages/r1/visual/visual-plan.json'
+ await mkdir(join(cwd,'stages/r1/storyboard'),{recursive:true});await mkdir(join(cwd,'stages/r1/visual'),{recursive:true})
+ const board={scriptSha256:'a'.repeat(64),scenes:[{id:'s1',sound:'line-1'}],visualRequirements:[{id:'face',sceneId:'s1',purpose:'reaction'},{id:'room',sceneId:'s1',purpose:'location'}]}
+ await writeFile(join(cwd,boardPath),JSON.stringify(board));await writeFile(join(cwd,'stages/r1/storyboard/manifest.json'),JSON.stringify({stage:'storyboard',round:1,outputs:[boardPath],summary:'planned'}))
+ const story=await registerStageFiles(input('storyboard'),'stages/r1/storyboard/manifest.json',workflow,db);states.set('B#s1-storyboard',{status:'done',tenant:'B',assignee:'video-storyboard'})
+ await promisify(execFile)('ffmpeg',['-v','error','-f','lavfi','-i','color=c=blue:s=16x16','-frames:v','1','-threads','1','-y',join(cwd,imagePath)])
+ const plan={schema:'visual-plan-v1',storyboardSha256:story.outputs[0].sha256,missing:[],items:[{requirementId:'face',path:imagePath,usage:'reaction crop'}]}
+ await writeFile(join(cwd,planPath),JSON.stringify(plan));await writeFile(join(cwd,'stages/r1/visual/manifest.json'),JSON.stringify({stage:'visual',round:1,outputs:[imagePath,planPath],summary:'incomplete fixture'}))
+ await assert.rejects(registerStageFiles(input('visual'),'stages/r1/visual/manifest.json',workflow,db),/Unfulfilled.*room/);assert.equal(receipts.has('1:visual'),false)
+ plan.items.push({requirementId:'room',path:imagePath,usage:'same source scene crop; fixture only'})
+ await writeFile(join(cwd,planPath),JSON.stringify(plan));const visual=await registerStageFiles(input('visual'),'stages/r1/visual/manifest.json',workflow,db)
+ assert.equal(visual.visualBinding.items.length,2);assert.equal(visual.qualityApproved,false)
+ await writeFile(join(cwd,planPath),'{}');await assert.rejects(verifyStageReceipt(input('visual'),visual,workflow),/file-changed/)
+})

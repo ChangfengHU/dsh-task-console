@@ -1,3 +1,4 @@
+import {StudioPreparation,assertPreparationWritable} from './studio-preparation.js'
 import {StudioRenderLedger} from './studio-render-ledger.js'
 import {assertScriptLanguage} from './studio-script-language.js'
 import {createHash,randomUUID} from 'node:crypto'
@@ -31,7 +32,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   private write(input:any,kind:string,value:any){const [task,batch]=this.key(input);this.db.prepare('INSERT INTO dsh_studio_state VALUES(?,?,?,?) ON CONFLICT(task_id,batch_id,kind) DO UPDATE SET payload=excluded.payload').run(task,batch,kind,JSON.stringify(value))}
   private read(input:any,kind:string){const [task,batch]=this.key(input);const r=this.db.prepare('SELECT payload FROM dsh_studio_state WHERE task_id=? AND batch_id=? AND kind=?').get(task,batch,kind);return r?JSON.parse(r.payload):undefined}
   stageReceipt(input:any,id:string){return this.read(input,`stage:${input.card.round}:${id}`)}
-  recordStageReceipt(input:any,value:any){this.write(input,`stage:${input.card.round}:${value.stage}`,value)}
+  recordStageReceipt(input:any,value:any){assertPreparationWritable(this.db,input);this.write(input,`stage:${input.card.round}:${value.stage}`,value)}
   recordCapability(task:any,value:StudioCapability){
     const policy=this.policy(task);strict(value,['name','status','proofSha256','checkedAt','expiresAt','reason','method'],'capability')
     if(!NAMES.includes(value.name)||!['passed','failed','access_denied','unknown'].includes(value.status))throw Error('studio-capability-status')
@@ -77,6 +78,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     return proof
   })()}
   recordCandidate(input:any,candidate:any){
+    assertPreparationWritable(this.db,input)
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
     strict(candidate,['sha256','manifestSha256','referenceSha256','revision','durationSeconds','width','height','fps'],'candidate')
     if(!HASH.test(candidate.sha256??'')||!HASH.test(candidate.manifestSha256??'')||!Number.isInteger(candidate.revision)||candidate.revision<1)throw Error('studio-candidate-invalid')
@@ -143,7 +145,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
       savedReview.reviewerSessionId!==input.sessionId||savedReview.candidateSha256!==current?.candidate.sha256||savedReview.revision!==current?.candidate.revision
     )?null:savedReview
     const planning=input.card?.role==='planner'&&this.read(input,'runtime_enforcement')===true?this.planningPrerequisites(input):undefined
-    return {...(input.card?.role==='reviewer'?{reviewProgress:this.reviewProgress(input,true)}:{}),...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),renderJobs:this.renderLedger.publicRows(input),candidate:current?.policyHash===ph?current.candidate:null,review,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
+    return {...(input.card?.role==='reviewer'?{reviewProgress:this.reviewProgress(input,true)}:{}),...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),preparationRevisions:new StudioPreparation({kernel:{db:this.db}}).publicRows(input.batch.id),renderJobs:this.renderLedger.publicRows(input),candidate:current?.policyHash===ph?current.candidate:null,review,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
   }
   recordCandidateLocation(input:any,location:{path:string;manifestPath:string;sha256:string}){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
@@ -171,7 +173,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     const ids=new Set();for(const line of value.lines){if(typeof line.id!=='string'||!line.id||ids.has(line.id)||typeof line.text!=='string'||!line.text.trim()||line.text.length>300)throw Error('studio-script-lines-invalid');ids.add(line.id)}
     assertScriptLanguage(this.policy(input.task),value.lines)
     const previous=this.script(input),review=this.read(input,'review'),candidate=this.read(input,'candidate')?.candidate
-    if(previous&&previous.sha256!==value.sha256&&(!review||review.candidateSha256!==candidate?.sha256||!review.issues?.some((i:any)=>['major','blocker'].includes(i.severity))))throw Error('studio-script-change-requires-independent-review')
+    if(previous&&previous.sha256!==value.sha256&&!new StudioPreparation({kernel:{db:this.db}}).allowsScript(input,previous.sha256)&&(!review||review.candidateSha256!==candidate?.sha256||!review.issues?.some((i:any)=>['major','blocker'].includes(i.severity))))throw Error('studio-script-change-requires-independent-review')
     this.write(input,'script',value)
   }
   speechPlan(input:any){const plan=this.read(input,'speech_plan'),current=this.read(input,'candidate');return plan&&plan.candidateSha256===current?.candidate.sha256&&plan.scriptSha256===this.script(input)?.sha256?plan:null}

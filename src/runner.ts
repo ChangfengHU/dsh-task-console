@@ -1,3 +1,4 @@
+import {StudioPreparation,preparationBarrier,preparationOriginExited} from './studio-preparation.js'
 import { recoverStudioFailure, type StudioRecoveryInput } from './studio-recovery.ts'
 /**
  * The dispatcher — the host-resident loop that turns a fired batch into
@@ -29,6 +30,7 @@ import { startupFallbackAllowed, installFallbackSelection } from './model-fallba
 import { FleetRepairRequired, fullFleetRecipe, fleetRoles } from './fleet-workflow-evidence.ts'
 
 interface Flight {
+  sessionCreationAttempted?: boolean
   modelProvider?: string
   fallbackUsed?: boolean
   toolCalled?: boolean
@@ -61,6 +63,7 @@ export interface RunnerOptions {
   now?: () => number
   onBatchSettled?: (batch: Batch) => void | Promise<void>
   onSessionCreated?: (sessionId: string) => void | Promise<void>
+  reconcilePreparationOperations?: (request:any)=>Promise<void>
   registerWorkflowTools?: (agentCtx:any,input:CompletionCheck,isActive:()=>boolean)=>Promise<()=>void>
   registerStudioTools?: (agentCtx: any, input: CompletionCheck, isActive: () => boolean, submitReview: () => Promise<void>) => Promise<() => void>
   beforeStart?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
@@ -94,6 +97,7 @@ export class TaskRunner {
   private readonly ctx: Context
   readonly store: EventStore
   private flights = new Map<string, Flight>()
+  private preparationRetiring = new Map<string, Flight>()
   private ticker?: ReturnType<typeof setInterval>
   schedule!: ScheduleLedger
   private disposeListener?: () => void
@@ -106,6 +110,7 @@ export class TaskRunner {
   private readonly onBatchSettled?: (batch: Batch) => void | Promise<void>
   private readonly onSessionCreated?: (sessionId: string) => void | Promise<void>
   private stopped=false
+  private readonly reconcilePreparationOperations?:RunnerOptions['reconcilePreparationOperations']
   private readonly registerWorkflowTools?:RunnerOptions['registerWorkflowTools']
   private readonly registerStudioTools?: RunnerOptions['registerStudioTools']
   private readonly beforeStart?: RunnerOptions['beforeStart']
@@ -125,6 +130,7 @@ export class TaskRunner {
     this.clock = opts.now ?? (() => Date.now())
     this.onBatchSettled = opts.onBatchSettled
     this.onSessionCreated = opts.onSessionCreated
+    this.reconcilePreparationOperations = opts.reconcilePreparationOperations
     this.registerWorkflowTools = opts.registerWorkflowTools
     this.registerStudioTools = opts.registerStudioTools
     this.beforeStart = opts.beforeStart
@@ -188,11 +194,42 @@ export class TaskRunner {
     if (this.stopped || this.ticking || this.dispatchSuspended > 0) return
     this.ticking = true
     try {
+      await this.reconcilePreparations()
       await this.expireBlockedPatrols()
       await this.wakeDueCards()
       await this.fireDueCron()
       await this.dispatch()
     } finally { this.ticking = false }
+  }
+
+  private async disposePreparationHandle(f:Flight):Promise<void> {
+    const task=this.store.tasks.get(f.taskId),studio=task?.design?.evidenceContract==='studio-video-v1'
+    this.preparationRetiring.set(f.sessionId,f)
+    if(studio&&f.sessionCreationAttempted&&typeof f.handle?.dispose!=='function')throw Error('studio-preparation-stop-unavailable')
+    await f.handle?.dispose?.()
+    if(studio)new StudioPreparation(this.store).recordStoppedSession(f.sessionId,f.sessionCreationAttempted?'disposed':'not-created')
+    this.preparationRetiring.delete(f.sessionId)
+  }
+
+  private async reconcilePreparations():Promise<void>{
+    const prep=new StudioPreparation(this.store)
+    for(const request of prep.rows().filter((r:any)=>r.state==='draining')){
+      const batch=this.store.s.batches.get(request.batchId)
+      if(!batch||batch.settled||batch.archivedAt)continue
+      for(const sid of request.sessionsToStop){
+        if(request.stoppedSessions.includes(sid))continue
+        const f=this.flights.get(sid)??this.preparationRetiring.get(sid)
+        if(f?.handle){
+          // The barrier already prevents commits. Do not infer stopped from
+          // absence in flights or swallow disposal failures as confirmation.
+          try{await this.disposePreparationHandle(f);this.disarm(f);this.stopHeartbeat(f);f.disposeFallback?.();f.disposeTools?.();this.flights.delete(sid)}catch{continue}
+        }else if(!f&&request.hostProcess&&preparationOriginExited(request.hostProcess))prep.markStopped(request.id,sid,'origin-process-exited')
+      }
+      try{await this.reconcilePreparationOperations?.(request)}catch{continue}
+      const fresh=prep.rows(request.batchId).find((r:any)=>r.id===request.id)
+      if(fresh.sessionsToStop.some((sid:string)=>!fresh.stoppedSessions.includes(sid))||prep.pending(fresh).length)continue
+      await prep.release(request.id)
+    }
   }
 
   /** The durable ready rows, not this callback, are the recoverable work queue. */
@@ -303,6 +340,7 @@ export class TaskRunner {
     ready.sort((a, b) => a.batchId.localeCompare(b.batchId) || Number(a.role === 'notifier') - Number(b.role === 'notifier') || a.index - b.index)
     for (const c of ready) {
       if (inProgress >= this.maxInProgress) break
+      if(preparationBarrier(this.store.kernel.db,c.id))continue
       const template = this.store.tasks.get(c.taskId); if (!template || template.archivedAt) continue
       const batch = this.store.s.batches.get(c.batchId); if (!batch || batch.settled || batch.archivedAt) continue
       const task = taskForBatch(template, batch)
@@ -330,7 +368,8 @@ export class TaskRunner {
   private async settleBatches(): Promise<void> {
     for (const b of this.store.s.batches.values()) {
       if (b.settled || b.archivedAt || this.store.tasks.get(b.taskId)?.archivedAt) continue
-      const cards = b.cardIds.map(id => this.store.s.cards.get(id)).filter(Boolean) as Card[]
+      if(new StudioPreparation(this.store).rows(b.id).some((r:any)=>r.state==='draining'))continue
+      const cards = b.cardIds.map(id => this.store.s.cards.get(id)).filter(c=>c&&!c.supersededBy) as Card[]
       if (!cards.length) continue
       const dead = cards.filter(c => c.status === 'failed' || c.status === 'cancelled')
       if (dead.length) {
@@ -417,7 +456,7 @@ export class TaskRunner {
   private async startRun(task: TaskSpec, batch: Batch, card: Card): Promise<void> {
     const presets = (this.ctx as any).get('agentPresets')
     const coreTask = this.store.kernel.getTask(card.id)
-    if (!coreTask || !['ready', 'review'].includes(coreTask.status)) return
+    if (!coreTask || !['ready', 'review'].includes(coreTask.status)||preparationBarrier(this.store.kernel.db,card.id)) return
     const fromReview = coreTask.status === 'review'
     const profileId = coreTask.assignee ?? card.agentId
     const preset = await presets.resolve(profileId)
@@ -460,19 +499,25 @@ export class TaskRunner {
     )
     this.flights.set(sessionId, flight)
     this.startHeartbeat(flight)
+    const assertStartupActive=()=>{const current=this.store.kernel.getTask(card.id);if(this.stopped||this.flights.get(sessionId)!==flight||current?.current_run_id!==flight.coreRunId||preparationBarrier(this.store.kernel.db,card.id))throw Error('studio-preparation-startup-superseded')}
     try {
+      assertStartupActive()
       // Host preflight runs after a durable claim, before any model or paid work.
       const blocked = await this.beforeStart?.({ task, batch, card, sessionId, profileId })
       if (blocked) { await this.finishBlocked(flight, blocked.reason, blocked.kind); return }
+      assertStartupActive()
       // The normalized CAS claim is durable before a DSH session is created.
+      flight.sessionCreationAttempted=true
       flight.handle = await (this.ctx as any).agents.create({
         sessionId,
         ...(selection ? { agentOptions: selection } : {}),
         meta: { cwd: task.cwd, agentPreset: preset.id },
         setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
       })
+      assertStartupActive()
       applyAgentPermission(this.ctx, spec, flight.handle.agent.session)
       await this.onSessionCreated?.(sessionId)
+      assertStartupActive()
       this.store.kernel.recordEvent(card.id, 'session_created', { session_id: sessionId }, flight.coreRunId)
       await this.append({ t: 'run/session_created', taskId: task.id, runId, sessionId })
       // The terminators live on this agent's scope only.
@@ -616,12 +661,13 @@ export class TaskRunner {
         const ws = registry ? (await registry.resolveByPath(task.cwd).catch(() => undefined)) ?? (await registry.create(task.cwd).catch(() => undefined)) : undefined
         await ws?.attachSession?.(sessionId)
       } catch { /* cosmetic */ }
+      assertStartupActive()
       flight.handle.agent.followup({ id: messageId, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
       this.store.kernel.recordEvent(card.id, 'prompt_dispatched', { message_id: messageId }, flight.coreRunId)
       await this.append({ t: 'run/prompt_dispatched', taskId: task.id, runId, messageId })
       this.arm(flight)
     } catch (error) {
-      try { await flight.handle?.dispose?.() } catch { /* original startup error wins */ }
+      try { await this.disposePreparationHandle(flight) } catch { /* no stop receipt on failure */ }
       this.flights.delete(sessionId)
       this.stopHeartbeat(flight)
       this.store.kernel.failRun(card.id, { expectedRunId: flight.coreRunId, outcome: 'failed', error: error instanceof Error ? error.message : String(error) })
@@ -777,16 +823,17 @@ export class TaskRunner {
     this.stopHeartbeat(f)
     f.disposeFallback?.()
     f.disposeTools?.()
-    try { await f.handle?.dispose?.() } catch { /* already gone */ }
+    try { await this.disposePreparationHandle(f) } catch { /* no preparation stop receipt on failure */ }
+    if(preparationBarrier(this.store.kernel.db,f.cardId)){t='run/cancelled';outcome='cancelled';error='Preparation revision superseded this run';giveUpNow=false;metadata=undefined}
     let changed = false
     if (t === 'run/completed') {
       changed = await this.store.transition(
-        () => this.store.kernel.completeTask(f.cardId, { expectedRunId: f.coreRunId, summary: summary ?? f.lastText, metadata }),
+        () => preparationBarrier(this.store.kernel.db,f.cardId) ? false : this.store.kernel.completeTask(f.cardId, { expectedRunId: f.coreRunId, summary: summary ?? f.lastText, metadata }),
         ok => ok ? { t, at: this.now(), taskId: f.taskId, runId: f.runId, summary: summary ?? f.lastText, ...(metadata ? { metadata } : {}) } : undefined,
       )
     } else if (t === 'run/review_requested') {
       changed = await this.store.transition(
-        () => this.store.kernel.requestReview(f.cardId, { expectedRunId: f.coreRunId, summary: summary ?? f.lastText, metadata, reviewer }),
+        () => preparationBarrier(this.store.kernel.db,f.cardId) ? false : this.store.kernel.requestReview(f.cardId, { expectedRunId: f.coreRunId, summary: summary ?? f.lastText, metadata, reviewer }),
         ok => ok ? { t, at: this.now(), taskId: f.taskId, runId: f.runId, summary: summary ?? f.lastText, ...(metadata ? { metadata } : {}), ...(reviewer ? { reviewer } : {}) } : undefined,
       )
     } else {
@@ -829,7 +876,7 @@ export class TaskRunner {
     this.stopHeartbeat(f)
     f.disposeFallback?.()
     f.disposeTools?.()
-    try { await f.handle?.dispose?.() } catch { /* already gone */ }
+    try { await this.disposePreparationHandle(f) } catch { /* no preparation stop receipt on failure */ }
     const ok = await this.store.transition(
       () => this.store.kernel.blockTask(f.cardId, { expectedRunId: f.coreRunId, reason, kind }),
       changed => changed ? { t: 'run/blocked', at: this.now(), taskId: f.taskId, runId: f.runId, kind, reason, terminal: true } : undefined,
@@ -850,7 +897,7 @@ export class TaskRunner {
     this.stopHeartbeat(f)
     f.disposeFallback?.()
     f.disposeTools?.()
-    try { await f.handle?.dispose?.() } catch { /* already gone */ }
+    try { await this.disposePreparationHandle(f) } catch { /* no preparation stop receipt on failure */ }
     const result = await this.store.transition(
       () => this.store.kernel.requestChanges(f.cardId, { expectedRunId: f.coreRunId, reason }),
       value => value.ok ? { t: 'card/changes_requested', at: this.now(), taskId: f.taskId, cardId: f.cardId, runId: f.runId, note: reason, targetCardId: f.cardId, reviewer: f.profileId } : undefined,

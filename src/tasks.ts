@@ -1,4 +1,5 @@
 import {studioStageRows,studioStageCardId} from './studio-stages.js'
+import {preparationBarrier} from './studio-preparation.js'
 import { validateDesign } from './task-design.js'
 /**
  * Store, validation, and the message a card receives. The model itself
@@ -529,7 +530,7 @@ export class EventStore {
 
   async claimCard(cardId: string, externalRunId: string, sessionId: string, attempt: number, fromReview = false): Promise<ClaimResult | undefined> {
     return this.transition(
-      () => this.tasks.get(this.state.cards.get(cardId)?.taskId ?? '')?.archivedAt || this.s.batches.get(this.s.cards.get(cardId)?.batchId ?? '')?.archivedAt ? undefined : this.kernel.claimTask(cardId, { fromReview }),
+      () => this.tasks.get(this.state.cards.get(cardId)?.taskId ?? '')?.archivedAt || this.s.batches.get(this.s.cards.get(cardId)?.batchId ?? '')?.archivedAt || preparationBarrier(this.kernel.db,cardId) ? undefined : this.kernel.claimTask(cardId, { fromReview }),
       claim => {
         if (!claim) return undefined
         this.kernel.db.prepare(`INSERT INTO dsh_run_bindings(external_run_id, core_run_id, session_id) VALUES (?, ?, ?)`).run(externalRunId, claim.run.id, sessionId)

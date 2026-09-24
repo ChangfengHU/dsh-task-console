@@ -169,3 +169,10 @@ test('real service scope refreshes studio status budget on success and unknown s
   assert.equal(workflow.status(input).budget.used.voiceSegments,3)
   assert.equal(ops.snapshot(input).unknown,true)
 })
+test('asset catalog task calls reach the host pagination path after preset namespace rename',async()=>{
+ let rawSeen='';const ctx={get:()=>({scopedMcp:(raw:string,args:any,_exec:any,invoke:any)=>{rawSeen=raw;return invoke(args)}})}
+ const identity={serverName:'vyibc-cartoon-assets-studio-taskbook-sound',sourceEntryId:'mcp-vyibc-cartoon-assets',sourceServerName:'vyibc-cartoon-assets'}
+ const args={kind:'bgm',limit:5};const result=await executeWithTaskScope(ctx,identity,'asset_search',args,{agent:{session:{id:'task-catalog'}}},async x=>x)
+ assert.equal(rawSeen,'asset_search');assert.deepEqual(result,args)
+ assert.throws(()=>executeWithTaskScope({},identity,'asset_search',args,{agent:{session:{id:'task-catalog'}}},()=>{}),/scope guard unavailable/)
+})

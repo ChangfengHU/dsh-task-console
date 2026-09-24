@@ -600,6 +600,10 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
     '只有下载返回 ok=true、path、sha256、bytes 后才把实际文件作为输入；kind、标签、封面或来源卡不证明有音频文件，下载成功也不证明许可或质量。source-only 表示只有来源资料，不能把页面/来源卡当音频：选择有归档文件的合适素材，或按原始来源核实许可后获取真实媒体。不要循环重试同一个 source-only ID。',
     'asset-file-auth-failed、installed-asset-auth-unavailable、studio-asset-download-host-not-configured 属于宿主依赖问题；保留 error_code 和 httpStatus，先 studio_status 核对可用状态，报告该下载工具的确切故障，不用 bootstrap token 或猜测地址绕过。output-exists-with-other-bytes 时保留旧文件、使用新路径；output-extension-mismatch 时按归档扩展名更正输出路径。失败或完整性校验失败的响应不能改名成 .wav/.mp3/.png，也不能加入已完成清单。',
     '阶段交接仍调用 studio_register_stage({path:本轮manifest路径})，验证实际媒体和哈希；有未下载成功的必需素材就如实列出缺项。下载回执不是阶段完成或审美通过。')
+  if(task.design?.evidenceContract==='studio-video-v1'&&card.role==='executor')lines.push('', '[STUDIO EXECUTION BOARD]',
+    '采用结构化编译时先读本项目 STORYBOARD_EXECUTION.md 和当前 studio_compile_storyboard schema；规划分镜不是执行板。根字段为 schema=studio-board-v1、duration秒数、gsap、font、script、scenes、audio。沿用冻结台词，voice音轨逐条含lineId/text；场景需start/duration/layers，不能把frame描述当可执行图层。',
+    '先读取 studio_status.executionAssets 中实际发现的本地GSAP/字体路径；若没有该字段则查现有工程文件。不能填包名、字体名或用Skill哈希猜运行库版本。根据同轮实际登记文件核对每个src；pending-generation不是存在的图片，缺失文件名应定位后处理，不能靠改绝对路径或反复重试解决。',
+    '当前schema支持boardPath时，将完整执行板保存在项目内JSON，调用 studio_compile_storyboard({boardPath:相对JSON路径})，无需每次重新发送整份JSON；旧schema才用board对象。编译器负责创建输出目录，不预建目录、不先把源JSON写进输出目录，也不删除旧版规避output-exists。保持有效分镜，局部修正明确错误；失败编译不能直接交渲染。')
   if(task.design?.evidenceContract==='studio-video-v1'&&card.role==='executor')lines.push('', '[STUDIO REAL RENDER]',
     '先检查同轮实际素材、冻结台词及当前渲染依赖，再使用已安装并可用的 HyperFrames/FFmpeg 执行能力产出真实视频；只能按当前会话实际工具 schema 调用渲染工具或执行能力；缺少时不臆造接口、名称或参数。渲染命令返回执行编号时持续查询该编号；结果未知先对账，不盲目重复启动。',
     '渲染缺依赖或命令失败时先 studio_status 核对宿主能力，记录失败命令、退出码、脱敏错误和受影响步骤；能够在授权范围修复则修复，否则 task_block(reason,kind="capability") 如实交接确切故障。preflight 通过不覆盖之后真实发生的渲染失败。',

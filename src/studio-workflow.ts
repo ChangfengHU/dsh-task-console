@@ -2,6 +2,7 @@ import {createHash,randomUUID} from 'node:crypto'
 import {validateStudioPolicy} from './studio-policy.js'
 import {evaluateStudioReview} from './studio-evidence.mjs'
 import {studioStageFor} from './studio-stages.js'
+import {studioReviewProgress} from './studio-review-progress.js'
 
 const NAMES=['frames','audio','audio_calibration','render','character','reference'] as const
 const HASH=/^[a-f0-9]{64}$/i
@@ -97,11 +98,18 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     this.write(input,'skill_loads',[...rows,{...receipt,sessionId:input.sessionId,policyHash:sha(this.policy(input.task)),at:new Date().toISOString()}])
   }
   recordIntervention(input:any,reason:string){if(typeof reason!=='string'||!reason.trim())throw Error('studio-intervention-reason');this.write(input,'interventions',[...(this.read(input,'interventions')??[]),{reason,at:new Date().toISOString()}])}
+  reviewProgress(input:any){
+    if(input.card?.role!=='reviewer')return null
+    const [task,batch]=this.key(input),ph=sha(this.policy(input.task)),saved=this.read(input,'candidate')
+    if(!saved||saved.policyHash!==ph)return null
+    const rows=this.db.prepare('SELECT payload FROM dsh_studio_receipts WHERE task_id=? AND batch_id=? AND policy_hash=? AND session_id=? AND candidate_sha256=?').all(task,batch,ph,input.sessionId,saved.candidate.sha256)
+    return studioReviewProgress(saved.candidate,input.sessionId,rows.map((r:any)=>JSON.parse(r.payload)),this.speechPlan(input),this.read(input,'speech_checks')??[])
+  }
   status(input:any){
     this.key(input)
     const current=this.read(input,'candidate'),ph=sha(this.policy(input.task)),preflight=this.preflight(input.task)
     const planning=input.card?.role==='planner'&&this.read(input,'runtime_enforcement')===true?this.planningPrerequisites(input):undefined
-    return {...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),candidate:current?.policyHash===ph?current.candidate:null,review:current?.policyHash===ph?(this.read(input,'review')??null):null,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
+    return {...(input.card?.role==='reviewer'?{reviewProgress:this.reviewProgress(input)}:{}),...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),candidate:current?.policyHash===ph?current.candidate:null,review:current?.policyHash===ph?(this.read(input,'review')??null):null,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
   }
   recordCandidateLocation(input:any,location:{path:string;manifestPath:string;sha256:string}){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')

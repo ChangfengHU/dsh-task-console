@@ -127,3 +127,17 @@ test('candidate retry cannot transfer to a restored session or another round, ca
  assert.equal(workflow.status({...producer,batch:{id:'other-batch'}}).candidate,null)
  input.task.design.studio.characterId='different-character';assert.throws(()=>workflow.recordCandidate(producer,{...candidate}),/revision-must-increase/)
 })
+
+
+test('review progress is rebuilt from current host ledger and isolated by session, batch and policy',t=>{
+ const {workflow,input}=setup(t),{reviewer,candidate}=proof(workflow,input),db=(workflow as any).db
+ db.prepare('DELETE FROM dsh_studio_receipts').run()
+ workflow.recordReceipt(reviewer,{candidateSha256:candidate.sha256,sha256:h('d'),kind:'audio',ranges:[[0,8]]})
+ workflow.recordReceipt({...reviewer,sessionId:'other'},{candidateSha256:candidate.sha256,sha256:h('d'),kind:'audio',ranges:[[8,100]]})
+ const rebuilt=new StudioWorkflow({kernel:{db}})
+ assert.deepEqual(rebuilt.status(reviewer).reviewProgress.audio.remainingRanges,[[8,100]])
+ assert.equal(rebuilt.status(input).reviewProgress,undefined)
+ assert.equal(rebuilt.reviewProgress({...reviewer,batch:{id:'other'}}),null)
+ input.task.design.studio.characterId='changed'
+ assert.equal(rebuilt.reviewProgress(reviewer),null)
+})

@@ -186,3 +186,12 @@ test('actual candidate registration is repeatable through file tool and rejects 
  await writeFile(join(s.cwd,'manifest.json'),'{"changed":true}');await assert.rejects(tools.studio_register_candidate.execute(args),/revision-must-increase/);assert.deepEqual(state(),before)
  input.sessionId='restored-producer';await writeFile(join(s.cwd,'manifest.json'),'{}');await assert.rejects(tools.studio_register_candidate.execute(args),/revision-must-increase/)
 })
+
+
+test('inspection returns updated host progress only after recording its real observation receipt',async t=>{
+ const s=await setup(t),tools:any={},receipts:any[]=[]
+ await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd:s.cwd},card:{role:'reviewer'},sessionId:'s'},workflow:{candidateLocation:()=>({path:join(s.cwd,'film.mp4')}),status:()=>({candidate:s.getCandidate()}),recordReceipt:(_:any,r:any)=>{receipts.push(r);return {...r,id:'actual-id'}},reviewProgress:()=>({observationCount:receipts.length,qualityApproved:false})},isActive:()=>true,runCommand:async(_,args)=>{await writeFile(args.at(-1)!,'audio');return {stdout:''}},audioObserve:async({wavPath})=>({input_modality:'input_audio',audio_sha256:await fileSha256(wavPath)})})
+ const value=await tools.studio_inspect_audio.execute({start:0,end:3})
+ assert.equal(value.receipt.id,'actual-id');assert.equal(value.reviewProgress.observationCount,1);assert.equal(value.reviewProgress.qualityApproved,false)
+ assert.equal(value.observation.audio_sha256,hash('audio'))
+})

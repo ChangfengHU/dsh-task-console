@@ -27,7 +27,7 @@ export async function downloadStudioAsset(task:any,args:{id:string;path:string},
  return {ok:true,assetId:args.id,path:relative(root,path),sha256:result.sha256,bytes:size,kind:result.kind,reused:result.reused,newGeneration:0,qualityApproved:false}
 }
 async function execute(script:string,args:string[],task:any,config:any,stdin?:string):Promise<any>{
- return new Promise((resolve,reject)=>{const child=spawn('python3',[script,...args],{env:{...process.env,STUDIO_PROJECT_ROOT:task.cwd,STUDIO_VAULT_TOKEN_FILE:config.vaultTokenFile??''},stdio:['pipe','pipe','ignore']});let output='',overflow=false,done=false
+ return new Promise((resolve,reject)=>{const child=spawn('python3',[script,...args],{env:{...process.env,STUDIO_PROJECT_ROOT:task.cwd,STUDIO_TASK_ID:String(task.id??''),STUDIO_VAULT_TOKEN_FILE:config.vaultTokenFile??'',STUDIO_OBSERVATION_CACHE_ROOT:config.observationCacheRoot??'',STUDIO_OBSERVATION_CACHE_EPOCH:config.observationCacheEpoch??''},stdio:['pipe','pipe','ignore']});let output='',overflow=false,done=false
  const finish=(err?:Error,result?:any)=>{if(done)return;done=true;clearTimeout(timer);if(err)reject(err);else resolve(result)}
  const timer=setTimeout(()=>{child.kill('SIGKILL');finish(Error('studio-host-subprocess-timeout'))},420000)
  child.stdout.on('data',b=>{output+=b.toString();if(output.length>2_000_000){overflow=true;child.kill('SIGKILL')}});child.on('error',()=>finish(Error('studio-host-subprocess-unavailable')));child.stdin.on('error',()=>{});child.stdin.end(stdin??'')

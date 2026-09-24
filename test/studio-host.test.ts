@@ -33,3 +33,14 @@ test('host configuration changes invalidate probe reuse and a thrown probe can b
  await refreshStudioCapabilities(s.workflow,s.task,{config,execute});assert.equal(calls,2)
  await refreshStudioCapabilities(s.workflow,s.task,{config:{...config,renderRuntime:'/runtime-b'},execute});assert.equal(calls,3)
 })
+
+test('real host subprocess gets task scope and opt-in cache only from host config',async t=>{
+ const s=await setup(t),script=join(s.cwd,'scope.py')
+ await writeFile(script,`import os,json\nprint(json.dumps({'ok':True,'input_modality':'input_audio','finish_reason':'stop','audio_sha256':'${s.sha256}','scope':{k:os.environ.get(k) for k in ['STUDIO_TASK_ID','STUDIO_OBSERVATION_CACHE_ROOT','STUDIO_OBSERVATION_CACHE_EPOCH']}}))\n`)
+ const config={audioScript:script,vaultTokenFile:'fixture',observationCacheRoot:join(s.cwd,'cache'),observationCacheEpoch:'v2'}
+ const args={wavPath:s.path,start:0,end:1}
+ const result=await observeStudioAudio({...s.task,observationCacheRoot:'/model-controlled'},args,{config})
+ assert.deepEqual(result.scope,{STUDIO_TASK_ID:s.task.id,STUDIO_OBSERVATION_CACHE_ROOT:config.observationCacheRoot,STUDIO_OBSERVATION_CACHE_EPOCH:'v2'})
+ const disabled=await observeStudioAudio(s.task,args,{config:{audioScript:script,vaultTokenFile:'fixture'}})
+ assert.equal(disabled.scope.STUDIO_OBSERVATION_CACHE_ROOT,'')
+})

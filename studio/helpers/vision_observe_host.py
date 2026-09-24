@@ -43,6 +43,39 @@ class VisionError(ValueError):
     def __init__(self,code):
         super().__init__('Vision observation failed');self.error_code=code
 
+OBSERVATION_CONTRACT = 'studio-vision-json-v1'
+
+def validate_observation(text,image_count):
+    """Validate structure and input coverage, not whether visual claims are true."""
+    if isinstance(image_count,bool) or not isinstance(image_count,int) or not 1<=image_count<=8:raise VisionError('observation_index_invalid')
+    if not isinstance(text,str) or not 0<len(text)<=MAX_TEXT_CHARS:raise VisionError('observation_json_invalid')
+    def unique(pairs):
+        obj={}
+        for key,value in pairs:
+            if key in obj:raise ValueError('duplicate key')
+            obj[key]=value
+        return obj
+    def reject_constant(value):raise ValueError('nonfinite JSON number')
+    try:value=json.loads(text,object_pairs_hook=unique,parse_constant=reject_constant)
+    except (ValueError,TypeError,RecursionError):raise VisionError('observation_json_invalid') from None
+    if not isinstance(value,dict) or set(value)!={'observations','canvas_observations','continuity','uncertain'}:raise VisionError('observation_schema_invalid')
+    def bounded_string(v):return isinstance(v,str) and bool(v.strip()) and len(v)<=6000
+    for key in ('observations','canvas_observations'):
+        rows=value[key]
+        if not isinstance(rows,list) or not 1<=len(rows)<=image_count:raise VisionError('observation_schema_invalid')
+        seen=set()
+        for row in rows:
+            if not isinstance(row,dict) or set(row)!={'index','description'} or not bounded_string(row['description']):raise VisionError('observation_schema_invalid')
+            indices=row['index'] if isinstance(row['index'],list) else [row['index']]
+            if not 1<=len(indices)<=image_count:raise VisionError('observation_index_invalid')
+            for index in indices:
+                if isinstance(index,bool) or not isinstance(index,int) or not 0<=index<image_count or index in seen:raise VisionError('observation_index_invalid')
+                seen.add(index)
+        if seen!=set(range(image_count)):raise VisionError('observation_coverage_incomplete')
+    if not bounded_string(value['continuity']):raise VisionError('observation_schema_invalid')
+    if not isinstance(value['uncertain'],list) or len(value['uncertain'])>32 or any(not bounded_string(v) for v in value['uncertain']):raise VisionError('observation_schema_invalid')
+    return value
+
 def transport_image(data,mime):
     """Lossy transport copy only. Preserve dimensions and original on-disk asset."""
     if mime!='image/png' or len(data)<=512*1024:return data,mime,'none'
@@ -104,7 +137,7 @@ def observation_prompt(request):
     images=request['images']
     times=[item.get('time') for item in images]
     ordered=len(times)>1 and all(isinstance(t,(int,float)) and not isinstance(t,bool) and math.isfinite(t) for t in times) and all(a<b for a,b in zip(times,times[1:]))
-    common='\n用途:'+request['purpose']+'。细小五官、张嘴或露齿等看不清时必须写uncertain，禁止补想。人物转身或视角变化时屏幕左右会改变，不能仅据左右变化断言道具跳位。'+CANVAS_PROMPT
+    common='\n用途:'+request['purpose']+'。细小五官、张嘴或露齿等看不清时必须写uncertain，禁止补想。人物转身或视角变化时屏幕左右会改变，不能仅据左右变化断言道具跳位。'+CANVAS_PROMPT+('\n严格JSON契约：顶层只能含observations、canvas_observations、continuity、uncertain。前两个字段均为非空数组，每项只能含index和description：index为整数图号或非空整数图号数组（分组），description为非空描述文字。每个数组各自覆盖全部图号且不得重复。图号范围0至'+str(len(images)-1)+'。不得用范围文字代替整数数组。continuity为非空文字，不适用时写不适用；uncertain为文字数组，无不确定项用[]。不能省略字段或使用Markdown代码围栏。该格式不提供任何缺陷答案。')
     if request['purpose']=='reference_overview':
         return PROMPT+common+'这是跨全片的稀疏视觉概览，时间仅为请求seek位置，未测实际解码帧PTS。相邻图片不是相邻镜头或连续动作，continuity写不适用。只记录采样可见的场景、景别、版式与人物状态变化，重复图按图号分组；不要推断未采样剧情、台词、角色意图、语气、转场或步态质量。未提供音频，不能评价声音。不以概览代表完整理解参考片。'
     if ordered:
@@ -121,7 +154,7 @@ def run(request,opener=None):
         transported.append({**meta,'sent_sha256':digest(data),'mediaType':mime,'transform':transform,'original_bytes':len(original),'sent_bytes':len(data)})
         content.extend([{'type':'text','text':json.dumps({'index':i,**meta})},{'type':'image_url','image_url':{'url':'data:'+mime+';base64,'+base64.b64encode(data).decode()}}])
     key=credentials()
-    body={'model':MODEL,'messages':[{'role':'user','content':content}],'enable_thinking':False,'max_tokens':2400,'stream':True,'stream_options':{'include_usage':True}}
+    body={'model':MODEL,'messages':[{'role':'user','content':content}],'enable_thinking':False,'max_tokens':2400,'stream':True,'stream_options':{'include_usage':True},'response_format':{'type':'json_object'}}
     def fresh():
         for p,data,_,meta in loaded:
             if not p.resolve().is_relative_to(pathlib.Path(os.environ['STUDIO_PROJECT_ROOT']).resolve()) or digest(p.read_bytes())!=meta['sha256']:
@@ -134,11 +167,12 @@ def run(request,opener=None):
                     result=parse_stream(response,started)
             observation=result['observation']
             if key in observation:raise VisionError('credential_echo_rejected')
+            validate_observation(observation,len(loaded))
         except Exception as e:
             e.stage='provider';e.timing={'total_seconds':round(time.monotonic()-started,3)};e.transport=transported
             if not hasattr(e,'error_code'):e.error_code='provider_timeout' if isinstance(e,TimeoutError) else 'provider_request_failed'
             raise
-        return {'ok':True,'schema':'studio-vision-observation-v1','input_modality':'input_image','finish_reason':'stop','model':MODEL,'response_model':result['response_model'],'observer_purpose':request['purpose'],'prompt_sha256':digest(prompt.encode()),'images':transported,'observation':observation,'usage':result['usage'],'timing':result['timing'],'credential_reference':'service:qwen','calibrated':False,'qualityApproved':False}
+        return {'ok':True,'schema':'studio-vision-observation-v1','input_modality':'input_image','finish_reason':'stop','model':MODEL,'response_model':result['response_model'],'observer_purpose':request['purpose'],'prompt_sha256':digest(prompt.encode()),'images':transported,'observation':observation,'usage':result['usage'],'timing':result['timing'],'credential_reference':'service:qwen','observation_contract':OBSERVATION_CONTRACT,'calibrated':False,'qualityApproved':False}
     def validate(result):
         if (result.get('input_modality')!='input_image' or result.get('images')!=transported
             or result.get('model')!=MODEL or result.get('observer_purpose')!=request['purpose']
@@ -146,6 +180,8 @@ def run(request,opener=None):
             raise ValueError('Vision observation identity mismatch')
         if not isinstance(result.get('observation'),str) or not result['observation'].strip() or key in result['observation']:
             raise ValueError('Vision observation text invalid')
+        validate_observation(result['observation'],len(loaded))
+        if result.get('observation_contract')!=OBSERVATION_CONTRACT:raise VisionError('observation_contract_mismatch')
         for p,data,_,meta in loaded:
             if not p.resolve().is_relative_to(pathlib.Path(os.environ['STUDIO_PROJECT_ROOT']).resolve()) or digest(p.read_bytes())!=meta['sha256']:
                 raise ValueError('Image changed during observation')

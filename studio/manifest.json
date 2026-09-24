@@ -14,7 +14,7 @@
     "helpers/audio_signals.py": "ebe844143ee2fea3dc8f844200386627a1d9622a26740aca3bf39a8ac25752c2",
     "helpers/compiler_host_bridge.py": "1cb9e76631c32f4180e3540b25a9a0c38bc8b2086255b7d77398b2b64d38d775",
     "helpers/compile_storyboard.py": "bc4078568601add6dd9aa34b656e1f242da4577945e77348b7e06a50875c29be",
-    "helpers/vision_observe_host.py": "8a09c4c6097fc6bd895b2a3c72819346d68035c7413ef37433eb853c19941951",
+    "helpers/vision_observe_host.py": "cad23f18bc76ab0eb5ea1262ec892ceed3314c263426de1d5d5421c388c88c64",
     "helpers/observation_cache.py": "571102aef3793b6777b9245e33767354c27a74f49f7f5bf0a76f275c683bb28d",
     "helpers/render_job_host.py": "f45133eb47fc2837bc1821fb7a31682ca39e157077cebda878eae521d1264b12",
     "helpers/speech_check_host.py": "f67f3861e804624c7cf8842fecb102beab1f27de9eb04b09eacc0c2ed4bccdf8",

@@ -771,6 +771,10 @@ test('review upgrades a paused once-only Fleet Task in place without executing, 
   const input=(id:string)=>({agent:{session:{id,deriveMessages:()=>[{role:'user',content:'Upgrade this workflow without deleting history; do not start yet'}]}}})
   const revision={decision:'revise' as const,taskId:task.id,reason:'require full node evidence',recipe:{id:'fleet-base-v3' as const,login:'provision-gemini' as const},design}
   assert.ok((await creator.context()).revisionCandidates.some(t=>t.id===task.id))
+  const defaults:any=await creator.prepare({...revision,design:undefined},input('default-design'),root)
+  assert.equal(defaults.definition.design.failurePolicy.maxAttempts,2)
+  assert.match(defaults.definition.design.branches.find((b:any)=>b.id==='repair').action,/Gate→责任角色→Runner/)
+  assert.equal(host.sessions.size,0)
   await assert.rejects(creator.prepare({...revision,recipe:{id:'fleet-base-v3',login:'preserve'}},input('weaken'),root),/不能弱化/)
   const plan:any=await creator.prepare(revision,input('upgrade'),root)
   assert.equal(store.tasks.get(task.id)?.workflowRecipe?.id,'fleet-base-v2')

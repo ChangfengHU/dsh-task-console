@@ -7,7 +7,7 @@ import { batchStatus, cardRun, validateTask, type TaskSpec, type TaskTurn } from
 import type { TaskRunner } from './runner.ts'
 import type { IntakeAgent } from './task-intake.ts'
 import { workflowDefinition } from './workflow-plan.ts'
-import { composeRecipe, workflowRecipes, type WorkflowRecipe } from './workflow-recipes.ts'
+import { composeRecipe, fleetRecipeDesign, workflowRecipes, type WorkflowRecipe } from './workflow-recipes.ts'
 import { validateDesign, taskAgentIds, type TaskDesign } from './task-design.ts'
 import { TaskActions, validateTaskActions, type TaskActionInput } from './task-actions.ts'
 import type { AgentAction } from './agent-actions.ts'
@@ -50,6 +50,7 @@ export class TaskCreator {
   async context() {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
       designFields: { scope:'required string, not an object; reusable target-selection policy, no fixed IP', branches:'required array of {id:string,when:string,action:string,evidence:string}', coordination:'required string describing actual role dependencies', failurePolicy:'{isolateItems:boolean,maxAttempts:integer 1..3,stopConditions:string[]}', acceptance:'required nonempty string[] of business evidence criteria', optional:'notifications only when requested; evidenceContract only for a matching catalog contract, not a Fleet recipe ID' },
+      fleetRecipeDesign: { recipe:'fleet-base-v3', use:'选择该配方且无额外设计约束时可省略 design，宿主将按 login 策略填入以下可审查默认设计。显式传入 design 时仍完整校验并独立审查，不覆盖自定义约束。', preserve:fleetRecipeDesign('preserve'), provisionGemini:fleetRecipeDesign('provision-gemini') },
       revisionCandidates: [...this.runner.store.tasks.values()].filter(t=>!t.enabled && !t.archivedAt && t.origin?.source === 'task-chat')
         .map(t=>({id:t.id,title:t.title,trigger:t.trigger,...(t.workflowRecipe ? {workflowRecipe:t.workflowRecipe} : {}),manualAvailable:t.trigger.kind === 'cron'})),
       loginDiagnosis: '巡查可显式审查 browserPatrol.resumeAfterCopyLimit=1（需 actions 包含 resume）：复制预算耗尽但有同 Task 同故障已确认导入时，保留计数，允许额外一次正常登录续接。先新鲜 verify；canResume=true 应冻结 resume 而非再次 provision。原账号由 MCP 跨会话解析并核对当前授权，禁止静默换号；不再次导入、不重启、不绕过验证码。续接后独立20分钟4样本；失败只报告真实原因。一个目标失败，继续其他目标，本轮有界收口；未登录或未知不等于整轮执行协议应永久阻塞。旧计划不自动获得额外预算，必须 revise 审查。',
@@ -68,6 +69,10 @@ export class TaskCreator {
   }
 
   async prepare(proposal: TaskProposal, exec: ToolExecutionLike, cwd?: string) {
+    if (proposal.design === undefined && proposal.recipe?.id === 'fleet-base-v3') {
+      composeRecipe(proposal.recipe) // Validate the selected policy before supplying defaults.
+      proposal = {...proposal,design:fleetRecipeDesign(proposal.recipe.login)}
+    }
     validateDesign(proposal.design)
     const input = userInput(exec)
     const pending = this.queue.then(() => this.dispatch(proposal, input, exec, cwd, false, true))

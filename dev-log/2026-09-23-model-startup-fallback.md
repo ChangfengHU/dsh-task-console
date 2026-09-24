@@ -348,3 +348,17 @@ field types, no submitting guessed plans when context fails, and notification
 discovery only when requested. Context/tool descriptions now expose required
 field types. Focused revision tests and preset tests passed before these added
 policy assertions; final focused rerun below is required before rollout.
+
+Final policy tests passed;7e38e84 deployed and Creator persona updated through API
+preserving authored suffix/grants. New planning session agent-task-create-agent-
+mufarotk created P-chat-9034da23fcaf9e409e75, then4de6a7854fa5fd158047. Independent
+review rejected both: patrol evaluator leakage, invented response fields and
+missing targeted-repair description. No workflow revision approved/no236 action.
+Add opt-in default design only when a v3 proposal omits design; context exposes
+both policies for review. Explicit custom designs are still validated and retained,
+never silently replaced. Focused default/revision and recipe tests pass. This is
+not permission to skip independent review or widen target scope.
+At09:01Z another release switched to6b8e1a4ca791; its bundle includes7e38e84 as
+an ancestor and preserves Fleet changes. Service briefly unavailable then recovered;
+native running sessions zero. Integrate this newer Studio rendering source/config
+before deploying further host changes. Existing frontend9ecf721 remains active.

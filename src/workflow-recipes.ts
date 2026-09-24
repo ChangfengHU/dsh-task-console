@@ -1,4 +1,25 @@
 import type { Participant } from './fold.ts'
+import type { TaskDesign } from './task-design.ts'
+
+/** Reviewed defaults for the implemented recipe, never a replacement for supplied constraints. */
+export function fleetRecipeDesign(login: 'preserve' | 'provision-gemini'): TaskDesign {
+  const provision = login === 'provision-gemini'
+  return {
+    scope:'仅本次输入目标及其 browser-1、browser-2；不扩展为全机群操作。复用健康组件、账号和资料；缺失或漂移由责任角色在原权限内补齐，不删除重建、不轮换令牌、不安装图片服务。目标 IP 不写入模板。',
+    branches:[
+      {id:'base',when:'装机者开始本次目标检查',action:'start/resume 新鲜探测，健康复用、缺项修复，完成基础十阶段后读取同事务 report。',evidence:'本会话原始基础工具回执与同 run_id 十阶段报告；基础完成不代表完整节点通过。'},
+      {id:'browser',when:'基础角色交接完成',action:'浏览器管理员 inspect；缺独立管理能力时在授权内 prepare，保留实例、资料和其他服务。',evidence:'本会话成功 inspect；Fleet 真实 CDP、实例与新鲜后台登录检测，不能只有 desktopOnly 占位。'},
+      {id:'login',when:'浏览器管理能力可读取真实状态',action:provision?'健康登录复用；未知先有界只读验证；仅明确未登录时从授权金库库存按本次策略 provision，跟踪原操作终态。两实例均由 browser_login_acceptance 独立验收，browser_status 等待真实终态。':'保留登录现状，不 provision/copy；新鲜 signed_out 可接受，unknown/过期/读取失败不得冒充未登录。',evidence:provision?'同会话独立后台验收回执 result.stable=true，完整20分钟、两实例及账号指纹；交卷 metadata.browserAcceptanceOperationId 引用真实操作。轮询次数不是样本。':'新鲜独立登录观测及具体原因。'},
+      {id:'runner',when:'浏览器角色通过并交接',action:'Runner 运维者 inspect、ensure 幂等准备并触发本次签名作业，status 查询至终态。',evidence:'同会话本目标 phase=complete、signedJobId、signatureVerified=true、runnerCoverageHealthy=true，不用旧作业或心跳代替。'},
+      {id:'readback',when:'末位 Runner 申请交卷',action:'宿主独立回读 Fleet、出口和线路接口，核对本次角色原始证据。',evidence:'真实浏览器能力、持续状态、主机与网络指标，以及同签名作业的新鲜出口/线路结果；符合期望线路。'},
+      {id:'repair',when:'宿主最终回读发现可定位责任的组件故障',action:'宿主创建真实 Gate→责任角色→Runner 复验；不重做无关健康角色。最多两轮，不重置原总时间预算，CAS/租约防重复。',evidence:'同 Batch 的实际 task/link/run/event 和每轮失败原因、修复结果及独立复验；Session 仅执行时创建。'},
+      {id:'blocked',when:'缺凭据/权限、人工验证、不可证明的证据、未知故障或预算耗尽',action:'保留失败证据并准确受阻；不伪造成功、不扩大权限、不盲目重复副作用。',evidence:'原始工具错误、具体缺项、尝试次数和未通过标准。'},
+    ],
+    coordination:'仅装机者→浏览器管理员→Runner 运维者三业务角色；账号稳定性由独立后台检测与宿主校验，不新增评估者或借用巡查 task_wait。宿主仅在已实现的最终回读故障条件下创建定向返工依赖；自然语言不生成额外能力。',
+    failurePolicy:{isolateItems:true,maxAttempts:2,stopConditions:['需要未获授权的操作或缺少接入凭据','人工登录挑战或无法核验的原始证据','未知故障、有界复验仍失败或修复/总时间预算耗尽']},
+    acceptance:['同目标本次十阶段完整基础证据和报告','独立浏览器管理、真实CDP/VNC及新鲜登录检测',provision?'browser-1、browser-2 完整20分钟独立Gemini稳定性证据':'保持账号不变并真实报告登录状态','同会话 Runner 本次真实签名作业和独立 Fleet 回读','健康服务、浏览器资料和凭据保留；报告 checked/reused/changed/blocked 与验收证据'],
+  }
+}
 
 /** Business presets, not a second scheduler. The Creator selects a policy, never rewrites its boundaries. */
 export const workflowRecipes = [{ id: 'fleet-base-v3', title: 'Fleet 完整节点接入与证据验收',

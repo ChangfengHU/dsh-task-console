@@ -1,3 +1,4 @@
+export {loadStudioRolePack,inspectStudioRoleDependencies,STUDIO_ROLE_IDS,type StudioRolePack,type StudioRoleTemplate,type StudioPackRole,type StudioDependencyInventory} from './studio-role-pack.js'
 /**
  * `dsh-task-console` — host half.
  *

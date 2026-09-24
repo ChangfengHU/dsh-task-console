@@ -1,0 +1,170 @@
+{
+  "schema": "studio-role-pack-v1",
+  "version": "1.0.0",
+  "roles": [
+    {
+      "role": "director",
+      "taskRole": "planner",
+      "agentId": "studio-role-director-v1",
+      "path": "director/task-console.json",
+      "sha256": "51b671e7c5517757b7b182f7ca326e059fab4d1a8d0f2f00bd3377b1c7f0e8d8",
+      "requiredHostTools": [
+        "studio_status",
+        "studio_character_profile",
+        "studio_character_image",
+        "studio_reference_overview",
+        "studio_reference_frames",
+        "studio_reference_audio",
+        "studio_freeze_script"
+      ]
+    },
+    {
+      "role": "storyboard",
+      "taskRole": "studio-stage",
+      "agentId": "studio-role-storyboard-v1",
+      "path": "storyboard/task-console.json",
+      "sha256": "8e95e1a1d443878ffa823b8df2099a63116646d14f52ed7a8aad0ccd6e1dbed7",
+      "requiredHostTools": [
+        "studio_status",
+        "studio_character_profile",
+        "studio_character_image",
+        "studio_preview_image",
+        "studio_register_stage",
+        "studio_request_preparation_revision"
+      ]
+    },
+    {
+      "role": "visual",
+      "taskRole": "studio-stage",
+      "agentId": "studio-role-visual-v1",
+      "path": "visual/task-console.json",
+      "sha256": "a13749359f02b94381d3606e21268c48e944e90c83deddbc3aeb5a4be658700e",
+      "requiredHostTools": [
+        "studio_status",
+        "studio_character_profile",
+        "studio_character_image",
+        "studio_preview_image",
+        "studio_preview_frames",
+        "studio_download_asset",
+        "studio_register_stage",
+        "studio_request_preparation_revision"
+      ]
+    },
+    {
+      "role": "sound",
+      "taskRole": "studio-stage",
+      "agentId": "studio-role-sound-v1",
+      "path": "sound/task-console.json",
+      "sha256": "d63a1559bf48d329df70e8419e76ef7ee9f22832e85939111bac9a486f9f12d9",
+      "requiredHostTools": [
+        "studio_status",
+        "studio_character_profile",
+        "studio_preview_audio",
+        "studio_probe_audio_sources",
+        "studio_download_asset",
+        "studio_register_stage",
+        "studio_request_preparation_revision"
+      ]
+    },
+    {
+      "role": "editor",
+      "taskRole": "executor",
+      "agentId": "studio-role-editor-v1",
+      "path": "editor/task-console.json",
+      "sha256": "efef44cfc5f7e3b95283eba60df0f79b071f91144ba882eb7e4c36f6dd44d28f",
+      "requiredHostTools": [
+        "studio_status",
+        "studio_character_profile",
+        "studio_character_image",
+        "studio_reference_frames",
+        "studio_reference_audio",
+        "studio_read_text",
+        "studio_preview_image",
+        "studio_preview_frames",
+        "studio_preview_audio",
+        "studio_compile_storyboard",
+        "studio_render_start",
+        "studio_render_status",
+        "studio_register_candidate",
+        "studio_register_speech_plan"
+      ]
+    },
+    {
+      "role": "quality",
+      "taskRole": "reviewer",
+      "agentId": "studio-role-quality-v1",
+      "path": "quality/task-console.json",
+      "sha256": "db1516c5ef481d1954d74d44cb0be39b311409afaab1253ef3155bdabc47458d",
+      "requiredHostTools": [
+        "studio_status",
+        "studio_character_profile",
+        "studio_character_image",
+        "studio_read_text",
+        "studio_reference_overview",
+        "studio_reference_frames",
+        "studio_reference_audio",
+        "studio_inspect_probe",
+        "studio_inspect_frames",
+        "studio_inspect_audio",
+        "studio_check_speech",
+        "studio_submit_review"
+      ]
+    }
+  ],
+  "requiredSkills": [
+    "cartoon-video-studio",
+    "general-video",
+    "hyperframes",
+    "hyperframes-animation",
+    "hyperframes-audio",
+    "hyperframes-cli",
+    "hyperframes-core",
+    "studio-character-workflow",
+    "studio-director",
+    "studio-materials",
+    "studio-music",
+    "studio-quality",
+    "voice-production",
+    "vyibc-character-design"
+  ],
+  "requiredMcp": {
+    "vyibc-cartoon-assets": [
+      "asset_get",
+      "asset_search",
+      "character_assets",
+      "character_get",
+      "character_search",
+      "library_info"
+    ],
+    "vyibc-image": [
+      "vyibc-image_generate_image",
+      "vyibc-image_get_task",
+      "vyibc-image_list_results"
+    ],
+    "vyibc-voice": [
+      "vyibc-voice_capabilities",
+      "vyibc-voice_check_config",
+      "vyibc-voice_get_voice",
+      "vyibc-voice_list_voices",
+      "vyibc-voice_resolve_voice",
+      "vyibc-voice_result",
+      "vyibc-voice_retry_segments",
+      "vyibc-voice_status",
+      "vyibc-voice_synthesize"
+    ]
+  },
+  "requiredHostCapabilities": [
+    "character-profile-lock",
+    "reference-lock",
+    "visual-observation",
+    "audio-observation",
+    "speech-check-and-calibration",
+    "render-runtime",
+    "asset-download",
+    "public-preview-upload"
+  ],
+  "modelPolicy": "empty AgentSpec.model inherits current DSH default; optional private setup binding, never a public provider/account preset",
+  "publishingGranted": false,
+  "installed": false,
+  "runtimeVerified": false
+}

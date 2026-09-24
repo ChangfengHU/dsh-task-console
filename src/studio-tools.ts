@@ -1,5 +1,6 @@
 /** Run-scoped media tools. Paths and evidence hashes are host-derived, never model claims. */
 import {createHash} from 'node:crypto'
+import {studioExecutionAssets} from './studio-execution-assets.js'
 import {createReadStream} from 'node:fs'
 import {realpath,readFile,stat,mkdir,mkdtemp} from 'node:fs/promises'
 import {resolve,relative,sep,basename,extname,join} from 'node:path'
@@ -61,7 +62,7 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   // snapshot at both levels, avoiding split results at an expiration boundary.
   preflight=state.preflight??workflow.preflight(input.task)
   const artifacts=state.candidate?(()=>{const loc=workflow.candidateLocation(input);return {manifestPath:relative(input.task.cwd,loc.manifestPath),videoPath:relative(input.task.cwd,loc.path)}})():null
-  return {preflight,state:{...state,preflight},artifacts,reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(({id,sha256})=>({id,sha256}))}
+  return {preflight,state:{...state,preflight},artifacts,executionAssets:await studioExecutionAssets(input.task.cwd),reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(({id,sha256})=>({id,sha256}))}
  })
  register('studio_register_candidate','Producer only: register actual project MP4 and manifest after host probing and hashing. An identical retry in the same session/card/round is idempotent; changed content requires a higher revision.',{path:{type:'string',required:true},manifestPath:{type:'string',required:true},revision:{type:'number',required:true}},async args=>{
   requireRole(['executor']);if(!Number.isInteger(args.revision)||args.revision<1)throw Error('studio-invalid-revision')

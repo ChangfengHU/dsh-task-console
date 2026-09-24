@@ -65,8 +65,15 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
     strict(candidate,['sha256','manifestSha256','referenceSha256','revision','durationSeconds','width','height','fps'],'candidate')
     if(!HASH.test(candidate.sha256??'')||!HASH.test(candidate.manifestSha256??'')||!Number.isInteger(candidate.revision)||candidate.revision<1)throw Error('studio-candidate-invalid')
-    const previous=this.read(input,'candidate');if(previous&&(candidate.revision<=previous.candidate.revision))throw Error('studio-candidate-revision-must-increase')
-    this.write(input,'candidate',{candidate,producerSessionId:input.sessionId,policyHash:sha(this.policy(input.task))})
+    const previous=this.read(input,'candidate'),policyHash=sha(this.policy(input.task)),producerRound=input.card?.round??null,producerCardId=input.card?.id??null
+    if(previous&&candidate.revision<=previous.candidate.revision){
+      // Retry a lost acknowledgement, not a revision, ownership transfer or new round.
+      const samePayload=['sha256','manifestSha256','referenceSha256','revision','durationSeconds','width','height','fps'].every(k=>candidate[k]===previous.candidate[k])
+      if(samePayload&&previous.producerSessionId===input.sessionId&&previous.policyHash===policyHash&&(previous.producerRound??null)===producerRound&&(previous.producerCardId??null)===producerCardId)return previous
+      throw Error('studio-candidate-revision-must-increase')
+    }
+    const stored={candidate,producerSessionId:input.sessionId,producerRound,producerCardId,policyHash}
+    this.write(input,'candidate',stored);return stored
   }
   recordReceipt(input:any,receipt:any){
     if(input.card?.role!=='reviewer')throw Error('studio-reviewer-required')

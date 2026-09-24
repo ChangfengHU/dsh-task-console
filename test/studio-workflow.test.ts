@@ -106,3 +106,24 @@ test('planning readiness distinguishes repaired prerequisites from unavailable p
  assert.throws(()=>workflow.plan(input),/blocked_quality_capability/)
  assert.equal(workflow.status({...input,card:{role:'executor'}}).planning,undefined)
 })
+
+test('identical candidate registration retries preserve review, speech plan and receipts',t=>{
+ const {workflow,input}=setup(t),{candidate}=proof(workflow,input),producer={...input,card:{role:'executor'},sessionId:'producer'}
+ workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'完整台词。'}]})
+ workflow.recordSpeechPlan(producer,{candidateSha256:candidate.sha256,scriptSha256:h('c'),planSha256:h('f'),lines:[{id:'1',text:'完整台词。'}]})
+ const before=workflow.status(input),stored=workflow.recordCandidate(producer,{...candidate})
+ assert.deepEqual(stored.candidate,candidate);assert.deepEqual(workflow.status(input),before)
+ const reversed=Object.fromEntries(Object.entries(candidate).reverse());assert.deepEqual(workflow.recordCandidate(producer,reversed),stored)
+ assert.equal(workflow.complete(input).metadata.workflowOutcome,'machine_assessed_candidate')
+ for(const field of ['sha256','manifestSha256','referenceSha256','durationSeconds','width','height','fps'])assert.throws(()=>workflow.recordCandidate(producer,{...candidate,[field]:typeof (candidate as any)[field]==='number'?1:h('e')}),/revision-must-increase/)
+ assert.deepEqual(workflow.status(input),before)
+})
+
+test('candidate retry cannot transfer to a restored session or another round, card or policy',t=>{
+ const {workflow,input}=setup(t),producer={...input,card:{id:'producer-r1',round:1,role:'executor'},sessionId:'producer'}
+ const candidate={sha256:h('a'),manifestSha256:h('c'),referenceSha256:h('b'),revision:1,durationSeconds:100,width:1080,height:1920,fps:30}
+ workflow.recordCandidate(producer,candidate)
+ for(const changed of [{...producer,sessionId:'restored-producer'},{...producer,card:{...producer.card,round:2}},{...producer,card:{...producer.card,id:'different-card'}}])assert.throws(()=>workflow.recordCandidate(changed,{...candidate}),/revision-must-increase/)
+ assert.equal(workflow.status({...producer,batch:{id:'other-batch'}}).candidate,null)
+ input.task.design.studio.characterId='different-character';assert.throws(()=>workflow.recordCandidate(producer,{...candidate}),/revision-must-increase/)
+})

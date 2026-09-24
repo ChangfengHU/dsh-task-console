@@ -60,7 +60,7 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   const artifacts=state.candidate?(()=>{const loc=workflow.candidateLocation(input);return {manifestPath:relative(input.task.cwd,loc.manifestPath),videoPath:relative(input.task.cwd,loc.path)}})():null
   return {preflight,state:{...state,preflight},artifacts,reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(({id,sha256})=>({id,sha256}))}
  })
- register('studio_register_candidate','Producer only: register actual project MP4 and manifest after host probing and hashing.',{path:{type:'string',required:true},manifestPath:{type:'string',required:true},revision:{type:'number',required:true}},async args=>{
+ register('studio_register_candidate','Producer only: register actual project MP4 and manifest after host probing and hashing. An identical retry in the same session/card/round is idempotent; changed content requires a higher revision.',{path:{type:'string',required:true},manifestPath:{type:'string',required:true},revision:{type:'number',required:true}},async args=>{
   requireRole(['executor']);if(!Number.isInteger(args.revision)||args.revision<1)throw Error('studio-invalid-revision')
   const path=await studioPath(input.task.cwd,args.path),manifestPath=await studioPath(input.task.cwd,args.manifestPath)
   if(extname(path).toLowerCase()!=='.mp4')throw Error('studio-mp4-required')

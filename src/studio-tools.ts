@@ -8,7 +8,7 @@ import {resolve,relative,sep,basename,extname,join} from 'node:path'
 import {execFile} from 'node:child_process'
 import {promisify} from 'node:util'
 const run=promisify(execFile)
-export const STUDIO_TOOL_NAMES=['studio_render_start','studio_render_status','studio_download_asset','studio_register_stage','studio_status','studio_register_candidate','studio_read_text','studio_inspect_frames','studio_inspect_probe','studio_inspect_audio','studio_submit_review','studio_reference_frames','studio_reference_audio','studio_character_image','studio_preview_audio','studio_preview_image','studio_preview_frames'] as const
+export const STUDIO_TOOL_NAMES=['studio_render_start','studio_render_status','studio_download_asset','studio_register_stage','studio_status','studio_register_candidate','studio_read_text','studio_inspect_frames','studio_inspect_probe','studio_inspect_audio','studio_submit_review','studio_reference_overview','studio_reference_frames','studio_reference_audio','studio_character_image','studio_preview_audio','studio_preview_image','studio_preview_frames'] as const
 const hash=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex')
 export async function fileSha256(path:string){const h=createHash('sha256');for await(const b of createReadStream(path))h.update(b);return h.digest('hex')}
 export async function studioPath(cwd:string,value:string,text=false){
@@ -19,7 +19,7 @@ export async function studioPath(cwd:string,value:string,text=false){
  if(!(await stat(p)).isFile())throw Error('studio-file-required')
  return p
 }
-export interface VisionInput {images:{path:string;sha256:string;time?:number}[];purpose:'character'|'reference'|'candidate'|'preview'}
+export interface VisionInput {images:{path:string;sha256:string;time?:number}[];purpose:'character'|'reference'|'reference_overview'|'candidate'|'preview'}
 export interface StudioToolOptions {renderJob?:(action:'start'|'status',args:{composition?:string;output?:string;jobId?:string})=>Promise<any>;downloadAsset?:(args:{id:string;path:string})=>Promise<any>;registerStage?:(path:string)=>Promise<any>;submitReview?:()=>Promise<void>;visionObserve?:(value:VisionInput)=>Promise<any>;input:any;workflow:any;isActive:()=>boolean;refreshPreflight?:()=>Promise<{reference?:{path:string;sha256:string};characterReferences?:{id:string;path:string;sha256:string}[]}|void>;audioObserve?:(value:{wavPath:string;start:number;end:number})=>Promise<any>;runCommand?:(file:string,args:string[])=>Promise<{stdout:string}>;reference?:{path:string;sha256:string};characterReferences?:{id:string;path:string;sha256:string}[];referenceReceipt?:(value:{referenceSha256:string;kind:'frames'|'audio';ranges:number[][];sha256:string})=>any}
 export async function registerStudioTools(agentCtx:any,options:StudioToolOptions):Promise<()=>void>{
  const {input,workflow,isActive}=options,role=input.card?.role,disposers:(()=>void)[]=[]
@@ -121,6 +121,24 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   const probe=JSON.parse((await command(process.env.FFPROBE_PATH??'ffprobe',['-v','error','-show_format','-of','json',path])).stdout),duration=Number(probe.format?.duration)
   if(!Number.isFinite(duration)||duration<=0)throw Error('studio-reference-probe-invalid');check();return {path,sha256:ref.sha256,duration}
  }
+ register('studio_reference_overview','Planner/producer/reviewer: get 8 sparse images spread across the host-frozen reference video, including opening and near-ending. Use for initial visual orientation, then inspect specific actions/transitions with studio_reference_frames and sound with studio_reference_audio. Does not prove complete narrative understanding, motion quality or audio coverage; produces no candidate or planning-prerequisite receipt.',{},async()=>{
+  requireRole(['planner','executor','reviewer','studio-stage']);const attachments=attachmentStore(),ref=await lockedReference(),dir=await directory(),images:any[]=[],frames:any[]=[]
+  const last=Math.max(0,ref.duration-Math.min(.25,ref.duration/8))
+  for(let i=0;i<8;i++){
+   check();const time=last*i/7,p=join(dir,`overview-${i}.jpg`)
+   await command(process.env.FFMPEG_PATH??'ffmpeg',['-nostdin','-v','error','-ss',String(time),'-i',ref.path,'-frames:v','1','-vf','scale=540:-2','-y',p])
+   const bytes=await readFile(p);if(bytes.length>4*1024*1024)throw Error('studio-frame-too-large')
+   images.push(await attachments.saveImage({data:bytes,mediaType:'image/jpeg',name:basename(p)}));frames.push({time,sha256:hash(bytes)})
+  }
+  const observation=await observe(frames.map((f:any,i:number)=>({...f,path:join(dir,`overview-${i}.jpg`)})),'reference_overview')
+  if(await fileSha256(ref.path)!==ref.sha256)throw Error('studio-reference-file-changed');check()
+  const groups=new Map<string,number[]>();frames.forEach((f:any,i:number)=>groups.set(f.sha256,[...(groups.get(f.sha256)??[]),i]))
+  return {scope:'reference-overview-only',referenceSha256:ref.sha256,durationSeconds:ref.duration,frames,images,observation,
+   sampling:'8 sparse requested seek positions across the reference; not consecutive frames or scene detection. Unsampled content remains unknown.',
+   timestampBasis:'requested seek time; actual decoded frame PTS not measured',distinctImageHashes:groups.size,repeatedImageGroups:[...groups.values()].filter(g=>g.length>1),
+   audioChecked:false,continuousMotionChecked:false,qualityApproved:false,
+   nextAction:'Use this overview to select opening, middle and ending details for targeted 2-second frame checks and up-to-8-second audio checks. Do not infer dialogue, intention, unseen actions or transition quality from sparse images.'}
+ },true)
  register('studio_reference_frames','Planner/producer/reviewer: see 8 actual frames of the host-frozen reference film, up to 2 seconds. Reference observations never count as candidate evidence.',{start:{type:'number',required:true},end:{type:'number',required:true}},async args=>{
   requireRole(['planner','executor','reviewer','studio-stage']);const attachments=attachmentStore();const ref=await lockedReference(),[start,end]=interval(args,ref.duration,2),dir=await directory(),images:any[]=[],frames:any[]=[]
   for(let i=0;i<8;i++){check();const time=start+(end-start)*i/8,p=join(dir,`reference-${i}.jpg`);await command(process.env.FFMPEG_PATH??'ffmpeg',['-nostdin','-v','error','-ss',String(time),'-i',ref.path,'-frames:v','1','-vf','scale=540:-2','-y',p]);const bytes=await readFile(p);if(bytes.length>4*1024*1024)throw Error('studio-frame-too-large');images.push(await attachments.saveImage({data:bytes,mediaType:'image/jpeg',name:basename(p)}));frames.push({time,sha256:hash(bytes)})}

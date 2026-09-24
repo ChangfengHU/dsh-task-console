@@ -42,6 +42,7 @@
     "src",
     "presets",
     "docs/proxy-mcp.md",
+    "docs/workflow-extensions.md",
     "docs/agent-actions.md",
     "scripts/preset-skills.mjs",
     "scripts/install-task-intake.mjs",

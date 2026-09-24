@@ -38,4 +38,3 @@ export function validateWorkflowSelection(value:unknown):WorkflowSelection {
  for(const h of [v.implementationSha256,v.policySha256])if(h!==undefined&&!HASH.test(h))throw Error('workflow-extension-hash-invalid')
  return {id:v.id,version:v.version,policy:workflowJsonObject(v.policy),...(v.implementationSha256?{implementationSha256:v.implementationSha256,policySha256:v.policySha256}:{})}
 }
-

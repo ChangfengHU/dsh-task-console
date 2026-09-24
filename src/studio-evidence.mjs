@@ -126,5 +126,7 @@ export function evaluateStudioReview({policy:input, candidate, review, producerS
     issueIds.add(issue.id);
     if (issue.status === 'pending' || (['blocker','major'].includes(issue.severity) && !['resolved','verified'].includes(issue.status))) fail(`issue.${issue.id}: unresolved ${issue.severity}`);
   }
-  return {ok:issues.length === 0, issues, label:issues.length === 0 ? 'machine_assessed_candidate' : 'candidate'};
+  const qualityIssues=issues.filter(issue=>!issue.startsWith('autonomy:'));
+  const autonomy={status:!Array.isArray(interventions)?'unknown':interventions.length?'assisted':'no_recorded_intervention',autonomousVerified:false};
+  return {ok:issues.length === 0, qualityOk:qualityIssues.length===0, qualityIssues, autonomy, issues, label:qualityIssues.length ? 'candidate' : autonomy.status==='assisted' ? 'assisted_machine_assessed_candidate' : 'machine_assessed_candidate'};
 }

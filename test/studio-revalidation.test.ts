@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os'
 import {EventStore} from '../src/tasks.ts'
 import {StudioOperations} from '../src/studio-operations.ts'
 import {recoverStudioFailure} from '../src/studio-recovery.ts'
+import {StudioInterventions} from '../src/studio-interventions.js'
 const request={taskId:'T',batchId:'B',cardId:'B#e1',expectedRunId:'R-editor',recoveryId:'recheck-1',reason:'Revalidate actual legacy files, preserve originals and paid jobs; never reset budget.',revalidateFrom:'storyboard' as const}
 async function setup(t:any){
  const cwd=await mkdtemp(join(tmpdir(),'studio-revalidate-'));const s=new EventStore(cwd);await s.load();t.after(async()=>{s.kernel.close();await rm(cwd,{recursive:true,force:true})})
@@ -27,12 +28,20 @@ test('stage revalidation reopens actual DAG without resetting paid work, history
  const {s}=await setup(t),db=s.kernel.db,ledger=JSON.stringify(db.prepare('SELECT * FROM dsh_studio_operations').all())
  const results=await Promise.all([recoverStudioFailure(s,request),recoverStudioFailure(s,request)])
  assert.equal(results[0].replay,false);assert.equal(results[1].replay,true)
+ const audit=new StudioInterventions(s).list(request);assert.equal(audit.length,1);assert.equal(audit[0].sourceRunId,'R-editor');assert.equal(audit[0].kind,'operator-studio-revalidation:storyboard')
  assert.equal(s.s.cards.get('B#s1-storyboard')?.status,'ready');for(const id of ['B#s1-visual','B#s1-sound','B#e1','B#r1'])assert.equal(s.s.cards.get(id)?.status,'todo')
  assert.equal(s.s.runs.get('R-editor')?.status,'blocked');assert.equal(JSON.stringify(db.prepare('SELECT * FROM dsh_studio_operations').all()),ledger)
  assert.equal(s.s.cards.get('B#s1-storyboard')?.reviewNote,request.reason)
  assert.equal(s.all().filter(e=>e.t==='batch/studio_revalidation').length,1)
  const restored=new EventStore(s.root);await restored.load();assert.equal((await recoverStudioFailure(restored,request)).replay,true);restored.kernel.close()
  await assert.rejects(recoverStudioFailure(s,{...request,reason:'changed'}),/id-conflict/)
+})
+test('audit failure rolls back all preparation nodes',async t=>{
+ const {s}=await setup(t);new StudioInterventions(s)
+ s.kernel.db.exec("CREATE TRIGGER reject_audit BEFORE INSERT ON dsh_studio_interventions BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
+ const before=JSON.stringify(s.kernel.db.prepare('SELECT * FROM tasks').all()),count=s.all().length
+ await assert.rejects(recoverStudioFailure(s,request),/audit unavailable/)
+ assert.equal(JSON.stringify(s.kernel.db.prepare('SELECT * FROM tasks').all()),before);assert.equal(s.all().length,count)
 })
 for(const mode of ['wrong-run','active','archived','settled','wrong-stage'])test(`revalidation refuses ${mode} atomically`,async t=>{
  const {s}=await setup(t);let r={...request}

@@ -1,3 +1,4 @@
+import {StudioInterventions} from '../src/studio-interventions.js'
 import {WorkflowExtensions} from '../src/workflow-extensions.js'
 import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises'
@@ -1348,6 +1349,8 @@ test('Studio unblock acknowledges durable ready without waiting for suspended me
   const acknowledgement=runner.unblockCard(cardId).then(()=>{acknowledged=true})
   await Promise.race([acknowledgement,new Promise((_,reject)=>setTimeout(()=>reject(Error('unblock waited for preflight')),500))])
   assert.equal(acknowledged,true)
+  const audit=new StudioInterventions(store).assessment({taskId:'T',batchId:batch.id})
+  assert.equal(audit.status,'assisted');assert.equal(audit.records.length,1);assert.equal(audit.records[0].kind,'operator_unblock');assert.equal(audit.records[0].sourceRunId,`${batch.id}#0#1`)
   assert.ok(store.all().some(e=>e.t==='card/ready'&&e.cardId===cardId))
   await preflightEntered
   assert.equal(host.sessions.size,0,'preflight is actually still suspended')
@@ -1722,4 +1725,34 @@ test('queued planRound rechecks run identity inside the expansion transaction',a
  store.expandRound=async(...args)=>{const pending=expand(...args);runner.stop();return pending}
  await assert.rejects(host.callTool(sid,'task_plan_round',{summary:'planned'}),/task-run-no-longer-active/)
  assert.equal(store.s.cards.size,before)
+})
+
+for(const lateAssistance of [false,true])test(`studio finalization preserves delivery with assistance (${lateAssistance?'late race':'preexisting'}) and never labels autonomous`,async()=>{
+ const {runner,store,host,root}=await setup({graphMode:'dynamic-rounds',design:{evidenceContract:'studio-video-v1',failurePolicy:{maxAttempts:3}} as any},{registerStudioTools:async()=>()=>{},beforeComplete:input=>input.card.role==='planner'?{summary:'Machine quality check complete',metadata:{workflowOutcome:lateAssistance?'machine_assessed_candidate':'assisted_machine_assessed_candidate',qualityPassed:true}}:undefined})
+ await writeFile(join(root,'film.txt'),'fixture delivered artifact')
+ const batch=await runner.fire('T','manual'),ledger=new StudioInterventions(store)
+ const next=()=>[...host.sessions.keys()].at(-1)!
+ let sid=next();host.consumeFirst(sid);await host.callTool(sid,'task_plan_round',{summary:'production'});host.endTurn(sid);await tick()
+ sid=next();host.consumeFirst(sid);await host.callTool(sid,'task_complete',{summary:'candidate',artifacts:['film.txt']});host.endTurn(sid);await tick()
+ sid=next();host.consumeFirst(sid);await host.callTool(sid,'task_complete',{summary:'quality passed'});host.endTurn(sid);await tick()
+ sid=next();host.consumeFirst(sid)
+ const record=()=>ledger.record({id:'fixture-assistance',taskId:'T',batchId:batch.id,kind:'operator_repair',reason:'fixture external infrastructure repair'})
+ if(!lateAssistance)record()
+ await host.callTool(sid,'task_finalize',{summary:'not trusted',artifact:'film.txt'})
+ if(lateAssistance)record()
+ host.endTurn(sid);await tick()
+ const run=[...store.s.runs.values()].at(-1)!
+ assert.equal(run.metadata?.decision,'assisted');assert.equal(run.metadata?.workflowOutcome,'assisted_machine_assessed_candidate')
+ assert.equal((run.metadata?.autonomy as any).status,'assisted');assert.equal((run.metadata?.autonomy as any).autonomousVerified,false)
+ assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'done');assert.ok([...store.s.artifacts.values()].some(a=>a.final))
+ assert.match(run.summary!,/人工协助/);runner.stop()
+})
+
+test('studio unblock rolls back kernel transition when intervention write fails',async()=>{
+ const {runner,store}=await setup({participants:[{agentId:'a'}],design:{evidenceContract:'studio-video-v1'} as any},{beforeStart:()=>({kind:'capability',reason:'fixture'})})
+ const batch=await runner.fire('T','manual'),cardId=batch.cardIds[0],sourceRunId=store.s.cards.get(cardId)!.runIds.at(-1)!
+ new StudioInterventions(store).record({id:`unblock:${sourceRunId}`,taskId:'other',batchId:'other',kind:'conflict',reason:'fixture'})
+ await assert.rejects(runner.unblockCard(cardId),/intervention-id-conflict/)
+ assert.equal(store.s.cards.get(cardId)?.status,'blocked');assert.equal(store.kernel.getTask(cardId)?.status,'blocked')
+ assert.equal(store.all().filter(e=>e.t==='card/ready'&&e.cardId===cardId).length,0);runner.stop()
 })

@@ -1,3 +1,4 @@
+import {StudioInterventions} from './studio-interventions.js'
 import {StudioPreparation,preparationBarrier,preparationOriginExited} from './studio-preparation.js'
 import { recoverStudioFailure, type StudioRecoveryInput } from './studio-recovery.ts'
 /**
@@ -635,7 +636,7 @@ export class TaskRunner {
               finalArtifactId = selected.id
             }
             assertToolActive()
-            flight.terminal = { kind: 'completed', summary, metadata: { ...verified?.metadata, decision: 'approved', round: card.round, ...(finalArtifactId ? { finalArtifactId } : {}) } }
+            flight.terminal = { kind: 'completed', summary, metadata: { ...verified?.metadata, decision: verified?.metadata.workflowOutcome==='assisted_machine_assessed_candidate'?'assisted':'approved', round: card.round, ...(finalArtifactId ? { finalArtifactId } : {}) } }
           },
         }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner', dynamicRounds: task.graphMode === 'dynamic-rounds', nativeEvidence: ['browser-patrol-v2','studio-video-v1'].includes(task.design?.evidenceContract ?? '') })
       } catch (error) {
@@ -828,7 +829,18 @@ export class TaskRunner {
     let changed = false
     if (t === 'run/completed') {
       changed = await this.store.transition(
-        () => preparationBarrier(this.store.kernel.db,f.cardId) ? false : this.store.kernel.completeTask(f.cardId, { expectedRunId: f.coreRunId, summary: summary ?? f.lastText, metadata }),
+        () => {
+          if(preparationBarrier(this.store.kernel.db,f.cardId))return false
+          // Re-read at the final transactional boundary: assistance may have been
+          // recorded after asynchronous artifact validation or session disposal.
+          const card=this.store.s.cards.get(f.cardId),batch=card&&this.store.s.batches.get(card.batchId),template=this.store.tasks.get(f.taskId)
+          if(card?.role==='planner'&&batch&&template&&taskForBatch(template,batch).design?.evidenceContract==='studio-video-v1'&&metadata&&['machine_assessed_candidate','assisted_machine_assessed_candidate'].includes(String(metadata.workflowOutcome))){
+            const autonomy=new StudioInterventions(this.store).assessment({taskId:f.taskId,batchId:batch.id})
+            metadata={...metadata,autonomy,...(autonomy.status==='assisted'?{decision:'assisted',workflowOutcome:'assisted_machine_assessed_candidate'}:{})}
+            if(autonomy.status==='assisted')summary='机器质检候选片（有人工协助）；不计为自主成功，也非用户审美认可。'
+          }
+          return this.store.kernel.completeTask(f.cardId, { expectedRunId: f.coreRunId, summary: summary ?? f.lastText, metadata })
+        },
         ok => ok ? { t, at: this.now(), taskId: f.taskId, runId: f.runId, summary: summary ?? f.lastText, ...(metadata ? { metadata } : {}) } : undefined,
       )
     } else if (t === 'run/review_requested') {
@@ -852,7 +864,7 @@ export class TaskRunner {
       console.warn(`[task-console] stale terminal transition refused: ${f.cardId} core run ${f.coreRunId}`)
       await this.tick(); return
     }
-    if (t === 'run/completed' && metadata?.decision === 'approved' && typeof metadata.finalArtifactId === 'string') {
+    if (t === 'run/completed' && ['approved','assisted'].includes(String(metadata?.decision)) && typeof metadata?.finalArtifactId === 'string') {
       const artifact = this.store.s.artifacts.get(metadata.finalArtifactId)
       const card = this.store.s.cards.get(f.cardId)
       if (artifact && card?.role === 'planner' && artifact.batchId === card.batchId) {
@@ -985,7 +997,15 @@ export class TaskRunner {
     if (!card || card.status !== 'blocked') throw new Error('这张卡不在阻塞状态')
     if (card.wakeAt && Date.parse(card.wakeAt) > this.clock()) throw new Error('定时等待尚未到期，不能提前当作复验完成')
     const ok = await this.store.transition(
-      () => this.store.kernel.unblockTask(cardId),
+      () => {
+        const changed=this.store.kernel.unblockTask(cardId)
+        const batch=this.store.s.batches.get(card.batchId),template=this.store.tasks.get(card.taskId)
+        if(changed&&batch&&template&&taskForBatch(template,batch).design?.evidenceContract==='studio-video-v1'){
+          const sourceRunId=card.runIds.at(-1);if(!sourceRunId)throw Error('studio-unblock-source-run-required')
+          new StudioInterventions(this.store).record({id:`unblock:${sourceRunId}`,taskId:card.taskId,batchId:card.batchId,cardId,sourceRunId,kind:'operator_unblock',reason:'Operator explicitly unblocked the card'})
+        }
+        return changed
+      },
       changed => changed && this.store.kernel.getTask(cardId)?.status === 'ready' ? { t: 'card/ready', at: this.now(), taskId: card.taskId, cardId } : undefined,
     )
     if (!ok) throw new Error('核心任务状态已经变化，无法解除阻塞')

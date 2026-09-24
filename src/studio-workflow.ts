@@ -1,3 +1,4 @@
+import {StudioInterventions} from './studio-interventions.js'
 import {StudioPreparation,assertPreparationWritable} from './studio-preparation.js'
 import {StudioRenderLedger} from './studio-render-ledger.js'
 import {assertScriptLanguage} from './studio-script-language.js'
@@ -130,7 +131,9 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     const rows=(this.read(input,'skill_loads')??[]).filter((r:any)=>r.sessionId!==input.sessionId||r.name!==receipt.name)
     this.write(input,'skill_loads',[...rows,{...receipt,sessionId:input.sessionId,policyHash:sha(this.policy(input.task)),at:new Date().toISOString()}])
   }
-  recordIntervention(input:any,reason:string){if(typeof reason!=='string'||!reason.trim())throw Error('studio-intervention-reason');this.write(input,'interventions',[...(this.read(input,'interventions')??[]),{reason,at:new Date().toISOString()}])}
+  recordIntervention(input:any,reason:string){this.key(input);return new StudioInterventions(this.store).record({id:randomUUID(),taskId:input.task.id,batchId:input.batch.id,...(input.card?.id?{cardId:input.card.id}:{}),kind:'operator_assistance',reason})}
+  autonomy(input:any){this.key(input);return new StudioInterventions(this.store).assessment({taskId:input.task.id,batchId:input.batch.id})}
+  interventions(input:any){this.key(input);return new StudioInterventions(this.store).list({taskId:input.task.id,batchId:input.batch.id})}
   reviewProgress(input:any,includeReceipts=false){
     if(input.card?.role!=='reviewer')return null
     const [task,batch]=this.key(input),ph=sha(this.policy(input.task)),saved=this.read(input,'candidate')
@@ -149,7 +152,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
       savedReview.reviewerSessionId!==input.sessionId||savedReview.candidateSha256!==current?.candidate.sha256||savedReview.revision!==current?.candidate.revision
     )?null:savedReview
     const planning=input.card?.role==='planner'&&this.read(input,'runtime_enforcement')===true?this.planningPrerequisites(input):undefined
-    return {...(input.card?.role==='reviewer'?{reviewProgress:this.reviewProgress(input,true)}:{}),...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),preparationRevisions:new StudioPreparation({kernel:{db:this.db}}).publicRows(input.batch.id),renderJobs:this.renderLedger.publicRows(input),candidate:current?.policyHash===ph?current.candidate:null,review,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
+    return {...(input.card?.role==='reviewer'?{reviewProgress:this.reviewProgress(input,true)}:{}),...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),preparationRevisions:new StudioPreparation({kernel:{db:this.db}}).publicRows(input.batch.id),renderJobs:this.renderLedger.publicRows(input),candidate:current?.policyHash===ph?current.candidate:null,review,budget:this.read(input,'budget')??null,autonomy:this.autonomy(input),interventions:this.interventions(input),preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
   }
   recordCandidateLocation(input:any,location:{path:string;manifestPath:string;sha256:string}){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
@@ -227,7 +230,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     if(!review)throw Error('studio-version-bound-trusted-review-required')
     if(role==='reviewer'&&review.reviewerSessionId!==input.sessionId)throw Error('studio-review-session-mismatch')
     const receipts=this.db.prepare('SELECT payload FROM dsh_studio_receipts WHERE task_id=? AND batch_id=? AND policy_hash=?').all(input.task.id,input.batch.id,sha(policy)).map((r:any)=>JSON.parse(r.payload))
-    const result=evaluateStudioReview({policy,candidate:saved.candidate,review,producerSessionId:saved.producerSessionId,reviewerSessionId:review.reviewerSessionId,receipts,budget,interventions:this.read(input,'interventions')??[]})
+    const result=evaluateStudioReview({policy,candidate:saved.candidate,review,producerSessionId:saved.producerSessionId,reviewerSessionId:review.reviewerSessionId,receipts,budget,interventions:this.interventions(input)})
     if(role==='reviewer'){
       if(!Array.isArray(review.checks)||review.checks.some((c:any)=>!['pass','fail','pending'].includes(c?.status)))throw Error('studio-review-check-status-invalid')
       // A real, complete negative review must reach the planner. Only integrity failures block handoff.
@@ -247,7 +250,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
         if(integrity.some((x:string)=>x.startsWith('check.source_records:')))hints.push('Source evidence comes only from a complete unchanged read of studio_status.artifacts.manifestPath. Stage manifests and file SHA strings are not receipt IDs. If unavailable on a grounded rejection, mark source_records pending with evidenceReceiptIds:[] and state the limitation.')
         throw Error(`studio-review-integrity-failed: ${integrity.join('; ')}${hints.length?' Correction guidance (report not stored): '+hints.join(' '):''}`)
       }
-      return {summary:result.ok?'Independent review completed; planner must verify final acceptance.':'Independent review found issues; return to planner for repairs.',metadata:{workflowOutcome:result.ok?'review_complete':'review_needs_changes',...base,reviewerSessionId:review.reviewerSessionId,issues:result.issues}}
+      return {summary:result.qualityOk?'Independent review completed; planner must verify final acceptance.':'Independent review found issues; return to planner for repairs.',metadata:{workflowOutcome:result.qualityOk?'review_complete':'review_needs_changes',...base,reviewerSessionId:review.reviewerSessionId,qualityPassed:result.qualityOk,autonomy:this.autonomy(input),issues:result.qualityIssues}}
     }
     if(this.read(input,'runtime_enforcement')===true){
       const audioRanges=receipts.filter((r:any)=>r.sessionId===review.reviewerSessionId&&r.candidateSha256===saved.candidate.sha256&&r.kind==='audio').flatMap((r:any)=>r.ranges).sort((a:any,b:any)=>a[0]-b[0]);let covered=0
@@ -258,7 +261,8 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
       const plan=this.speechPlan(input),checks=this.read(input,'speech_checks')??[]
       if(!plan||plan.lines.some((line:any)=>['source','final'].some(stage=>!checks.some((c:any)=>c.lineId===line.id&&c.stage===stage&&c.sessionId===review.reviewerSessionId&&c.candidateSha256===saved.candidate.sha256&&c.result?.content_gate==='pass'))))throw Error('studio-speech-coverage-not-passed')
     }
-    if(!result.ok)throw Error(`studio-quality-gate-failed: ${result.issues.join('; ')}`)
-    return {summary:'Machine-assessed candidate; not human aesthetic approval.',metadata:{workflowOutcome:'machine_assessed_candidate',...base,reviewerSessionId:review.reviewerSessionId}}
+    if(!result.qualityOk)throw Error(`studio-quality-gate-failed: ${result.qualityIssues.join('; ')}`)
+    const autonomy=this.autonomy(input),assisted=autonomy.status==='assisted'
+    return {summary:assisted?'机器质检候选片（有人工协助）；不计为自主成功，也非用户审美认可。':'机器质检候选片；未记录人工协助不等于自主成功，也非用户审美认可。',metadata:{workflowOutcome:assisted?'assisted_machine_assessed_candidate':'machine_assessed_candidate',qualityPassed:true,autonomy,...base,reviewerSessionId:review.reviewerSessionId}}
   }
 }

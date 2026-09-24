@@ -6,6 +6,7 @@ import {join} from 'node:path'
 import {EventStore} from '../src/tasks.ts'
 import {StudioOperations} from '../src/studio-operations.ts'
 import {recoverStudioFailure} from '../src/studio-recovery.ts'
+import {StudioInterventions} from '../src/studio-interventions.js'
 const input={taskId:'T',batchId:'B',cardId:'e',expectedRunId:'R',recoveryId:'repair-1',reason:'platform stack overflow repaired'}
 async function fixture(t:any){
  const root=await mkdtemp(join(tmpdir(),'studio-recover-'));const s=new EventStore(root);await s.load();t.after(async()=>{s.kernel.close();await rm(root,{recursive:true,force:true})})
@@ -25,11 +26,19 @@ test('same batch recovery is atomic, preserves paid ledger/history and is idempo
  const s=await fixture(t);const ledger=JSON.stringify(s.kernel.db.prepare('SELECT * FROM dsh_studio_operations').all());const old=s.all().length
  const results=await Promise.all([recoverStudioFailure(s,input),recoverStudioFailure(s,input)])
  assert.equal(results[0].replay,false);assert.equal(results[1].replay,true);assert.equal(s.all().length,old+1)
+ const audit=new StudioInterventions(s).list(input);assert.equal(audit.length,1);assert.equal(audit[0].sourceRunId,'R');assert.equal(audit[0].kind,'operator-studio-recovery')
  assert.equal(s.s.cards.get('e')?.status,'ready');assert.equal(s.s.cards.get('r')?.status,'todo');assert.equal(s.s.cards.get('p')?.status,'todo');assert.equal(s.s.batches.get('B')?.settled,undefined)
  assert.deepEqual(s.s.cards.get('e')?.runIds,['R']);assert.equal(s.s.runs.get('R')?.status,'failed');assert.equal(JSON.stringify(s.kernel.db.prepare('SELECT * FROM dsh_studio_operations').all()),ledger)
  const claim=s.kernel.claimTask('e');assert.ok(claim);assert.equal(s.kernel.listRuns('e').length,2)
  const reloaded=new EventStore(s.root);await reloaded.load();assert.equal((await recoverStudioFailure(reloaded,input)).replay,true);reloaded.kernel.close()
  await assert.rejects(recoverStudioFailure(s,{...input,reason:'different'}),/id-conflict/)
+})
+test('audit failure rolls back the entire operator recovery',async t=>{
+ const s=await fixture(t);new StudioInterventions(s)
+ s.kernel.db.exec("CREATE TRIGGER reject_audit BEFORE INSERT ON dsh_studio_interventions BEGIN SELECT RAISE(ABORT,'audit unavailable'); END")
+ const before=JSON.stringify(s.kernel.db.prepare('SELECT * FROM tasks').all()),count=s.all().length
+ await assert.rejects(recoverStudioFailure(s,input),/audit unavailable/)
+ assert.equal(JSON.stringify(s.kernel.db.prepare('SELECT * FROM tasks').all()),before);assert.equal(s.all().length,count)
 })
 for(const mode of ['unknown','submitted','manual-cancel','archived','wrong-run','wrong-batch','success','active','other-failure'])test(`recovery rejects ${mode} without partial mutation`,async t=>{
  const s=await fixture(t);let request={...input}

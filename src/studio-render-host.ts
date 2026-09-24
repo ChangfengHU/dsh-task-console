@@ -6,6 +6,7 @@ import {fileSha256,studioPath} from './studio-tools.js'
 interface Dependencies {config?:any;execute?:(script:string,args:string[])=>Promise<any>}
 const digest=/^[a-f0-9]{64}$/
 const errorActions:Record<string,string>={
+ render_node_version_unsupported:'The host renderer requires Node 22 or later at its pinned path; repair host configuration, not the project composition.',
  project_relative_path_required:'Use a relative composition/output path inside this task.',project_path_invalid:'Use files inside the current task; do not traverse outside it.',plain_directory_required:'The composition must be a real directory.',plain_file_required:'Verify each referenced local file exists.',
  input_symlink_forbidden:'Freeze regular local files; symbolic links are not render inputs.',sensitive_input_forbidden:'Keep credentials and private configuration out of the composition.',input_snapshot_too_large:'Limit the composition directory to required render assets.',input_changed_during_snapshot:'Stop editing inputs and submit a stable composition.',
  freeze_dynamic_dependencies_required:'Freeze dynamically loaded dependencies locally before rendering.',freeze_remote_dependencies_required:'Download permitted dependencies into the composition first.',freeze_dependencies_inside_composition:'Copy required dependencies inside the composition directory and update references.',composition_audio_required:'Mount actual narration/audio in the composition before rendering.',

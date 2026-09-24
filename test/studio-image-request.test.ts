@@ -23,7 +23,9 @@ test('existing receipt replays even when current validation would reject histori
  const input={task:{id:'t'},batch:{id:'b'},card:{role:'executor'}},ops=new StudioOperations({kernel:{db}})
  ops.configure(input,{imageCalls:6,voiceSegments:0,imageBatches:6});const args={prompt:'historical'},receipt={structuredContent:{taskId:'existing',status:'done'}}
  await ops.invoke(input,raw,args,async()=>receipt)
- assert.deepEqual(await ops.invoke(input,raw,args,async()=>{throw Error('no repeat')},()=>assertStudioImageRequest(raw,args)),receipt)
+ const reused=await ops.invoke(input,raw,args,async()=>{throw Error('no repeat')},()=>assertStudioImageRequest(raw,args))
+ const {content,...providerReceipt}=reused;assert.deepEqual(providerReceipt,receipt)
+ const provenance=JSON.parse(content[0].text).studioOperation;assert.equal(provenance.replayed,true);assert.equal(provenance.dispatched,false)
  assert.equal(ops.snapshot(input).used.imageCalls,1)
 })
 test('both prompt and prompts are charged like the upstream concatenated request',async t=>{

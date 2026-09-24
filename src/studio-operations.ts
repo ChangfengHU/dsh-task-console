@@ -17,6 +17,25 @@ const failedStates=new Set(['failed','cancelled','canceled'])
 const rejected=(result:any,value:any)=>result?.isError===true||value?.ok===false||!!value?.error
 const statusTool=(name:string)=>/(?:vyibc-voice_(?:status|result|cancel)|vyibc-image_get_task)$/.test(name)
 
+/** Add host provenance without rewriting the saved provider receipt or its schema.
+ * A historical queued response is not a newly queued job or a fresh status poll.
+ */
+function replayResult(result:any,row:any):any {
+  const provenance={source:'studio-operation-ledger',replayed:true,dispatched:false,newReservedUnits:0,
+    jobId:row.job_id??null,ledgerState:row.state,qualityApproved:false,
+    instruction:'Reused the original submission receipt; no new generation or provider request occurred. Its provider status is historical. Poll the original job if needed. Do not report this as newly generated or improved audio/images; verify the actual reused files.'}
+  const note={type:'text',text:JSON.stringify({studioOperation:provenance})}
+  if(result?.type==='text'&&typeof result.text==='string'){
+    try{return {...result,text:JSON.stringify(replayResult(JSON.parse(result.text),row))}}catch{
+      return {...result,text:result.text+'\n'+note.text}
+    }
+  }
+  if(Array.isArray(result))return [...result,note]
+  if(result&&typeof result==='object'&&Array.isArray(result.content))return {...result,content:[...result.content,note]}
+  if(result&&typeof result==='object'&&result.structuredContent)return {...result,content:[note]}
+  return result&&typeof result==='object'?{...result,studioOperation:provenance}:{providerReceipt:result,studioOperation:provenance}
+}
+
 /** Paid MCP submissions are reserved before dispatch and replayed by argument digest.
  * An unknown submission is never automatically retried. This is not a shell sandbox.
  */
@@ -56,11 +75,9 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
     }
     const intent=hash({raw,args:canonical(args)}),key=[input.task.id,input.batch.id,intent]
     const replay=this.db.prepare('SELECT * FROM dsh_studio_operations WHERE task_id=? AND batch_id=? AND intent=?').get(...key)
-    if(replay){if(replay.result)return JSON.parse(replay.result);throw Error('studio-submission-unknown: reconcile original operation; do not resubmit')}
+    if(replay){if(replay.result)return replayResult(JSON.parse(replay.result),replay);throw Error('studio-submission-unknown: reconcile original operation; do not resubmit')}
     // Semantic checks apply only to new work: never block saved receipts or polling,
     // and reject before reserving budget so local validation cannot become unknown.
-    const checked=beforeDispatch?.()
-    if(checked&&typeof (checked as any).then==='function')throw Error('studio-dispatch-validator-must-be-synchronous')
     this.db.transaction(()=>{
       const s=this.snapshot(input)
       if(s.unknown)throw Error('studio-prior-submission-unknown')
@@ -81,6 +98,11 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
         dispatched:false,reservedUnits:0,retryable:false,retryAfterRepair:remaining>0,
         action:remaining>0?'This request is too large; the remaining allowance is not zero. Each image prompt or voice segment counts as one unit, even in a single batch call. Reuse valid assets, then submit only necessary units within the remaining allowance. Do not repeat the same oversized request or create another task to reset the budget.':'No allowance remains for new generation. Reuse verified existing assets and report unmet requirements. Do not reset the task budget or retry paid work under another ID.',
       }))
+      // An exhausted or absent allowance cannot be repaired by fetching another
+      // reference or tweaking prompts. Report that first; validate new input
+      // only when this request can actually reserve its required units.
+      const checked=beforeDispatch?.()
+      if(checked&&typeof (checked as any).then==='function')throw Error('studio-dispatch-validator-must-be-synchronous')
       this.db.prepare('INSERT INTO dsh_studio_operations VALUES(?,?,?,?,?,?,?,?,?)').run(...key,raw,d.kind,d.units,'dispatching',null,null)
     })()
     try {

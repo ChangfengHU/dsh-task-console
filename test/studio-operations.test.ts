@@ -5,8 +5,18 @@ import Database from 'better-sqlite3'
 import {StudioOperations} from '../src/studio-operations.js'
 function setup(t:any,limits:{imageCalls:number;voiceSegments:number;imageBatches?:number}={imageCalls:6,voiceSegments:30,imageBatches:6}){const db=new Database(':memory:');t.after(()=>db.close());const ops=new StudioOperations({kernel:{db}});const input={task:{id:'task'},batch:{id:'batch'},card:{role:'executor'}};ops.configure(input,limits);return {db,ops,input}}
 const receipt=(v:any)=>({content:[{type:'text',text:JSON.stringify(v)}]})
+function assertReplay(replayed:any,original:any){
+ const content=replayed.content
+ assert.ok(Array.isArray(content));assert.equal(content.length,original.content.length+1)
+ assert.deepEqual({...replayed,content:content.slice(0,-1)},original)
+ const meta=JSON.parse(content.at(-1).text).studioOperation
+ assert.equal(meta.source,'studio-operation-ledger');assert.equal(meta.replayed,true)
+ assert.equal(meta.dispatched,false);assert.equal(meta.newReservedUnits,0);assert.equal(meta.qualityApproved,false)
+ assert.match(meta.instruction,/no new generation/)
+ return meta
+}
 const args={segments:[{text:'你好',voice_type:'voice'}]}
-test('canonical requests replay without second dispatch',async t=>{const {ops,input}=setup(t);let calls=0;const call=async()=>{calls++;return receipt({ok:true,job_id:'j1',status:'queued'})};const a=await ops.invoke(input,'vyibc-voice_synthesize',args,call);const b=await ops.invoke(input,'vyibc-voice_synthesize',{segments:[{voice_type:'voice',text:'你好'}]},call);assert.deepEqual(a,b);assert.equal(calls,1);assert.equal(ops.snapshot(input).used.voiceSegments,1)})
+test('canonical requests replay without second dispatch',async t=>{const {ops,input}=setup(t);let calls=0;const call=async()=>{calls++;return receipt({ok:true,job_id:'j1',status:'queued'})};const a=await ops.invoke(input,'vyibc-voice_synthesize',args,call);const b=await ops.invoke(input,'vyibc-voice_synthesize',{segments:[{voice_type:'voice',text:'你好'}]},call);assertReplay(b,a);assert.equal(calls,1);assert.equal(ops.snapshot(input).used.voiceSegments,1)})
 test('concurrent duplicate cannot dispatch twice',async t=>{const {ops,input}=setup(t);let resolve:any,calls=0;const p=ops.invoke(input,'vyibc-voice_synthesize',args,async()=>{calls++;return new Promise(r=>resolve=r)});await assert.rejects(ops.invoke(input,'vyibc-voice_synthesize',args,async()=>{calls++;return {}}),/submission-unknown/);resolve(receipt({job_id:'j1'}));await p;assert.equal(calls,1)})
 test('timeout retains budget and blocks same or different paid requests',async t=>{const {ops,input}=setup(t);let calls=0;await assert.rejects(ops.invoke(input,'vyibc-voice_synthesize',args,async()=>{calls++;throw Error('timeout')}),/submission-unknown/);await assert.rejects(ops.invoke(input,'vyibc-voice_synthesize',args,async()=>{calls++;return {}}),/submission-unknown/);await assert.rejects(ops.invoke(input,'vyibc-image_generate_image',{prompt:'new'},async()=>{calls++;return {}}),/prior-submission-unknown/);assert.equal(calls,1);assert.equal(ops.snapshot(input).unknown,true);assert.equal(ops.snapshot(input).used.voiceSegments,1)})
 test('unrecognized success receipt remains unknown',async t=>{const {ops,input}=setup(t);await assert.rejects(ops.invoke(input,'vyibc-voice_synthesize',args,async()=>receipt({ok:true})),/submission-unknown/);assert.equal(ops.snapshot(input).operations[0].state,'unknown')})
@@ -69,7 +79,7 @@ test('public image reference preserves historical operation key and budget after
  db.prepare('INSERT INTO dsh_studio_operations VALUES(?,?,?,?,?,?,?,?,?)').run(input.task.id,input.batch.id,intent,raw,'imageCalls',1,'completed','historical-image-job',JSON.stringify(original))
  const restarted=new StudioOperations({kernel:{db}});let calls=0
  const replay=await restarted.invoke(input,raw,{referenceImageUrl:request.referenceImageUrl,prompt:request.prompt,engine:request.engine},async()=>{calls++;return receipt({task_id:'unexpected'})})
- assert.deepEqual(replay,original);assert.equal(calls,0)
+ assertReplay(replay,original);assert.equal(calls,0)
  assert.equal(restarted.snapshot(input).used.imageCalls,1)
  assert.equal(restarted.snapshot(input).operations[0].intent,intent)
  // A deliberately changed immutable asset URL denotes new input and consumes
@@ -100,7 +110,7 @@ test('frozen image batches reject third dispatch despite remaining units and sur
  await assert.rejects(restarted.invoke(input,'vyibc-image_generate_image',{prompt:'f'},send),(error:any)=>{
   assert.match(error.message,/batch-limit/);const details=JSON.parse(error.message.split(': ')[1]);assert.equal(details.remainingImageUnits,1);assert.equal(details.dispatched,false);return true
  })
- assert.deepEqual(await restarted.invoke(input,'vyibc-image_generate_image',{prompt:'e'},send),failed)
+ assertReplay(await restarted.invoke(input,'vyibc-image_generate_image',{prompt:'e'},send),failed)
  assert.equal(calls,2);assert.deepEqual(restarted.snapshot(input),before)
  assert.throws(()=>restarted.configure(input,{imageCalls:6,voiceSegments:30,imageBatches:3}),/cannot-change/)
 })
@@ -125,9 +135,52 @@ test('legacy missing batch allowance rejects new images without rewriting frozen
  let calls=0;const invoke=async()=>{calls++;return receipt({task_id:'not-authorized'})},before=ops.snapshot(input)
  await assert.rejects(ops.invoke(input,raw,{prompt:'new'},invoke),/studio-image-batch-budget-missing/)
  const restarted=new StudioOperations({kernel:{db}})
- assert.deepEqual(await restarted.invoke(input,raw,request,invoke),old)
+ assertReplay(await restarted.invoke(input,raw,request,invoke),old)
  assert.equal(calls,0);assert.deepEqual(restarted.snapshot(input),before)
  assert.throws(()=>restarted.configure(input,{...before.limits,imageBatches:2}),/cannot-change/)
  await restarted.invoke(input,'vyibc-image_get_task',{taskId:'legacy-image'},async()=>receipt({taskId:'legacy-image',status:'completed'}))
  assert.deepEqual(restarted.snapshot(input),before)
+})
+
+
+test('replay reports historical submission and current ledger state without rewriting provider content or budget',async t=>{
+ const {db,ops,input}=setup(t);let calls=0
+ const original={...receipt({job_id:'j1',status:'queued'}),structuredContent:{job_id:'j1',status:'queued'}}
+ await ops.invoke(input,'vyibc-voice_synthesize',args,async()=>{calls++;return original})
+ await ops.invoke(input,'vyibc-voice_status',{job_id:'j1'},async()=>receipt({job_id:'j1',status:'done'}))
+ const savedBefore=db.prepare('SELECT result FROM dsh_studio_operations').get() as any
+ const before=ops.snapshot(input),restarted=new StudioOperations({kernel:{db}})
+ const reused=await restarted.invoke(input,'vyibc-voice_synthesize',args,async()=>{calls++;throw Error('must not dispatch')})
+ const meta=assertReplay(reused,original)
+ assert.equal(meta.jobId,'j1');assert.equal(meta.ledgerState,'completed')
+ assert.equal(reused.structuredContent.status,'queued');assert.match(meta.instruction,/status is historical/)
+ assert.deepEqual(restarted.snapshot(input),before);assert.deepEqual(db.prepare('SELECT result FROM dsh_studio_operations').get(),savedBefore)
+ assert.equal(calls,1)
+ // Provenance must not leak into a fresh polling response.
+ const poll=receipt({job_id:'j1',status:'done'})
+ assert.deepEqual(await restarted.invoke(input,'vyibc-voice_status',{job_id:'j1'},async()=>poll),poll)
+})
+
+test('DSH text envelope exposes replay note and preserves inner MCP receipt',async t=>{
+ const {db,ops,input}=setup(t);const original=receipt({job_id:'j1',status:'queued'});let calls=0
+ const send=async()=>{calls++;return {type:'text',text:JSON.stringify(original)}}
+ await ops.invoke(input,'vyibc-voice_synthesize',args,send)
+ const replayed=await new StudioOperations({kernel:{db}}).invoke(input,'vyibc-voice_synthesize',args,send)
+ assert.equal(replayed.type,'text');assert.equal(assertReplay(JSON.parse(replayed.text),original).jobId,'j1');assert.equal(calls,1)
+})
+
+test('failed replay remains failed and does not claim success or new work',async t=>{
+ const {db,ops,input}=setup(t);const original=receipt({ok:false,error:'provider rejection'});let calls=0
+ const send=async()=>{calls++;return original}
+ await ops.invoke(input,'vyibc-voice_synthesize',args,send)
+ const replayed=await new StudioOperations({kernel:{db}}).invoke(input,'vyibc-voice_synthesize',args,send)
+ assert.equal(assertReplay(replayed,original).ledgerState,'failed');assert.equal(calls,1)
+ assert.equal(JSON.parse(replayed.content[0].text).ok,false)
+})
+
+test('missing image batch allowance is reported before asking for an unusable reference repair',async t=>{
+ const {ops,input}=setup(t,{imageCalls:6,voiceSegments:30});let validations=0,dispatches=0
+ const before=ops.snapshot(input)
+ await assert.rejects(ops.invoke(input,'vyibc-image_generate_image',{prompt:'new scene'},async()=>{dispatches++;return receipt({task_id:'unexpected'})},()=>{validations++;throw Error('studio-image-reference-required')}),/studio-image-batch-budget-missing/)
+ assert.equal(validations,0);assert.equal(dispatches,0);assert.deepEqual(ops.snapshot(input),before)
 })

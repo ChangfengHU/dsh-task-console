@@ -38,7 +38,7 @@ test('structured review invokes guarded handoff; rejected evidence remains edita
  await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd:s.cwd},card:{role:'reviewer'},sessionId:'s'},workflow:{candidateLocation:()=>({path:join(s.cwd,'film.mp4')}),status:()=>({candidate:s.getCandidate()}),recordValidatedReview:()=>{}},isActive:()=>active,submitReview:async()=>{submissions++;if(!valid)throw Error('host-evidence-invalid');active=false}})
  await assert.rejects(tools.studio_submit_review.execute({checks:[],issues:[]}),/host-evidence-invalid/)
  assert.equal(active,true);valid=true
- const r=await tools.studio_submit_review.execute({checks:[],issues:[]});assert.equal(r.taskHandoff,true);assert.equal(r.qualityApproved,false);assert.equal(submissions,2)
+ const r=await tools.studio_submit_review.execute({checks:[],issues:[]});assert.equal(r.taskHandoff,true);assert.equal(r.qualityApproved,false);assert.match(r.nextAction,/already completed.*do not call task_complete/);assert.equal(submissions,2)
  await assert.rejects(tools.studio_submit_review.execute({checks:[],issues:[]}),/stale-run/)
 })
 test('audio actual host wav hash recorded with calibration result intact',async t=>{const s=await setup(t),r=await s.tools.studio_inspect_audio.execute({start:1,end:3});assert.equal(r.observation.calibrated,false);assert.equal(r.receipt.kind,'audio');assert.equal(r.qualityApproved,false);await assert.rejects(s.tools.studio_inspect_audio.execute({start:0,end:9}),/range/)})

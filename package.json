@@ -6,7 +6,9 @@
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
-    "./workflow-extensions": {"default":"./lib/workflow-extensions.js"},
+    "./workflow-extensions": {
+      "default": "./lib/workflow-extensions.js"
+    },
     ".": {
       "default": "./lib/index.js"
     },
@@ -58,7 +60,12 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "studio/helpers/*.py",
+    "studio/roles",
+    "studio/manifest.json",
+    "studio/README.md",
+    "scripts/package-studio.mjs"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -67,7 +74,9 @@
     "preset:intake": "node scripts/install-task-intake.mjs",
     "preset:creator": "node scripts/install-task-create.mjs",
     "test": "NODE_ENV=test tsx --test test/*.test.ts",
-    "kernel:check": "npm --prefix cloudflare run check"
+    "kernel:check": "npm --prefix cloudflare run check",
+    "prepack": "node scripts/package-studio.mjs",
+    "test:studio-package": "node --test test/studio-package-payload.test.mjs"
   },
   "dsh": {
     "bundle": {

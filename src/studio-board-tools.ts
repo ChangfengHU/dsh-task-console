@@ -59,13 +59,26 @@ async function replayReceipt(root:string,output:string,board:any){
 export async function registerStudioBoardTools(ctx:any,o:StudioBoardOptions):Promise<()=>void>{
  const {input,workflow}=o
  const check=(exec?:any)=>{if(!o.isActive())throw Error('studio-stale-run');if(exec?.agent?.session?.id&&exec.agent.session.id!==input.sessionId)throw Error('studio-session-mismatch')}
- const tool=defineTool({name:'studio_compile_storyboard',description:'Executor only: pass a structured storyboard object to the fixed local compiler. Saves immutable input, writes a new composition directory and verifies HTML hash. Fix named fields without deleting planned scenes/actions. Does not render, synthesize media or approve quality.',parameters:{board:{type:'object',description:'Execution object with required root schema:"studio-board-v1", numeric duration (seconds), gsap, font, script, scenes and audio. Not the planning document or serialized text. Scenes use start/duration/layers. Image layer example: {"type":"image","role":"character","src":"assets/character.png","width":400,"height":800}. role is a direct property; tags is unsupported. Full contract: STORYBOARD_EXECUTION.md.',additionalProperties:true,required:true},outputDirectory:{type:'string',description:'A new directory name that does not exist yet. The compiler creates it. Do not mkdir it or write board.json into it first; preserve existing directories and choose a fresh name.',required:true}},output:{schema:{type:'object',additionalProperties:true},render:(_:any,value:any)=>[{type:'text',text:JSON.stringify(value)}]},execute:async(args:any,exec:any)=>{
+ const tool=defineTool({name:'studio_compile_storyboard',description:'Executor only: pass a structured storyboard object to the fixed local compiler. Saves immutable input, writes a new composition directory and verifies HTML hash. Fix named fields without deleting planned scenes/actions. Does not render, synthesize media or approve quality.',parameters:{board:{type:'object',description:'Execution object with required root schema:"studio-board-v1", numeric duration (seconds), gsap, font, script, scenes and audio. Not the planning document or serialized text. Scenes use start/duration/layers. Image layer example: {"type":"image","role":"character","src":"assets/character.png","width":400,"height":800}. role is a direct property; tags is unsupported. Full contract: STORYBOARD_EXECUTION.md.',additionalProperties:true},boardPath:{type:'string',description:'Preferred for an existing execution board: project-relative .json file to read and freeze. Supply exactly one of boardPath or board. No need to copy the whole JSON into tool arguments.'},outputDirectory:{type:'string',description:'Optional new directory name that does not exist yet. Omit to use a content-derived name. The compiler creates it. Do not mkdir it or write board.json into it first; preserve existing directories.'}},output:{schema:{type:'object',additionalProperties:true},render:(_:any,value:any)=>[{type:'text',text:JSON.stringify(value)}]},execute:async(args:any,exec:any)=>{
   check(exec);if(input.card?.role!=='executor')throw Error('studio-role-denied')
-  if(Object.keys(args).some(key=>!['board','outputDirectory'].includes(key)))throw Error('studio-board-unknown-argument')
-  const name=args.outputDirectory
-  if(!/^[A-Za-z0-9._-]{1,80}$/.test(name)||name==='.'||name==='..')throw Error('studio-board-output-name-invalid')
-  const encoded=JSON.stringify(args.board)
+  if(Object.keys(args).some(key=>!['board','boardPath','outputDirectory'].includes(key)))throw Error('studio-board-unknown-argument')
+  const hasBoard=args.board!==undefined,hasPath=args.boardPath!==undefined
+  if(hasBoard===hasPath)throw Error('studio-board-input-required: provide exactly one of board or boardPath; prefer boardPath for an existing project JSON file')
+  const root=resolve(input.task.cwd);await plainDirectory(root)
+  let source=args.board
+  if(hasPath){
+   if(!args.boardPath||isAbsolute(args.boardPath)||extname(args.boardPath).toLowerCase()!=='.json')throw Error('studio-board-source-path-invalid')
+   const path=await realpath(resolve(root,args.boardPath)),within=relative(root,path)
+   if(!within||within==='..'||within.startsWith('..'+sep)||isAbsolute(within))throw Error('studio-board-source-outside-project')
+   if((await lstat(path)).size>1024*1024)throw Error('studio-board-input-too-large')
+   try{source=JSON.parse((await fileBytes(path)).toString('utf8'))}catch{throw Error('studio-board-source-invalid-json')}
+   if(!source||typeof source!=='object'||Array.isArray(source))throw Error('studio-board-source-object-required')
+   check(exec)
+  }
+  const encoded=JSON.stringify(source)
   if(Buffer.byteLength(encoded)>1024*1024)throw Error('studio-board-input-too-large')
+  const name=args.outputDirectory??'composition-'+sha(encoded).slice(0,16)
+  if(!/^[A-Za-z0-9._-]{1,80}$/.test(name)||name==='.'||name==='..')throw Error('studio-board-output-name-invalid')
   const board=JSON.parse(encoded),script=workflow.script(input),policy=input.task.design?.studio
   if(!script||!isDeepStrictEqual(board.script,script.lines))throw Error('studio-board-script-mismatch')
   if(!policy||policy.width!==1080||policy.height!==1920||policy.fps!==30||(board.width??1080)!==policy.width||(board.height??1920)!==policy.height||(board.fps??30)!==policy.fps)throw Error('studio-board-dimensions-mismatch')
@@ -80,7 +93,6 @@ export async function registerStudioBoardTools(ctx:any,o:StudioBoardOptions):Pro
    minimum:policy.durationMin,maximum:policy.durationMax,
    action:'Set a numeric duration in seconds at the execution board root, aligned with the complete scene timeline and task duration policy. durationMin/durationMax inside dimensions do not supply it. Preserve the full script and scene content; do not pad empty frames or trim dialogue to fit.',
   }))
-  const root=resolve(input.task.cwd);await plainDirectory(root)
   const base=join(root,'.studio-boards'),output=join(root,name),digest=sha(encoded),boardPath=join(base,digest+'.json')
   // lstat catches dangling output symlinks too. Only complete, matching compiler
   // output can be replayed; this branch never creates or repairs any files.

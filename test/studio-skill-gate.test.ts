@@ -94,7 +94,11 @@ for(const id of ['planner','reviewer','executor','storyboard','visual','sound'] 
   assert.equal((await run('write')).isError,true);assert.equal(writes,0)
   assert.equal((await run('skill',{name:'missing'})).isError,true);assert.equal(records.length,0)
   for(const name of required)assert.equal((await run('skill',{name})).isError,false)
-  assert.equal(records.length,required.length);assert.deepEqual(workflow.status(input).skillLoads.map((r:any)=>r.name),required);assert.equal((await run('write')).isError,false);assert.equal(writes,1)
+  assert.equal(records.length,required.length);assert.deepEqual(workflow.status(input).skillLoads.map((r:any)=>r.name),required)
+  const malformed='{"path":"index.html","content":"'+'PRIVATE_FIXTURE'.repeat(4500)
+  const rejected=await run('write',malformed as any);assert.equal(rejected.isError,true);assert.equal(writes,0)
+  const diagnostic=JSON.stringify(rejected);assert.match(diagnostic,/studio-production-arguments-object-required/);assert.match(diagnostic,/tool body was not invoked/);assert.match(diagnostic,/does not prove the provider finish reason/);assert.equal(diagnostic.includes('PRIVATE_FIXTURE'),false)
+  assert.equal((await run('write')).isError,false);assert.equal(writes,1)
  }finally{stop();d1();d2();db.close()}
 })
 
@@ -107,4 +111,15 @@ for(const [role,skillName,submission] of [['planner','studio-director','task_pla
  f.load(skillName,undefined,'another-session');assert.equal(f.records.length,0)
  f.load(skillName);assert.equal(f.guard(submission),undefined);assert.equal(f.records.length,1)
  assert.match(fixture(role).guard(submission),/required-skills-not-loaded/)
+})
+
+test('malformed production arguments receive repair guidance after skills without parsing or leaking input',()=>{
+ const f=fixture();REQUIRED_PRODUCTION_SKILLS.forEach(name=>f.load(name))
+ for(const tool of ['write','edit','bash','run_code']){
+  for(const args of [null,[],42,true,'{"content":"secret-test-value"}']){
+   const error=f.guard(tool,args);assert.match(error,/structured JSON object/);assert.equal(error.includes('secret-test-value'),false)
+  }
+  assert.equal(f.guard(tool,{content:'valid object'}),undefined)
+ }
+ assert.equal(f.guard('studio_status',{}),undefined)
 })

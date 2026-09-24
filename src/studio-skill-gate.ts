@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto'
+import {productionArgumentError} from './studio-production-arguments.js'
 import {studioStageFor,type StudioStageId} from './studio-stages.js'
 
 export const REQUIRED_PRODUCTION_SKILLS=['hyperframes','hyperframes-core','studio-character-workflow'] as const
@@ -48,6 +49,7 @@ export function registerStudioSkillGate(ctx:any,options:{input:any;isActive:()=>
   if(READ_ONLY.has(exec.name)||READ_MCP.test(exec.name))return
   const missing=required.filter(name=>!loaded.has(name))
   if(missing.length)return `studio-required-skills-not-loaded: before planning, production, or review submission, actually call skill with each JSON argument ${missing.map(name=>JSON.stringify({name})).join(', ')}. These installed instructions must be returned successfully in this session. Do not invent another path or treat this as permission denial. Loading is not quality approval.`
+  return productionArgumentError(exec.name,exec.arguments)
  })
  return()=>{stopGuard();stopResult()}
 }

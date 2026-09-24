@@ -22,6 +22,11 @@ test('creator ships reusable onboarding/login rules but no business execution gr
   assert.match(spec.persona, /browser_login_provision/)
   assert.match(spec.persona, /仅要求只读验收或保持登录时不得自动复制/)
   assert.match(spec.persona, /不承诺其他平台/)
+  assert.match(spec.persona, /fleet-base-v3/)
+  assert.doesNotMatch(spec.persona, /应选择 fleet-base-v2/)
+  assert.match(spec.persona, /scope、coordination.*必须是字符串/)
+  assert.match(spec.persona, /只有本次用户确实要求企微通知时/)
+  assert.match(spec.persona, /context 读取失败先说明接口失败/)
   assert.doesNotMatch(spec.persona, /152\.70\.155\.63/)
 })
 

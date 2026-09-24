@@ -80,7 +80,7 @@ export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: s
     rows: "- id: tool-todo\n  name: '@deepseek-ai/dsh-tool-todo'\n  config:\n    allowParallelInProgress: true" },
   { id: 'fleet-onboard-runtime', label: 'Fleet onboard runtime', group: 'Fleet', writes: true,
     description: '仅基础节点接入、Clash/浏览器/VNC 修复与报告。不能部署 Fleet Probe Runner，不能用于 Runner 专项任务。',
-    schemaNames: ['fleet_onboard_start', 'fleet_onboard_status', 'fleet_onboard_resume', 'fleet_onboard_report'],
+    schemaNames: ['fleet_onboard_start', 'fleet_onboard_status', 'fleet_onboard_resume', 'fleet_onboard_report', 'fleet_onboard_inspect'],
     rows: "- id: fleet-onboard-runtime\n  name: 'dsh-task-console/fleet-onboard-tools'" },
   { id: 'fleet-runner-runtime', label: 'Fleet Runner operations', group: 'Fleet', writes: true,
     description: '仅检查、幂等部署/恢复 Fleet Probe Runner 并验收签名作业。不会修改 Clash、浏览器、账户或站点登录。',

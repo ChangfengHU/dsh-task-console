@@ -49,10 +49,13 @@ export class TaskCreator {
 
   async context() {
     return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
+      designFields: { scope:'required string, not an object; reusable target-selection policy, no fixed IP', branches:'required array of {id:string,when:string,action:string,evidence:string}', coordination:'required string describing actual role dependencies', failurePolicy:'{isolateItems:boolean,maxAttempts:integer 1..3,stopConditions:string[]}', acceptance:'required nonempty string[] of business evidence criteria', optional:'notifications only when requested; evidenceContract only for a matching catalog contract, not a Fleet recipe ID' },
+      revisionCandidates: [...this.runner.store.tasks.values()].filter(t=>!t.enabled && !t.archivedAt && t.origin?.source === 'task-chat')
+        .map(t=>({id:t.id,title:t.title,trigger:t.trigger,...(t.workflowRecipe ? {workflowRecipe:t.workflowRecipe} : {}),manualAvailable:t.trigger.kind === 'cron'})),
       loginDiagnosis: '巡查可显式审查 browserPatrol.resumeAfterCopyLimit=1（需 actions 包含 resume）：复制预算耗尽但有同 Task 同故障已确认导入时，保留计数，允许额外一次正常登录续接。先新鲜 verify；canResume=true 应冻结 resume 而非再次 provision。原账号由 MCP 跨会话解析并核对当前授权，禁止静默换号；不再次导入、不重启、不绕过验证码。续接后独立20分钟4样本；失败只报告真实原因。一个目标失败，继续其他目标，本轮有界收口；未登录或未知不等于整轮执行协议应永久阻塞。旧计划不自动获得额外预算，必须 revise 审查。',
       recurringInput: 'create/revise 定时计划可显式提供顶层 recurringObjective：完整可复用的业务执行目标，包含原始目标的范围、禁令、验收与通知约束，但不含“生成待审查计划/等待审批”这类 Creator 控制指令。它与原始请求并列供独立审查，批准后才用于后续 cron；不提供时保留旧输入语义。不得省略原请求中的操作限制。reuse 不允许改写它。',
       actions: { fleetBaseExample: fleetTaskActions, contract: '新建可复用 Task 时同时提交 actions 数组，独立审查显示快捷入口。每项 {id,name,description,template,parameters,enabled?,isDefault?}。模板用 {{key}}；参数 {key,label,type:text|number|boolean,required,default?,choices?,source?,dependsOn?,visibleWhen?,binding?}。binding 可用 target-ip、ssh-user、ssh-password、gemini-account；密码不能保存默认值。账号来源 fleet.gemini-accounts 依赖目标 IP，账号必须保存明确 accountId 意图；机器候选 fleet.nodes 可手填新 IP。Task Actions 仅提供本次参数，不改变角色、工具、验收、定时；执行同 Task 新 Batch，绝不复制历史 IP/密码。复用和 revise 不覆盖现有 Actions；用户在 Task Actions 页单独编辑。' },
-      revisions: { decision: 'revise', contract: '同一已暂停的 cron Task 可用 taskId、reason、完整 design 及要调整的 title/brief/participants 生成新待审查版本，不创建另一 Task。不能更改时间表、移除证据合同、缩短独立验收或改变通知范围。未结束执行或缺少历史冻结定义时拒绝更新；审查会再次核验原定义与全部角色指纹。批准只更新未来定义，定时仍关闭，不派发 Batch。新增编排能力仍须实际支持，不能仅在自然语言中承诺。' },
+      revisions: { decision: 'revise', contract: '同一已暂停的 Task（once 或 cron）可用 taskId、reason、完整 design 及要调整的 title/brief/participants 生成待审查版本，不创建另一 Task。Fleet v2→v3 升级传 recipe:{id:"fleet-base-v3",login:原策略}，不要另传角色计划；账号验收策略不允许弱化。不能更改时间表、移除证据合同、缩短独立验收或改变通知范围。未结束执行或缺少历史冻结定义时拒绝更新；审查再次核验原定义与角色指纹。批准只更新未来定义，Task仍暂停，不派发 Batch、不新增定时。' },
       capabilityLimits: { studioStages: 'studio-video-v1保持三位主角色：编导、合成、独立质检；可选design.studioStages=[{id:storyboard|visual|sound,agentId:已安装专门角色,brief:职责}]，三项完整且与主角色分离。每轮创建真实分镜→视觉/声音→Gate→合成→独审→编导节点。中间阶段必须studio_register_stage登记实际文件清单，不能只写文字完成。沿用预算与最终视听门禁。', browserPatrolV2: '固定规划者、browser-manager、独立评估者及可选通知员。可选 design.proxy={agentId:真实独立代理角色,lineId:批准线路,maxAttempts:1至3}；每轮规划者以 proxyItems:[{ip,action:verify|repair,reason}] 与浏览器items同时冻结本轮动作，生成代理处理→Gate→浏览器→独立评估→规划者。代理全部确定终态后交接；宿主逐机器禁止未通过目标登录写入，其他已通过目标继续。登录复制/续接需15分钟内真实网络证据，最终需评估者自己只读验收；独立历史验收不因后续等待过期，新的异常或修复仍使它失效。互斥限于本MCP操作及本Task串行支线，不能承诺其他工具或直接SSH受约束；角色仍须持有相应权限。',
         browserRecovery: '新增受限能力：browserPatrol.actions 可显式加入 recover，执行者工具 browser_recover(ip,instance,sessionId,requestId)；需要本轮真实 cdp-unavailable 事件、冻结 recover 动作和精确宿主 recover 权限。仅恢复现有实例，不删除重建、不复制、不重启同机其他浏览器；恢复后重新 verify，必要时下一轮 provision，再由评估者做原20分钟4样本。未知不是一律重启。browserPatrol.excludedNodeIds 可存用户明确排除的节点ID；仍保留观测并展示排除，不伪装健康。browserPatrol.scheduleActivation=completed-patrol 可独立审查允许完整巡查含未解决项后启用：全部角色done、原生可收口证据、全部通知sent；协议失败、缺证据或通知未知仍拒绝。业务未通过仍是failed，不改历史。',
         tools: 'Creator持有的工具不会自动授予规划者或执行者。每条角色动作必须核对该角色名册；不能让未持有task_create_status的角色调用它，也不能把提示词约定称为宿主强制闸门。',
@@ -172,7 +175,7 @@ export class TaskCreator {
         await this.runner.store.reviseReviewedTask(p.previous, revised, id, () => {
           if (db.prepare("UPDATE dsh_task_plans SET state='awaiting_trial',reviewed_at=?,review_reason=?,task_id=? WHERE id=? AND state='pending'")
             .run(new Date().toISOString(), reason.trim(), p.task.id, id).changes !== 1) throw new Error('审查状态已变化，请重新读取')
-          db.prepare(`INSERT INTO dsh_schedule_bindings VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET plan_id=excluded.plan_id,turn_json=excluded.turn_json,roster_hash=excluded.roster_hash`)
+          if (revised.trigger.kind === 'cron') db.prepare(`INSERT INTO dsh_schedule_bindings VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET plan_id=excluded.plan_id,turn_json=excluded.turn_json,roster_hash=excluded.roster_hash`)
             .run(p.task.id,id,JSON.stringify(turn),p.rosterHash)
         })
         this.runner.schedule.sync(revised, Date.now())
@@ -270,24 +273,30 @@ export class TaskCreator {
       const actions = proposal.actions === undefined ? undefined : validateTaskActions(proposal.actions)
       if (actions && proposal.decision !== 'create') throw Error('复用或更新工作流不覆盖 Actions，请在 Task Actions 页单独配置')
       if (proposal.recipe) {
-        if (proposal.decision !== 'create' || proposal.title || proposal.brief || proposal.participants || proposal.graphMode)
-          throw new Error('预制配方只接受 create、reason、recipe；不能混入另一份角色计划')
+        if (!['create','revise'].includes(proposal.decision) || proposal.title || proposal.brief || proposal.participants || proposal.graphMode)
+          throw new Error('预制配方只接受 create/revise、reason、recipe；不能混入另一份角色计划')
         proposal = { ...proposal, ...composeRecipe(proposal.recipe) }
       }
       let task: TaskSpec, previous: TaskSpec | undefined
       if (proposal.decision === 'reuse' || proposal.decision === 'revise') {
         const found = store.tasks.get(proposal.taskId ?? '')
-        if (!found || found.archivedAt || (!found.enabled && found.trigger.kind !== 'cron') || found.origin?.source !== 'task-chat') throw new Error('只能复用未归档且允许手动执行的聊天工作流；不能重放巡检 Signal')
+        if (!found || found.archivedAt || (proposal.decision !== 'revise' && !found.enabled && found.trigger.kind !== 'cron') || found.origin?.source !== 'task-chat') throw new Error('只能复用未归档且允许手动执行的聊天工作流；不能重放巡检 Signal')
         task = found
         if (proposal.trigger && JSON.stringify(proposal.trigger) !== JSON.stringify(task.trigger)) throw new Error('复用不能修改时间表；需创建新的待审查计划')
         if (proposal.decision === 'revise') {
-          if (found.enabled || found.trigger.kind !== 'cron') throw new Error('只能审查更新已暂停的定时 Task')
+          if (found.enabled) throw new Error('只能审查更新已暂停的 Task')
           if ([...store.s.batches.values()].some(b => b.taskId === found.id && !b.settled && !b.archivedAt)) throw new Error('仍有未结束的执行，不能更新任务定义')
           previous = found
           const reusable = (text: string) => ips.reduce((s, ip) => s.split(ip).join('{{target}}'), text)
           task = { ...found, ...validateTask({ ...found, title: reusable(proposal.title ?? found.title), brief: reusable(proposal.brief ?? found.brief),
             participants: (proposal.participants ?? found.participants).map(p => ({ ...p, ...(p.brief ? { brief: reusable(p.brief) } : {}) })), graphMode: proposal.graphMode ?? found.graphMode }, ids),
             id: found.id, enabled: false, createdAt: found.createdAt, origin: found.origin }
+          if (proposal.recipe) {
+            if (!found.workflowRecipe || found.workflowRecipe.login !== proposal.recipe.login ||
+                !(found.workflowRecipe.id === proposal.recipe.id || found.workflowRecipe.id === 'fleet-base-v2' && proposal.recipe.id === 'fleet-base-v3'))
+              throw Error('配方修订只允许保持账号验收策略的同版更新或 Fleet v2→v3 升级，不能弱化旧验收')
+            task.workflowRecipe = {...proposal.recipe}
+          }
           if (found.design?.evidenceContract === 'browser-patrol-v2' && (proposal.design?.evidenceContract !== found.design.evidenceContract ||
               (proposal.design.browserPatrol?.observationMinutes ?? 0) < found.design.browserPatrol!.observationMinutes ||
               (proposal.design.browserPatrol?.minSamples ?? 0) < found.design.browserPatrol!.minSamples ||

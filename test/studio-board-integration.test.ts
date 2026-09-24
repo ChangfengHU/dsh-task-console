@@ -11,7 +11,7 @@ import {compileStudioStoryboard} from '../src/studio-host.ts'
 // This suite deliberately uses the deployed Python source and real ffprobe.
 // No injected execute function or replacement compiler may hide CLI incompatibility.
 const packageRoot=resolve(dirname(fileURLToPath(import.meta.url)),'..')
-const compiler=resolve(packageRoot,'../autonomous-studio/compile_storyboard.py')
+const compiler=process.env.STUDIO_TEST_STORYBOARD_COMPILER ?? resolve(packageRoot,'../autonomous-studio/compile_storyboard.py')
 const workspace=resolve(packageRoot,'../..')
 const sha=(value:string|Buffer)=>createHash('sha256').update(value).digest('hex')
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=','base64')

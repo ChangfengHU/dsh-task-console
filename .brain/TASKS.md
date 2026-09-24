@@ -1,6 +1,6 @@
 # 后续优化
 
-- [ ] [FLEET-FULL-ACCEPTANCE-20260924] v3已审查，1a14133双零窗口部署，保留Studio/角色pin/历史。原Task Batch b-chat-5d944930d2d8c1582400：装机者1122基础通过；浏览器1123首次稳定性失败保留，1125同卡续跑。Fleet金库下发flag已恢复并持久化；实际Vault下发f502be401d1087fd037bc4d2b1807fb0认证回执imported/verified。本地误套巡查预算导致receipt-mismatch，linux-clash e0f7291已修复推送，115 MCP测试通过，原失败不改写。稳定性d1adda7c3da4cdba3b9cc920aacfdb1c运行中，公网已显示真实9222/9223及两个不同已验证账号；尚未达到20分钟，Runner及第二次幂等验收未开始。DSH全量621/624通过（3既有跳过），公网DAG/全屏0错误，最新冷加载20.68秒不算性能已解决。未直接SSH236或重启活跃DSH。详见既有model-startup-fallback日志最新段。
+- [ ] [FLEET-FULL-ACCEPTANCE-20260924] v3已审查，线上1a14133保留Studio/角色pin/历史。原Task Batch b-chat-5d944930d2d8c1582400现已失败：装机者1122基础通过；浏览器1123首次稳定性失败，1125续跑又因Codex原生10分钟sleep触及5分钟请求超时而失败，真实稳定性仅14分钟/各15样本，不算20分钟通过；Runner未执行。Vault实际下发成功、本地误套巡查预算的问题已由linux-clash e0f7291修复推送，115 MCP测试通过。当前补Task宿主有界TIMEOUT等待恢复、后台终态正常唤醒不占交卷纠正次数及可见事件说明；部署与完整两次验收待完成，失败历史不改写。1126 Studio仍活跃，禁止重载。未直接SSH236。详见既有model-startup-fallback日志最新段。
 
 - [x] [MANUAL-FLEET-WITHDRAW-20260923] Fleet c3ff0b7 deployed;31 Fleet tests and22 preset/Action tests pass. Browser-selected fleet-ops Action performed real236 withdrawal in session agent-fleet-ops-mue2yyrn, audit6088. Public Fleet card absent; D1 membership0/enabledRunners0; Vault value digest unchanged, access inventory unchanged; VNC page and Clash health remain200. Installer session agent-fleet-installer-mudto47m first completed all10 stages in onb-92f512d5-0bf2-4e0b-b3b1-66426c0c4b7e. Final236 state is intentionally withdrawn, not uninstalled. No developer target SSH or global reload. Full receipts in existing model-startup-fallback log.
 

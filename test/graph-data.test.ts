@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { replayGraph, type GraphEventRow } from '../src/graph-data.ts'
+import { replayGraph, graphEventLabel, type GraphEventRow } from '../src/graph-data.ts'
 
 const event = (id: number, task: string, kind: string, payload: Record<string, unknown> = {}, run_id: number | null = null): GraphEventRow => ({ id, graph_id: 'b1', task_id: task, run_id, kind, payload, created_at: id })
+
+test('model wait recovery is visible without inventing completion or another Run',()=>{
+  const rows=[event(1,'browser','created',{status:'ready'}),event(2,'browser','claimed',{},9),event(3,'browser','model_wait_interrupted',{code:'TIMEOUT'},9)]
+  assert.match(graphEventLabel(rows[2]),/模型等待超时，后台操作继续/)
+  const frame=replayGraph(rows)
+  assert.equal(frame.tasks.length,1);assert.equal(frame.runs.length,1)
+  assert.equal(frame.tasks[0].status,'running')
+  assert.notEqual(frame.runs[0].outcome,'completed')
+})
 
 test('DB replay never displays a task, link, or run before its canonical row event', () => {
   const events = [

@@ -489,3 +489,57 @@ errors/no horizontal overflow. DAG/fullscreen took20.68s, no page errors;1122don
 1125running, Runner no Run yet. Original1123 remains blocked. Screenshots reuse
 the existing /tmp/dsh-fleet-236-v3-* and /tmp/fleet-236-vault-restored-* evidence paths.
 Full stability, Runner signed readback and second idempotent run remain pending.
+
+### 2026-09-24: native sleep timeout interrupted otherwise live acceptance
+
+At10:31:07Z native1125 ended with Codex TIMEOUT; Batch5d944930 settled failed and
+unstarted Runner was cancelled by the existing dependency policy. Background
+d1adda7c3da4cdba3b9cc920aacfdb1c then correctly refused the no-longer-live binding
+at10:31:18Z (dsh-session-required). Both logins had15 independent verified samples
+and only14minutes before interruption, not a completed20-minute acceptance.
+
+Native seq482 proves the model ran Code Mode setTimeout(600000), followed by wait
+yield_time_ms360000. The default Codex provider has a300000ms per-request cap;
+seq473–489 lasts exactly that cap. This is not target logout, a failed copy,
+DSH's7200-second role watchdog or a live profile reload (mtime10:06:09Z).
+The installed fleet-installer copied Skill SHA256 matches the canonical source
+a08611dc92a23b8de262b4ebd8b3098e328e8dac13eebc81ef7799ecb6e7abe3.
+
+Fix the Task host, not global model timeout/permissions: explicitly instruct browser
+workers to end ordinary turns during running async jobs. On one model TIMEOUT after
+tool dispatch, retain the same Run/Session/lease only with a verified pending host
+operation, append model_wait_interrupted, and enter the existing30-second host wait.
+Preserve the original watchdog, no tool replay or model switch. Resume after terminal
+observation for actual receipt reading and original acceptance checks. Duplicate
+timeout notifications cannot cancel the waiter; cancellation/business errors,
+unknown liveness and repeated timeout fail normally. Failed1125 is not rewritten.
+
+The first all-tests command accidentally omitted the package's NODE_ENV=test and
+failed loopback/mock-schema checks; rerun with the declared test environment.
+Two new regression assertions initially used Batch.outcome instead of settled.outcome;
+corrected the fixture assertions, not production settlement. Focused69 tests pass.
+Integration/deployment and fresh original-Task execution are pending; another
+Studio Run1126/native session remains active, so no live reload is permitted.
+
+Further review found normal async completion used the missing-terminator nudge
+budget, so a multi-operation browser workflow could fail despite making progress.
+Scoped operation outcomes now wake the same Agent without consuming submission
+nudges. Empty completed turns retain the bounded correction/failure policy. Tests
+cover three sequential operations, caller cancellation during the async liveness
+check, unchanged deadline/lease, duplicate timeout notifications and one recovery
+only. Replay labels model_wait_interrupted explicitly without creating nodes/Runs
+or marking acceptance passed.
+
+Full-suite runs exposed pre-existing 80ms fixture races (review handoff, Fleet
+repair claim and notifier scheduling). Wait for the exact asynchronous transition
+with a finite bound rather than changing production scheduling or weakening CAS.
+The notifier fix is the same as the existing integration branch. Full recheck
+remains pending at this edit. The current public Related Sessions test originally
+looked for anchors, but the UI uses real Open/Trace buttons; correct the fixture
+to exercise the actual Trace navigation, not claim missing production links.
+
+Recheck: declared NODE_ENV=test full main suite completed exit0; separate graph
+replay tests3/3 passed after adding the wait-event test. Real public Chrome opened
+the existing failed Batch's Sessions drawer and navigated1125 via Trace, exact
+session URL and zero page errors. No target mutation or live reload. The screenshot
+initially captured Trace loading, so payload-render acceptance is checked separately.

@@ -51,6 +51,7 @@ interface Flight {
   heartbeatTimer?: ReturnType<typeof setInterval>
   idleTimer?: ReturnType<typeof setTimeout>
   waitedForOperation?: boolean
+  operationTimeoutRecovery?: 'checking' | 'waiting' | 'used'
   timeoutSec: number
   deadline?: number
 }
@@ -392,7 +393,9 @@ export class TaskRunner {
     for (const d of [...prior.values()].sort((a, b) => a.index - b.index)) upstream.push({ agentName: await this.displayName(d.agentId), summary: d.summary ?? '' })
     const previousWait = this.store.kernel.db.prepare('SELECT reason,wake_at FROM dsh_task_wakeups WHERE card_id=?').get(card.id) as any
     const resumeFacts = card.runIds.length ? await this.operationOutcome?.({task,batch,card,sessionId,profileId}) : undefined
-    const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}${resumeFacts ? '\n[RESUME FACTS]\n'+resumeFacts : ''}${previousWait ? `\n[RESUMED DURABLE WAIT]\nDue: ${new Date(previousWait.wake_at).toISOString()}\n${previousWait.reason}\nContinue verification; do not repeat completed side effects.` : ''}`
+    const background = profileId === 'browser-manager' && this.pendingOperation
+      ? '\n[BACKGROUND OPERATIONS]\n后台操作返回 running 后，可用普通回复说明等待并结束当前模型回合；宿主会保留同一 Run、Session 和租约，等待真实终态后自动唤醒你读取原回执。不要调用 task_complete、task_block 或 task_wait 表示等待，不要在 Codex exec/setTimeout/sleep/wait 中长时间睡眠，也不要重复发起操作。宿主等待不是业务验收通过。\n' : ''
+    const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}${background}${resumeFacts ? '\n[RESUME FACTS]\n'+resumeFacts : ''}${previousWait ? `\n[RESUMED DURABLE WAIT]\nDue: ${new Date(previousWait.wake_at).toISOString()}\n${previousWait.reason}\nContinue verification; do not repeat completed side effects.` : ''}`
     const messageId = randomUUID()
     const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview)
     if (!claim) return
@@ -616,8 +619,29 @@ export class TaskRunner {
 
   private async onTurnEnd(f: Flight, reason: any): Promise<void> {
     if (!this.flights.has(f.sessionId)) return
+    if (reason?.kind === 'error' && reason.error?.code === 'TIMEOUT' && ['checking','waiting'].includes(f.operationTimeoutRecovery ?? '')) return
     if (f.idleTimer) { clearTimeout(f.idleTimer); f.idleTimer = undefined }
     if (reason && reason.kind !== 'completed') {
+      // A model's native sleep may exceed its request timeout while the host's
+      // authenticated async operation is still healthy. Retain its live identity
+      // once, without replaying tools, switching models or extending the watchdog.
+      if (reason.kind === 'error' && reason.error?.code === 'TIMEOUT' && f.toolCalled && !f.terminal && !f.pendingAsk && this.pendingOperation && f.operationTimeoutRecovery !== 'used') {
+        if (f.operationTimeoutRecovery) return
+        f.operationTimeoutRecovery = 'checking'
+        const card = this.store.s.cards.get(f.cardId), batch = card && this.store.s.batches.get(card.batchId), base = this.store.tasks.get(f.taskId)
+        try {
+          const pending = card && batch && base && await this.pendingOperation({ task: taskForBatch(base,batch), batch, card, sessionId:f.sessionId, profileId:f.profileId })
+          if (!this.flights.has(f.sessionId)) return
+          if (pending) {
+            f.operationTimeoutRecovery = 'waiting'; f.waitedForOperation = true
+            this.store.kernel.recordEvent(f.cardId,'model_wait_interrupted',{code:'TIMEOUT',provider:f.modelProvider,reason:'host-operation-still-running'},f.coreRunId)
+            f.idleTimer = setTimeout(() => { void this.onTurnEnd(f,{kind:'completed'}) },30_000)
+            ;(f.idleTimer as any).unref?.()
+            return
+          }
+        } catch { /* Unknown liveness is not permission to retain a failed Run. */ }
+        f.operationTimeoutRecovery = 'used'
+      }
       const fallback = this.modelFallback
       if (fallback && startupFallbackAllowed(reason, { used: f.fallbackUsed, toolCalled: f.toolCalled, terminal: f.terminal, provider: f.modelProvider }, fallback.fromProvider)) {
         f.fallbackUsed = true // Reserve once before async resolution or duplicate events.
@@ -666,15 +690,22 @@ export class TaskRunner {
         if (f.waitedForOperation) {
           outcomeNotice = await this.operationOutcome?.({ task: taskForBatch(base, batch), batch, card, sessionId: f.sessionId, profileId: f.profileId })
           f.waitedForOperation = false
+          if (f.operationTimeoutRecovery === 'waiting') f.operationTimeoutRecovery = 'used'
         }
       } catch { await this.finish(f, 'run/failed', 'failed', '无法核验后台操作状态，未宣称完成'); return }
+    }
+    if (outcomeNotice) {
+      // Completing an asynchronous operation is normal workflow progress, not
+      // a failure to submit. Multi-stage workers may park more than once.
+      f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: `[BACKGROUND OPERATION FINISHED]\n${outcomeNotice}\n读取原始回执并继续本任务尚未完成的检查；不要重复已完成的写操作。全部验收满足后实际调用 task_complete，不能完成则如实调用 task_block。` }], source: { kind: 'user' } })
+      return
     }
     const nativeEvidence = !!base && !!batch && taskForBatch(base,batch).design?.evidenceContract === 'browser-patrol-v2' && card?.role !== 'planner'
     const maxNudges = nativeEvidence ? 2 : 1
     if ((run?.nudges ?? 0) < maxNudges) {
       await this.append({ t: 'run/nudged', taskId: f.taskId, runId: f.runId })
       const correction = nativeEvidence ? `${(run?.nudges ?? 0) > 0 ? '最后一次协议纠正。' : ''}上次只有普通文本，没有执行交卷工具。现在请实际调用 task_complete，仅传 JSON 对象 {"summary":"简短如实交接"}，省略 metadata 和 artifacts；或实际调用 task_block 说明阻塞。宿主自动读取证据，不接受你口述成功。不要复查或重发业务操作，不要再次只输出“我将调用”的文字。` : NUDGE
-      f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: outcomeNotice ? `${outcomeNotice}\n\n${correction}` : correction }], source: { kind: 'user' } })
+      f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: correction }], source: { kind: 'user' } })
       return
     }
     await this.finish(f, 'run/failed', 'protocol_violation', `经过 ${maxNudges} 次协议纠正仍未调用 task_complete / task_block`)

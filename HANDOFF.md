@@ -369,6 +369,19 @@ to read browser_status and actually invoke its terminator; it never calls task_c
 on the Agent's behalf. Raw private job payloads are not forwarded and all existing
 receipt/Fleet checks, deadlines and protocol budgets remain. A completion tool present
 in request/header is distinct from a model actually invoking it.
+Browser workers are explicitly instructed to end an ordinary model turn while a
+host operation runs, rather than sleeping inside Codex Code Mode. One model TIMEOUT
+after tool dispatch may park that same Run only when the host proves its own
+background operation is still running. Keep the original CAS lease, watchdog,
+session and model; record `model_wait_interrupted`, then poll without LLM calls and
+wake for actual terminal evidence. This is not model fallback, task completion or
+permission to replay writes. Missing/unknown operations, caller cancellation,
+business errors and a second timeout are not recovered by this path. Failed old
+Runs stay failed; do not resurrect their leases or credit incomplete stability.
+Successful host-operation wakes are normal workflow continuation, not submission
+nudges. They carry scoped terminal facts without consuming the missing-terminator
+budget, so prepare → verify → stability can each park in the same Run. Once there
+is no operation to await, the original bounded submission correction still applies.
 Base-node browser preparation uses default browser_prepare without component; the
 login-observation component is specifically for an already-installed legacy image
 observer, not a prerequisite to install image services on a base node.
@@ -576,8 +589,8 @@ MCP status returns only recent acceptance events to avoid growing model context.
 Fresh running Browser MCP receipts keep their owning browser-manager Run alive
 when the model ends a turn, including custom workflows without a Fleet recipe.
 The host polls receipts every 30 seconds without LLM calls, retains the CAS
-heartbeat and original watchdog deadline, then uses the existing terminator nudge
-after the operation ends. Completion/block calls cannot abandon a running browser
+heartbeat and original watchdog deadline, then wakes the Agent with scoped terminal
+facts after the operation ends (not a submission nudge). Completion/block calls cannot abandon a running browser
 operation. This is operation lifecycle protection, not a new generic Gemini gate;
 other Agents and stale/unrelated receipts retain their existing behavior.
 

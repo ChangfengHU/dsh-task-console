@@ -153,6 +153,7 @@ export function graphEventLabel(e: GraphEventRow): string {
     case 'session_created': return `UPDATE dsh_run_bindings · ${role} 会话已创建`
     case 'prompt_dispatched': return `UPDATE dsh_run_bindings · ${role} 任务书已发送`
     case 'heartbeat': return `UPDATE task_runs · ${role} 心跳续租`
+    case 'model_wait_interrupted': return `INSERT task_events · ${role} 模型等待超时，后台操作继续`
     case 'promoted': return `UPDATE tasks · ${role} 进入 ready`
     case 'gate_opened': return `UPDATE tasks · Gate 放行`
     case 'completed': return `UPDATE tasks/task_runs · ${role} 完成`

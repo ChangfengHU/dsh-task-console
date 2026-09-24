@@ -601,6 +601,9 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
     '只有下载返回 ok=true、path、sha256、bytes 后才把实际文件作为输入；kind、标签、封面或来源卡不证明有音频文件，下载成功也不证明许可或质量。source-only 表示只有来源资料，不能把页面/来源卡当音频：选择有归档文件的合适素材，或按原始来源核实许可后获取真实媒体。不要循环重试同一个 source-only ID。',
     'asset-file-auth-failed、installed-asset-auth-unavailable、studio-asset-download-host-not-configured 属于宿主依赖问题；保留 error_code 和 httpStatus，先 studio_status 核对可用状态，报告该下载工具的确切故障，不用 bootstrap token 或猜测地址绕过。output-exists-with-other-bytes 时保留旧文件、使用新路径；output-extension-mismatch 时按归档扩展名更正输出路径。失败或完整性校验失败的响应不能改名成 .wav/.mp3/.png，也不能加入已完成清单。',
     '阶段交接仍调用 studio_register_stage({path:本轮manifest路径})，验证实际媒体和哈希；有未下载成功的必需素材就如实列出缺项。下载回执不是阶段完成或审美通过。')
+  if(task.design?.evidenceContract==='studio-video-v1'&&card.role==='planner')lines.push('', '[STUDIO STORY AND REPAIR]',
+    '镜头时长必须由剧情、表演和实际声音支撑；冻结台词不证明故事足以支撑目标时长。先用认可片的实际画面/声音校准节奏，再设计完整故事和具体动作；不能把几句短台词拉长为整片或用静止留白补足时长。',
+    '返修先读绑定当前候选的独立质量报告，区分剧本/分镜根因与局部剪辑问题。若当前候选已有major/blocker独立负评，studio_freeze_script允许编导修订后重新冻结完整台词；下游按新台词重新生成本轮分镜、声音和剪辑，并复用仍匹配的真实素材。没有该负评不能任意换剧本；不重置预算或靠删内容绕过验收。')
   if(task.design?.evidenceContract==='studio-video-v1'&&card.role==='executor')lines.push('', '[STUDIO EXECUTION BOARD]',
     '采用结构化编译时先读本项目 STORYBOARD_EXECUTION.md 和当前 studio_compile_storyboard schema；规划分镜不是执行板。根字段为 schema=studio-board-v1、duration秒数、gsap、font、script、scenes、audio。沿用冻结台词，voice音轨逐条含lineId/text；场景需start/duration/layers，不能把frame描述当可执行图层。',
     'scene.duration是视觉镜头持续时间，不是某句配音长度；台词、反应与无对白动作共同构成镜头，音轨时间单独按真实音频计算。编译前用短程序打印所有镜头start/duration/end及相邻差值，同时打印音轨边界，修正后复查。关键时刻之间不能留未渲染的空档；不能压缩整片、删剧情或静态填空来过检查。',

@@ -43,7 +43,24 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     return result
   }
   private requirePreflight(task:any){const row=this.db.prepare('SELECT * FROM dsh_studio_preflight WHERE task_id=?').get(task.id);if(!row||row.policy_hash!==sha(this.policy(task)))throw Error('blocked_quality_capability: studio-preflight-required');const current=this.preflight(task);if(!current.ok)throw Error(`blocked_quality_capability: ${current.reason}`)}
-  plan(input:any){this.key(input);if(input.card?.role!=='planner')throw Error('studio-planner-required');this.requirePreflight(input.task);if(this.read(input,'runtime_enforcement')===true){const refs=(this.read(input,'reference_receipts')??[]).filter((r:any)=>r.sessionId===input.sessionId);if(!this.script(input)||!refs.some((r:any)=>r.kind==='frames')||!refs.some((r:any)=>r.kind==='audio'))throw Error('studio-plan-requires-script-and-direct-reference')}return {ok:true,status:'ready' as const}}
+  private planningPrerequisites(input:any){
+    const policy=this.policy(input.task),ph=sha(policy)
+    const refs=(this.read(input,'reference_receipts')??[]).filter((r:any)=>r.sessionId===input.sessionId&&r.policyHash===ph&&r.referenceSha256===policy.referenceSha256)
+    const checks=[
+      {id:'frozen_script',ok:!!this.script(input),tool:'studio_freeze_script',action:'Freeze the complete dialogue lines; a script hash or narrative summary is not a frozen script.'},
+      {id:'current_session_reference_frames',ok:refs.some((r:any)=>r.kind==='frames'),tool:'studio_reference_frames',action:'Inspect actual frozen reference frames in this session (start/end, at most 2 seconds; use studio_status.reference.durationSeconds).'},
+      {id:'current_session_reference_audio',ok:refs.some((r:any)=>r.kind==='audio'),tool:'studio_reference_audio',action:'Listen to actual frozen reference audio in this session (start/end, at most 8 seconds; use studio_status.reference.durationSeconds).'},
+    ]
+    return {prerequisitesReady:checks.every(c=>c.ok),checks,missing:checks.filter(c=>!c.ok).map(({id,tool,action})=>({id,tool,action})),instruction:'Repair only missing prerequisites, then query studio_status and resubmit the plan. Hashes, metadata, textual summaries and another session’s receipts cannot substitute for direct reference observations.'}
+  }
+  plan(input:any){
+    this.key(input);if(input.card?.role!=='planner')throw Error('studio-planner-required');this.requirePreflight(input.task)
+    if(this.read(input,'runtime_enforcement')===true){
+      const readiness=this.planningPrerequisites(input)
+      if(!readiness.prerequisitesReady)throw Error('studio-plan-requires-script-and-direct-reference: '+JSON.stringify({error_code:'studio-plan-requires-script-and-direct-reference',retryable:false,retryAfterRepair:true,requiresHuman:false,...readiness}))
+    }
+    return {ok:true,status:'ready' as const}
+  }
   recordCandidate(input:any,candidate:any){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
     strict(candidate,['sha256','manifestSha256','referenceSha256','revision','durationSeconds','width','height','fps'],'candidate')
@@ -73,8 +90,9 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   recordIntervention(input:any,reason:string){if(typeof reason!=='string'||!reason.trim())throw Error('studio-intervention-reason');this.write(input,'interventions',[...(this.read(input,'interventions')??[]),{reason,at:new Date().toISOString()}])}
   status(input:any){
     this.key(input)
-    const current=this.read(input,'candidate'),ph=sha(this.policy(input.task))
-    return {...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),candidate:current?.policyHash===ph?current.candidate:null,review:current?.policyHash===ph?(this.read(input,'review')??null):null,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight:this.preflight(input.task),script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
+    const current=this.read(input,'candidate'),ph=sha(this.policy(input.task)),preflight=this.preflight(input.task)
+    const planning=input.card?.role==='planner'&&this.read(input,'runtime_enforcement')===true?this.planningPrerequisites(input):undefined
+    return {...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),candidate:current?.policyHash===ph?current.candidate:null,review:current?.policyHash===ph?(this.read(input,'review')??null):null,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
   }
   recordCandidateLocation(input:any,location:{path:string;manifestPath:string;sha256:string}){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')

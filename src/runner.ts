@@ -25,6 +25,7 @@ import { publicToolName } from './filtered-mcp-client.ts'
 import { dispatchNotification } from './notification-dispatch.ts'
 import { readBrowserAcceptance } from './workflow-acceptance.ts'
 import { startupFallbackAllowed, installFallbackSelection } from './model-fallback.ts'
+import { FleetRepairRequired, fullFleetRecipe, fleetRoles } from './fleet-workflow-evidence.ts'
 
 interface Flight {
   modelProvider?: string
@@ -402,6 +403,10 @@ export class TaskRunner {
       coreRunId: claim.run.id, claimLock: claim.lock, profileId,
       ...(previousWait ? { deadline: Date.parse(card.startedAt ?? this.now()) + task.timeoutSec * 1000 } : {}),
     }
+    if (task.workflowRecipe?.id === fullFleetRecipe) flight.deadline = Math.min(
+      flight.deadline ?? this.clock() + task.timeoutSec * 1000,
+      Date.parse(batch.firedAt) + task.timeoutSec * fleetRoles.length * 1000,
+    )
     this.flights.set(sessionId, flight)
     this.startHeartbeat(flight)
     try {
@@ -424,7 +429,14 @@ export class TaskRunner {
           const pending = await this.pendingOperation?.({ task, batch, card, sessionId, profileId })
           if (pending) throw new Error(`后台操作仍在运行，继续读取终态回执，不能提前提交验收：${pending}`)
           if (kind === 'completed' || task.design?.evidenceContract === 'browser-patrol-v1') {
-            const observed = await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata })
+            let observed: CompletionDecision | void
+            try { observed = await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata }) }
+            catch (error) {
+              if (!(error instanceof FleetRepairRequired) || task.workflowRecipe?.id !== fullFleetRecipe || profileId !== 'fleet-runner-operator') throw error
+              const round = await this.store.expandFleetRepair(task,batch,card,flight.coreRunId,error.owner,error.message,this.clock())
+              flight.terminal = {kind:'completed',summary:`本轮验收未通过；已交接第 ${round} 轮定向返工给 ${error.owner}。\n${error.message}`,metadata:{decision:'rework',round,repairOwner:error.owner,acceptanceFailure:error.message}}
+              return
+            }
             if (observed) { summary = observed.summary; metadata = observed.metadata }
           }
           const at = this.now()

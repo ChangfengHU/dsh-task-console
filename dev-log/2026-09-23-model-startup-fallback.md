@@ -269,3 +269,24 @@ No target machine operations, live Task revisions or deployments in this slice.
 Boss binding retained the task; linux-clash Brain initialization reported ignored
 metadata, so no portability claim is made for that Brain (use its tracked TASKS/
 dev-log/HANDOFF when changing that repository).
+
+### 2026-09-24: bounded component-owner rework
+
+Added a host-evidence-only repair transition for the final v3 Runner readback.
+It materializes Gate → responsible owner → independent Runner (Runner-only
+observation faults do not rerun browser/installer). The original verification
+Run retains the failure and `decision=rework`; normal CAS dispatch creates child
+Sessions only after dependencies finish. Two repair rounds and the original
+three-role total timeout bound retries; missing/untrusted receipts and explicit
+human/capability blocks are not converted to automatic repair. Later failed or
+malformed native receipts now invalidate earlier successful tool receipts.
+
+New tests exercise actual normalized tasks/links, Gate with zero Runs, delayed
+Session creation, healthy installer reuse, final settlement, stale source CAS,
+time/round ceilings and failed receipt precedence. Focused four-test rerun
+passes; full suite rerun exits0 (existing skips retained). Two test-only assertion
+fixes used the actual `batch.settled.outcome` / `graph.live` API; production kernel
+timestamps remain epoch seconds, covered explicitly. Live SQLite claims were0
+when checked, but this is not enough to authorize hot reload without a fresh
+native session check. Integration, Skill/preset rollout and actual236 verification
+remain pending; no target-machine actions occurred in this slice.

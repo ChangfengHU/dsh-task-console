@@ -4,6 +4,13 @@ import { publicToolName } from './filtered-mcp-client.ts'
 export const fullFleetRecipe = 'fleet-base-v3'
 export const fleetRoles = ['fleet-installer', 'browser-manager', 'fleet-runner-operator'] as const
 type Role = typeof fleetRoles[number]
+/** Only host readback failures with a known owner may schedule bounded repair. */
+export class FleetRepairRequired extends Error {
+  constructor(readonly owner: Role, reason: string) {
+    super(`完整 Fleet 接入验收未通过：${reason}`)
+  }
+}
+const repair = (owner: Role, reason: string): never => { throw new FleetRepairRequired(owner, reason) }
 type Receipt = { name: string; args: any; value: any; seq: number }
 export type FleetRoleEvidence = { role: Role; sessionId: string; events: any[] }
 const reject = (reason: string): never => { throw Error(`完整 Fleet 接入验收未通过：${reason}`) }
@@ -32,12 +39,13 @@ export function fleetReceipts(role: Role, events: any[]): Receipt[] {
     if (event.type !== 'tool/result') continue
     for (const part of event.data?.message?.content ?? []) {
       const call = calls.get(part.toolCallId)
-      if (part.type !== 'tool-result' || part.isError || !call) continue
+      if (part.type !== 'tool-result' || !call) continue
       calls.delete(part.toolCallId)
+      if (part.isError) { results.push({...call,value:{ok:false},seq:event.seq}); continue }
       try {
         const value = JSON.parse((part.content ?? []).filter((p: any) => p.type === 'text').map((p: any) => p.text).join(''))
         results.push({...call,value,seq:event.seq})
-      } catch { /* plain-language tool output is not a structured receipt */ }
+      } catch { results.push({...call,value:{ok:false},seq:event.seq}) }
     }
   }
   return results
@@ -72,18 +80,20 @@ function checkRunner(ip: string, evidence: FleetRoleEvidence, started: number, n
 
 function checkBrowser(ip: string, evidence: FleetRoleEvidence) {
   const rows = fleetReceipts(evidence.role,evidence.events).filter(r => r.args?.ip === ip)
-  if (!rows.some(r => r.name === 'browser_inspect' && r.value.ip === ip)) return reject(`${ip} 缺少浏览器管理员本会话 inspect 证据`)
+  const inspect = rows.filter(r => r.name === 'browser_inspect').at(-1)
+  if (!inspect || inspect.value.ip !== ip || inspect.value.ok !== true) return reject(`${ip} 缺少浏览器管理员本会话成功 inspect 证据`)
   return {ip,eventSeq:rows.at(-1)!.seq}
 }
 
 function checkBrowserReadback(ip: string, node: any, now: number) {
-  if (!node?.reachable || node.capabilityError || !node.browserService) return reject(`${ip} 独立浏览器管理能力未接入或读取失败`)
+  if (!node?.reachable) return reject(`${ip} Fleet 当前不可达，需要先定位接入原因`)
+  if (node.capabilityError || !node.browserService) return repair('browser-manager',`${ip} 独立浏览器管理能力未接入或读取失败`)
   for (const instance of [1,2]) {
     const browser = node.browsers?.find((b: any)=>b.browserNo === instance), check = browser?.loginVerification
     if (!browser || browser.desktopOnly || !Number.isInteger(Number(browser.cdpPort)) || Number(browser.cdpPort) < 1)
-      return reject(`${ip}/browser-${instance} 只有桌面信息或缺少 CDP`)
+      return repair('browser-manager',`${ip}/browser-${instance} 只有桌面信息或缺少 CDP`)
     if (!['verified','signed_out'].includes(check?.status) || !Number.isFinite(stamp(check.checkedAt)) || stamp(check.checkedAt)>now+5000 || !(stamp(check.expiresAt)>now))
-      return reject(`${ip}/browser-${instance} 登录检测未知、缺失或过期；这不是明确未登录`)
+      return repair('browser-manager',`${ip}/browser-${instance} 登录检测未知、缺失或过期；这不是明确未登录`)
   }
 }
 
@@ -114,15 +124,15 @@ export async function validateFleetWorkflowEvidence(input: CompletionCheck, deps
       const node = fleetNodeForIp(fleet.nodes,ip)
       nodeIds.set(ip,node.id)
       checkBrowserReadback(ip,node,now)
-      if (input.task.workflowRecipe.login === 'provision-gemini' && node.browsers.filter((b: any)=>[1,2].includes(b.browserNo)).some((b: any)=>b.identities?.gemini !== 'in' || b.loginVerification?.status !== 'verified')) return reject(`${ip} 本次要求的 Gemini 登录尚未通过`)
+      if (input.task.workflowRecipe.login === 'provision-gemini' && node.browsers.filter((b: any)=>[1,2].includes(b.browserNo)).some((b: any)=>b.identities?.gemini !== 'in' || b.loginVerification?.status !== 'verified')) return repair('browser-manager',`${ip} 本次要求的 Gemini 登录尚未通过；先定位，不绕过人工挑战或重复导入健康账号`)
       if (index === 2) {
         if (accepted.find(r=>r.role === 'fleet-runner-operator' && r.ip === ip)?.targetId !== node.id) return reject(`${ip} Runner 回执目标与 Fleet 名册不一致`)
         const reach = node.reachability
         if (reach?.state !== 'reachable' || reach.fresh !== true || reach.source !== 'signed-runner-result' || !(stamp(reach.lastObservedAt)>=started) || stamp(reach.lastObservedAt)>now+5000)
-          return reject(`${ip} 缺少本轮 Runner 持续状态观测`)
+          return repair('fleet-runner-operator',`${ip} 缺少本轮 Runner 持续状态观测`)
         const telemetry = node.telemetry, network = node.network
         if (telemetry?.contract !== 'fleet-host-v1' || telemetry.complete !== true || !(stamp(telemetry.checkedAt)>=now-180_000) || stamp(telemetry.checkedAt)>now+5000 || !(node.host?.totalMb>0) || !(node.host?.disk?.totalGb>0) || network?.status !== 'fresh' || !(stamp(network.checkedAt)>=now-180_000) || stamp(network.checkedAt)>now+5000 ||
-          ['gemini','claude','chatgpt','youtube','github'].some(id=>network.targets?.[id]?.ok !== true)) return reject(`${ip} 主机或代理指标缺失、失败或过期`)
+          ['gemini','claude','chatgpt','youtube','github'].some(id=>network.targets?.[id]?.ok !== true)) return repair('fleet-installer',`${ip} 主机或代理指标缺失、失败或过期`)
       }
     }
   }
@@ -131,8 +141,9 @@ export async function validateFleetWorkflowEvidence(input: CompletionCheck, deps
     for (const ip of targets) {
       const nodeId = nodeIds.get(ip), job = accepted.find(r=>r.role === 'fleet-runner-operator' && r.ip === ip)?.jobId
       const exit = exits.rows?.find((r: any)=>r.id === nodeId), line = lines.rows?.find((r: any)=>r.id === nodeId)
-      if (exit?.jobId !== job || exit.source !== 'fleet-probe-runner' || !ipv4(exit.exitIp) || exit.exitIp !== exit.expectedIp || !(stamp(exit.verifiedAt)>=started) || stamp(exit.verifiedAt)>now+5000 || !(stamp(exit.expiresAt)>now)) return reject(`${ip} 缺少本次签名巡检的有效出口验证`)
-      if (line?.jobId !== job || line.source !== 'fleet-probe-runner' || line.error || !Array.isArray(line.lines) || !line.lines.length || !(stamp(line.checkedAt)>=started) || stamp(line.checkedAt)>now+5000) return reject(`${ip} 缺少本次候选线路实拨结果`)
+      if (exit?.jobId !== job || exit.source !== 'fleet-probe-runner' || !ipv4(exit.exitIp) || !(stamp(exit.verifiedAt)>=started) || stamp(exit.verifiedAt)>now+5000 || !(stamp(exit.expiresAt)>now)) return repair('fleet-runner-operator',`${ip} 缺少本次签名巡检的有效出口验证`)
+      if (exit.exitIp !== exit.expectedIp) return repair('fleet-installer',`${ip} 本次观测出口不符合期望线路`)
+      if (line?.jobId !== job || line.source !== 'fleet-probe-runner' || line.error || !Array.isArray(line.lines) || !line.lines.length || !(stamp(line.checkedAt)>=started) || stamp(line.checkedAt)>now+5000) return repair('fleet-runner-operator',`${ip} 缺少本次候选线路实拨结果`)
     }
   }
   return {contract:fullFleetRecipe,scope:index === 2 ? input.task.workflowRecipe.login === 'provision-gemini' ? 'node-and-login' : 'full-node' : 'role-handoff',checkedAt:new Date(now).toISOString(),accepted}

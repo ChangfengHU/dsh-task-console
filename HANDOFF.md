@@ -16,6 +16,15 @@ includes current Controller telemetry and same-job signed exit/line observations
 an advisory score or optional candidate-line failure is not itself absence of data.
 Human-review approval is not a bypass for this business evidence contract.
 
+Only a typed host readback failure at the final Runner can create bounded repair:
+the existing kernel stores a real Gate → component owner → Runner verification
+branch (Runner-only faults need just Gate → Runner). At most two rounds fit within
+three role timeout budgets from Batch start. Healthy unrelated roles are not rerun;
+missing receipts, unavailable credentials, human login and unknown failures remain
+explicit blocks. The old verification Run records `decision=rework`, never full
+acceptance; child Sessions appear only after their normal CAS claim. Failed native
+tool results invalidate earlier successful results rather than being skipped.
+
 Paused once-only Tasks can use the same revision CAS as paused cron Tasks; no
 schedule, Batch or Session is created on approval. Trigger, Task ID, Actions and
 historical frozen definitions remain unchanged. Fleet v2→v3 recipe revision must

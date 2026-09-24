@@ -10,6 +10,7 @@ import { TaskCreator } from '../src/task-create.ts'
 import { taskCredential } from '../src/task-credentials.ts'
 import { TaskNotifications } from '../src/task-notifications.ts'
 import { composeRecipe } from '../src/workflow-recipes.ts'
+import { FleetRepairRequired } from '../src/fleet-workflow-evidence.ts'
 
 const testResources: { root: string; runner: TaskRunner; store: EventStore }[] = []
 after(async () => {
@@ -782,6 +783,65 @@ test('Fleet full acceptance cannot bypass evidence through a human-review termin
   await host.callTool(session,'task_block',{reason:'missing business receipt',kind:'capability'});host.endTurn(session);await tick()
   assert.equal([...store.s.cards.values()].find(c=>c.batchId===batch.id)?.status,'blocked')
   runner.stop()
+})
+
+test('Fleet final readback creates a real bounded owner-only repair DAG, no early sessions or fake success', async () => {
+  let failures = 1
+  const recipe = composeRecipe({id:'fleet-base-v3',login:'preserve'})
+  const {host,store,runner,task} = await setup({...recipe,workflowRecipe:{id:'fleet-base-v3',login:'preserve'},timeoutSec:300},
+    {beforeComplete:async input=>{if(input.profileId==='fleet-runner-operator' && failures-->0)throw new FleetRepairRequired('browser-manager','fixture missing CDP')}})
+  const batch = await runner.fire(task.id,'manual')
+  const active = async () => {
+    for(let n=0;n<100;n++){
+      const found = [...host.sessions.entries()].find(([,s])=>!s.disposed && s.tools.length && s.followups.length)
+      if(found)return found[0]
+      await tick()
+    }
+    throw Error('no active fixture session')
+  }
+  const complete = async () => {const sid=await active();host.consumeFirst(sid);await host.callTool(sid,'task_complete',{summary:'checked'});host.endTurn(sid);await tick();return sid}
+  await complete();await complete()
+  const sid=await active();host.consumeFirst(sid)
+  assert.equal(host.sessions.size,3)
+  await host.callTool(sid,'task_complete',{summary:'claims success'})
+  assert.equal(host.sessions.size,3,'repair sessions are not precreated')
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  const rows=[...store.s.cards.values()].filter(c=>c.id.includes('#fleet-'))
+  assert.equal(rows.length,3)
+  assert.deepEqual(rows.map(c=>c.agentId),['__gate__','browser-manager','fleet-runner-operator'])
+  assert.ok(rows.every(c=>c.status==='todo' && !c.runIds.length))
+  host.endTurn(sid);await tick()
+  assert.equal(store.s.cards.get(rows[0].id)?.status,'done')
+  assert.equal(store.kernel.listRuns(rows[0].id).length,0)
+  const previous = [...store.s.runs.values()].find(r=>r.sessionId===sid)!
+  assert.equal(previous.metadata?.decision,'rework');assert.match(previous.summary!,/未通过/)
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  await complete();await complete()
+  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'done')
+  assert.equal([...store.s.runs.values()].filter(r=>r.profileId==='fleet-installer').length,1,'healthy installer is not repeated')
+  const graph=store.graphSnapshot(task.id,batch.id)
+  assert.equal(graph.live.tasks.length,6)
+  assert.equal(graph.live.links.length,5)
+  assert.ok(graph.live.tasks.every(t=>Math.abs(t.created_at-Date.now()/1000)<60),'all kernel timestamps use seconds')
+})
+
+test('Fleet repair budget and source CAS reject extra or stale graph mutation atomically', async () => {
+  const recipe=composeRecipe({id:'fleet-base-v3',login:'preserve'})
+  const {host,store,runner,task}=await setup({...recipe,workflowRecipe:{id:'fleet-base-v3',login:'preserve'},timeoutSec:300})
+  const batch=await runner.fire(task.id,'manual')
+  for(let i=0;i<2;i++){
+    const sid=[...host.sessions.entries()].find(([,s])=>!s.disposed)![0]
+    host.consumeFirst(sid);await host.callTool(sid,'task_complete',{summary:'checked'});host.endTurn(sid);await tick()
+  }
+  const source=[...store.s.cards.values()].find(c=>c.agentId==='fleet-runner-operator')!,core=store.kernel.getTask(source.id)!
+  const count=()=>store.kernel.db.prepare('SELECT COUNT(*) AS n FROM tasks').get() as {n:number}
+  await assert.rejects(store.expandFleetRepair(task,batch,source,core.current_run_id!+1,'browser-manager','stale'),/租约/)
+  assert.equal(count().n,3)
+  await assert.rejects(store.expandFleetRepair(task,batch,source,core.current_run_id!,'browser-manager','late',Date.parse(batch.firedAt)+900001),/时间预算/)
+  assert.equal(count().n,3)
+  for(let i=0;i<2;i++)store.kernel.recordEvent(source.id,'fleet_repair_requested',{round:i+1})
+  await assert.rejects(store.expandFleetRepair(task,batch,source,core.current_run_id!,'browser-manager','third'),/两轮/)
+  assert.equal(count().n,3)
 })
 
 test('Creator exposes blocked rather than running for a parked dependency', async () => {

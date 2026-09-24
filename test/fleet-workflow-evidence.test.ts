@@ -112,6 +112,17 @@ test('legacy/unrelated workflows do not acquire v3 requirements on upgrade',asyn
   assert.equal(await validateFleetWorkflowEvidence(f.input,f.deps),undefined)
 })
 
+test('a later failed or malformed native tool result invalidates an earlier success',async()=>{
+  for(const failed of [true,false]){
+    const f=fixture(),ev=f.evidence['fleet-installer'].events
+    const later=JSON.parse(JSON.stringify(ev.slice(0,2)))
+    later[0].data.callId='failed-call';later[0].seq=100
+    const part=later[1].data.message.content[0];part.toolCallId='failed-call';part.isError=failed;part.content[0].text='not a receipt';later[1].seq=101
+    ev.push(...later)
+    await assert.rejects(validateFleetWorkflowEvidence(f.input,f.deps),/基础十阶段/)
+  }
+})
+
 test('existing Fleet aliases are resolved by exact target hostname, never guessed from an IP octet',async()=>{
   const f=fixture();f.node.id='host-legacy'
   f.reads.exits.rows[0].id='host-legacy';f.reads.lines.rows[0].id='host-legacy'

@@ -2,7 +2,7 @@ import type { Participant } from './fold.ts'
 
 /** Business presets, not a second scheduler. The Creator selects a policy, never rewrites its boundaries. */
 export const workflowRecipes = [{ id: 'fleet-base-v3', title: 'Fleet 完整节点接入与证据验收',
-  description: '基础装机 → 独立浏览器管理与账号验收 → Runner 首轮巡检及 Fleet 回读。三个角色均须本次原始工具证据；Gemini 策略保留双浏览器20分钟验收。目标/IP 留在本次输入中。',
+  description: '基础装机 → 独立浏览器管理与账号验收 → Runner 首轮巡检及 Fleet 回读。三个角色均须本次原始工具证据；Gemini 策略保留双浏览器20分钟验收。末位回读发现已知组件异常时，宿主最多创建两轮责任角色返工及独立复验，总预算不超过三个角色原时间预算之和；缺凭据、人工登录或无证据不得自动重试。目标/IP 留在本次输入中。',
   loginPolicies: ['preserve', 'provision-gemini'],
   requiredAgents: ['fleet-installer', 'browser-manager', 'fleet-runner-operator'],
 }]

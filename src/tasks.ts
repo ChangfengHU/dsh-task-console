@@ -16,6 +16,7 @@ export { actorOf, batchStatus, cardRun, describe, fold, foldTurns, migrate, read
 export type { Artifact, Batch, BlockKind, Card, CardStatus, Event, Participant, Run, RunOutcome, RunStatus, State, StepRow, TaskOrigin, TaskSpec, TaskTarget, TaskTurn, ToolRow, Trigger, TurnLedger, TurnRow } from './fold.ts'
 export { cronHuman, cronMatches, nextFire, parseCron, type Cron } from './cron.ts'
 import { parseCron, validTimeZone } from './cron.ts'
+import { fleetRoles, fullFleetRecipe } from './fleet-workflow-evidence.ts'
 
 // ── store ───────────────────────────────────────────────────────────────
 
@@ -379,6 +380,50 @@ export class EventStore {
       return { t: 'card/created' as const, at, taskId:task.id, batchId:batch.id, card }
     }, event => event)
     return id
+  }
+
+  /** A failed final readback may hand off only to its actual component owner. */
+  async expandFleetRepair(task: TaskSpec, batch: Batch, source: Card, expectedRunId: number, owner: typeof fleetRoles[number], reason: string, now = Date.now()): Promise<number> {
+    if (task.workflowRecipe?.id !== fullFleetRecipe || task.participants.map(p=>p.agentId).join(',') !== fleetRoles.join(',') || source.agentId !== 'fleet-runner-operator' || source.batchId !== batch.id || !fleetRoles.includes(owner)) throw Error('没有已审查的 Fleet 定向返工权限')
+    const seeds: Extract<Event,{t:'card/created'}>[] = []
+    const next = this.queue.then(() => {
+      const round = this.kernel.compose(() => {
+        const db = this.kernel.db, current = this.kernel.getTask(source.id)
+        if (current?.status !== 'running' || current.current_run_id !== expectedRunId || this.state.batches.get(batch.id)?.settled) throw Error('返工来源租约已变化')
+        if (db.prepare('SELECT 1 FROM task_links WHERE parent_id=? LIMIT 1').get(source.id)) throw Error('本次验收已创建返工，不能重复提交')
+        const count = (db.prepare("SELECT COUNT(*) AS n FROM task_events WHERE graph_id=? AND kind='fleet_repair_requested'").get(batch.id) as {n:number}).n
+        if (count >= 2 || !Number.isFinite(Date.parse(batch.firedAt)) || now >= Date.parse(batch.firedAt) + task.timeoutSec * fleetRoles.length * 1000) throw Error('完整 Fleet 验收已达两轮返工或本次总时间预算；保留失败原因并 task_block，不继续重试')
+        const round = count+1, at = new Date(now).toISOString(), epoch = toEpoch(at)
+        const gateId = `${batch.id}#fleet-g${round}`, repairId = `${batch.id}#fleet-repair${round}`
+        const ownerBrief = task.participants.find(p=>p.agentId===owner)!.brief ?? ''
+        const rows = [
+          {id:gateId,agentId:'__gate__',kind:'gate' as const,role:'gate' as const,round,deps:[source.id],brief:`第 ${round} 轮定向返工：${reason}`},
+          {id:repairId,agentId:owner,kind:'agent' as const,round,deps:[gateId],brief:`[HOST READBACK REPAIR]\n${reason}\n只检查和修复上述原因所属组件，健康项复用；不扩大权限或删除资料。\n${ownerBrief}`},
+          ...(owner === 'fleet-runner-operator' ? [] : [{id:`${batch.id}#fleet-verify${round}`,agentId:'fleet-runner-operator',kind:'agent' as const,round,deps:[repairId],brief:task.participants.find(p=>p.agentId==='fleet-runner-operator')!.brief}]),
+        ]
+        const position = (db.prepare('SELECT COALESCE(MAX(position),-1)+1 AS n FROM dsh_card_bindings WHERE batch_id=?').get(batch.id) as {n:number}).n
+        for (const [offset,row] of rows.entries()) {
+          const assignee = row.kind === 'gate' ? null : row.agentId, title = `${task.title} · ${row.agentId} · 返工 ${round}`
+          db.prepare('INSERT INTO dsh_card_bindings(card_id,spec_id,batch_id,position,brief) VALUES (?,?,?,?,?)').run(row.id,task.id,batch.id,position+offset,row.brief ?? null)
+          db.prepare(`INSERT INTO tasks(id,title,body,assignee,status,priority,created_by,created_at,workspace_kind,workspace_path,tenant,max_runtime_seconds,max_retries,node_kind,round,role)
+            VALUES (?,?,?,?,'todo',?,'dsh-task-console',?,'dir',?,?,?,?,?,?,?)`).run(row.id,title,row.brief ?? '',assignee,-position-offset,epoch,task.cwd,batch.id,task.timeoutSec,task.maxTries,row.kind,round,row.kind==='gate'?'gate':null)
+          this.kernel.recordEvent(row.id,'created',{title,body:row.brief,assignee,status:'todo',parents:row.deps,tenant:batch.id,node_kind:row.kind,role:row.kind==='gate'?'gate':null,round,created_at:epoch})
+          for (const parent of row.deps) {
+            db.prepare("INSERT INTO task_links(parent_id,child_id,kind,created_at) VALUES (?,?,'dependency',?)").run(parent,row.id,epoch)
+            this.kernel.recordEvent(row.id,'linked',{parent_id:parent,kind:'dependency'})
+          }
+          const event: Extract<Event,{t:'card/created'}> = {t:'card/created',at,taskId:task.id,batchId:batch.id,card:row}
+          db.prepare('INSERT INTO dsh_events(event_type,task_id,occurred_at,payload_json) VALUES (?,?,?,?)').run(event.t,task.id,at,JSON.stringify(event))
+          seeds.push(event)
+        }
+        this.kernel.recordEvent(source.id,'fleet_repair_requested',{owner,reason,round,gate_id:gateId,repair_id:repairId},expectedRunId)
+        return round
+      })
+      this.events.push(...seeds); this.state = fold(this.events)
+      return round
+    })
+    this.queue = next.then(()=>undefined,()=>undefined)
+    return next
   }
 
   /** Materialize one real rework round. Nothing is inferred by the browser. */

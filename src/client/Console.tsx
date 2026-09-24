@@ -140,6 +140,8 @@ export function Console({ api }: { api: Api }) {
   const executionPage = section === 'tasks' && !!route[1] && !['new', 'plans', 'executions', 'migration'].includes(route[1]) && route[2] !== 'actions'
   const report = executionPage && route[2] === 'runs' && route[4] === 'report'
   const needsCatalog = section === 'agents' || route[1] === 'new'
+  const needsTaskAgentNames = section === 'tasks' && !!route[1] && !['new', 'migration', 'executions', 'plans'].includes(route[1])
+  useEffect(() => { if (needsTaskAgentNames) void loadAgents() }, [loadAgents, needsTaskAgentNames])
   const reload = useCallback(async () => { await Promise.all([loadCatalog(), loadAgents()]) }, [loadCatalog, loadAgents])
   useEffect(() => { if (needsCatalog) { if(section!=='agents')void loadAgents(); void loadCatalog() } }, [loadAgents, loadCatalog, needsCatalog, section])
   const url = `${HASH_PREFIX}/${route.join('/')}`

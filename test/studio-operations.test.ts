@@ -19,3 +19,15 @@ test('immediate completion recognized and batch state isolated',async t=>{const 
 test('read publication list permitted but writes forbidden',async t=>{const {ops,input}=setup(t);let n=0;const f=async()=>{n++;return {}};await ops.invoke(input,'vyibc-douyin_list_published_videos',{},f);await assert.rejects(ops.invoke(input,'vyibc-douyin_publish_video',{},f),/publication-not-authorized/);assert.equal(n,1)})
 
 test('DSH text ToolResult wrapper is parsed and restart retains idempotency',async t=>{const {db,ops,input}=setup(t);let n=0;const f=async()=>{n++;return {type:'text',text:JSON.stringify(receipt({job_id:'j1',status:'queued'}))}};await ops.invoke(input,'vyibc-voice_synthesize',args,f);const restarted=new StudioOperations({kernel:{db}});await restarted.invoke(input,'vyibc-voice_synthesize',args,f);assert.equal(n,1);assert.equal(restarted.snapshot(input).operations[0].job_id,'j1')})
+
+test('specialist generation stays within its media role and shared budget',async t=>{
+ const {ops,input}=setup(t,{imageCalls:1,voiceSegments:1});let n=0
+ const stage=(id:string)=>({...input,task:{...input.task,design:{studioStages:[{id,agentId:id}]}},card:{role:'studio-stage',id:`batch#s1-${id}`,round:1,agentId:id}})
+ const f=async()=>{n++;return receipt({job_id:'stage-job',status:'completed'})}
+ await assert.rejects(ops.invoke(stage('sound'),'vyibc-image_generate_image',{prompt:'x'},f),/executor-only/)
+ await assert.rejects(ops.invoke(stage('storyboard'),'vyibc-voice_synthesize',args,f),/executor-only/)
+ await ops.invoke(stage('visual'),'vyibc-image_generate_image',{prompt:'x'},f)
+ await ops.invoke(stage('sound'),'vyibc-voice_synthesize',args,f)
+ await assert.rejects(ops.invoke(stage('visual'),'vyibc-image_generate_image',{prompt:'y'},f),/budget-exhausted/)
+ assert.equal(n,2);assert.deepEqual(ops.snapshot(input).used,{imageCalls:1,voiceSegments:1})
+})

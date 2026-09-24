@@ -30,7 +30,9 @@ test('real WAV ffprobe reports hashes, durations and technical fit without recor
  const s=await setup(t,{real:true,durationMax:3});const out=await s.tools.studio_probe_audio_sources.execute({sources})
  assert.deepEqual(out.sources.map((x:any)=>x.durationSeconds),[1,2]);assert.equal(out.totalDurationSeconds,3);assert.equal(out.durationMax,3);assert.equal(out.fits,true);assert.equal(out.qualityApproved,false);assert.equal(out.sources[0].sha256,await fileSha256(join(s.cwd,'one.wav')));assert.equal(s.records.length,0)
  assert.ok(STUDIO_SPEECH_TOOL_NAMES.includes('studio_probe_audio_sources'))
- await s.tools.studio_freeze_script.execute({sources,lines});assert.equal(s.records.length,1)
+ const frozen=await s.tools.studio_freeze_script.execute({sources,lines});assert.equal(s.records.length,1)
+ assert.deepEqual(frozen.sources,out.sources);assert.equal(frozen.totalDurationSeconds,3);assert.deepEqual(frozen.lines,lines);assert.deepEqual(s.records[0],frozen)
+ assert.deepEqual(frozen.sources.map((source:any)=>source.path),[join(s.cwd,'one.wav'),join(s.cwd,'two.wav')])
 })
 test('actual 34.686667-second sources cannot freeze into a 25-second task',async t=>{
  const s=await setup(t,{duration:'34.686667'}),one=[sources[0]]
@@ -39,7 +41,7 @@ test('actual 34.686667-second sources cannot freeze into a 25-second task',async
 })
 test('zero voice budget requires sources; legacy synthesis remains compatible and policy still owns rewriting',async t=>{
  const required=await setup(t);await assert.rejects(required.tools.studio_freeze_script.execute({lines}),/sources-required/);assert.equal(required.records.length,0);assert.equal(required.calls(),0)
- const legacy=await setup(t,{voiceSegments:80});const result=await legacy.tools.studio_freeze_script.execute({lines});assert.deepEqual(result.lines,lines);assert.equal(legacy.records.length,1);assert.equal(legacy.calls(),0)
+ const legacy=await setup(t,{voiceSegments:80});const result=await legacy.tools.studio_freeze_script.execute({lines});assert.deepEqual(result.lines,lines);assert.deepEqual(Object.keys(result).sort(),['lines','sha256']);assert.deepEqual(legacy.records,[result]);assert.equal(legacy.calls(),0)
  const policy=await setup(t,{rejectRecord:true});await assert.rejects(policy.tools.studio_freeze_script.execute({lines,sources}),/existing-script-policy/);assert.equal(policy.records.length,0)
 })
 test('sources must match line ids and order before probing; bounds and duplicate ids reject',async t=>{

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,writeFile,rm} from 'node:fs/promises'
+import {mkdtemp,writeFile,rm,mkdir} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {createHash} from 'node:crypto'
@@ -10,13 +10,16 @@ async function fixture(t:any){
  const cwd=await mkdtemp(join(tmpdir(),'studio-board-host-'));t.after(()=>rm(cwd,{recursive:true,force:true}))
  const script=join(cwd,'fixed-compiler.py'),body='import json,sys\nprint(json.dumps({"ok":False,"errorType":"ValueError","reason":"fixture-rejection","qualityApproved":False,"args":sys.argv[1:]}))\n'
  await writeFile(script,body)
+ await mkdir(join(cwd,'.studio-boards'))
+ await writeFile(join(cwd,'.studio-boards','hash.json'),'{}')
+ await writeFile(join(cwd,'b.json'),'{}')
  return {cwd,script,config:{storyboardCompilerScript:script,storyboardCompilerSha256:createHash('sha256').update(body).digest('hex')}}
 }
 test('actual Python host transport uses the pinned compiler and preserves a rejection',async t=>{
  const f=await fixture(t),args={boardPath:join(f.cwd,'.studio-boards','hash.json'),outputDirectory:'composition-r1'}
  const result=await compileStudioStoryboard({cwd:f.cwd},args,{config:f.config})
  assert.equal(result.ok,false);assert.equal(result.qualityApproved,false);assert.equal(result.reason,'fixture-rejection')
- assert.deepEqual(result.args,['--project-root',f.cwd,'--board',args.boardPath,'--output','composition-r1'])
+ assert.deepEqual(result.args,['--project-root',f.cwd,'--board','.studio-boards/hash.json','--output','composition-r1'])
 })
 test('missing configuration or changed compiler refuses execution',async t=>{
  const f=await fixture(t),args={boardPath:'data.json',outputDirectory:'r1'};let executions=0

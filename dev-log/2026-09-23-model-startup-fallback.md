@@ -306,3 +306,16 @@ then discovered newer deployed Studioff7eed66461f. The55ea995 candidate MUST NOT
 deployed over it. Import the live source.bundle, merge its newer stage/UI logic,
 repeat tests, and recheck zero native/SQLite activity before any live edit.
 No target action, live Task revision or production switch has occurred.
+
+### 2026-09-24: current Studio source integrated
+
+Merged the actual deployed ff7eed66461f source bundle into the isolated onboarding
+integration branch, preserving specialized Studio stages, saved collaboration
+plans, frontend role labels and speech verification. Repeated the complete suite:
+565 tests,562 passed,0 failed,3 existing skips. The new Studio board integration
+test accepts an explicit installed compiler bridge path, matching the existing
+calibration-path test override; production code and evidence are unchanged.
+The suite uses compiler-bridge-fb6ee9862c0c and retained7063694a00e2 calibration.
+Fresh native session and SQLite running-claim checks both returned zero. This
+is only a deployment prerequisite, not permission to interrupt later work.
+No production switch or236 business acceptance has occurred at this point.

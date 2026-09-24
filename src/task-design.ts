@@ -1,9 +1,11 @@
+import {validateStudioStages,type StudioStage} from './studio-stages.js'
 import { validateStudioPolicy, type StudioPolicy } from './studio-policy.js'
 
 /** An explicit, reviewable Agent decision contract; not executable JavaScript. */
 export interface TaskDesign {
   evidenceContract?: 'browser-patrol-v1' | 'browser-patrol-v2' | 'studio-video-v1'
   studio?: StudioPolicy
+  studioStages?: StudioStage[]
   browserPatrol?: { scope: 'fleet-existing-authorized'; actions: ('provision' | 'resume' | 'recover')[]; observationMinutes: number; minSamples: number; excludedNodeIds?: string[]; scheduleActivation?: 'completed-patrol'; resumeAfterCopyLimit?: 1 }
   notifications?: { channel: 'wecom'; chatIds: string[]; agentId?: string; mode?: 'final-handoff' }
   proxy?: { agentId: string; lineId: string; maxAttempts: number }
@@ -16,7 +18,7 @@ export interface TaskDesign {
 
 export function validateDesign(value: unknown): TaskDesign {
   const d = value as TaskDesign
-  if (d && Object.keys(d).some(key => !['evidenceContract','studio','browserPatrol','notifications','proxy','scope','branches','coordination','failurePolicy','acceptance'].includes(key)))
+  if (d && Object.keys(d).some(key => !['evidenceContract','studio','studioStages','browserPatrol','notifications','proxy','scope','branches','coordination','failurePolicy','acceptance'].includes(key)))
     throw new Error('计划包含当前插件不支持的设计字段；不能将未实现的代理支线或跨任务 Gate 当成可执行能力')
   const text = (v: unknown, name: string) => {
     if (typeof v !== 'string' || !v.trim() || v.length > 4000) throw new Error(`计划 ${name} 必须是非空文本（最多4000字符）`)
@@ -31,6 +33,8 @@ export function validateDesign(value: unknown): TaskDesign {
   const isStudio = d.evidenceContract === 'studio-video-v1'
   if (d.studio !== undefined && !isStudio) throw Error('studio 字段仅适用于 studio-video-v1')
   if (isStudio && (d.browserPatrol !== undefined || d.notifications !== undefined || d.proxy !== undefined)) throw Error('studio-video-v1 不支持巡查、代理或通知支线')
+  if(d.studioStages !== undefined && !isStudio) throw Error('studioStages requires studio-video-v1')
+  const studioStages = d.studioStages === undefined ? undefined : validateStudioStages(d.studioStages)
   const studio = isStudio ? validateStudioPolicy(d.studio) : undefined
   let browserPatrol: TaskDesign['browserPatrol']
   let notifications: TaskDesign['notifications']
@@ -80,12 +84,12 @@ export function validateDesign(value: unknown): TaskDesign {
   const maxAttempts = isStudio ? 8 : 3
   if (typeof d.failurePolicy?.isolateItems !== 'boolean' || !Number.isInteger(d.failurePolicy.maxAttempts) || d.failurePolicy.maxAttempts < 1 || d.failurePolicy.maxAttempts > maxAttempts)
     throw new Error(`failurePolicy 需要 isolateItems 和 1至${maxAttempts} 的 maxAttempts；它不授权重复有副作用的操作`)
-  return { ...(studio ? {studio} : {}), ...(d.evidenceContract ? { evidenceContract: d.evidenceContract } : {}), ...(browserPatrol ? { browserPatrol } : {}), ...(notifications ? { notifications } : {}), ...(proxy ? {proxy} : {}), scope: text(d.scope, 'scope'), branches, coordination: text(d.coordination, 'coordination'),
+  return { ...(studioStages ? {studioStages} : {}), ...(studio ? {studio} : {}), ...(d.evidenceContract ? { evidenceContract: d.evidenceContract } : {}), ...(browserPatrol ? { browserPatrol } : {}), ...(notifications ? { notifications } : {}), ...(proxy ? {proxy} : {}), scope: text(d.scope, 'scope'), branches, coordination: text(d.coordination, 'coordination'),
     failurePolicy: { isolateItems: d.failurePolicy.isolateItems, maxAttempts: d.failurePolicy.maxAttempts, stopConditions: list(d.failurePolicy.stopConditions, 'stopConditions') },
     acceptance: list(d.acceptance, 'acceptance') }
 }
 
 /** Three business roles stay intact; the optional notifier is a reviewed side participant. */
 export function taskAgentIds(task: { participants: { agentId: string }[]; design?: TaskDesign }): string[] {
-  return [...new Set([...task.participants.map(p => p.agentId), ...(task.design?.notifications?.agentId ? [task.design.notifications.agentId] : []), ...(task.design?.proxy ? [task.design.proxy.agentId] : [])])]
+  return [...new Set([...task.participants.map(p => p.agentId), ...(task.design?.studioStages?.map(s=>s.agentId) ?? []), ...(task.design?.notifications?.agentId ? [task.design.notifications.agentId] : []), ...(task.design?.proxy ? [task.design.proxy.agentId] : [])])]
 }

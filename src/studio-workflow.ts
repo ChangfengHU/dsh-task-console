@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   private key(input:any){this.policy(input.task);if(!input.batch?.id||!input.sessionId)throw Error('studio-live-context-required');return [input.task.id,input.batch.id]}
   private write(input:any,kind:string,value:any){const [task,batch]=this.key(input);this.db.prepare('INSERT INTO dsh_studio_state VALUES(?,?,?,?) ON CONFLICT(task_id,batch_id,kind) DO UPDATE SET payload=excluded.payload').run(task,batch,kind,JSON.stringify(value))}
   private read(input:any,kind:string){const [task,batch]=this.key(input);const r=this.db.prepare('SELECT payload FROM dsh_studio_state WHERE task_id=? AND batch_id=? AND kind=?').get(task,batch,kind);return r?JSON.parse(r.payload):undefined}
+  stageReceipt(input:any,id:string){return this.read(input,`stage:${input.card.round}:${id}`)}
+  recordStageReceipt(input:any,value:any){this.write(input,`stage:${input.card.round}:${value.stage}`,value)}
   recordCapability(task:any,value:StudioCapability){
     const policy=this.policy(task);strict(value,['name','status','proofSha256','checkedAt','expiresAt','reason','method'],'capability')
     if(!NAMES.includes(value.name)||!['passed','failed','access_denied','unknown'].includes(value.status))throw Error('studio-capability-status')
@@ -72,7 +74,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   status(input:any){
     this.key(input)
     const current=this.read(input,'candidate'),ph=sha(this.policy(input.task))
-    return {candidate:current?.policyHash===ph?current.candidate:null,review:current?.policyHash===ph?(this.read(input,'review')??null):null,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight:this.preflight(input.task),script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
+    return {...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),candidate:current?.policyHash===ph?current.candidate:null,review:current?.policyHash===ph?(this.read(input,'review')??null):null,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight:this.preflight(input.task),script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
   }
   recordCandidateLocation(input:any,location:{path:string;manifestPath:string;sha256:string}){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
@@ -90,7 +92,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   enforceRuntime(input:any){this.write(input,'runtime_enforcement',true)}
   recordReferenceReceipt(input:any,receipt:any){
     this.key(input);const policy=this.policy(input.task)
-    if(!['planner','executor','reviewer'].includes(input.card?.role)||receipt.referenceSha256!==policy.referenceSha256||!HASH.test(receipt.sha256??'')||!['frames','audio','image'].includes(receipt.kind))throw Error('studio-reference-receipt-invalid')
+    if(!['planner','executor','reviewer','studio-stage'].includes(input.card?.role)||receipt.referenceSha256!==policy.referenceSha256||!HASH.test(receipt.sha256??'')||!['frames','audio','image'].includes(receipt.kind))throw Error('studio-reference-receipt-invalid')
     const stored={...receipt,id:randomUUID(),sessionId:input.sessionId,role:input.card.role,policyHash:sha(policy)}
     this.write(input,'reference_receipts',[...(this.read(input,'reference_receipts')??[]),stored]);return stored
   }

@@ -31,11 +31,13 @@ async function execute(script:string,args:string[]):Promise<any>{
   child.on('close',(code,signal)=>{try{const result=JSON.parse(output);if(signal||code!==0&&result?.ok!==false)throw Error();finish(undefined,result)}catch{finish(Error('studio-render-bridge-output-invalid'))}})
  })
 }
-export async function studioRenderJob(task:any,action:'start'|'status',args:{composition?:string;output?:string;jobId?:string},deps:Dependencies={},intentId?:string){
- const config=deps.config??await studioRenderConfiguration(deps.configPath)
+/** All checks before this returns are read-only and cannot dispatch a renderer. */
+export async function prepareStudioRenderJob(task:any,action:'start'|'status',args:{composition?:string;output?:string;jobId?:string},deps:Dependencies={}){
+ args={...args}
+ const config={...(deps.config??await studioRenderConfiguration(deps.configPath))}
  if(!config.renderJobScript||!digest.test(config.renderJobSha256??'')||!config.renderRuntime)throw Error('studio-render-host-not-configured')
  if(await fileSha256(config.renderJobScript)!==config.renderJobSha256)throw Error('studio-render-helper-changed')
- const root=await realpath(task.cwd),policy=task.design?.studio
+ const root=await realpath(task.cwd),policy=task.design?.studio&&{...task.design.studio}
  if(!policy||policy.width!==1080||policy.height!==1920||policy.fps!==30)throw Error('studio-render-policy-invalid')
  const argv=[action,'--project-root',root]
  if(action==='start'){
@@ -48,8 +50,10 @@ export async function studioRenderJob(task:any,action:'start'|'status',args:{com
   if(!digest.test(args.jobId??''))throw Error('studio-render-job-id-invalid')
   argv.push('--job-id',args.jobId!)
  }
- if(intentId!==undefined){if(!digest.test(intentId))throw Error('studio-render-intent-invalid');if(action==='start')argv.push('--intent-id',intentId)}
- const r=await(deps.execute??execute)(config.renderJobScript,argv)
+ return {dispatch:async(intentId?:string)=>{
+ const commandArgs=[...argv]
+ if(intentId!==undefined){if(!digest.test(intentId))throw Error('studio-render-intent-invalid');if(action==='start')commandArgs.push('--intent-id',intentId)}
+ const r=await(deps.execute??execute)(config.renderJobScript,commandArgs)
  // Never return arbitrary subprocess body, log contents, environment or provider errors.
  if(r?.ok!==true)return {ok:false,...failure(r?.errorCode),qualityApproved:false}
  if(!digest.test(r.jobId??'')||action==='status'&&r.jobId!==args.jobId||!['queued','running','completed','failed','unknown'].includes(r.state)||!digest.test(r.inputSha256??'')||!safeRelative(r.composition)||!safeRelative(r.output))throw Error('studio-render-receipt-invalid')
@@ -68,5 +72,35 @@ export async function studioRenderJob(task:any,action:'start'|'status',args:{com
    try{const path=await studioPath(root,value);result.logs.push(relative(root,path))}catch{}
   }
  }
+ return result
+ }}
+}
+
+export async function studioRenderJob(task:any,action:'start'|'status',args:{composition?:string;output?:string;jobId?:string},deps:Dependencies={},intentId?:string){
+ return (await prepareStudioRenderJob(task,action,args,deps)).dispatch(intentId)
+}
+
+
+/** Preflight does not reserve. Once the intent is durable, every bridge failure
+ * is ambiguous unless an authoritative original-job receipt resolves it. */
+export async function invokeStudioRenderJob(input:any,action:'start'|'status',args:any,ledger:any,assertActive:()=>void,deps:Dependencies={}){
+ args=structuredClone(args)
+ assertActive()
+ const prior=ledger.lookup(input,action,args)
+ const config=prior?.helperPath?{renderJobScript:prior.helperPath,renderJobSha256:prior.helperSha256,renderRuntime:prior.runtimePath}:deps.config??await studioRenderConfiguration(deps.configPath)
+ const selectedAction=action==='start'&&prior?.jobId?'status':action
+ const selectedArgs=selectedAction==='status'?{jobId:prior?.jobId??args.jobId}:args
+ const prepared=await prepareStudioRenderJob(input.task,selectedAction,selectedArgs,{...deps,config})
+ assertActive()
+ // No await between the durable reservation and the dispatch boundary.
+ const intent=ledger.prepare(input,action,args,config)
+ if(intent.helperPath!==config.renderJobScript||intent.helperSha256!==config.renderJobSha256||intent.runtimePath!==config.renderRuntime)throw Error('studio-render-origin-changed-before-dispatch')
+ let result:any
+ try{result=await prepared.dispatch(intent.intentId)}
+ catch(error){ledger.record(input,intent,{ok:false,errorCode:'render_host_failed'});throw error}
+ // Preserve original-job facts even when the calling session expired while
+ // awaiting them; ledger CAS prevents an older observation from overwriting.
+ ledger.record(input,intent,result)
+ assertActive()
  return result
 }

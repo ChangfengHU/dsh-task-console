@@ -22,6 +22,42 @@ test('new access denial invalidates prior capability result',t=>{const {workflow
 test('missing budget does not default to zero',t=>{const {workflow,input}=setup(t);capabilities(workflow,input.task);workflow.preflight(input.task);assert.throws(()=>workflow.complete(input),/trusted-review-required/)})
 test('executor hands off candidate without pretending review passed',t=>{const {workflow,input}=setup(t);const {candidate}=proof(workflow,input);const producer={...input,card:{role:'executor'},sessionId:'producer'};(workflow as any).db.prepare("DELETE FROM dsh_studio_state WHERE kind='review'").run();assert.equal(workflow.complete(producer).metadata.workflowOutcome,'candidate_handoff');assert.throws(()=>workflow.complete({...producer,sessionId:'other'}),/producer-session-mismatch/)})
 test('negative real review completes handoff but planner acceptance stays blocked',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);const db=(workflow as any).db;const row=db.prepare("SELECT payload FROM dsh_studio_state WHERE kind='review'").get();const review=JSON.parse(row.payload);delete review.reviewerSessionId;review.checks.find((c:any)=>c.dimension==='motion').status='fail';review.issues=[{id:'motion-poor',severity:'major',status:'open'}];workflow.recordReview(reviewer,review);assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_needs_changes');assert.throws(()=>workflow.complete(input),/quality-gate-failed/)})
+test('invalid submission cannot replace prior review or authorize script changes',t=>{
+ const {workflow,input}=setup(t),{reviewer}=proof(workflow,input),before=workflow.status(input).review
+ workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'原台词。'}]})
+ for(const defect of ['unknown-receipt','wrong-session','range-overrun','stale-candidate','bad-shape']){
+  const r=structuredClone(before);delete r.reviewerSessionId
+  r.checks.find((c:any)=>c.dimension==='motion').status='fail';r.issues=[{id:'motion',severity:'major',status:'open'}]
+  let context=reviewer
+  if(defect==='unknown-receipt')r.checks[0].evidenceReceiptIds=['invented']
+  if(defect==='wrong-session')context={...reviewer,sessionId:'other-reviewer'}
+  if(defect==='range-overrun')r.checks[0].ranges=[[0,101]]
+  if(defect==='stale-candidate')r.candidateSha256=h('e')
+  if(defect==='bad-shape')r.checks[0].status='partial'
+  assert.throws(()=>workflow.recordValidatedReview(context,r),/studio-review-(integrity-failed|shape-invalid)/,defect)
+  assert.deepEqual(workflow.status(input).review,before,defect)
+  assert.throws(()=>workflow.recordScript(input,{sha256:h('e'),lines:[{id:'1',text:'另一台词。'}]}),/independent-review/)
+ }
+})
+test('first invalid submission leaves review absent; genuine rejection commits without full audio coverage',t=>{
+ const {workflow,input}=setup(t),{reviewer}=proof(workflow,input),r=workflow.status(input).review,db=(workflow as any).db
+ delete r.reviewerSessionId;db.prepare("DELETE FROM dsh_studio_state WHERE kind='review'").run()
+ const invalid=structuredClone(r);invalid.checks[0].evidenceReceiptIds=['invented']
+ assert.throws(()=>workflow.recordValidatedReview(reviewer,invalid),/unknown receipt/)
+ assert.equal(workflow.status(input).review,null)
+ for(const c of r.checks){c.status='pending';c.evidenceReceiptIds=[];c.finding='Not checked; pending revision.'}
+ const receipt=workflow.recordReceipt(reviewer,{candidateSha256:h('a'),kind:'frames',ranges:[[0,2]],sha256:h('d')})
+ Object.assign(r.checks.find((c:any)=>c.dimension==='motion'),{status:'fail',finding:'Observed motion defect at the opening.',ranges:[[0,2]],evidenceReceiptIds:[receipt.id]})
+ r.issues=[{id:'motion',severity:'major',status:'open'}]
+ db.prepare("DELETE FROM dsh_studio_receipts WHERE json_extract(payload,'$.kind')='audio'").run()
+ workflow.recordCapability(input.task,{name:'character',status:'failed',checkedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString()})
+ workflow.recordValidatedReview(reviewer,r)
+ assert.equal(workflow.status(input).review.reviewerSessionId,reviewer.sessionId)
+ assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_needs_changes')
+ assert.throws(()=>workflow.complete(input),/blocked_quality_capability/)
+ workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'原台词。'}]})
+ workflow.recordScript(input,{sha256:h('e'),lines:[{id:'1',text:'返修台词。'}]})
+})
 test('negative review still requires genuine audio evidence',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);const db=(workflow as any).db;db.prepare("DELETE FROM dsh_studio_receipts WHERE json_extract(payload,'$.kind')='audio'").run();assert.throws(()=>workflow.complete(reviewer),/review-integrity-failed/)})
 
 test('grounded rejection survives dependency outage but production and approval remain blocked',t=>{

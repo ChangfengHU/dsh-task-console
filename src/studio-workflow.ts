@@ -3,6 +3,7 @@ import {validateStudioPolicy} from './studio-policy.js'
 import {evaluateStudioReview} from './studio-evidence.mjs'
 import {studioStageFor} from './studio-stages.js'
 import {studioReviewProgress} from './studio-review-progress.js'
+import {validateReviewShape} from './studio-review-schema.js'
 
 const NAMES=['frames','audio','audio_calibration','render','character','reference'] as const
 const HASH=/^[a-f0-9]{64}$/i
@@ -90,6 +91,16 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     strict(review,['candidateSha256','referenceSha256','revision','checks','issues'],'review')
     this.write(input,'review',{...review,reviewerSessionId:input.sessionId})
   }
+  recordValidatedReview(input:any,review:any){
+    if(input.card?.role!=='reviewer')throw Error('studio-reviewer-required')
+    strict(review,['candidateSha256','referenceSha256','revision','checks','issues'],'review')
+    validateReviewShape(review)
+    const proposed={...review,reviewerSessionId:input.sessionId}
+    // Validate against the live ledger before replacing any previously accepted
+    // report. Rejected attempts remain in session logs, never authoritative state.
+    this.completeWithReview(input,proposed)
+    this.write(input,'review',proposed)
+  }
   recordBudget(input:any,budget:any){strict(budget,['repairRounds','used','limits','exceeded','maxRepairRounds'],'budget');this.write(input,'budget',budget)}
   recordSkillLoad(input:any,receipt:any){
     const productionRole=input.card?.role==='executor'||(input.card?.role==='studio-stage'&&!!studioStageFor(input))
@@ -154,17 +165,20 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     if(!plan||!line||value.candidateSha256!==plan.candidateSha256||value.planSha256!==plan.planSha256||!['source','final'].includes(value.stage)||!HASH.test(value.audioSha256??'')||value.result?.audio_sha256!==value.audioSha256)throw Error('studio-speech-check-invalid')
     const stored={...value,sessionId:input.sessionId};const checks=(this.read(input,'speech_checks')??[]).filter((x:any)=>!(x.lineId===value.lineId&&x.stage===value.stage&&x.sessionId===input.sessionId));this.write(input,'speech_checks',[...checks,stored])
   }
-  hasRejection(input:any){
+  hasRejection(input:any,review=this.read(input,'review')){
     if(input.card?.role!=='reviewer')return false
-    const review=this.read(input,'review'),candidate=this.read(input,'candidate')?.candidate
+    const candidate=this.read(input,'candidate')?.candidate
     return !!review&&review.reviewerSessionId===input.sessionId&&review.candidateSha256===candidate?.sha256&&review.checks?.some((c:any)=>c.status==='fail')&&review.issues?.some((i:any)=>['major','blocker'].includes(i.severity)&&['open','pending'].includes(i.status))
   }
   complete(input:any){
+    return this.completeWithReview(input,this.read(input,'review'))
+  }
+  private completeWithReview(input:any,review:any){
     this.key(input)
     // A grounded rejection can be handed back during an unrelated dependency
     // outage. Full evidence validation below still applies; no success shortcut.
-    if(!this.hasRejection(input))this.requirePreflight(input.task)
-    const saved=this.read(input,'candidate'),review=this.read(input,'review'),budget=this.read(input,'budget')
+    if(!this.hasRejection(input,review))this.requirePreflight(input.task)
+    const saved=this.read(input,'candidate'),budget=this.read(input,'budget')
     const policy=this.policy(input.task),role=input.card?.role
     if(!saved||!budget||saved.policyHash!==sha(policy))throw Error('studio-version-bound-trusted-review-required')
     const base={candidateSha256:saved.candidate.sha256,revision:saved.candidate.revision}

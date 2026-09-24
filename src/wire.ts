@@ -48,7 +48,7 @@ export const METHODS = [
   ['catalog', 0], ['agents', 0], ['previewAgent', 1], ['saveAgent', 1], ['deleteAgent', 1], ['tryRun', 1],
   ['startAgentSession', 1], ['sessionTurns', 1], ['agentHistory', 1],
   ['sessionShortcuts', 0], ['setSessionShortcut', 1],
-  ['sessionCapabilities', 1],
+  ['sessionCapabilities', 1], ['agentCapabilityStatus', 1],
   ['exportConfig', 0], ['createConfigBootstrap', 1], ['previewConfigImport', 1], ['applyConfigImport', 1], ['installConfigRuntime', 1], ['configRuntimeStatus', 1],
   ['agentActions', 1], ['saveAgentActions', 1], ['prepareAgentAction', 1], ['agentActionOptions', 1],
   ['workflowCatalog', 0], ['launchWorkflow', 1],
@@ -191,6 +191,7 @@ export interface AgentHistoryPage {
 }
 
 export interface Preview {
+  capabilities?: import('./capability-contract.ts').CapabilityContract
   yml: string
   /** MCP servers renamed because the host still runs one with the same name. */
   renamed: { from: string; to: string }[]

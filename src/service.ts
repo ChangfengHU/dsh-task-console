@@ -1,3 +1,5 @@
+import { inspectCapabilityContract } from './capability-contract.ts'
+import { taskAgentIds } from './task-design.ts'
 import {registerStageFiles,requireStudioStages,verifyStageReceipt} from './studio-stage-files.js'
 import {studioStageFor} from './studio-stages.js'
 import { registerStudioSpeechTools } from './studio-speech-tools.js'
@@ -121,6 +123,16 @@ export class TaskConsoleService extends TypertRemoteService {
         try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});board=await registerStudioBoardTools(agentCtx,{input,workflow,isActive,compile:args=>compileStudioStoryboard(input.task,args)});return ()=>{board();speech();skillGate();media()} } catch(e){board();speech();skillGate();media();throw e}
       },
       beforeStart: async input => {
+        const ids=input.card.role==='planner' ? taskAgentIds(input.task) : [input.profileId]
+        for(const id of ids){
+          const audit=JSON.parse(await this.agentCapabilityStatus(JSON.stringify({id})))
+          // Legacy authored presets remain usable only when their actual fence matches;
+          // they are never labelled live-verified or certified by this compatibility path.
+          if(['composition-missing','tool-drift','dependency-missing','contract-drift','local-edit'].includes(audit.status))return {
+            kind:'capability' as const,
+            reason:JSON.stringify({error_code:'agent-capability-drift',agentId:id,status:audit.status,missingTools:audit.missingTools,unexpectedTools:audit.unexpectedTools,missingDependencies:audit.missingDependencies,retryable:false,nextAction:'Review the capability diff and regenerate the authored preset without losing local edits. Resume in a new run after verification.'})
+          }
+        }
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return
         const workflow = new StudioWorkflow(this.runner.store)
         await requireStudioStages(input,workflow,this.runner.store.kernel.db)
@@ -475,11 +487,12 @@ export class TaskConsoleService extends TypertRemoteService {
       for (const row of skillRows) skills.add(row.name)
       const agents = envelope.payload.agents.map(row => {
         const missingSkills = row.spec.skills.filter(name => !skills.has(name))
+        const manifest=renderComposition(row.spec,this.hostMcp(),this.hostToolNames()).capabilities!
         const missingMcp = Object.keys(row.spec.mcpTools).filter(name => !mcp.has(name))
-        return { id: row.spec.id, name: row.spec.name, conflict: existingAgents.has(row.spec.id), missingSkills, missingMcp, ready: !missingSkills.length && !missingMcp.length }
+        return { id: row.spec.id, name: row.spec.name, conflict: existingAgents.has(row.spec.id), missingSkills, missingMcp, missingCapabilities:manifest.missing, readinessScope:'definition-only', liveVerified:false, ready: !missingSkills.length && !manifest.missing.length }
       })
       const available = new Set(envelope.payload.agents.map(row => row.spec.id))
-      const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: row.participants.map(p => p.agentId).filter(id => !available.has(id)), scheduleDisabled: row.trigger.kind === 'cron' }))
+      const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: taskAgentIds(row).filter(id => !available.has(id) && !existingAgents.has(id)), scheduleDisabled: row.trigger.kind === 'cron' }))
       const runtime = envelope.runtime ? {
         missingMcp: envelope.runtime.mcps.map(row => row.serverName).filter(name => !mcp.has(name)),
         missingSkills: envelope.runtime.skills.map(row => row.id).filter(name => !skills.has(name)),
@@ -656,6 +669,18 @@ export class TaskConsoleService extends TypertRemoteService {
     const spec = validateSpec(JSON.parse(payload))
     const preview = renderComposition(spec, this.hostMcp(), this.hostToolNames())
     return JSON.stringify({ ...preview, yml: mask(preview.yml) } satisfies Preview)
+  }
+
+  /** Read-only drift audit. A green configuration is not a passed live invocation. */
+  async agentCapabilityStatus(payload:string):Promise<string>{
+    const {id}=JSON.parse(payload)
+    if(typeof id!=='string'||!id.trim())throw Error('Agent id required')
+    const presets=(this.ctx as any).get('agentPresets'),preset=await presets?.resolve(id)
+    if(!preset)throw Error('Agent not found')
+    const dir=dirname(String(preset.path)),spec=await readSpec(dir)
+    if(!spec)return JSON.stringify({id,ready:false,status:'unmanaged',scope:'configuration-only',liveVerified:false})
+    const expected=renderComposition(spec,this.hostMcp(),this.hostToolNames()).capabilities!
+    return JSON.stringify({id,...await inspectCapabilityContract(dir,expected)})
   }
 
   async saveAgent(payload: string): Promise<string> {
@@ -987,7 +1012,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const task = validateTask(raw, ids)
     for (const p of rows) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
     await this.runner.store.append({ t: 'task/created', at: task.createdAt, taskId: task.id, task })
-    if (task.trigger.kind === 'once' && !raw.saveOnly) await this.runner.fire(task.id, 'manual')
+    if (task.trigger.kind === 'once' && !raw.saveOnly) await this.runner.fire(task.id, 'manual', {dispatch:'background'})
     return JSON.stringify({ id: task.id })
   }
 
@@ -1043,10 +1068,11 @@ export class TaskConsoleService extends TypertRemoteService {
   }
 
   async fireTask(payload: string): Promise<string> {
-    const { id, by } = JSON.parse(payload) as { id: string; by?: 'manual' | 'retry' }
+    const { id, by, requestId } = JSON.parse(payload) as { id: string; by?: 'manual' | 'retry'; requestId?:string }
+    if(requestId!==undefined&&!/^[a-zA-Z0-9-]{16,80}$/.test(requestId))throw Error('Invalid execution requestId')
     const presets = (this.ctx as any).get('agentPresets')
     for (const p of presets ? (await presets.list() as any[]) : []) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
-    const batch = await this.runner.fire(id, by === 'retry' ? 'retry' : 'manual')
+    const batch = await this.runner.fire(id, by === 'retry' ? 'retry' : 'manual', {dispatch:'background',...(requestId?{batchId:'b-manual-'+requestId}:{})})
     return JSON.stringify({ runId: batch.id, batchId: batch.id })
   }
 

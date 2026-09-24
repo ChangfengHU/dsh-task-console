@@ -1,3 +1,4 @@
+import { capabilityContract, CAPABILITY_LOCK } from './capability-contract.ts'
 import { fileURLToPath } from 'node:url'
 import { STUDIO_SPEECH_TOOL_NAMES } from './studio-speech-tools.js'
 import { STUDIO_BOARD_TOOL_NAMES } from './studio-board-tools.js'
@@ -237,7 +238,8 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
   const fence = toYaml({ selected: [...allowedToolNames].sort() }, { lineWidth: 0 }).trimEnd()
   parts.push(`- id: inherited-tool-fence\n  name: 'dsh-task-console/agent-tool-fence'\n  config:\n${indent(fence, 4)}`)
 
-  return { yml: parts.join('\n\n') + '\n', renamed, permission: permissionOf(spec, () => true) }
+  const yml=parts.join('\n\n') + '\n'
+  return { yml, renamed, permission: permissionOf(spec, () => true), capabilities: capabilityContract(spec,yml,NATIVE_TOOLS,hostMcp) }
 }
 
 /** The spec file we keep beside the composition. */
@@ -478,6 +480,7 @@ async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: S
   await mkdir(staged, { recursive: true, mode: 0o700 })
   try {
     await writeFile(join(staged, 'agent.cordis.yml'), preview.yml, { mode: 0o600 })
+    await writeFile(join(staged, CAPABILITY_LOCK), JSON.stringify(preview.capabilities,null,2)+'\n', {mode:0o600})
     await writeFile(join(staged, 'preset.yml'), `name: ${JSON.stringify(spec.name)}\ndescription: ${JSON.stringify(spec.description)}\n`, { mode: 0o600 })
     await writeFile(join(staged, SPEC_FILE), JSON.stringify(spec, null, 2) + '\n', { mode: 0o600 })
     await writeFile(join(staged, 'agent-meta.json'), JSON.stringify({ createdAt }) + '\n', { mode: 0o600 })

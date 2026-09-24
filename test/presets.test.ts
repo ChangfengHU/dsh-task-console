@@ -86,7 +86,7 @@ test('writePreset lays out the directory, copies chosen skills, and readSpec rou
   const presetRoot = join(root, 'presets')
   const { path } = await writePreset(spec, [], [{ name: 'linux-clash-skill', dir: join(lib, 'linux-clash-skill'), description: '', root: 'x' }], presetRoot)
   assert.equal(path, join(presetRoot, 'inspector'))
-  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'preset.yml', 'skills', 'skills.lock.json', 'task-console.json'])
+  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'capabilities.lock.json', 'preset.yml', 'skills', 'skills.lock.json', 'task-console.json'])
   const createdAt = await readAgentCreatedAt(path)
   assert.ok(createdAt)
   assert.match(await readFile(join(path, 'preset.yml'), 'utf8'), /name: "巡检员"/)
@@ -99,7 +99,7 @@ test('writePreset lays out the directory, copies chosen skills, and readSpec rou
   assert.deepEqual((await verifyPresetSkills(spec, [{ name: 'linux-clash-skill', dir: join(lib, 'linux-clash-skill'), description: '', root: 'x' }], path)).map(row => row.status), ['source-and-copy-drift'])
   // a second save without skills clears the stale copy
   await writePreset({ ...spec, skills: [] }, [], [], presetRoot)
-  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'preset.yml', 'skills.lock.json', 'task-console.json'])
+  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'capabilities.lock.json', 'preset.yml', 'skills.lock.json', 'task-console.json'])
   assert.equal(await readAgentCreatedAt(path), createdAt)
   await removePreset('inspector', presetRoot)
   assert.deepEqual(await readdir(presetRoot), [])
@@ -133,7 +133,7 @@ test('configuration import preserves an unavailable Skill reference without bloc
   const spec = validateSpec({ ...base, id: 'portable', tools: [], mcpTools: {}, skills: ['missing'] })
   const { path } = await writePreset(spec, [], [], root, [], { allowMissingSkills: true })
   assert.deepEqual((await readSpec(path))?.skills, ['missing'])
-  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'preset.yml', 'skills', 'skills.lock.json', 'task-console.json'])
+  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'capabilities.lock.json', 'preset.yml', 'skills', 'skills.lock.json', 'task-console.json'])
 })
 
 test('managed Skill copies and hashes ignore interpreter cache files', async () => {

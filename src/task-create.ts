@@ -39,7 +39,7 @@ export class TaskCreator {
   constructor(readonly runner: TaskRunner, readonly agents: () => Promise<IntakeAgent[]>, readonly bindDesign: (design:TaskDesign)=>TaskDesign = design => {
     if(design.extension)throw Error('workflow-extension-host-binding-unavailable')
     return design
-  }) {}
+  }, readonly extensions:()=>unknown[]=()=>[]) {}
   get actions() { return new TaskActions(this.runner) }
 
   catalog() {
@@ -51,7 +51,7 @@ export class TaskCreator {
   }
 
   async context() {
-    return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
+    return { workflowExtensions:this.extensions(), agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
       designFields: { scope:'required string, not an object; reusable target-selection policy, no fixed IP', branches:'required array of {id:string,when:string,action:string,evidence:string}', coordination:'required string describing actual role dependencies', failurePolicy:'{isolateItems:boolean,maxAttempts:integer 1..3,stopConditions:string[]}', acceptance:'required nonempty string[] of business evidence criteria', optional:'extension:{id,version,policy} only for a trusted installed host extension; exact host/policy digests are frozen before review. notifications only when requested; evidenceContract only for a matching catalog contract, not a Fleet recipe ID' },
       fleetRecipeDesign: { recipe:'fleet-base-v3', use:'选择该配方且无额外设计约束时可省略 design，宿主将按 login 策略填入以下可审查默认设计。显式传入 design 时仍完整校验并独立审查，不覆盖自定义约束。', preserve:fleetRecipeDesign('preserve'), provisionGemini:fleetRecipeDesign('provision-gemini') },
       revisionCandidates: [...this.runner.store.tasks.values()].filter(t=>!t.enabled && !t.archivedAt && t.origin?.source === 'task-chat')

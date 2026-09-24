@@ -9,7 +9,7 @@ export interface WorkflowModule {path:string;sha256:string}
 /** The same manifest is consumed by the deployment guard and actual startup. */
 export async function loadBundledWorkflowModules(rootUrl:URL):Promise<WorkflowExtension[]> {
  const root=fileURLToPath(rootUrl),compat=JSON.parse(await readFile(resolve(root,'lib/workflow-compat.json'),'utf8'))
- if(compat?.schemaVersion!==1||compat.hostApi!==1||!Array.isArray(compat.extensions))throw Error('workflow-compat-invalid')
+ if(compat?.schemaVersion!==1||![1,2].includes(compat.hostApi)||!Array.isArray(compat.extensions))throw Error('workflow-compat-invalid')
  const modules:WorkflowModule[]=compat.extensions.map((entry:any)=>{
   if(!entry||typeof entry.bundle!=='string'||!entry.bundle.startsWith('lib/')||isAbsolute(entry.bundle))throw Error('workflow-bundle-path-invalid')
   const path=resolve(root,entry.bundle),rel=relative(root,path)
@@ -17,7 +17,7 @@ export async function loadBundledWorkflowModules(rootUrl:URL):Promise<WorkflowEx
   return {path,sha256:entry.implementationSha256}
  })
  const loaded=await loadWorkflowModules(modules)
- for(let i=0;i<loaded.length;i++)if(loaded[i].id!==compat.extensions[i].id||loaded[i].version!==compat.extensions[i].version)throw Error('workflow-bundle-identity-mismatch')
+ for(let i=0;i<loaded.length;i++)if(loaded[i].id!==compat.extensions[i].id||loaded[i].version!==compat.extensions[i].version||loaded[i].hostApi!==(compat.extensions[i].hostApi??1))throw Error('workflow-bundle-identity-mismatch')
  return loaded
 }
 export async function loadWorkflowModules(modules:WorkflowModule[]):Promise<WorkflowExtension[]> {

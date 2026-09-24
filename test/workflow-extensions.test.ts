@@ -64,7 +64,7 @@ test('empty completion cannot become generic success and thrown evidence failure
 })
 test('syntax stays JSON only; unsupported API and partial bindings are rejected',()=>{
  for(const value of [{...selection,implementationSha256:hash('a')},{...selection,extra:true},{...selection,policy:{bad:NaN}},{...selection,policy:{bad:()=>{}}},{...selection,policy:JSON.parse('{"__proto__":{}}')}])assert.throws(()=>validateWorkflowSelection(value),/workflow-/)
- assert.throws(()=>new WorkflowExtensions().register(definition({hostApi:2 as any})),/definition-invalid/)
+ assert.throws(()=>new WorkflowExtensions().register(definition({hostApi:3 as any})),/definition-invalid/)
 })
 test('new extension syntax cannot mix legacy business fields and does not alter ordinary designs',()=>{
  const design={scope:'audit',branches:[{id:'bytes',when:'input exists',action:'verify',evidence:'hashes'}],coordination:'independent review',failurePolicy:{isolateItems:false,maxAttempts:2,stopConditions:['invalid input']},acceptance:['actual checks']}

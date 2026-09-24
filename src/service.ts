@@ -1,3 +1,4 @@
+import {WorkflowEvidence} from './workflow-evidence.js'
 import {WorkflowExtensions,type WorkflowExtension} from './workflow-extensions.js'
 import { studioRenderJob } from './studio-render-host.js'
 import { inspectCapabilityContract } from './capability-contract.ts'
@@ -94,7 +95,7 @@ export class TaskConsoleService extends TypertRemoteService {
       if(binding?.id===id&&binding.version===version)return true
     }
     return false
-  })
+  },(input,isActive)=>new WorkflowEvidence(this.runner.store).port(input,isActive))
 
   /** Trusted host integration only: deliberately absent from the RPC method table. */
   async registerWorkflowExtension(extension:WorkflowExtension):Promise<()=>void>{
@@ -142,6 +143,7 @@ export class TaskConsoleService extends TypertRemoteService {
     super(ctx, NAMESPACE)
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
+      registerWorkflowTools:(ctx,input,isActive)=>this.workflowExtensions.registerTools(ctx,input,isActive),
       registerStudioTools: async (agentCtx,input,isActive,submitReview) => {
         const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
         const media=await registerStudioTools(agentCtx,{input,workflow,isActive,renderJob:(action,args)=>studioRenderJob(input.task,action,args),downloadAsset:args=>downloadStudioAsset(input.task,args),registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
@@ -160,7 +162,18 @@ export class TaskConsoleService extends TypertRemoteService {
           }
         }
         if(input.task.design?.extension){
-          try{return await this.workflowExtensions.beforeStart(input)}
+          try{
+            if(this.workflowExtensions.requiresScopedTools(input)){
+              const roster=await this.intakeAgents()
+              for(const id of taskAgentIds(input.task)){
+                const role=roster.find(r=>r.id===id)
+                const audit=JSON.parse(await this.agentCapabilityStatus(JSON.stringify({id})))
+                if(audit.ready!==true||audit.status!=='in-sync')return {kind:'capability',reason:'workflow-scoped-tools-require-verified-preset: '+id}
+                if(!role||role.tools.length!==1||role.tools[0]!=='workflow-runtime'||role.skills.length||Object.values(role.mcpTools).some(v=>v.length))return {kind:'capability',reason:'workflow-scoped-tools-only: remove ambient shell, filesystem, skills and MCP grants from '+id}
+              }
+            }
+            return await this.workflowExtensions.beforeStart(input)
+          }
           catch(error){return {kind:'capability',reason:error instanceof Error?error.message:String(error)}}
         }
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return
@@ -275,7 +288,7 @@ export class TaskConsoleService extends TypertRemoteService {
     })
     // Startup registrations precede store recovery and the first dispatch.
     for(const extension of config.workflowExtensions??[])this.workflowExtensions.register(extension)
-    this.creator = new TaskCreator(this.runner, () => this.intakeAgents(), design => design.extension ? {...design,extension:this.workflowExtensions.bind(design.extension)} : design)
+    this.creator = new TaskCreator(this.runner, () => this.intakeAgents(), design => design.extension ? {...design,extension:this.workflowExtensions.bind(design.extension)} : design,()=>this.workflowExtensions.list())
     this.ready = this.runner.start()
       .then(() => { this.capabilities = new SessionCapabilities(ctx, async () => ({
       checkedAt: new Date().toISOString(), scope: 'environment-directory-not-execution-grant',
@@ -436,6 +449,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const defaultModel = def ? `${def.provider}/${def.model}` : ''
     const models = [...new Set([defaultModel, ...KNOWN_MODELS].filter(Boolean))]
     const out: Catalog = {
+      workflowExtensions:this.workflowExtensions.list(),
       tools: NATIVE_TOOLS.map(({ rows: _rows, schemaNames: _schemaNames, ...t }) => t),
       mcp: this.hostMcp().map(({ config: _c, live: _l, ...m }) => m),
       skills: await scanSkills(),

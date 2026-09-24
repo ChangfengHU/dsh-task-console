@@ -30,3 +30,20 @@ test('legacy deny fences remain loadable until presets are explicitly regenerate
   apply({ tools: { restrict: (candidate: unknown) => { seen = candidate } } } as any, { deny: ['bash', 'bash'] })
   assert.deepEqual(seen, { deny: ['bash'] })
 })
+
+test('workflow grants admit only exact live run names and are revoked independently',async()=>{
+ const {grantWorkflowTool}=await import('../src/workflow-tool-grants.js')
+ let guard:any,legacy:any,active=true
+ const ctx=(save:(g:any)=>void)=>({tools:{schemas:()=>[],restrict:()=>{},guard:save}})
+ apply(ctx(g=>guard=g) as any,{selected:['task_complete'],workflowRunTools:true})
+ apply(ctx(g=>legacy=g) as any,{selected:['task_complete']})
+ const exec=(name:string,sid='run-a')=>({name,agent:{session:{id:sid}}})
+ assert.match(guard(exec('release_audit_verify')),/not been granted/)
+ const revoke=grantWorkflowTool('run-a','release_audit_verify',()=>active)
+ assert.equal(guard(exec('release_audit_verify')),undefined)
+ assert.match(guard(exec('release_audit_report')),/not been granted/)
+ assert.match(guard(exec('release_audit_verify','run-b')),/not been granted/)
+ assert.match(legacy(exec('release_audit_verify')),/not been granted/)
+ active=false;assert.match(guard(exec('release_audit_verify')),/not been granted/)
+ active=true;revoke();assert.match(guard(exec('release_audit_verify')),/not been granted/)
+})

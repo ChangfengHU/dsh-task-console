@@ -61,6 +61,7 @@ export interface RunnerOptions {
   now?: () => number
   onBatchSettled?: (batch: Batch) => void | Promise<void>
   onSessionCreated?: (sessionId: string) => void | Promise<void>
+  registerWorkflowTools?: (agentCtx:any,input:CompletionCheck,isActive:()=>boolean)=>Promise<()=>void>
   registerStudioTools?: (agentCtx: any, input: CompletionCheck, isActive: () => boolean, submitReview: () => Promise<void>) => Promise<() => void>
   beforeStart?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
   beforeComplete?: (input: CompletionCheck) => CompletionDecision | void | Promise<CompletionDecision | void>
@@ -75,8 +76,8 @@ export interface RunnerOptions {
 }
 
 export interface BlockDecision { reason: string; kind: BlockKind }
-export interface CompletionDecision { summary: string; metadata: Record<string, unknown> }
-export interface CompletionCheck { task: TaskSpec; batch: Batch; card: Card; sessionId: string; profileId: string; metadata?: Record<string, unknown> }
+export interface CompletionDecision { summary: string; metadata: Record<string, unknown>; artifacts?:{path:string;sha256:string}[] }
+export interface CompletionCheck { task: TaskSpec; batch: Batch; card: Card; sessionId: string; profileId: string; metadata?: Record<string, unknown>; artifactPaths?:string[]; finalArtifactPath?:string }
 
 export interface FireOptions {
   /** Stable IDs let an external signal resume safely after a host restart. */
@@ -104,6 +105,8 @@ export class TaskRunner {
   private readonly clock: () => number
   private readonly onBatchSettled?: (batch: Batch) => void | Promise<void>
   private readonly onSessionCreated?: (sessionId: string) => void | Promise<void>
+  private stopped=false
+  private readonly registerWorkflowTools?:RunnerOptions['registerWorkflowTools']
   private readonly registerStudioTools?: RunnerOptions['registerStudioTools']
   private readonly beforeStart?: RunnerOptions['beforeStart']
   private readonly beforeComplete?: RunnerOptions['beforeComplete']
@@ -122,6 +125,7 @@ export class TaskRunner {
     this.clock = opts.now ?? (() => Date.now())
     this.onBatchSettled = opts.onBatchSettled
     this.onSessionCreated = opts.onSessionCreated
+    this.registerWorkflowTools = opts.registerWorkflowTools
     this.registerStudioTools = opts.registerStudioTools
     this.beforeStart = opts.beforeStart
     this.beforeComplete = opts.beforeComplete
@@ -136,6 +140,7 @@ export class TaskRunner {
   }
 
   async start(): Promise<void> {
+    this.stopped=false
     await this.store.load()
     this.schedule = new ScheduleLedger(this.store)
     // Runs still live in the projection belonged to a previous host process.
@@ -158,6 +163,7 @@ export class TaskRunner {
   }
 
   stop(): void {
+    this.stopped=true
     if (this.ticker) clearInterval(this.ticker)
     if (this.backgroundTick) clearImmediate(this.backgroundTick)
     this.backgroundTick = undefined
@@ -179,7 +185,7 @@ export class TaskRunner {
   // ── the tick ──────────────────────────────────────────────────────────
 
   async tick(): Promise<void> {
-    if (this.ticking || this.dispatchSuspended > 0) return
+    if (this.stopped || this.ticking || this.dispatchSuspended > 0) return
     this.ticking = true
     try {
       await this.expireBlockedPatrols()
@@ -472,15 +478,20 @@ export class TaskRunner {
       // The terminators live on this agent's scope only.
       let submitStudioReview: (() => Promise<void>) | undefined
       try {
+        const toolClaim = this.store.kernel.getTask(card.id)?.claim_lock
+        const assertToolActive = () => {
+          const current=this.store.kernel.getTask(card.id),currentBatch=this.store.s.batches.get(batch.id)
+          if(this.stopped||this.flights.get(sessionId)!==flight||flight.terminal||current?.status!=='running'||current.current_run_id!==flight.coreRunId||current.claim_lock!==toolClaim||!current.claim_expires||current.claim_expires<=Math.floor(this.clock()/1000)||!currentBatch||currentBatch.settled||currentBatch.archivedAt)throw Error('task-run-no-longer-active')
+        }
         const submit = async (kind: 'completed' | 'review', summary: string, paths: string[], metadata?: Record<string, unknown>, reviewer?: string) => {
           if (flight.terminal) throw new Error('这次运行已经提交了终态')
           if (kind === 'review' && task.design?.extension) throw Error('workflow-extension-human-review-bypass-forbidden: use task_complete with host evidence or task_block')
           if (kind === 'review' && task.workflowRecipe?.id === 'fleet-base-v3') throw new Error('完整 Fleet 接入必须通过宿主证据验收后 task_complete；不能用人工批准替代缺失的业务证据。无法完成时 task_block 并保留原因。')
           const pending = await this.pendingOperation?.({ task, batch, card, sessionId, profileId })
           if (pending) throw new Error(`后台操作仍在运行，继续读取终态回执，不能提前提交验收：${pending}`)
+          let observed: CompletionDecision | void
           if (kind === 'completed' || task.design?.evidenceContract === 'browser-patrol-v1') {
-            let observed: CompletionDecision | void
-            try { observed = await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata }) }
+            try { observed = await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata,artifactPaths:paths }) }
             catch (error) {
               if (!(error instanceof FleetRepairRequired) || task.workflowRecipe?.id !== fullFleetRecipe || profileId !== 'fleet-runner-operator') throw error
               const round = await this.store.expandFleetRepair(task,batch,card,flight.coreRunId,error.owner,error.message,this.clock())
@@ -489,9 +500,11 @@ export class TaskRunner {
             }
             if (observed) { summary = observed.summary; metadata = observed.metadata }
           }
-          if(this.flights.get(sessionId)!==flight||flight.terminal)throw new Error('task-run-no-longer-active')
+          assertToolActive()
           const at = this.now()
           const captured = await captureArtifacts({ root: this.store.root, task, batchId: batch.id, cardId: card.id, runId, sessionId, at }, paths)
+          if(observed?.artifacts&&(captured.length!==observed.artifacts.length||observed.artifacts.some(expected=>!captured.some(actual=>actual.originalPath===expected.path&&actual.sha256===expected.sha256))))throw Error('workflow-artifact-capture-mismatch')
+          assertToolActive()
           for (const artifact of captured) await this.append({ t: 'artifact/registered', at, taskId: task.id, artifact })
           flight.terminal = { kind, summary, metadata, reviewer }
         }
@@ -516,7 +529,7 @@ export class TaskRunner {
             if (!/(Z|[+-]\d\d:\d\d)$/.test(until) || !Number.isFinite(wakeAt) || wakeAt < this.clock() + 60_000 || wakeAt > deadline || !reason.trim() || reason.length > 4000) throw new Error('等待需要带时区、至少一分钟且不超过本卡总时间预算的时间及简短理由')
             if (await this.pendingOperation?.({ task, batch, card, sessionId, profileId })) throw new Error('后台操作仍在运行，先继续查询原操作回执')
             if (task.design?.evidenceContract === 'browser-patrol-v2') await this.patrolStatus?.({ task, batch, card, sessionId, profileId })
-            const ok = await this.store.transition(() => this.store.kernel.deferTask(card.id, flight.coreRunId, wakeAt, reason.trim()), changed => changed ? { t: 'run/deferred', at: this.now(), taskId: task.id, runId: flight.runId, wakeAt: new Date(wakeAt).toISOString(), reason: reason.trim() } : undefined)
+            const ok = await this.store.transition(() => { assertToolActive(); return this.store.kernel.deferTask(card.id, flight.coreRunId, wakeAt, reason.trim()) }, changed => changed ? { t: 'run/deferred', at: this.now(), taskId: task.id, runId: flight.runId, wakeAt: new Date(wakeAt).toISOString(), reason: reason.trim() } : undefined)
             if (!ok) throw new Error('等待被拒绝，当前 Run 已变化')
             flight.terminal = { kind: 'deferred' }
           },
@@ -544,19 +557,23 @@ export class TaskRunner {
               return
             }
             const observed = await this.beforeBlock?.({ task, batch, card, sessionId, profileId, metadata:{requestedBlock:{reason,kind}} })
+            assertToolActive()
             flight.terminal = { kind: 'blocked', reason: observed?.reason ?? reason, blockKind: observed?.kind ?? kind }
           },
           planRound: async (summary, items, proxyItems) => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
             const plan = await this.beforePlanRound?.({ task, batch, card, sessionId, profileId }, items, proxyItems)
             if (plan) summary += `\n[FROZEN ROUND ITEMS]\n${JSON.stringify(plan.items)}`
-            await this.store.expandRound(task, batch, card, summary, plan?.commit)
+            assertToolActive()
+            await this.store.expandRound(task, batch, card, summary, () => { assertToolActive(); plan?.commit?.() })
+            assertToolActive()
             flight.terminal = { kind: 'completed', summary, metadata: { decision: card.round === 1 ? 'planned' : 'rework', round: card.round } }
           },
           finalize: async (summary, artifactPath, disposition = 'passed') => {
             if (flight.terminal) throw new Error('这次运行已经提交了终态')
             if (disposition === 'unresolved' && task.design?.evidenceContract !== 'browser-patrol-v2') throw new Error('仅巡查v2允许明确的未解决收口')
-            const verified = await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata: { patrolDisposition: disposition } })
+            const verified = await this.beforeComplete?.({ task, batch, card, sessionId, profileId, metadata: { patrolDisposition: disposition },...(artifactPath?{finalArtifactPath:artifactPath}:{}) })
+            assertToolActive()
             if (disposition === 'unresolved' && verified?.metadata.workflowOutcome !== 'unresolved') throw new Error('未通过宿主未解决收口检查')
             if (verified) summary = verified.summary
             let finalArtifactId: string | undefined
@@ -572,12 +589,20 @@ export class TaskRunner {
               if (!selected) throw new Error(`最终产物尚未通过 task_complete 登记:${artifactPath}`)
               finalArtifactId = selected.id
             }
+            assertToolActive()
             flight.terminal = { kind: 'completed', summary, metadata: { ...verified?.metadata, decision: 'approved', round: card.round, ...(finalArtifactId ? { finalArtifactId } : {}) } }
           },
         }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner', dynamicRounds: task.graphMode === 'dynamic-rounds', nativeEvidence: ['browser-patrol-v2','studio-video-v1'].includes(task.design?.evidenceContract ?? '') })
       } catch (error) {
-        if (task.design?.evidenceContract === 'studio-video-v1') throw error
+        if (task.design?.evidenceContract === 'studio-video-v1'||task.design?.extension) throw error
         console.warn('[task-console] worker tools not registered:', error)
+      }
+      if(task.design?.extension){
+        if(!this.registerWorkflowTools&&task.design.extension.hostApi===2)throw Error('workflow-runtime-tools-unavailable')
+        if(this.registerWorkflowTools){
+          const old=flight.disposeTools,dispose=await this.registerWorkflowTools(flight.handle.agent.ctx,{task,batch,card,sessionId,profileId},()=>!this.stopped&&this.flights.get(sessionId)===flight&&!flight.terminal)
+          flight.disposeTools=()=>{dispose();old?.()}
+        }
       }
       if (task.design?.evidenceContract === 'studio-video-v1') {
         if (!this.registerStudioTools) throw Error('studio-runtime-tools-unavailable')

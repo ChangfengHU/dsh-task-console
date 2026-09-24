@@ -1611,3 +1611,115 @@ test('chat approval refuses missing or changed extension without changing the re
  assert.equal(creator.plan(plan.id).state,'pending');assert.equal(creator.plan(plan.id).hash,plan.hash)
  assert.equal(store.s.batches.size,0);assert.equal(host.sessions.size,0)
 })
+
+test('release audit extension runs planner, independent verifier sessions and exact artifact handoff',async()=>{
+ const {default:adapter}=await import('../src/release-audit-extension.js'),{WorkflowEvidence}=await import('../src/workflow-evidence.js'),{releaseArchive}=await import('./fixtures/release-archive.js')
+ const fixture=releaseArchive();let ledger:InstanceType<typeof WorkflowEvidence>
+ const registry=new WorkflowExtensions(()=>false,(i,active)=>ledger.port(i,active));registry.register(adapter)
+ const extension=registry.bind({id:adapter.id,version:adapter.version,policy:fixture.policy})
+ const {runner,store,host,root}=await setup({graphMode:'dynamic-rounds',design:{extension,failurePolicy:{maxAttempts:2}} as any},{beforeStart:i=>registry.beforeStart(i),beforeComplete:i=>registry.beforeComplete(i),beforePlanRound:(i,a,b)=>registry.beforePlanRound(i,a,b),registerWorkflowTools:(ctx,i,a)=>registry.registerTools(ctx,i,a)})
+ ledger=new WorkflowEvidence(store);await writeFile(join(root,'candidate.tgz'),fixture.bytes)
+ const {apply:fence}=await import('../src/agent-tool-fence.js')
+ let guard:((exec:any)=>string|undefined)|undefined
+ fence({tools:{schemas:()=>[{name:'bash'},{name:'write'}],restrict:()=>{},guard:(g:any)=>{guard=g}}} as any,{selected:['task_plan_round','task_complete','task_finalize'],workflowRunTools:true})
+ const call=host.callTool;host.callTool=async(session,name,args)=>{const denied=guard?.({name,agent:{session:{id:session}}});if(denied)throw Error(denied);return call(session,name,args)}
+
+ const batch=await runner.fire('T','manual');await tick();let sid=[...host.sessions.keys()].at(-1)!
+ host.consumeFirst(sid);await host.callTool(sid,'task_plan_round',{summary:'Verify frozen bytes in separate sessions'});host.endTurn(sid);await tick()
+ sid=[...host.sessions.keys()].at(-1)!;host.consumeFirst(sid)
+ await assert.rejects(host.callTool(sid,'task_complete',{summary:'trust me'}),/current-run-report-required/)
+ const a:any=await host.callTool(sid,'release_audit_verify',{})
+ await assert.rejects(host.callTool(sid,'release_audit_report',{receiptId:a.id,conclusion:'fail',summary:'Wrong fixture conclusion',findings:[]}),/disagrees-with-facts/)
+ const reportA:any=await host.callTool(sid,'release_audit_report',{receiptId:a.id,conclusion:'pass',summary:'Verified fixture package byte integrity only.',findings:[]})
+ const replay:any=await host.callTool(sid,'release_audit_report',{receiptId:a.id,conclusion:'pass',summary:'Verified fixture package byte integrity only.',findings:[]});assert.equal(replay.report.id,reportA.report.id)
+ assert.match(guard?.({name:'bash',agent:{session:{id:sid}}})??'',/not been granted/)
+ assert.match(guard?.({name:'release_audit_verify',agent:{session:{id:'another-session'}}})??'',/not been granted/)
+ await assert.rejects(host.callTool(sid,'task_complete',{summary:'omit evidence'}),/required-report-artifacts/)
+ await host.callTool(sid,'task_complete',{summary:'handoff',artifacts:reportA.artifacts});host.endTurn(sid);await tick()
+ sid=[...host.sessions.keys()].at(-1)!;host.consumeFirst(sid)
+ await assert.rejects(host.callTool(sid,'release_audit_report',{receiptId:a.id,conclusion:'pass',summary:'Copied other session proof',findings:[],upstreamReportId:reportA.report.id}),/own-verification-required/)
+ const b:any=await host.callTool(sid,'release_audit_verify',{});assert.notEqual(a.sessionId,b.sessionId)
+ const reportB:any=await host.callTool(sid,'release_audit_report',{receiptId:b.id,conclusion:'pass',summary:'Independently recomputed using the same pinned verifier.',findings:[],upstreamReportId:reportA.report.id})
+ await host.callTool(sid,'task_complete',{summary:'independent handoff',artifacts:reportB.artifacts});host.endTurn(sid);await tick()
+ sid=[...host.sessions.keys()].at(-1)!;host.consumeFirst(sid)
+ await assert.rejects(host.callTool(sid,'task_finalize',{summary:'wrong report',artifact:reportB.artifacts[0]}),/final-artifact-must-be-current-executor-report/)
+ await host.callTool(sid,'task_finalize',{summary:'verified',artifact:reportA.artifacts.find((p:string)=>p.endsWith('REPORT.md'))});host.endTurn(sid);await tick()
+ assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'done')
+ assert.equal(store.kernel.db.prepare('SELECT COUNT(*) n FROM dsh_workflow_receipts').get().n,4)
+ assert.equal([...store.s.artifacts.values()].filter(a=>a.batchId===batch.id).length,4)
+})
+
+test('extension evidence rejects delayed results after tool disposal even if kernel run remains live',async()=>{
+ const {WorkflowEvidence}=await import('../src/workflow-evidence.js');let ledger:InstanceType<typeof WorkflowEvidence>,release:()=>void=()=>{},entered:()=>void=()=>{}
+ const waiting=new Promise<void>(r=>release=r),started=new Promise<void>(r=>entered=r)
+ const registry=new WorkflowExtensions(()=>false,(i,a)=>ledger.port(i,a))
+ registry.register({id:'late-fixture',version:'1.0.0',hostApi:2,implementationSha256:'a'.repeat(64),validatePolicy:()=>({}),beforeComplete:async()=>({summary:'host',metadata:{}}),registerTools:async(ctx,_i,host)=>ctx.tools.register({name:'late_fixture_verify',description:'fixture',parameters:{},output:{schema:{type:'object',additionalProperties:true},render:(_:any,r:any)=>[{type:'text',text:JSON.stringify(r)}]},execute:async()=>{entered();await waiting;return host.commit('verification',{actual:true})}})})
+ const extension=registry.bind({id:'late-fixture',version:'1.0.0',policy:{}})
+ const {runner,store,host}=await setup({participants:[{agentId:'a'}],design:{extension} as any},{beforeStart:i=>registry.beforeStart(i),registerWorkflowTools:(ctx,i,a)=>registry.registerTools(ctx,i,a)})
+ ledger=new WorkflowEvidence(store);await runner.fire('T','manual');const sid=[...host.sessions.keys()].at(-1)!
+ const pending=host.callTool(sid,'late_fixture_verify',{});await started;runner.stop();release()
+ await assert.rejects(pending,/stale-run/)
+ assert.equal(store.kernel.db.prepare('SELECT COUNT(*) n FROM dsh_workflow_receipts').get().n,0)
+})
+
+test('workflow evidence survives storage reload but cannot be reused as proof of a new run',async()=>{
+ const {WorkflowEvidence}=await import('../src/workflow-evidence.js')
+ const {store,runner,task}=await setup({participants:[{agentId:'a'}],design:{extension:{id:'fixture',version:'1.0.0',policy:{},implementationSha256:'a'.repeat(64),policySha256:'b'.repeat(64)}}} as any)
+ // Create and claim through the real EventStore without dispatching a model.
+ const batchId='b-evidence-restart',cardId=batchId+'#0'
+ await store.createBatch(task,{t:'batch/fired',at:new Date().toISOString(),taskId:task.id,batch:{id:batchId,by:'manual',cards:[{id:cardId,agentId:'a',deps:[]}]}})
+ await store.claimCard(cardId,cardId+'#1','evidence-session-1',1)
+ const input:any={task,batch:store.s.batches.get(batchId),card:store.s.cards.get(cardId),sessionId:'evidence-session-1',profileId:'a'}
+ const evidence=new WorkflowEvidence(store),old=evidence.port(input),receipt=old.commit('verification',{actual:'bytes'})
+ assert.equal(new WorkflowEvidence(store).port(input).receipts('run')[0].id,receipt.id)
+ const first=store.coreRunId(cardId+'#1')!
+ store.kernel.failRun(cardId,{expectedRunId:first,outcome:'crashed',error:'fixture interruption'})
+ // Project the restart closure, then claim the ready retry as a distinct run.
+ await store.append({t:'run/crashed',at:new Date().toISOString(),taskId:task.id,runId:cardId+'#1',error:'fixture interruption'})
+ await store.claimCard(cardId,cardId+'#2','evidence-session-2',2)
+ assert.throws(()=>old.commit('verification',{late:true}),/stale-run/)
+ const current=new WorkflowEvidence(store).port({...input,card:store.s.cards.get(cardId),sessionId:'evidence-session-2'})
+ assert.equal(current.receipts('run').length,0);assert.equal(current.receipts('batch').length,1)
+ const fresh=current.commit('verification',{actual:'recomputed bytes'})
+ assert.notEqual(fresh.coreRunId,receipt.coreRunId);assert.notEqual(fresh.claimLock,receipt.claimLock)
+ runner.stop()
+})
+
+test('artifact changed after workflow verdict is rejected before registering or completing',async()=>{
+ const {createHash}=await import('node:crypto');let path=''
+ const {runner,store,host,root}=await setup({participants:[{agentId:'a'}]},{beforeComplete:async()=>{
+  const expected=createHash('sha256').update(await readFile(path)).digest('hex')
+  await writeFile(path,'changed after inspection')
+  return {summary:'inspected old bytes',metadata:{},artifacts:[{path,sha256:expected}]}
+ }})
+ path=join(root,'report.txt');await writeFile(path,'verified original')
+ const batch=await runner.fire('T','manual'),sid=[...host.sessions.keys()][0]
+ await assert.rejects(host.callTool(sid,'task_complete',{summary:'ready',artifacts:[path]}),/artifact-capture-mismatch/)
+ assert.equal(store.s.artifacts.size,0);assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+})
+
+for (const operation of ['task_plan_round','task_finalize'] as const) {
+ test(`${operation} cannot mutate a stopped runner after an async host hook`,async()=>{
+  let release:()=>void=()=>{},entered:()=>void=()=>{}
+  const waiting=new Promise<void>(r=>release=r),started=new Promise<void>(r=>entered=r)
+  const hook=async()=>{entered();await waiting;return {summary:'host checked',metadata:{}}}
+  const {runner,store,host}=await setup({graphMode:'dynamic-rounds'},operation==='task_plan_round'?{beforePlanRound:async()=>{await hook()}}:{beforeComplete:hook})
+  const batch=await runner.fire('T','manual'),sid=[...host.sessions.keys()][0]
+  const before=store.s.cards.size
+  const pending=host.callTool(sid,operation,{summary:'checked'})
+  await started;runner.stop();release()
+  await assert.rejects(pending,/task-run-no-longer-active/)
+  assert.equal(store.s.cards.size,before)
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+ })
+}
+
+test('queued planRound rechecks run identity inside the expansion transaction',async()=>{
+ const {runner,store,host}=await setup({graphMode:'dynamic-rounds'})
+ await runner.fire('T','manual');const sid=[...host.sessions.keys()][0],before=store.s.cards.size
+ const expand=store.expandRound.bind(store)
+ store.expandRound=async(...args)=>{const pending=expand(...args);runner.stop();return pending}
+ await assert.rejects(host.callTool(sid,'task_plan_round',{summary:'planned'}),/task-run-no-longer-active/)
+ assert.equal(store.s.cards.size,before)
+})

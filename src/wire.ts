@@ -95,6 +95,7 @@ export interface SkillEntry {
 }
 
 export interface Catalog {
+  workflowExtensions?:{id:string;version:string;hostApi:number;implementationSha256:string;toolAccess?:string;scope:string}[]
   tools: NativeTool[]
   mcp: McpServer[]
   skills: SkillEntry[]

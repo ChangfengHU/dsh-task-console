@@ -55,10 +55,12 @@ await build({
   logLevel: 'info',
 })
 
-// No business adapter ships in this foundational build. A release packager must
-// include byte-verified adapter bundles before declaring them compatible.
+// Bundle exact trusted adapters; the manifest drives BOTH startup and upgrades.
 const {WORKFLOW_HOST_API}=await import(pathToFileURL(join(out,'workflow-extensions.js')).href)
-await writeFile(join(out,'workflow-compat.json'),JSON.stringify({schemaVersion:1,hostApi:WORKFLOW_HOST_API,extensions:[]},null,2)+'\n')
+await build({entryPoints:[join(root,'src/release-audit-extension.ts')],outfile:join(out,'workflows/release-audit.mjs'),bundle:true,format:'esm',platform:'node',target:'node20',external:['node:*'],logLevel:'info'})
+const adapterBytes=await readFile(join(out,'workflows/release-audit.mjs'))
+const adapter=(await import(pathToFileURL(join(out,'workflows/release-audit.mjs')).href)).default
+await writeFile(join(out,'workflow-compat.json'),JSON.stringify({schemaVersion:1,hostApi:WORKFLOW_HOST_API,extensions:[{id:adapter.id,version:adapter.version,hostApi:adapter.hostApi,implementationSha256:createHash('sha256').update(adapterBytes).digest('hex'),bundle:'lib/workflows/release-audit.mjs'}]},null,2)+'\n')
 
 async function writeClient(assetHash) {
 const client = await build({

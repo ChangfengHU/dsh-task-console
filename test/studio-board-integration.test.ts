@@ -79,7 +79,7 @@ async function fixture(t:any,options:{loseResponse?:boolean}={}){
   compile:async value=>{calls++;const result=await compileStudioStoryboard(task,value,{config});if(options.loseResponse)throw Error('lost compiler response');return result},
  })
  t.after(dispose)
- return {root,cwd,task,config,input,calls:()=>calls,stop:()=>{active=false},changeScript:()=>{lines=[{id:'L1',text:'changed script'}]},execute:(board:any=storyboard(),outputDirectory='composition-r1',exec?:any)=>tool.execute({board,outputDirectory},exec)}
+ return {root,cwd,task,config,input,calls:()=>calls,stop:()=>{active=false},changeScript:()=>{lines=[{id:'L1',text:'changed script'}]},execute:(board:any=storyboard(),outputDirectory='composition-r1',exec?:any)=>tool.execute({board,outputDirectory},exec),executeFile:(boardPath:string)=>tool.execute({boardPath})}
 }
 
 test('SDK → host → real Python compiler produces verifiable assets, speech and immutable revisions',async t=>{
@@ -119,7 +119,7 @@ test('real missing-media rejection leaves no output and can retry the same immut
  const f=await fixture(t),board=storyboard();board.audio[0].src='assets/missing.wav'
  const failed=await f.execute(board)
  assert.equal(failed.ok,false);assert.equal(failed.qualityApproved,false)
- assert.equal(failed.error,'studio-board-compile-failed');assert.match(failed.reason,/No such file or directory/)
+ assert.equal(failed.error,'studio-board-compile-failed');assert.match(failed.reason,/No such file or directory/);assert.ok(failed.reason.includes('[project]/assets/missing.wav'))
  assert.equal(await readFile(failed.boardPath,'utf8'),JSON.stringify(board))
  assert.deepEqual((await readdir(f.cwd)).sort(),['.studio-boards','assets'])
  await writeFile(join(f.cwd,'assets/missing.wav'),wave())
@@ -237,4 +237,16 @@ test('replay preserves frozen board, role, session, active-run and script gates'
  f.changeScript();await assert.rejects(f.execute(),/script-mismatch/)
  f.stop();await assert.rejects(f.execute(),/stale/)
  assert.equal(f.calls(),1)
+})
+
+
+test('real file-backed compile avoids JSON re-submission, replays safely, and preserves the previous revision',async t=>{
+ const f=await fixture(t),board=storyboard(),path=join(f.cwd,'execution-board.json')
+ await writeFile(path,JSON.stringify(board,null,2));const first=await f.executeFile('execution-board.json')
+ assert.equal(first.ok,true,first.reason);assert.equal(first.composition,join(f.cwd,'composition-'+sha(JSON.stringify(board)).slice(0,16)))
+ const oldHtml=await readFile(first.indexPath,'utf8'),again=await f.executeFile('execution-board.json')
+ assert.equal(again.outputReused,true);assert.equal(f.calls(),1)
+ board.duration=3;board.scenes[0].duration=3;await writeFile(path,JSON.stringify(board,null,2))
+ const next=await f.executeFile('execution-board.json');assert.equal(next.ok,true,next.reason);assert.notEqual(next.composition,first.composition)
+ assert.equal(await readFile(first.indexPath,'utf8'),oldHtml);assert.equal(f.calls(),2)
 })

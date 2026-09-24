@@ -15,3 +15,21 @@ test('speech host accepts blocked content as evidence, never treats it as execut
 test('audio failure reports safe stage and HTTP code without secrets or provider body',async t=>{const s=await setup(t),args={wavPath:s.path,start:0,end:1},config={audioScript:'audio',vaultTokenFile:'file'};await assert.rejects(observeStudioAudio(s.task,args,{config,execute:async()=>({ok:false,error_stage:'vault',error_type:'HTTPError',http_status:403,body:'secret'})}),{message:'studio-audio-failed:vault:HTTPError-http-403'});await assert.rejects(observeStudioAudio(s.task,args,{config,execute:async()=>({ok:false,error_stage:'secret',error_type:'secret',http_status:'token'})}),{message:'studio-audio-failed:unknown:Error'})})
 
 test('vision host binds observations to exact ordered hashes and rejects provider failure',async t=>{const s=await setup(t),args={images:[{path:s.path,sha256:s.sha256,time:1}],purpose:'preview' as const},config={visionScript:'vision',vaultTokenFile:'file'};const valid={ok:true,input_modality:'input_image',finish_reason:'stop',images:[{sha256:s.sha256,time:1}],observation:'visible'};assert.equal((await observeStudioVision(s.task,args,{config,execute:async()=>valid})).observation,'visible');for(const bad of [{...valid,images:[{sha256:s.sha256,time:2}]},{...valid,input_modality:'text'},{...valid,finish_reason:'length'},{ok:false,error_type:'HTTPError',http_status:400,error_stage:'provider'}])await assert.rejects(observeStudioVision(s.task,args,{config,execute:async()=>bad}));await writeFile(s.path,'changed');await assert.rejects(observeStudioVision(s.task,args,{config,execute:async()=>valid}),/invalid/)})
+
+
+test('parallel stage refresh shares one host probe without caching a failed outcome',async t=>{
+ const s=await setup(t);let calls=0,release!:()=>void
+ const barrier=new Promise<void>(resolve=>{release=resolve})
+ const opts={config:{preflightScript:'parallel'},execute:async()=>{calls++;await barrier;return {ok:false,capabilities:{}}}}
+ const pending=[refreshStudioCapabilities(s.workflow,s.task,opts),refreshStudioCapabilities(s.workflow,s.task,opts)]
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,1);release();await Promise.all(pending)
+ await refreshStudioCapabilities(s.workflow,s.task,opts);assert.equal(calls,2)
+})
+test('host configuration changes invalidate probe reuse and a thrown probe can be retried',async t=>{
+ const s=await setup(t);let calls=0
+ const execute=async()=>{calls++;if(calls===1)throw Error('temporary');return {ok:true,capabilities:{}}}
+ const config={preflightScript:'changing',renderRuntime:'/runtime-a'}
+ await refreshStudioCapabilities(s.workflow,s.task,{config,execute});await refreshStudioCapabilities(s.workflow,s.task,{config,execute});assert.equal(calls,2)
+ await refreshStudioCapabilities(s.workflow,s.task,{config,execute});assert.equal(calls,2)
+ await refreshStudioCapabilities(s.workflow,s.task,{config:{...config,renderRuntime:'/runtime-b'},execute});assert.equal(calls,3)
+})

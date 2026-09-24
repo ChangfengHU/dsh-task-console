@@ -31,3 +31,10 @@ test('studio recovery can freeze zero additional generation without increasing d
   assert.throws(()=>validateStudioPolicy({...base,generationLimits:limits}),/generationLimits/)
  assert.equal(validateStudioPolicy(base).generationLimits,undefined)
 })
+
+
+test('studio policy freezes optional image batches without changing legacy policy',()=>{
+ const base=design().studio,limits={imageCalls:6,voiceSegments:40,imageBatches:2}
+ assert.deepEqual(validateStudioPolicy({...base,generationLimits:limits}).generationLimits,limits)
+ for(const imageBatches of [-1,7,1.5,'2'])assert.throws(()=>validateStudioPolicy({...base,generationLimits:{...limits,imageBatches}}),/generationLimits/)
+})

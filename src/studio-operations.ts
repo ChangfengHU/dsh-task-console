@@ -25,7 +25,7 @@ export class StudioOperations {
   constructor(store:any){this.db=store.kernel.db;this.db.exec(`CREATE TABLE IF NOT EXISTS dsh_studio_limits(task_id TEXT,batch_id TEXT,limits TEXT,PRIMARY KEY(task_id,batch_id));
 CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,intent TEXT,tool TEXT,kind TEXT,units INTEGER,state TEXT,job_id TEXT,result TEXT,PRIMARY KEY(task_id,batch_id,intent));`)}
   configure(input:any,limits:Record<string,number>){
-    if(!limits||Object.keys(limits).sort().join(',')!=='imageCalls,voiceSegments'||Object.values(limits).some(v=>!Number.isInteger(v)||v<0))throw Error('studio-generation-budget-required')
+    if(!limits||!['imageCalls,voiceSegments','imageBatches,imageCalls,voiceSegments'].includes(Object.keys(limits).sort().join(','))||Object.values(limits).some(v=>!Number.isInteger(v)||v<0))throw Error('studio-generation-budget-required')
     const before=this.db.prepare('SELECT limits FROM dsh_studio_limits WHERE task_id=? AND batch_id=?').get(input.task.id,input.batch.id)
     if(before&&hash(canonical(JSON.parse(before.limits)))!==hash(canonical(limits)))throw Error('studio-budget-cannot-change-within-batch')
     this.db.prepare('INSERT OR IGNORE INTO dsh_studio_limits VALUES(?,?,?)').run(input.task.id,input.batch.id,JSON.stringify(limits))
@@ -35,7 +35,9 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
     if(!row)throw Error('studio-generation-budget-required')
     const operations=this.db.prepare('SELECT intent,tool,kind,units,state,job_id FROM dsh_studio_operations WHERE task_id=? AND batch_id=?').all(input.task.id,input.batch.id)
     const used={imageCalls:0,voiceSegments:0};for(const o of operations)used[o.kind as keyof typeof used]+=o.units
-    return {used,limits:JSON.parse(row.limits),operations,unknown:operations.some((o:any)=>['dispatching','unknown'].includes(o.state))}
+    const limits=JSON.parse(row.limits)
+    if(limits.imageBatches!==undefined)(used as any).imageBatches=operations.filter((o:any)=>o.kind==='imageCalls').length
+    return {used,limits,operations,unknown:operations.some((o:any)=>['dispatching','unknown'].includes(o.state))}
   }
   async invoke(input:any,raw:string,args:any,invoke:(args:any)=>Promise<any>,beforeDispatch?:()=>unknown){
     if(/(?:publish_video|post_video|upload_video|register_published_video)$/.test(raw))throw Error('studio-publication-not-authorized')
@@ -61,6 +63,11 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
     this.db.transaction(()=>{
       const s=this.snapshot(input)
       if(s.unknown)throw Error('studio-prior-submission-unknown')
+      if(d.kind==='imageCalls'&&s.limits.imageBatches!==undefined&&(s.used as any).imageBatches>=s.limits.imageBatches)throw Error('studio-generation-batch-limit: '+JSON.stringify({
+        error_code:'studio-generation-batch-limit',usedBatches:(s.used as any).imageBatches,limitBatches:s.limits.imageBatches,remainingBatches:0,
+        remainingImageUnits:Math.max(0,s.limits.imageCalls-s.used.imageCalls),dispatched:false,reservedUnits:0,
+        action:'The image submission batch allowance is exhausted even if image units remain. Failed and unknown submissions consume a batch. Reuse verified existing assets and report missing coverage; do not submit a new request or reset task limits.',
+      }))
       const used=s.used[d.kind as keyof typeof s.used],limit=s.limits[d.kind],remaining=Math.max(0,limit-used)
       if(d.units>remaining)throw Error('studio-generation-budget-exhausted: '+JSON.stringify({
         error_code:remaining>0?'studio-generation-request-exceeds-remaining':'studio-generation-budget-exhausted',

@@ -8,7 +8,7 @@ export interface StudioPolicy {
   fps: number
   durationMin: number
   durationMax: number
-  generationLimits?: {imageCalls:number; voiceSegments:number}
+  generationLimits?: {imageCalls:number; voiceSegments:number; imageBatches?:number}
   maxRepairRounds: number
   referenceSha256: string
   referenceUrl: string

@@ -28,3 +28,11 @@ test('media acquisition instructions do not grant downloads to planner/reviewer 
  const other=cardMessage({...task,design:undefined},{id:'x',index:0,role:'executor',round:1,brief:'Inspect'} as any,'B',[])
  assert.doesNotMatch(other,/studio_download_asset|\[STUDIO REAL RENDER\]/)
 })
+
+
+test('new executor handoff carries compiler ownership and actual resource discovery without granting it to other roles',()=>{
+ const prompt=message('executor')
+ assert.match(prompt,/\[STUDIO EXECUTION BOARD\]/);assert.match(prompt,/studio_status.executionAssets/);assert.match(prompt,/voice音轨逐条含lineId\/text/)
+ assert.match(prompt,/studio_compile_storyboard\(\{boardPath:相对JSON路径\}\)/);assert.match(prompt,/pending-generation不是存在的图片/);assert.match(prompt,/不删除旧版规避output-exists/)
+ for(const role of ['planner','reviewer','studio-stage'])assert.doesNotMatch(message(role),/\[STUDIO EXECUTION BOARD\]/)
+})

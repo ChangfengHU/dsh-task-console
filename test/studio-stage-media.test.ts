@@ -50,7 +50,12 @@ test('sound registration rejects the real missing music/effects pattern without 
   await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),/registered, host-probed audio/)
   assert.equal(s.receipts.get('sound'),previous)
  }
- await s.soundPlan({bgm:[{id:'music',sourcePath:'stages/r1/sound/voice.wav',path:'assets/music/future.wav',start:0,end:5}],sfx:[{id:'cue',path:'stages/r1/sound/voice.wav',start:2,end:3}]})
+ for(const loop of [undefined,true]){
+  await s.soundPlan({bgm:[{id:'short-as-bed',path:'stages/r1/sound/voice.wav',start:0,end:100,...(loop===undefined?{}:{loop})}]})
+  await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),loop===true?/Implicit looping is not supported/:/exceeds the actual source duration/)
+  assert.equal(s.receipts.get('sound'),previous,'invalid music coverage cannot replace the valid receipt')
+ }
+ await s.soundPlan({bgm:[{id:'music',sourcePath:'stages/r1/sound/voice.wav',path:'assets/music/future.wav',start:0,end:0.3}],sfx:[{id:'cue',path:'stages/r1/sound/voice.wav',start:2,end:3}]})
  const r=await registerStageFiles(s.input('sound'),path,s.workflow,s.db)
  assert.equal(r.stageContractVersion,2);assert.equal(r.soundBinding!.tracks.length,3);assert.equal(r.qualityApproved,false)
  s.script.sha256='b'.repeat(64);await assert.rejects(verifyStageReceipt(s.input('sound'),r,s.workflow),/Frozen script differs/)

@@ -136,6 +136,9 @@ test('review progress is rebuilt from current host ledger and isolated by sessio
  workflow.recordReceipt({...reviewer,sessionId:'other'},{candidateSha256:candidate.sha256,sha256:h('d'),kind:'audio',ranges:[[8,100]]})
  const rebuilt=new StudioWorkflow({kernel:{db}})
  assert.deepEqual(rebuilt.status(reviewer).reviewProgress.audio.remainingRanges,[[8,100]])
+ assert.equal(rebuilt.status(reviewer).reviewProgress.receiptIndex.length,1)
+ assert.equal(rebuilt.status(reviewer).reviewProgress.receiptIndex[0].kind,'audio')
+ assert.equal(rebuilt.reviewProgress(reviewer)?.receiptIndex,undefined)
  assert.equal(rebuilt.status(input).reviewProgress,undefined)
  assert.equal(rebuilt.reviewProgress({...reviewer,batch:{id:'other'}}),null)
  input.task.design.studio.characterId='changed'

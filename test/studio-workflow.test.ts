@@ -58,6 +58,17 @@ test('first invalid submission leaves review absent; genuine rejection commits w
  workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'原台词。'}]})
  workflow.recordScript(input,{sha256:h('e'),lines:[{id:'1',text:'返修台词。'}]})
 })
+test('fresh reviewer cannot inherit historical report IDs while planner keeps repair history',t=>{
+ const {workflow,input}=setup(t),{reviewer,candidate}=proof(workflow,input),historical=workflow.status(input).review
+ assert.deepEqual(workflow.status(reviewer).review,historical)
+ const restored={...reviewer,sessionId:'reviewer-restored'}
+ assert.equal(workflow.status(restored).review,null)
+ assert.deepEqual(workflow.status(restored).reviewProgress?.receiptIndex,[])
+ assert.deepEqual(workflow.status(input).review,historical)
+ workflow.recordCandidate({...input,card:{role:'executor'},sessionId:'producer'},{...candidate,revision:2,sha256:h('e')})
+ assert.equal(workflow.status(reviewer).review,null)
+ assert.deepEqual(workflow.status(input).review,historical)
+})
 test('negative review still requires genuine audio evidence',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);const db=(workflow as any).db;db.prepare("DELETE FROM dsh_studio_receipts WHERE json_extract(payload,'$.kind')='audio'").run();assert.throws(()=>workflow.complete(reviewer),/review-integrity-failed/)})
 
 test('grounded rejection survives dependency outage but production and approval remain blocked',t=>{

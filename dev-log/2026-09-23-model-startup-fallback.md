@@ -466,3 +466,26 @@ verified, with Runner continuity/lines still pending. This is intermediate truth
 not full-node acceptance. A first browser fixture had an ambiguous duplicate name
 selector; scoping it to the actual nodeList fixed the test, not the production UI.
 No developer target SSH, browser import or process restart occurred.
+
+### 2026-09-24: actual Vault receipt and scoped Browser MCP accounting fix
+
+f502be401d1087fd037bc4d2b1807fb0 ended locally blocked with
+task-repair-receipt-mismatch, but authenticated GET of the original Fleet delivery
+returned terminal verified/mutation imported, gemini_648190cc, version19112,
+check10:14:24.386Z. Do not repeat delivery. In linux-clash e0f7291 (pushed), align
+recordTaskRepairOutcome with reserveTaskRepair: only frozen browser-patrol-v2
+contracts require patrol reservations; live binding remains mandatory. Preserve
+safe remote evidence before local accounting.115 Browser MCP tests pass, including
+frozen-contract/stale-session/cross-target/no-duplicate-POST regressions. New workers
+use the source directly, no global DSH restart or active-session interruption.
+Readback through the corrected function and actual live binding returns
+not-applicable for patrol accounting; no production budget rows were written.
+
+Visible diagnostic queued to the SAME1125 session. Agent independently verified
+and launched d1adda7c3da4cdba3b9cc920aacfdb1c stability operation. At10:24:40Z it is
+running with9/8 distinct samples, only482/425seconds, not20minutes. Public Chrome
+Fleet1440/390 shows both real9222/9223 and distinct verified accounts, zero page
+errors/no horizontal overflow. DAG/fullscreen took20.68s, no page errors;1122done,
+1125running, Runner no Run yet. Original1123 remains blocked. Screenshots reuse
+the existing /tmp/dsh-fleet-236-v3-* and /tmp/fleet-236-vault-restored-* evidence paths.
+Full stability, Runner signed readback and second idempotent run remain pending.

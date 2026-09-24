@@ -371,3 +371,9 @@ production gate weakened. Serial full regression passed615/618,0 failures,
 3 existing skips in80.27s; build passed. Candidate must preserve6b8e1a4's newer
 studio-host configuration. Role capability audits currently report unverified-
 legacy with no missing/unexpected tools or dependencies, not live certification.
+
+The5ea16fd candidate switch guard caught a newer b1c3c04 release before any live
+write. Its three-file Studio recovery update and unchanged studio-host config
+are preserved by an additional merge, with focused fold/recovery/revalidation
+tests and a fresh build.5ea16fd was staged only, not activated. Do not roll back
+the shared runtime to an older source just to continue onboarding.

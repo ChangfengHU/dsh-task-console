@@ -377,3 +377,16 @@ write. Its three-file Studio recovery update and unchanged studio-host config
 are preserved by an additional merge, with focused fold/recovery/revalidation
 tests and a fresh build.5ea16fd was staged only, not activated. Do not roll back
 the shared runtime to an older source just to continue onboarding.
+
+### 2026-09-24: real public exit envelope contract
+
+While waiting for live Studio Runs1120/1121 (confirmed native sessions and fresh
+heartbeats), read-only public API comparison found /api/fleet/exits returns
+{ok,fetchedAt,exits}, unlike /api/fleet/lines' {ok,rows}. The v3 validator and its
+synthetic fixture both incorrectly used exits.rows, which would reject even a
+valid signed Runner exit. Read exits.exits instead; preserve exact same-job,
+source, target, freshness and expected-IP checks. Tests now use the real public
+envelope and explicitly reject the invented rows shape. All9 focused evidence
+tests and candidate build pass. No Fleet/target writes or live reload occurred.
+Public236 still has desktopOnly rows, HTTP521 capability error and unknown
+reachability; those are actual missing acceptance, not this envelope bug.

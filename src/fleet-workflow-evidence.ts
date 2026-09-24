@@ -140,7 +140,7 @@ export async function validateFleetWorkflowEvidence(input: CompletionCheck, deps
     const [exits,lines] = await Promise.all([deps.read('exits'),deps.read('lines')])
     for (const ip of targets) {
       const nodeId = nodeIds.get(ip), job = accepted.find(r=>r.role === 'fleet-runner-operator' && r.ip === ip)?.jobId
-      const exit = exits.rows?.find((r: any)=>r.id === nodeId), line = lines.rows?.find((r: any)=>r.id === nodeId)
+      const exit = exits.exits?.find((r: any)=>r.id === nodeId), line = lines.rows?.find((r: any)=>r.id === nodeId)
       if (exit?.jobId !== job || exit.source !== 'fleet-probe-runner' || !ipv4(exit.exitIp) || !(stamp(exit.verifiedAt)>=started) || stamp(exit.verifiedAt)>now+5000 || !(stamp(exit.expiresAt)>now)) return repair('fleet-runner-operator',`${ip} 缺少本次签名巡检的有效出口验证`)
       if (exit.exitIp !== exit.expectedIp) return repair('fleet-installer',`${ip} 本次观测出口不符合期望线路`)
       if (line?.jobId !== job || line.source !== 'fleet-probe-runner' || line.error || !Array.isArray(line.lines) || !line.lines.length || !(stamp(line.checkedAt)>=started) || stamp(line.checkedAt)>now+5000) return repair('fleet-runner-operator',`${ip} 缺少本次候选线路实拨结果`)

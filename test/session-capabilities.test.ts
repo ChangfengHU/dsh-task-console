@@ -2,7 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { DatabaseSync } from 'node:sqlite'
 import { createRequire } from 'node:module'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { validateSpec } from '../src/presets.ts'
 import { pathToFileURL } from 'node:url'
 import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
 import { SessionCapabilities, ChatProgress, CAPABILITY_TOOLS, resolveMcpToolIdentity } from '../src/session-capabilities.ts'
@@ -153,4 +155,42 @@ test('native waterfall filters earlier registered slash-skill injection after ne
     cap.policy = {}; assert.equal((await run('standard')).messages.length, 1)
     dispose(); assert.equal((await run('standard')).messages.length, 1)
   } finally { native(); db.close() }
+})
+
+
+test('real hashed Studio MCP names resolve only against the exact authored preset identity',()=>{
+ const fixtures=[
+  ['vyibc-image','vyibc-image_generate_image','mcp__vyibc-image-studio-taskbook-visual__vyibc-imag_c79364b116b9'],
+  ['vyibc-image','vyibc-image_list_results','mcp__vyibc-image-studio-taskbook-visual__vyibc-imag_ce42e5d16d73'],
+  ['vyibc-cartoon-assets','character_search','mcp__vyibc-cartoon-assets-studio-taskbook-visual__c_4a99aa731c84'],
+  ['vyibc-cartoon-assets','character_assets','mcp__vyibc-cartoon-assets-studio-taskbook-visual__c_54cd6df8aae9'],
+  ['vyibc-cartoon-assets','character_history','mcp__vyibc-cartoon-assets-studio-taskbook-visual__c_f109c804b728'],
+  ['vyibc-cartoon-assets','asset_feedback_list','mcp__vyibc-cartoon-assets-studio-taskbook-visual__a_c72e7786602f'],
+ ]
+ for(const [server,rawName,name] of fixtures){
+  const identity={name:publicToolName(server,rawName),server,rawName}
+  assert.deepEqual(resolveMcpToolIdentity(name,[identity],[],'studio-taskbook-visual'),identity)
+  assert.equal(resolveMcpToolIdentity(name,[identity],[],'another-preset'),undefined)
+  assert.equal(resolveMcpToolIdentity(name+'x',[identity],[],'studio-taskbook-visual'),undefined)
+ }
+})
+
+test('scoped hashed tools are not falsely missing, while genuinely absent selected tools remain missing',async()=>{
+ const root=await mkdtemp(join(process.cwd(),'.capability-fixture-')),previous=process.env.DSH_HOME,db=new DatabaseSync(':memory:')
+ const id='studio-taskbook-visual',server='vyibc-cartoon-assets',present='character_assets',absent='character_history'
+ const spec=validateSpec({id,name:'Fixture',description:'',persona:'fixture only',model:'p/m',tools:[],skills:[],mcpTools:{[server]:[present,absent]}})
+ const path=join(root,'.agent-presets',id);await mkdir(path,{recursive:true});await writeFile(join(path,'task-console.json'),JSON.stringify(spec));process.env.DSH_HOME=root
+ try{
+  const runtimeName='mcp__vyibc-cartoon-assets-studio-taskbook-visual__c_54cd6df8aae9'
+  const agent={session:{id:'task-hashed-capability-test',header:{agentPreset:id},events:[]}}
+  const cap=new SessionCapabilities({tools:{schemas:()=>[{name:runtimeName}]},get:()=>undefined},async()=>{throw Error('no environment or business probe')},db,()=>[{serverName:server,tools:[present,absent]}])
+  const out=await cap.describe(agent)
+  assert.deepEqual(out.current.configuredButNotRegistered,[publicToolName(server,absent)])
+  assert.equal(out.current.tools[0].name,publicToolName(server,present));assert.equal(out.current.tools[0].runtimeName,runtimeName)
+  assert.equal(out.current.tools[0].source,'agent-definition');assert.equal(out.current.tools[0].state,'registered')
+  assert.equal(out.answerContract.registeredIsNotAuthorized,true)
+ }finally{
+  if(previous===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=previous
+  db.close();await rm(root,{recursive:true,force:true})
+ }
 })

@@ -24,7 +24,7 @@ const toolText = (message: any): string => (message?.content ?? []).flatMap((b: 
 interface McpIdentity { name: string; server: string; rawName: string }
 
 /** Map an Agent-isolated runtime MCP namespace back to its stable authored identity. */
-export function resolveMcpToolIdentity(name: string, declared: McpIdentity[], sources: { serverName: string; tools: string[] }[]): McpIdentity | undefined {
+export function resolveMcpToolIdentity(name: string, declared: McpIdentity[], sources: { serverName: string; tools: string[] }[], presetId?: string): McpIdentity | undefined {
   const candidates = [...declared]
   for (const source of sources) for (const rawName of source.tools) {
     const identity = { name: publicToolName(source.serverName, rawName), server: source.serverName, rawName }
@@ -32,6 +32,13 @@ export function resolveMcpToolIdentity(name: string, declared: McpIdentity[], so
   }
   const exact = candidates.find(candidate => candidate.name === name)
   if (exact) return exact
+  // renderComposition adds the authored preset ID before the official client
+  // hashes long public names. Their raw-name suffix is no longer recoverable;
+  // reproduce that exact identity instead of guessing from a prefix.
+  if (presetId) {
+    const scoped = candidates.find(candidate => publicToolName(`${candidate.server}-${presetId}`, candidate.rawName) === name)
+    if (scoped) return scoped
+  }
   if (!name.startsWith('mcp__')) return undefined
   return candidates.find(candidate => {
     const suffix = `__${candidate.rawName}`
@@ -141,7 +148,7 @@ export class SessionCapabilities {
     }
     const registeredStable = new Set<string>()
     const tools = schemas.map((s: any) => {
-      const identity = resolveMcpToolIdentity(s.name, declaredMcp, mcpSources)
+      const identity = resolveMcpToolIdentity(s.name, declaredMcp, mcpSources, spec?.id)
       if (identity) registeredStable.add(identity.name)
       const stableName = identity?.name ?? s.name
       return { name: stableName, ...(stableName !== s.name ? { runtimeName: s.name } : {}), kind: s.name.startsWith('mcp__') ? 'mcp' : 'native', server: identity?.server ?? null, source: CAPABILITY_TOOLS.includes(s.name) ? 'platform' : declared.has(stableName) ? 'agent-definition' : 'environment-inherited', state: availableNames.has(s.name) ? 'registered' : 'restricted', ...(this.restricted(s, agent) ? { reason: 'explicit-standard-exclusion' } : {}), ...(errors.has(s.name) || errors.has(stableName) ? { lastFailure: errors.get(s.name) ?? errors.get(stableName) } : {}) }

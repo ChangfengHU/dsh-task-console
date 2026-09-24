@@ -3,10 +3,27 @@ import {relative,sep,extname} from 'node:path'
 import {createHash} from 'node:crypto'
 import {studioStageFor,studioStageCardId,type StudioStageId} from './studio-stages.js'
 import {studioPath,fileSha256} from './studio-tools.js'
+import {isStoryboardDocument,validateStoryboardScript} from './studio-storyboard-script.js'
 const digest=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex')
-export async function verifyStageReceipt(input:any,receipt:any) {
+async function storyboardBinding(input:any,outputs:any[],workflow:any){
+ const script=workflow?.script?.(input)
+ if(!script)throw Error('studio-storyboard-script-required: read studio_status.state.script; the planner must freeze dialogue with studio_freeze_script before storyboard handoff')
+ const boards=[]
+ for(const output of outputs.filter(f=>extname(f.path).toLowerCase()==='.json')){
+  if(output.bytes>8*1024*1024)throw Error('studio-storyboard-json-too-large')
+  const path=await studioPath(input.task.cwd,output.path,true),bytes=await readFile(path)
+  if(bytes.length>8*1024*1024)throw Error('studio-storyboard-json-too-large')
+  if(createHash('sha256').update(bytes).digest('hex')!==output.sha256)throw Error('studio-stage-file-changed')
+  let board:any;try{board=JSON.parse(bytes.toString('utf8'))}catch{throw Error('studio-storyboard-json-invalid: repair JSON output before studio_register_stage')}
+  if(isStoryboardDocument(board)){validateStoryboardScript(board,script);boards.push(output.path)}
+ }
+ if(!boards.length)throw Error('studio-storyboard-document-required: include a JSON storyboard with scenes and scriptSha256 matching studio_status.state.script; unrelated JSON files do not satisfy storyboard handoff')
+ return {scriptSha256:script.sha256,boards}
+}
+export async function verifyStageReceipt(input:any,receipt:any,workflow?:any) {
  if(!receipt || receipt.configSha256!==digest(input.task.design.studioStages) || receipt.batchId!==input.batch.id || receipt.round!==input.card.round)throw Error('studio-stage-receipt-required')
  for(const f of [receipt.manifest,...receipt.outputs]){const path=await studioPath(input.task.cwd,f.path,true);if(await fileSha256(path)!==f.sha256)throw Error('studio-stage-file-changed')}
+ if(receipt.stage==='storyboard'){const binding=await storyboardBinding(input,receipt.outputs,workflow);if(!receipt.scriptBinding||digest(receipt.scriptBinding)!==digest(binding))throw Error('studio-storyboard-script-binding-required: frozen dialogue changed or legacy receipt has no verified binding; correct storyboard and re-register it before downstream generation')}
 }
 export async function requireStudioStages(input:any,workflow:any,db:any) {
  if(!input.task.design?.studioStages)return
@@ -16,7 +33,9 @@ export async function requireStudioStages(input:any,workflow:any,db:any) {
   const cardId=studioStageCardId(input.batch.id,input.card.round,id),row=db.prepare('SELECT status,tenant,assignee FROM tasks WHERE id=?').get(cardId)
   const spec=input.task.design.studioStages.find((s:any)=>s.id===id)
   if(row?.status!=='done'||row.tenant!==input.batch.id||row.assignee!==spec?.agentId)throw Error(`studio-stage-dependency-required:${id}`)
-  await verifyStageReceipt(input,workflow.stageReceipt(input,id))
+  const receipt=workflow.stageReceipt(input,id)
+  if(receipt?.stage!==id)throw Error('studio-stage-receipt-required')
+  await verifyStageReceipt(input,receipt,workflow)
  }
 }
 export async function registerStageFiles(input:any,pathValue:string,workflow:any,db:any) {
@@ -37,7 +56,8 @@ export async function registerStageFiles(input:any,pathValue:string,workflow:any
  const required=stage.id==='visual'?['.png','.jpg','.webp']:stage.id==='sound'?['.wav','.mp3','.m4a']:['.json']
  if(!extensions.some(e=>required.includes(e)))throw Error('studio-stage-media-required')
  if(await fileSha256(path)!==sha256)throw Error('studio-stage-file-changed')
- const receipt={stage:stage.id,round:input.card.round,batchId:input.batch.id,sessionId:input.sessionId,cardId:input.card.id,configSha256:digest(input.task.design.studioStages),manifest:{path:local(path),sha256},outputs,summary:value.summary.slice(0,4000),qualityApproved:false}
- await verifyStageReceipt(input,receipt);workflow.recordStageReceipt(input,receipt)
+ const scriptBinding=stage.id==='storyboard'?await storyboardBinding(input,outputs,workflow):undefined
+ const receipt={...(scriptBinding?{scriptBinding}:{}),stage:stage.id,round:input.card.round,batchId:input.batch.id,sessionId:input.sessionId,cardId:input.card.id,configSha256:digest(input.task.design.studioStages),manifest:{path:local(path),sha256},outputs,summary:value.summary.slice(0,4000),qualityApproved:false}
+ await verifyStageReceipt(input,receipt,workflow);workflow.recordStageReceipt(input,receipt)
  return receipt
 }

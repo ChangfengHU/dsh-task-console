@@ -34,6 +34,7 @@ async function storyboardBinding(input:any,outputs:any[],workflow:any){
   if(isStoryboardDocument(board)){validateStoryboardScript(board,script);if(input.task.design?.studio?.visualCoverage==='requirements-v1')visualRequirements(board);boards.push(output.path)}
  }
  if(!boards.length)throw Error('studio-storyboard-document-required: include a JSON storyboard with scenes and scriptSha256 matching studio_status.state.script; unrelated JSON files do not satisfy storyboard handoff')
+ if(input.task.design?.studio?.visualCoverage==='requirements-v1'&&boards.length!==1)throw Error('studio-visual-coverage-required: register exactly one canonical storyboard before visual handoff')
  return {scriptSha256:script.sha256,boards}
 }
 async function visualBinding(input:any,outputs:any[],workflow:any){

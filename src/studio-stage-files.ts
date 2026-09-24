@@ -6,6 +6,7 @@ import {studioStageFor,studioStageCardId,type StudioStageId} from './studio-stag
 import {studioPath,fileSha256} from './studio-tools.js'
 import {isStoryboardDocument,validateStoryboardScript} from './studio-storyboard-script.js'
 import {probeStageMedia,requireStageMediaMetadata,stageMediaKind} from './studio-stage-media.js'
+import {inspectAudioSignal} from './studio-audio-signal.js'
 import {bindSoundPlan,soundPlanError} from './studio-sound-plan.js'
 import {visualRequirements,bindVisualCoverage} from './studio-visual-coverage.js'
 const digest=(v:unknown)=>createHash('sha256').update(JSON.stringify(v)).digest('hex')
@@ -44,7 +45,7 @@ async function stageRegistrationError(input:any,stage:string,code:string,field:s
  }catch{truncated=true}finally{clearTimeout(timer)}
  throw Error(code+': '+JSON.stringify({error_code:code,field,...(outputIndex!==undefined?{outputIndex:Number(outputIndex)}:{}),reason,pathContract:{basis:'task-workspace-relative',relativeTo:'Task workspace root, not the stage directory or manifest parent',requiredPrefix:base,exampleOutputs,examplesArePlaceholders:true},stageDirectory:base,tool:'studio_register_stage',arguments:{path:expectedPath},manifestSchema:{stage,round:input.card.round,outputs:['project-relative existing file paths within '+base],summary:'actual work and unverified items'},eligibleExistingMedia:candidates,scan:{scanned,probed,bytesRead,elapsedMs:Math.round(performance.now()-started),deadlineMs:5000,maxFileBytes,maxReadBytes,truncated,complete:!truncated},retryable:false,retryAfterRepair:true,action:'Create/read the manifest at the exact arguments.path. outputs must explicitly list the actual image/audio files as well as required plan JSON; copying files or listing only JSON does not register media. Every output path is relative to the Task workspace root, not to the manifest or stage directory; keep the full stages/rN/stage/ prefix. For a legally reusable file outside this stage, explicitly copy it into the current stage directory and preserve the original before listing the new workspace-relative path. Do not assume a short filename is relative to the manifest. Correct the indicated field, preserve required dialogue and visual requirements, then call studio_register_stage with {path}. Listed candidates are verified files only, not selected poses or complete coverage; choose and explicitly register the needed paths yourself. If required media is absent, obtain it or reconcile its original generation job; do not invent paths, create placeholders, delete requirements, or repeat the same manifest unchanged.',qualityApproved:false}))
 }
-async function soundBinding(input:any,outputs:any[],workflow:any){
+async function soundBinding(input:any,outputs:any[],workflow:any,inspectSignal=false){
  const plans=[]
  for(const output of outputs.filter(f=>extname(f.path).toLowerCase()==='.json')){
   if(output.bytes>8*1024*1024)soundPlanError('plan','JSON exceeds 8 MiB.')
@@ -55,7 +56,24 @@ async function soundBinding(input:any,outputs:any[],workflow:any){
   if(value?.schema==='sound-plan-v1')plans.push({value,output})
  }
  if(plans.length!==1)soundPlanError('plan','Exactly one registered sound-plan-v1 JSON is required.')
- return bindSoundPlan(plans[0].value,workflow?.script?.(input),outputs,plans[0].output)
+ const binding=bindSoundPlan(plans[0].value,workflow?.script?.(input),outputs,plans[0].output)
+ if(inspectSignal){
+  const inspected=new Set<string>(),decodeDeadline=performance.now()+60000
+  for(const track of binding.tracks){
+   if(inspected.has(track.path))continue
+   const path=await studioPath(input.task.cwd,track.path,true)
+   if(await fileSha256(path)!==track.sha256)throw Error('studio-stage-file-changed')
+   const timeoutMs=Math.floor(decodeDeadline-performance.now())
+   if(timeoutMs<1)soundPlanError(`${track.role==='voice'?'lines':track.role}[${track.index}].sourcePath`,'Audio signal inspection exceeded the 60 second registration budget; required sources remain unverified. Diagnose the source/decoder before retrying; do not drop required cues.')
+   try{track.media.signalEvidence=await inspectAudioSignal(path,track.sha256,{timeoutMs})}
+   catch(error:any){soundPlanError(`${track.role==='voice'?'lines':track.role}[${track.index}].sourcePath`,`${error.message}. Actual audio signal remains unverified. Repair the local FFmpeg dependency or source file and re-register; do not claim silence or completion from a failed probe.`)}
+   if(await fileSha256(path)!==track.sha256)throw Error('studio-stage-file-changed')
+   inspected.add(track.path)
+  }
+  // Apply the exact same source/field check used when replaying new receipts.
+  return bindSoundPlan(plans[0].value,workflow?.script?.(input),outputs,plans[0].output)
+ }
+ return binding
 }
 async function storyboardBinding(input:any,outputs:any[],workflow:any){
  const script=workflow?.script?.(input)
@@ -147,7 +165,7 @@ export async function registerStageFiles(input:any,pathValue:string,workflow:any
  if(!extensions.some(e=>required.includes(e)))return stageRegistrationError(input,stage.id,'studio-stage-media-required','outputs',`No registered ${stage.id==='visual'?'image':stage.id==='sound'?'audio':'storyboard JSON'} file. Eligible extensions: ${required.join(', ')}. Files on disk are not registered unless their paths appear in outputs.`)
  if(await fileSha256(path)!==sha256)throw Error('studio-stage-file-changed')
  const scriptBinding=stage.id==='storyboard'?await storyboardBinding(input,outputs,workflow):undefined
- const audioBinding=stage.id==='sound'?await soundBinding(input,outputs,workflow):undefined
+ const audioBinding=stage.id==='sound'?await soundBinding(input,outputs,workflow,true):undefined
  const visual=stage.id==='visual'&&input.task.design?.studio?.visualCoverage==='requirements-v1'?await visualBinding(input,outputs,workflow):undefined
  const receipt={...(visual?{visualBinding:visual}:{}),...(scriptBinding?{scriptBinding}:{}),...(audioBinding?{stageContractVersion:2,soundBinding:audioBinding}:{}),stage:stage.id,round:input.card.round,batchId:input.batch.id,sessionId:input.sessionId,cardId:input.card.id,configSha256:digest(input.task.design.studioStages),manifest:{path:local(path),sha256},outputs,summary:value.summary.slice(0,4000),qualityApproved:false}
  await verifyStageReceipt(input,receipt,workflow);workflow.recordStageReceipt(input,receipt)

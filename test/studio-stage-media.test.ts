@@ -76,3 +76,30 @@ test('every listed media file is probed and renamed video cannot masquerade as a
  const visual=await s.manifest('visual',['bad.png']),movie=join(s.cwd,'movie.mp4');await run('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=32x32:r=10','-t','0.2','-y',movie]);await copyFile(movie,join(s.cwd,'stages/r1/visual/bad.png'))
  await assert.rejects(registerStageFiles(s.input('visual'),visual,s.workflow,s.db),/static_image_codec/);assert.equal(s.receipts.has('visual'),false)
 })
+
+test('new sound handoff rejects silent required BGM, SFX and dialogue without replacing accepted receipt',async t=>{
+ const s=await setup(t),base='stages/r1/sound/',path=await s.manifest('sound',['voice.wav','plan.json'])
+ await run('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','0.3','-y',join(s.cwd,base+'voice.wav')])
+ await s.soundPlan();const accepted=await registerStageFiles(s.input('sound'),path,s.workflow,s.db)
+ assert.equal(accepted.outputs[0].media.signalEvidence.allSilent,false)
+ for(const [kind,duration] of [['bgm','100'],['sfx','10'],['lines','0.5']]){
+  const name=kind+'-silent.wav'
+  await run('ffmpeg',['-v','error','-f','lavfi','-i','anullsrc=r=16000:cl=stereo','-t',duration,'-y',join(s.cwd,base+name)])
+  await s.manifest('sound',['voice.wav',name,'plan.json'])
+  await s.soundPlan({[kind]:[{id:kind==='lines'?'a':'required-cue',...(kind==='lines'?{text:'你好'}:{}),sourcePath:base+name,start:0,end:Number(duration)}]})
+  await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),(e:any)=>{assert.match(e.message,/entire required source decodes to exact zero/);assert.ok(e.message.includes(kind+'[0].sourcePath'));assert.match(e.message,/Do not remove cues/);return true})
+  assert.equal(s.receipts.get('sound'),accepted)
+ }
+ await s.manifest('sound',['voice.wav','sfx-silent.wav','plan.json']);await s.soundPlan()
+ const unused=await registerStageFiles(s.input('sound'),path,s.workflow,s.db)
+ assert.equal(unused.soundBinding.tracks.length,1,'unused silent helper file is not a required cue')
+})
+
+test('signal receipt is bound to real source hash and replay does not re-run FFmpeg',async t=>{
+ const s=await setup(t),path=await s.manifest('sound',['voice.wav','plan.json'])
+ await run('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=550:sample_rate=16000','-t','0.3','-y',join(s.cwd,'stages/r1/sound/voice.wav')]);await s.soundPlan()
+ const receipt=await registerStageFiles(s.input('sound'),path,s.workflow,s.db),previous=process.env.FFMPEG_PATH
+ try{process.env.FFMPEG_PATH='/nonexistent-ffmpeg';await verifyStageReceipt(s.input('sound'),receipt,s.workflow)}finally{if(previous===undefined)delete process.env.FFMPEG_PATH;else process.env.FFMPEG_PATH=previous}
+ const corrupt=structuredClone(receipt);corrupt.outputs[0].media.signalEvidence.sha256='b'.repeat(64)
+ await assert.rejects(verifyStageReceipt(s.input('sound'),corrupt,s.workflow),/signal receipt is invalid/)
+})

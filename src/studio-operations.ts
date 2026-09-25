@@ -20,11 +20,14 @@ const statusTool=(name:string)=>/(?:vyibc-voice_(?:status|result|cancel)|vyibc-i
 /** Read existing submission metadata only. Never poll, replay provider bodies,
  * create tables, reserve budget, or change paid-operation state from status. */
 export function readStudioOperationStatus(db:any,input:any){
-  const rows=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_studio_operations'").get()
-    ?db.prepare('SELECT tool,state,job_id FROM dsh_studio_operations WHERE task_id=? AND batch_id=? ORDER BY intent').all(input.task.id,input.batch.id):[]
+  const exists=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_studio_operations'").get()
+  const hasKind=exists&&db.prepare('PRAGMA table_info(dsh_studio_operations)').all().some((r:any)=>r.name==='kind')
+  const rows=exists?db.prepare(`SELECT tool,state,job_id,${hasKind?'kind':'NULL AS kind'} FROM dsh_studio_operations WHERE task_id=? AND batch_id=? ORDER BY intent`).all(input.task.id,input.batch.id):[]
+  const unrecognizedOperations:{kind:string|null;state:string}[]=[]
   const operations=rows.flatMap((row:any)=>{
     const tool=typeof row.tool==='string'?row.tool.match(/(?:vyibc-image_generate_image|vyibc-voice_(?:synthesize|retry_segments))$/)?.[0]:undefined
-    if(!tool)return []
+    const kind=['imageCalls','voiceSegments'].includes(row.kind)?row.kind:null
+    if(!tool){unrecognizedOperations.push({kind,state:['completed','failed'].includes(row.state)?row.state:'unknown'});return []}
     const jobId=typeof row.job_id==='string'&&/^[A-Za-z0-9_.:-]{1,200}$/.test(row.job_id)?row.job_id:null
     const state=['dispatching','unknown','submitted','completed','failed'].includes(row.state)?row.state:'unknown'
     const voice=tool.startsWith('vyibc-voice_')
@@ -32,7 +35,7 @@ export function readStudioOperationStatus(db:any,input:any){
       {tool:'vyibc-voice_status',arguments:{job_id:jobId}},
       {tool:'vyibc-voice_result',arguments:{job_id:jobId}},
     ]:[{tool:'vyibc-image_get_task',arguments:{taskId:jobId}}]):[]
-    return [{tool,jobId,state,nextCalls,
+    return [{tool,kind,jobId,state,nextCalls,
       action:!jobId?'The submission has no usable job ID. Reconcile the original operation; do not invent an ID or submit again.':voice?
         'Poll the original job with voice_status for fresh state, then voice_result for completed segment metadata. A queued receipt or a missing local WAV does not establish current synthesis status. Download and verify completed segment files before registering them; preserve every frozen dialogue line.':
         'Read the original image job with get_task. Use only its succeeded items by index, then download and verify their files. Do not substitute the global latest-results feed.'}]
@@ -40,7 +43,7 @@ export function readStudioOperationStatus(db:any,input:any){
   return {scope:'current-task-and-batch',source:'studio-operation-ledger',providerPolled:false,
     stateFreshness:'Recorded ledger states may be stale; this read does not query providers. No last-provider-check timestamp is stored.',
     instruction:'These calls only inspect existing jobs. Do not resubmit generation, infer provider failure from missing local files, or treat job completion as downloaded files or quality approval.',
-    operations,qualityApproved:false}
+    operations,unrecognizedOperations,qualityApproved:false}
 }
 
 /** Current allowance, read directly from immutable limits and reservations.

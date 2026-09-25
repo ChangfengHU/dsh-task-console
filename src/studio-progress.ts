@@ -1,5 +1,6 @@
 import {createHash} from 'node:crypto'
 import {classifyStudioTool} from './studio-progress-fingerprint.js'
+import {studioOperationInStage} from './studio-stage-operations.js'
 import {readStudioOperationStatus} from './studio-operations.js'
 
 export const STUDIO_PROGRESS_LIMITS=Object.freeze({modelSteps:80,tools:160,repeatedFailures:4,searches:8})
@@ -103,7 +104,10 @@ export function registerStudioProgress(ctx:any,progress:StudioProgress,sessionId
 
 /** Read-only reconciliation pointers; no network, budget changes, or completion. */
 export function studioProgressPending(db:any,input:any):string|undefined{
- const media=readStudioOperationStatus(db,input).operations.filter((r:any)=>!['completed','failed'].includes(r.state))
+ const status=readStudioOperationStatus(db,input)
+ const media=[...status.operations,...status.unrecognizedOperations].filter((r:any)=>studioOperationInStage(input,r)&&!['completed','failed'].includes(r.state))
+ // Render jobs remain batch-wide: legacy or unresolved ownership must not be
+ // inferred from stage names, and pending previous-round renders still need reconciliation.
  const render=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_studio_render_jobs'").get()
   ?db.prepare('SELECT payload FROM dsh_studio_render_jobs WHERE task_id=? AND batch_id=?').all(input.task.id,input.batch.id).map((r:any)=>JSON.parse(r.payload)).filter((r:any)=>!['completed','failed','rejected'].includes(r.state)).map((r:any)=>({state:r.state,jobId:r.jobId??null,nextCalls:r.jobId?[{tool:'studio_render_status',arguments:{jobId:r.jobId}}]:[]})):[]
  if(media.length||render.length)return JSON.stringify({reason:'original-operations-require-reconciliation',media,render,automaticRecovery:false,notice:'Recorded states may be stale. Reconcile original jobs before unblocking; do not resubmit, clear reservations, or infer completion.'})

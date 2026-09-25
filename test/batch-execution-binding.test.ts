@@ -171,3 +171,72 @@ test('batch workspace and execution identity freeze together before any director
  assert.equal(turn.cwd,turn.studioWorkspace.path);assert.equal(turn.workflow.definition.design.workspaceMode,'studio-batch-v1')
  await assert.rejects(readFile(join(turn.cwd,'.studio-workspace.json')),{code:'ENOENT'});assert.equal(s.sessions.length,0)
 })
+
+// Migration fixture reuses the real SQLite runner and authored preset locks.
+import {previewExecutionMigration,applyExecutionMigration,effectiveExecutionBinding,releasePathOnly} from '../src/batch-execution-migration.ts'
+async function migrationFixture(t:any){
+ const s=await runnerFixture(t),batch=await s.runner.fire('task','manual',{batchId:'batch'});s.runner.stop()
+ for(const card of batch.cardIds){const core=s.store.kernel.getTask(card);if(core.current_run_id)s.store.kernel.failRun(card,{expectedRunId:core.current_run_id,outcome:'failed',error:'fixture'});s.store.kernel.db.prepare("UPDATE tasks SET status='blocked',current_run_id=NULL,claim_lock=NULL,claim_expires=NULL,worker_pid=NULL WHERE id=?").run(card)}
+ const binding=batch.turn!.executionBinding!,runtimeRoot=join(s.root,'releases/runtime-bbbbbbbbbbbb'),dir=join(s.root,'releases/evidence/execution-binding-snapshots',binding.sha256)
+ const roles=[]
+ for(const a of binding.agents){const files:any={};await mkdir(join(dir,a.id),{recursive:true});for(const name of ['task-console.json','agent.cordis.yml','capabilities.lock.json']){const bytes=await readFile(join(a.directory,name));await writeFile(join(dir,a.id,name),bytes);files[name]=createHash('sha256').update(bytes).digest('hex')}roles.push({agentId:a.id,files})}
+ await writeFile(join(dir,'snapshot.json'),JSON.stringify({bindingSha256:binding.sha256,runtimeSha256:binding.runtimeSha256,roles}))
+ s.setRuntime('b'.repeat(64));return {...s,batch,binding,dir,options:{runtime:s.runtime,runtimeRoot}}
+}
+test('migration preserves original, records assistance, resolves after reload, refuses second migration',async t=>{
+ const s=await migrationFixture(t),args={taskId:'task',batchId:'batch'},before=JSON.stringify(s.batch.turn),p=await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ assert.equal(p.binding.runtimeSha256,'b'.repeat(64));await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p.previewSha256,reason:'platform fix'},s.options)
+ assert.equal(JSON.stringify(s.batch.turn),before);assert.equal(effectiveExecutionBinding(s.store.kernel.db,s.binding).sha256,p.binding.sha256)
+ assert.equal(s.store.kernel.db.prepare('SELECT count(*) AS n FROM dsh_studio_interventions').get().n,1)
+ await verifyExecutionBinding(s.ctx,effectiveExecutionBinding(s.store.kernel.db,s.binding),'task','batch','a',s.runtime)
+ const reloaded=new EventStore(join(s.root,'store'));await reloaded.load();assert.equal(effectiveExecutionBinding(reloaded.kernel.db,reloaded.s.batches.get('batch')!.turn!.executionBinding!).sha256,p.binding.sha256);reloaded.kernel.db.close()
+ await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/already-migrated/)
+ s.store.kernel.db.prepare("UPDATE dsh_execution_binding_migrations SET original_sha='bad'").run();assert.throws(()=>effectiveExecutionBinding(s.store.kernel.db,s.binding),/invalid-overlay/)
+})
+test('migration refuses stale preview, authority drift, untrusted evidence and dispatchable queue',async t=>{
+ const s=await migrationFixture(t),args={taskId:'task',batchId:'batch'},p=await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ await assert.rejects(applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:'0'.repeat(64),reason:'fix'},s.options),/preview-changed/)
+ await s.save('a',{model:'provider/changed'});await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/authority-drift/)
+ await s.save('a',{model:'provider/model'});await writeFile(join(s.dir,'a/task-console.json'),'{}');await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/snapshot-hash/)
+ s.store.kernel.db.prepare("UPDATE tasks SET status='ready' WHERE id=?").run(s.batch.cardIds[0]);await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/not-quiescent/)
+})
+test('path-only comparator rejects YAML policy, module or foreign root changes',()=>{
+ const old="- id: mcp-a\n  name: '/r/runtime-aaaaaaaaaaaa/lib/filtered-mcp-client.js'\n  config: true",current=old.replace('aaaaaaaaaaaa','bbbbbbbbbbbb')
+ assert.ok(releasePathOnly(old,current,'/r/runtime-bbbbbbbbbbbb'))
+ assert.ok(!releasePathOnly(old,current.replace('true','false'),'/r/runtime-bbbbbbbbbbbb'))
+ assert.ok(!releasePathOnly(old,current.replace('filtered-mcp-client','evil'),'/r/runtime-bbbbbbbbbbbb'))
+ assert.ok(!releasePathOnly(old,current,'/foreign/runtime-bbbbbbbbbbbb'))
+})
+
+test('stopping while reconciliation waits cannot dispatch a newly ready card',async t=>{
+ const s=await runnerFixture(t),batch=await s.runner.fire('task','manual',{batchId:'batch'})
+ let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(r=>release=r),started=new Promise<void>(r=>entered=r)
+ ;(s.runner as any).reconcileProgressOperations=async()=>{entered();await gate}
+ const ticking=s.runner.tick();await started
+ const target=batch.cardIds[1];s.store.kernel.db.prepare("UPDATE tasks SET status='ready' WHERE id=?").run(target)
+ const before=s.store.kernel.listEvents(target).length,runCount=s.store.kernel.listRuns(target).length,sessions=s.sessions.length
+ s.runner.stop();release();await ticking
+ assert.equal(s.store.kernel.listRuns(target).length,runCount);assert.equal(s.store.kernel.listEvents(target).length,before);assert.equal(s.sessions.length,sessions)
+})
+test('claim queue checks lifecycle inside the atomic transition',async t=>{
+ const s=await runnerFixture(t),batch=await s.runner.fire('task','manual',{batchId:'batch'}),target=batch.cardIds[1]
+ s.store.kernel.db.prepare("UPDATE tasks SET status='ready' WHERE id=?").run(target)
+ let active=true;const queued=s.store.claimCard(target,'never','never',1,false,()=>active);active=false
+ assert.equal(await queued,undefined);assert.equal(s.store.kernel.listRuns(target).length,0)
+})
+test('apply rejects archive during final verification; migration remains absent',async t=>{
+ const s=await migrationFixture(t),args={taskId:'task',batchId:'batch'},p=await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ let checks=0;const options={...s.options,quiescent:()=>{checks++;if(checks===3)s.store.s.batches.get('batch')!.archivedAt='now';return true}}
+ await assert.rejects(applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p.previewSha256,reason:'fix'},options),/migration-context/)
+ assert.equal(effectiveExecutionBinding(s.store.kernel.db,s.binding).sha256,s.binding.sha256)
+})
+
+test('settled historical ready rows do not block migration but any durable claim still does',async t=>{
+ const s=await migrationFixture(t),args={taskId:'task',batchId:'batch'}
+ s.store.kernel.db.prepare("INSERT INTO dsh_batches(id,spec_id,fired_at,fired_by,settled_at) VALUES('historical','task',1,'manual',2)").run()
+ const id='historical-card';s.store.kernel.db.prepare("INSERT INTO tasks(id,title,body,status,created_by,created_at) VALUES(?,'history','','ready','fixture',1)").run(id)
+ s.store.kernel.db.prepare("INSERT INTO dsh_card_bindings(card_id,spec_id,batch_id,position,brief) VALUES(?,'task','historical',0,'')").run(id)
+ await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ s.store.kernel.db.prepare("UPDATE tasks SET claim_lock='stale' WHERE id=?").run(id)
+ await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/not-quiescent/)
+})

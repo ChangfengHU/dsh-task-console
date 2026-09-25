@@ -528,9 +528,9 @@ export class EventStore {
     return { graphId: batchId, taskId, batch: { id: batch.id, firedAt: batch.fired_at, settledAt: batch.settled_at, outcome: batch.outcome }, live: { tasks, links, runs }, events, ...(after === undefined ? {} : { eventPage: { after, next: events.at(-1)?.id ?? after, hasMore } }) }
   }
 
-  async claimCard(cardId: string, externalRunId: string, sessionId: string, attempt: number, fromReview = false): Promise<ClaimResult | undefined> {
+  async claimCard(cardId: string, externalRunId: string, sessionId: string, attempt: number, fromReview = false, canClaim:()=>boolean=()=>true): Promise<ClaimResult | undefined> {
     return this.transition(
-      () => this.tasks.get(this.state.cards.get(cardId)?.taskId ?? '')?.archivedAt || this.s.batches.get(this.s.cards.get(cardId)?.batchId ?? '')?.archivedAt || preparationBarrier(this.kernel.db,cardId) ? undefined : this.kernel.claimTask(cardId, { fromReview }),
+      () => !canClaim() || this.tasks.get(this.state.cards.get(cardId)?.taskId ?? '')?.archivedAt || this.s.batches.get(this.s.cards.get(cardId)?.batchId ?? '')?.archivedAt || preparationBarrier(this.kernel.db,cardId) ? undefined : this.kernel.claimTask(cardId, { fromReview }),
       claim => {
         if (!claim) return undefined
         this.kernel.db.prepare(`INSERT INTO dsh_run_bindings(external_run_id, core_run_id, session_id) VALUES (?, ?, ?)`).run(externalRunId, claim.run.id, sessionId)

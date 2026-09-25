@@ -1,3 +1,4 @@
+import {previewExecutionMigration,applyExecutionMigration} from './batch-execution-migration.ts'
 import {uploadStudioPreview} from './studio-upload-host.js'
 import {assertStudioProgressWritable} from './studio-progress.js'
 import type {StudioConfigBinding} from './studio-config.js'
@@ -1366,6 +1367,15 @@ export class TaskConsoleService extends TypertRemoteService {
       if(!host)throw Error('studio-known-reconcile-provider-unavailable')
       return pollStudioOperation(host.config,operation)
     }))
+  }
+
+  async previewExecutionMigration(payload:string):Promise<string>{
+    await this.ready
+    return JSON.stringify(await previewExecutionMigration(this.runner.store,this.ctx,JSON.parse(payload),{quiescent:()=>this.runner.executionMigrationQuiescent()}))
+  }
+  async applyExecutionMigration(payload:string):Promise<string>{
+    await this.ready
+    return JSON.stringify(await applyExecutionMigration(this.runner.store,this.ctx,JSON.parse(payload),{quiescent:()=>this.runner.executionMigrationQuiescent()}))
   }
 
   async unblockCard(payload: string): Promise<string> {

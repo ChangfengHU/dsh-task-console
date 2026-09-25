@@ -1,3 +1,4 @@
+import {effectiveExecutionBinding,assertEffectiveBinding,executionMigrationSha} from './batch-execution-migration.ts'
 import {StudioProgressReconcile,PROGRESS_POLL_LIMITS} from './studio-progress-reconcile.js'
 import {StudioOperations} from './studio-operations.js'
 import {StudioProgress,registerStudioProgress,studioProgressPending,studioProgressResume} from './studio-progress.js'
@@ -216,10 +217,15 @@ export class TaskRunner {
     this.ticking = true
     try {
       await this.reconcilePreparations()
+      if(this.stopped)return
       await this.reconcileProgressOperations()
+      if(this.stopped)return
       await this.expireBlockedPatrols()
+      if(this.stopped)return
       await this.wakeDueCards()
+      if(this.stopped)return
       await this.fireDueCron()
+      if(this.stopped)return
       await this.dispatch()
     } finally { this.ticking = false }
   }
@@ -373,7 +379,9 @@ export class TaskRunner {
 
   /** Promote, claim, spawn — bounded by the in-progress cap. */
   private async dispatch(): Promise<void> {
+    if(this.stopped)return
     await this.store.openReadyGates()
+    if(this.stopped)return
     const s = this.store.s
     this.store.kernel.promoteReadyTasks()
     const core = this.store.kernel.listTasks()
@@ -391,6 +399,7 @@ export class TaskRunner {
       .map(row => s.cards.get(row.id)).filter(Boolean) as Card[]
     ready.sort((a, b) => a.batchId.localeCompare(b.batchId) || Number(a.role === 'notifier') - Number(b.role === 'notifier') || a.index - b.index)
     for (const c of ready) {
+      if(this.stopped)return
       if (inProgress >= this.maxInProgress) break
       if(preparationBarrier(this.store.kernel.db,c.id))continue
       const template = this.store.tasks.get(c.taskId); if (!template || template.archivedAt) continue
@@ -530,7 +539,7 @@ export class TaskRunner {
   private async failInitialPreflight(task: TaskSpec, first: Card, problem: string): Promise<void> {
     const runId = `${first.id}#1`
     const failure = `预检不过:${problem}`
-    const claim = await this.store.claimCard(first.id, runId, '', 1)
+    const claim = await this.store.claimCard(first.id, runId, '', 1,false,()=>!this.stopped)
     if (claim) {
       await this.store.transition(
         () => this.store.kernel.failRun(first.id, { expectedRunId: claim.run.id, outcome: 'failed', error: failure }),
@@ -556,13 +565,18 @@ export class TaskRunner {
 
   // ── one run ───────────────────────────────────────────────────────────
 
+  public executionMigrationQuiescent(){return this.flights.size===0&&this.preparationRetiring.size===0}
+
   private async startRun(task: TaskSpec, batch: Batch, card: Card): Promise<void> {
+    if(this.stopped)return
     const presets = (this.ctx as any).get('agentPresets')
     const coreTask = this.store.kernel.getTask(card.id)
     if (!coreTask || !['ready', 'review'].includes(coreTask.status)||preparationBarrier(this.store.kernel.db,card.id)) return
     const fromReview = coreTask.status === 'review'
     const profileId = coreTask.assignee ?? card.agentId
-    const binding=batch.turn?.executionBinding
+    const originalBinding=batch.turn?.executionBinding
+    let binding=originalBinding,migrationError:unknown
+    try{if(originalBinding)binding=effectiveExecutionBinding(this.store.kernel.db,originalBinding)}catch(error){migrationError=error}
     let preset:any,spec:Awaited<ReturnType<typeof readSpec>>,bindingStartupError=false
     try{preset=await presets.resolve(profileId);spec=await readSpec(dirname(String(preset.path)))}catch(e){if(!binding)throw e;bindingStartupError=true;preset={id:profileId,name:profileId};spec=null}
     const agentName = spec?.name ?? preset.name ?? preset.id
@@ -589,7 +603,7 @@ export class TaskRunner {
     const resumeFacts = [card.runIds.length ? await this.operationOutcome?.({task,batch,card,sessionId,profileId}) : undefined,task.design?.progressPolicy==='studio-bounded-v1'?studioProgressResume(this.store.kernel,card.id,task.cwd):undefined].filter(Boolean).join('\n')
     const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}${resumeFacts ? '\n[RESUME FACTS]\n'+resumeFacts : ''}${previousWait ? `\n[RESUMED DURABLE WAIT]\nDue: ${new Date(previousWait.wake_at).toISOString()}\n${previousWait.reason}\nContinue verification; do not repeat completed side effects.` : ''}`
     const messageId = randomUUID()
-    const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview)
+    const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview,()=>!this.stopped)
     if (!claim) return
     const flight: Flight = {
       ...(binding?{executionBinding:binding,boundFallback:binding.fallback}:{}),
@@ -611,8 +625,10 @@ export class TaskRunner {
       assertStartupActive()
       try{await this.checkBatchWorkspace(task,batch)}catch(error){await this.finishBlocked(flight,error instanceof Error?error.message:'studio-workspace-invalid','capability');return}
       if(binding){
+        if(migrationError)throw migrationError
+        assertEffectiveBinding(this.store.kernel.db,originalBinding!,binding)
         if(bindingStartupError)throw new ExecutionBindingError('preset-unavailable')
-        await verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity)
+        await (assertEffectiveBinding(this.store.kernel.db,originalBinding!,binding),verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity))
       }
       // Host preflight runs after a durable claim, before any model or paid work.
       const blocked = await this.beforeStart?.({ task, batch, card, sessionId, profileId })
@@ -632,9 +648,9 @@ export class TaskRunner {
             // Return the created handle before rejecting setup so finishBlocked
             // can dispose it. No prompt is dispatched until verification passes.
             try{
-              await verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity)
+              await (assertEffectiveBinding(this.store.kernel.db,originalBinding!,binding),verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity))
               await presets.mount(agentCtx,preset.id)
-              await verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity)
+              await (assertEffectiveBinding(this.store.kernel.db,originalBinding!,binding),verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity))
             }catch(error){setupFailure=error instanceof ExecutionBindingError?error:new ExecutionBindingError('mount-unavailable')}
           },
         })
@@ -799,8 +815,8 @@ export class TaskRunner {
       } catch { /* cosmetic */ }
       assertStartupActive()
       if(binding){
-        const observed=await verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity)
-        this.store.kernel.recordEvent(card.id,'execution_binding_verified',{bindingSha256:binding.sha256,runtimeSha256:binding.runtimeSha256,agentId:profileId,selection:observed.selection,permission:observed.permission,specSha256:observed.specSha256,compositionSha256:observed.compositionSha256,capabilitySha256:observed.capabilitySha256,skillsSha256:observed.skillsSha256},flight.coreRunId)
+        const observed=await (assertEffectiveBinding(this.store.kernel.db,originalBinding!,binding),verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity))
+        this.store.kernel.recordEvent(card.id,'execution_binding_verified',{originalBindingSha256:originalBinding!.sha256,migrationOverlaySha256:executionMigrationSha(this.store.kernel.db,batch.id),bindingSha256:binding.sha256,runtimeSha256:binding.runtimeSha256,agentId:profileId,selection:observed.selection,permission:observed.permission,specSha256:observed.specSha256,compositionSha256:observed.compositionSha256,capabilitySha256:observed.capabilitySha256,skillsSha256:observed.skillsSha256},flight.coreRunId)
       }
       try{await this.checkBatchWorkspace(task,batch)}catch(error){await this.finishBlocked(flight,error instanceof Error?error.message:'studio-workspace-invalid','capability');return}
       flight.handle.agent.followup({ id: messageId, role: 'user', content: [{ type: 'text', text }], source: { kind: 'user' } })
@@ -921,10 +937,12 @@ export class TaskRunner {
       if (fallback && startupFallbackAllowed(reason, { used: f.fallbackUsed, toolCalled: f.toolCalled, terminal: f.terminal, provider: f.modelProvider }, fallback.fromProvider)) {
         f.fallbackUsed = true // Reserve once before async resolution or duplicate events.
         try {
+          if(f.executionBinding){assertEffectiveBinding(this.store.kernel.db,this.store.s.batches.get(this.store.s.cards.get(f.cardId)!.batchId)!.turn!.executionBinding!,f.executionBinding)}
           if(f.executionBinding)await verifyExecutionBinding(this.ctx,f.executionBinding,f.taskId,this.store.s.cards.get(f.cardId)!.batchId,f.profileId,this.executionIdentity)
           const resolved = await (this.ctx as any).get('llm').resolveCallConfig({ provider: fallback.provider, model: fallback.model })
           if(f.executionBinding&&(resolved.provider!==fallback.provider||resolved.model!==fallback.model))throw new ExecutionBindingError('fallback-resolution-drift')
           if (!this.flights.has(f.sessionId)) return
+          if(f.executionBinding){assertEffectiveBinding(this.store.kernel.db,this.store.s.batches.get(this.store.s.cards.get(f.cardId)!.batchId)!.turn!.executionBinding!,f.executionBinding);await verifyExecutionBinding(this.ctx,f.executionBinding,f.taskId,this.store.s.cards.get(f.cardId)!.batchId,f.profileId,this.executionIdentity)}
           f.disposeFallback = installFallbackSelection(f.handle.agent.ctx, { provider: resolved.provider, model: resolved.model })
           const fact = { from: f.modelProvider, to: `${resolved.provider}/${resolved.model}`, code: reason.error.code, stage: 'before-tools' }
           this.store.kernel.recordEvent(f.cardId, 'model_fallback', fact, f.coreRunId)

@@ -82,7 +82,7 @@ export async function executionRuntimeIdentity(root=dirname(dirname(fileURLToPat
  }catch(e){if(e instanceof ExecutionBindingError)throw e;return fail('runtime-unavailable')}
 }
 
-function assertBinding(binding:BatchExecutionBinding,taskId:string,batchId:string){
+export function assertBinding(binding:BatchExecutionBinding,taskId:string,batchId:string){
  const {sha256,...body}=binding??{} as BatchExecutionBinding
  if(body.schemaVersion!==1||body.mode!=='agent-runtime-v1'||body.taskId!==taskId||body.batchId!==batchId||!Array.isArray(body.agents)||sha256!==digest(body))fail('invalid')
 }

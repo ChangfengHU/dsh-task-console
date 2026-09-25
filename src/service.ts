@@ -18,6 +18,7 @@ import { StudioOperations } from './studio-operations.js'
 import { searchStudioAssets } from './studio-asset-search.js'
 import { assertStudioImageRequest, prepareStudioImageRequest } from './studio-image-request.js'
 import { reconcileStudioImageOperation } from './studio-image-reconciliation.js'
+import { reconcileStudioKnownOperation } from './studio-known-operation-reconciliation.js'
 import { requireSettledStudioOperations } from './studio-stage-operations.js'
 import { assertFrozenVoiceSynthesis } from './studio-voice-script.js'
 import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard, downloadStudioAsset } from './studio-host.js'
@@ -1355,6 +1356,16 @@ export class TaskConsoleService extends TypertRemoteService {
     const persistence=(this.ctx as any).get('sessionPersistence')
     if(!persistence?.inspect)throw Error('studio-image-reconcile-original-session-required')
     return JSON.stringify(await reconcileStudioImageOperation(this.runner.store,JSON.parse(payload),id=>persistence.inspect(id)))
+  }
+
+  /** Explicit operator action; no Agent tool, model evidence, or automatic unblock. */
+  async reconcileStudioKnownOperation(payload:string):Promise<string>{
+    return JSON.stringify(await reconcileStudioKnownOperation(this.runner.store,JSON.parse(payload),async operation=>{
+      const server=operation.kind==='imageCalls'?'vyibc-image':'vyibc-voice'
+      const host=this.hostMcp().find(h=>h.serverName===server&&h.live)
+      if(!host)throw Error('studio-known-reconcile-provider-unavailable')
+      return pollStudioOperation(host.config,operation)
+    }))
   }
 
   async unblockCard(payload: string): Promise<string> {

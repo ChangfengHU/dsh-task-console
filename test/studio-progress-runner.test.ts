@@ -8,9 +8,10 @@ import {pathToFileURL} from 'node:url'
 import {ToolRuntime,defineTool} from '@deepseek-ai/dsh-tools'
 import {TaskRunner} from '../src/runner.ts'
 import {EventStore} from '../src/tasks.ts'
+import {StudioProgressReconcile} from '../src/studio-progress-reconcile.ts'
 import {StudioProgress,studioProgressPending} from '../src/studio-progress.ts'
 
-async function fixture(t:any,options:{disposeFails?:boolean,legacy?:boolean,native?:boolean,taskPatch?:any}={}){
+async function fixture(t:any,options:{disposeFails?:boolean,legacy?:boolean,native?:boolean,taskPatch?:any,pollProgressOperation?:any,now?:()=>number}={}){
  const root=await mkdtemp(join(tmpdir(),'studio-progress-')),preset=join(root,'a');await mkdir(preset)
  await writeFile(join(preset,'task-console.json'),JSON.stringify({id:'a',name:'A',description:'',persona:'',model:'p/m',effort:'',tools:[],mcpTools:{},skills:[]}))
  const require=createRequire(import.meta.url)
@@ -30,13 +31,13 @@ async function fixture(t:any,options:{disposeFails?:boolean,legacy?:boolean,nati
   rec.agent={ctx:agentCtx,session:{id:opts.sessionId},followup:(m:any)=>rec.messages.push(m)};sessions.push(rec);await opts.setup({})
   return{agent:rec.agent,dispose:async()=>{if(options.disposeFails)throw Error('fixture stop failed');await rec.beforeDispose?.();rec.disposed=true}}
  }}}
- const store=new EventStore(join(root,'store')),runner=new TaskRunner(ctx,store,{registerStudioTools:async()=>()=>{}})
+ const store=new EventStore(join(root,'store')),runner=new TaskRunner(ctx,store,{registerStudioTools:async()=>()=>{},pollProgressOperation:options.pollProgressOperation,now:options.now})
  await runner.start();t.after(async()=>{runner.stop();store.kernel.db.close();await rm(root,{recursive:true,force:true})})
  const task:any={id:'T',title:'fixture',brief:'fixture',trigger:{kind:'once'},participants:[{agentId:'a'}],cwd:root,timeoutSec:7200,onFail:'retry',maxTries:3,enabled:true,createdAt:'x',design:{evidenceContract:'studio-video-v1',failurePolicy:{maxAttempts:3},...(!options.legacy?{progressPolicy:'studio-bounded-v1'}:{})},...options.taskPatch}
  await store.append({t:'task/created',at:'x',taskId:'T',task});const batch=await runner.fire('T','manual')
  const end=async(rec:any)=>{const f=[...(runner as any).flights.values()].find((x:any)=>x.sessionId===rec.agent.session.id);await (runner as any).onTurnEnd(f,{kind:'error',error:{code:'STUDIO_PROGRESS_GUARD'}})}
  const steps=async(rec:any)=>{for(let i=1;i<=80;i++)await rec.hooks.get('agent/pre-step')({agent:rec.agent,turn:0,step:i},async()=>({kind:'enter'}));await assert.rejects(()=>rec.hooks.get('agent/pre-step')({agent:rec.agent,turn:0,step:81},async()=>({kind:'enter'})),/STUDIO_PROGRESS_GUARD/)}
- return{root,store,runner,sessions,batch,task,end,steps}
+ return{root,ctx,store,runner,sessions,batch,task,end,steps}
 }
 
 test('80-step native boundary fails a run, confirmed disposal precedes bounded fresh-session retry and truthful resume',async t=>{
@@ -147,4 +148,81 @@ test('accepted terminal cannot mask a superseded kernel claim',async t=>{
  f.store.kernel.db.prepare('UPDATE tasks SET current_run_id=? WHERE id=?').run(old+100,cardId)
  await assert.rejects(()=>nativeBoundary(rec),/STUDIO_PROGRESS_GUARD: stale-run/)
  assert.equal((await nativeCall(rec,'task_complete',{summary:'again'},'late')).isError,true)
+})
+
+function pendingVoice(f:any,jobId:string|null='known-job'){
+ const db=f.store.kernel.db
+ db.exec('CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,intent TEXT,tool TEXT,kind TEXT,units INTEGER,state TEXT,job_id TEXT,result TEXT)')
+ db.prepare('INSERT INTO dsh_studio_operations VALUES(?,?,?,?,?,?,?,?,?)').run('T',f.batch.id,'original-intent','vyibc-voice_synthesize','voiceSegments',1,'submitted',jobId,'{}')
+}
+test('new marked progress stop counts failure once and host read resumes without submitting or resetting budget',async t=>{
+ let polls=0
+ const f=await fixture(t,{pollProgressOperation:async(op:any)=>{polls++;return{name:'vyibc-voice_status',args:{job_id:op.job_id},result:{status:'completed',job_id:op.job_id}}}})
+ pendingVoice(f);await f.steps(f.sessions[0]);await f.end(f.sessions[0]);assert.equal(f.sessions.length,1)
+ assert.equal(f.store.s.cards.get(f.batch.cardIds[0])!.consecutiveFailures,1)
+ await f.runner.tick();assert.equal(polls,1);assert.equal(f.sessions.length,2)
+ assert.equal(f.store.s.cards.get(f.batch.cardIds[0])!.consecutiveFailures,1)
+ const row=f.store.kernel.db.prepare('SELECT * FROM dsh_studio_operations').get();assert.equal(row.state,'completed');assert.equal(row.units,1);assert.equal(row.intent,'original-intent')
+ await f.runner.tick();assert.equal(polls,1)
+})
+test('no-ID, exhausted model retries, historical/manual blocks and unconfirmed disposal never auto-resume',async t=>{
+ for(const variant of ['no-id','maxtries','historical','manual','dispose']){
+  let polls=0
+  const f=await fixture(t,{disposeFails:variant==='dispose',taskPatch:variant==='maxtries'?{maxTries:1}:undefined,pollProgressOperation:async(op:any)=>{polls++;return{name:'vyibc-voice_status',args:{job_id:op.job_id},result:{status:'completed'}}}})
+  pendingVoice(f,variant==='no-id'?null:'known');await f.steps(f.sessions[0]);await f.end(f.sessions[0])
+  if(variant==='historical')f.store.kernel.db.prepare('DELETE FROM dsh_studio_progress_reconcile').run()
+  if(variant==='manual')f.store.kernel.recordEvent(f.batch.cardIds[0],'operator-block',{reason:'manual hold'})
+  await f.runner.tick();assert.equal(polls,0,variant);assert.equal(f.sessions.length,1,variant)
+  if(variant==='maxtries')assert.equal(f.store.s.cards.get(f.batch.cardIds[0])!.status,'failed')
+ }
+})
+test('late host poll cannot update original receipt or resume after an intervening operator event',async t=>{
+ let resolve:any,entered:any;const gate=new Promise<void>(r=>entered=r)
+ const f=await fixture(t,{pollProgressOperation:async(op:any)=>{entered();return new Promise(r=>{resolve=()=>r({name:'vyibc-voice_status',args:{job_id:op.job_id},result:{status:'completed'}})})}})
+ pendingVoice(f);await f.steps(f.sessions[0]);await f.end(f.sessions[0]);const ticking=f.runner.tick();await gate
+ f.store.kernel.recordEvent(f.batch.cardIds[0],'operator-block',{reason:'manual hold'});resolve();await ticking
+ assert.equal(f.sessions.length,1);assert.equal(f.store.kernel.db.prepare('SELECT state FROM dsh_studio_operations').get().state,'submitted')
+})
+
+test('restart retains durable marker and failures; due polling recovers once',async t=>{
+ let polls=0
+ const poll=async(op:any)=>{polls++;return{name:'vyibc-voice_status',args:{job_id:op.job_id},result:{status:'completed'}}}
+ const f=await fixture(t,{pollProgressOperation:poll});pendingVoice(f)
+ await f.steps(f.sessions[0]);await f.end(f.sessions[0]);f.runner.stop()
+ const store=new EventStore(join(f.root,'store')),runner=new TaskRunner(f.ctx,store,{registerStudioTools:async()=>()=>{},pollProgressOperation:poll})
+ t.after(()=>{runner.stop();store.kernel.db.close()})
+ await runner.start();assert.equal(polls,1);assert.equal(f.sessions.length,2)
+ assert.equal(store.s.cards.get(f.batch.cardIds[0])!.consecutiveFailures,1)
+})
+test('poll interval and persisted total-attempt cap never reset failed-run or paid counters',async t=>{
+ let now=Date.now(),polls=0
+ const f=await fixture(t,{now:()=>now,pollProgressOperation:async(op:any)=>{polls++;return{name:'vyibc-voice_status',args:{job_id:op.job_id},result:{status:'running'}}}})
+ pendingVoice(f);await f.steps(f.sessions[0]);await f.end(f.sessions[0])
+ await f.runner.tick();assert.equal(polls,1);await f.runner.tick();assert.equal(polls,1)
+ for(let i=0;i<14;i++){now+=31_000;await f.runner.tick()}
+ assert.equal(polls,12);assert.equal(f.sessions.length,1)
+ assert.equal(f.store.kernel.db.prepare('SELECT state FROM dsh_studio_progress_reconcile').get().state,'exhausted')
+ assert.equal(f.store.s.cards.get(f.batch.cardIds[0])!.consecutiveFailures,1)
+ assert.equal(f.store.kernel.db.prepare('SELECT units FROM dsh_studio_operations').get().units,1)
+})
+
+test('durable poll lease excludes a second claimant and expired lost response consumes an attempt',async t=>{
+ let now=Date.now(),polls=0
+ const f=await fixture(t,{now:()=>now,pollProgressOperation:async(op:any)=>{polls++;return{name:'vyibc-voice_status',args:{job_id:op.job_id},result:{status:'completed'}}}})
+ pendingVoice(f);await f.steps(f.sessions[0]);await f.end(f.sessions[0])
+ const ledger=new StudioProgressReconcile(f.store),card=f.store.s.cards.get(f.batch.cardIds[0])!,input={task:f.task,batch:f.batch,card},row=ledger.row(card.id)
+ const token=ledger.reserve(input,row,now);assert.ok(token)
+ assert.equal(new StudioProgressReconcile(f.store).reserve(input,row,now),undefined)
+ await f.runner.tick();assert.equal(polls,0)
+ now+=91_000;assert.equal(ledger.current(input,token!,now),false)
+ await f.runner.tick();assert.equal(polls,1);assert.equal(f.sessions.length,2);assert.equal(ledger.row(card.id).attempts,2)
+})
+test('live claim and batch archive deny automatic reconciliation without changing the paid row',async t=>{
+ for(const reason of ['lease','archive']){
+  let polls=0;const f=await fixture(t,{pollProgressOperation:async()=>{polls++;throw Error('not expected')}})
+  pendingVoice(f);await f.steps(f.sessions[0]);await f.end(f.sessions[0])
+  if(reason==='lease')f.store.kernel.db.prepare('UPDATE tasks SET claim_lock=?,claim_expires=? WHERE id=?').run('other-worker',9999999999,f.batch.cardIds[0])
+  else f.store.s.batches.get(f.batch.id)!.archivedAt='now'
+  await f.runner.tick();assert.equal(polls,0);assert.equal(f.sessions.length,1);assert.equal(f.store.kernel.db.prepare('SELECT state FROM dsh_studio_operations').get().state,'submitted')
+ }
 })

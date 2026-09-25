@@ -171,6 +171,12 @@ export class TaskConsoleService extends TypertRemoteService {
     const studioHostDeps={configPath:config.studioConfigPath}
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
+      pollProgressOperation:async operation=>{
+        const server=operation.kind==='imageCalls'?'vyibc-image':operation.kind==='voiceSegments'?'vyibc-voice':undefined
+        const host=server&&this.hostMcp().find(h=>h.serverName===server&&h.live)
+        if(!host)throw Error('studio-operation-poll-host-unavailable')
+        return pollStudioOperation(host.config,operation)
+      },
       reconcilePreparationOperations:async request=>{
         const prep=new StudioPreparation(this.runner.store),ops=new StudioOperations(this.runner.store)
         for(const operation of prep.pending(request)){

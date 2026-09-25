@@ -128,7 +128,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
     if(limits.imageBatches!==undefined)(used as any).imageBatches=operations.filter((o:any)=>o.kind==='imageCalls').length
     return {used,limits,operations,unknown:operations.some((o:any)=>['dispatching','unknown'].includes(o.state))}
   }
-  async invoke(input:any,raw:string,args:any,invoke:(args:any)=>Promise<any>,beforeDispatch?:()=>unknown,prepareDispatch?:()=>Promise<unknown>){
+  async invoke(input:any,raw:string,args:any,invoke:(args:any)=>Promise<any>,beforeDispatch?:()=>unknown,prepareDispatch?:()=>Promise<unknown>,reconcile?:{operation:any;canApply:()=>boolean}){
     if(/(?:publish_video|post_video|upload_video|register_published_video)$/.test(raw))throw Error('studio-publication-not-authorized')
     if(/vyibc-image_list_results$/.test(raw))throw Error('studio-image-global-results-not-a-job-receipt: poll get_task with the original submitted taskId and use only its succeeded items by idx. A running item is not completed. The global latest-results feed can contain other tasks; use the asset library for intentional reuse instead.')
     const d=definition(raw,args)
@@ -140,7 +140,15 @@ CREATE TABLE IF NOT EXISTS dsh_studio_operations(task_id TEXT,batch_id TEXT,inte
     if(!d){const result=await invoke(args),value=unpack(result),requestedId=job(args),returnedId=job(value),id=requestedId??returnedId,status=terminal(value)
       // Only a recognized read/status endpoint may advance a receipt. A failed poll,
       // mismatched job identity, or unrelated tool result is not job completion.
-      if(statusTool(raw)&&id&&(!returnedId||returnedId===id)&&!rejected(result,value)&&status&&(done.has(status)||failedStates.has(status)))this.db.prepare("UPDATE dsh_studio_operations SET state=? WHERE task_id=? AND batch_id=? AND job_id=?").run(failedStates.has(status)?'failed':'completed',input.task.id,input.batch.id,id)
+      if(statusTool(raw)&&id&&(!returnedId||returnedId===id)&&!rejected(result,value)&&status&&(done.has(status)||failedStates.has(status))){
+        const next=failedStates.has(status)?'failed':'completed'
+        if(reconcile)this.db.transaction(()=>{
+          const op=reconcile.operation,expected=op.kind==='imageCalls'?'vyibc-image_get_task':op.kind==='voiceSegments'?'vyibc-voice_status':null
+          if(!expected||raw!==expected||id!==op.job_id||!['dispatching','unknown','submitted'].includes(op.state)||!reconcile.canApply())return
+          this.db.prepare('UPDATE dsh_studio_operations SET state=? WHERE task_id=? AND batch_id=? AND intent=? AND kind=? AND tool=? AND job_id=? AND state=?').run(next,input.task.id,input.batch.id,op.intent,op.kind,op.tool,op.job_id,op.state)
+        })()
+        else this.db.prepare("UPDATE dsh_studio_operations SET state=? WHERE task_id=? AND batch_id=? AND job_id=?").run(next,input.task.id,input.batch.id,id)
+      }
       return result
     }
     const intent=hash({raw,args:canonical(args)}),key=[input.task.id,input.batch.id,intent]

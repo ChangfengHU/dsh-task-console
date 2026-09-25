@@ -1,3 +1,5 @@
+import {StudioProgressReconcile,PROGRESS_POLL_LIMITS} from './studio-progress-reconcile.js'
+import {StudioOperations} from './studio-operations.js'
 import {StudioProgress,registerStudioProgress,studioProgressPending,studioProgressResume} from './studio-progress.js'
 import {StudioInterventions} from './studio-interventions.js'
 import {captureExecutionBinding,verifyExecutionBinding,withBoundPreset,executionRuntimeIdentity,ExecutionBindingError,type BatchExecutionBinding,type BoundFallback} from './batch-execution-binding.ts'
@@ -76,6 +78,7 @@ export interface RunnerOptions {
   now?: () => number
   onBatchSettled?: (batch: Batch) => void | Promise<void>
   onSessionCreated?: (sessionId: string) => void | Promise<void>
+  pollProgressOperation?: (operation:any)=>Promise<{name:string;args:any;result:any}>
   reconcilePreparationOperations?: (request:any)=>Promise<void>
   registerWorkflowTools?: (agentCtx:any,input:CompletionCheck,isActive:()=>boolean)=>Promise<()=>void>
   registerStudioTools?: (agentCtx: any, input: CompletionCheck, isActive: () => boolean, submitReview: () => Promise<void>) => Promise<() => void>
@@ -125,6 +128,7 @@ export class TaskRunner {
   private readonly onBatchSettled?: (batch: Batch) => void | Promise<void>
   private readonly onSessionCreated?: (sessionId: string) => void | Promise<void>
   private stopped=false
+  private readonly pollProgressOperation?:RunnerOptions['pollProgressOperation']
   private readonly reconcilePreparationOperations?:RunnerOptions['reconcilePreparationOperations']
   private readonly registerWorkflowTools?:RunnerOptions['registerWorkflowTools']
   private readonly registerStudioTools?: RunnerOptions['registerStudioTools']
@@ -146,6 +150,7 @@ export class TaskRunner {
     this.clock = opts.now ?? (() => Date.now())
     this.onBatchSettled = opts.onBatchSettled
     this.onSessionCreated = opts.onSessionCreated
+    this.pollProgressOperation = opts.pollProgressOperation
     this.reconcilePreparationOperations = opts.reconcilePreparationOperations
     this.registerWorkflowTools = opts.registerWorkflowTools
     this.registerStudioTools = opts.registerStudioTools
@@ -211,11 +216,41 @@ export class TaskRunner {
     this.ticking = true
     try {
       await this.reconcilePreparations()
+      await this.reconcileProgressOperations()
       await this.expireBlockedPatrols()
       await this.wakeDueCards()
       await this.fireDueCron()
       await this.dispatch()
     } finally { this.ticking = false }
+  }
+
+  private async reconcileProgressOperations():Promise<void>{
+    if(!this.pollProgressOperation)return
+    const ledger=new StudioProgressReconcile(this.store),ops=new StudioOperations(this.store)
+    for(const row of ledger.due(this.clock())){
+      const card=this.store.s.cards.get(row.card_id),batch=card&&this.store.s.batches.get(card.batchId),template=card&&this.store.tasks.get(card.taskId)
+      if(!card||!batch||!template){ledger.db.prepare("UPDATE dsh_studio_progress_reconcile SET state='invalidated' WHERE card_id=? AND run_id=? AND state='waiting'").run(row.card_id,row.run_id);continue}
+      const input={task:taskForBatch(template,batch),batch,card}
+      const stopped=()=>!this.stopped&&![...this.flights.values(),...this.preparationRetiring.values()].some(f=>f.cardId===card.id)
+      if(!stopped())continue
+      const token=await this.store.transition(()=>ledger.reserve(input,row,this.clock()),()=>undefined)
+      if(!token)continue
+      try{
+        const operations=ledger.operations(input)
+        // Ambiguous ownership/no ID or an unsupported provider cannot be guessed.
+        const supported=(op:any)=>typeof op.job_id==='string'&&/^[A-Za-z0-9_.:-]{1,200}$/.test(op.job_id)&&((op.kind==='imageCalls'&&/vyibc-image_generate_image$/.test(op.tool))||(op.kind==='voiceSegments'&&/vyibc-voice_(synthesize|retry_segments)$/.test(op.tool)))
+        if(operations.some((op:any)=>!supported(op)))continue
+        for(const operation of operations.slice(0,PROGRESS_POLL_LIMITS.jobsPerTick)){
+          if(!stopped()||!ledger.current(input,token,this.clock()))break
+          try{
+            const p=await this.pollProgressOperation(operation)
+            await ops.invoke(input,p.name,p.args,async()=>p.result,undefined,undefined,{operation,canApply:()=>stopped()&&ledger.current(input,token,this.clock())})
+          }catch{/* Bounded failed read keeps the reservation and original job. */}
+        }
+        await this.store.transition(()=>stopped()&&ledger.resume(input,token,this.clock()),ok=>ok?{t:'card/ready',at:this.now(),taskId:card.taskId,cardId:card.id}:undefined)
+      }catch{/* Unavailable/corrupt reconciliation evidence stays blocked within its attempt cap. */}
+      finally{ledger.release(input,token)}
+    }
   }
 
   private async disposePreparationHandle(f:Flight):Promise<void> {
@@ -361,13 +396,13 @@ export class TaskRunner {
       const template = this.store.tasks.get(c.taskId); if (!template || template.archivedAt) continue
       const batch = this.store.s.batches.get(c.batchId); if (!batch || batch.settled || batch.archivedAt) continue
       const task = taskForBatch(template, batch)
-      if(task.design?.progressPolicy==='studio-bounded-v1'){
+      if(task.design?.progressPolicy==='studio-bounded-v1'&&!(c.consecutiveFailures>0&&(task.onFail!=='retry'||c.consecutiveFailures>=task.maxTries))){
         const prior=this.store.kernel.db.prepare("SELECT payload FROM task_events WHERE task_id=? AND kind='studio_progress_stopped' ORDER BY id DESC LIMIT 1").get(c.id) as any
         if(prior){
           let blocked:string|undefined
           try{const stopped=JSON.parse(prior.payload);blocked=stopped.stopConfirmed!==true?'studio-progress-session-stop-unconfirmed':studioProgressPending(this.store.kernel.db,{task,batch,card:c})}catch{blocked='studio-progress-operation-state-unavailable'}
           if(blocked){
-            await this.store.transition(()=>this.store.kernel.blockTask(c.id,{reason:blocked!,kind:'capability'}),ok=>ok?{t:'run/blocked',at:this.now(),taskId:task.id,runId:c.runIds.at(-1)!,kind:'capability',reason:blocked!,terminal:true}:undefined)
+            await this.store.transition(()=>{const ok=this.store.kernel.blockTask(c.id,{reason:blocked!,kind:'capability'});if(ok)new StudioProgressReconcile(this.store).bind(c.id);return ok},ok=>ok?{t:'run/blocked',at:this.now(),taskId:task.id,runId:c.runIds.at(-1)!,kind:'capability',reason:blocked!,terminal:true}:undefined)
             continue
           }
         }
@@ -958,7 +993,7 @@ export class TaskRunner {
     this.disarm(f);this.stopHeartbeat(f)
     const card=this.store.s.cards.get(f.cardId)!,batch=this.store.s.batches.get(card.batchId)!,task=taskForBatch(this.store.tasks.get(f.taskId)!,batch)
     const facts=JSON.parse(f.progress.summary(task.cwd))
-    const record=(stopConfirmed:boolean,blocked?:string)=>this.store.kernel.recordEvent(f.cardId,'studio_progress_stopped',{schemaVersion:1,policy:'studio-bounded-v1',sessionId:f.sessionId,stopConfirmed,...facts,...(blocked?{blocked}: {})},f.coreRunId)
+    const record=(stopConfirmed:boolean,blocked?:string)=>this.store.kernel.recordEvent(f.cardId,'studio_progress_stopped',{schemaVersion:1,policy:'studio-bounded-v1',sessionId:f.sessionId,stopConfirmed,...facts,...(blocked?{blocked,...(stopConfirmed?{reconciliationVersion:1}:{})}: {})},f.coreRunId)
     record(false)
     try{await this.disposePreparationHandle(f);f.progressDisposed=true}
     catch{
@@ -972,7 +1007,6 @@ export class TaskRunner {
     let pending:string|undefined
     try{pending=studioProgressPending(this.store.kernel.db,{task,batch,card})}catch{pending='studio-progress-operation-state-unavailable; reconcile original operations before unblocking'}
     record(true,pending)
-    if(pending){await this.finishBlocked(f,'STUDIO_PROGRESS_GUARD: '+JSON.stringify(facts)+'\n'+pending,'capability');return}
     await this.finish(f,'run/failed','failed','STUDIO_PROGRESS_GUARD: '+JSON.stringify(facts))
   }
 
@@ -1012,6 +1046,7 @@ export class TaskRunner {
       const result = await this.store.transition(
         () => {
           const failed = this.store.kernel.failRun(f.cardId, { expectedRunId: f.coreRunId, outcome: mapped, error })
+          if(failed.ok&&mapped==='failed'&&f.progressDisposed)new StudioProgressReconcile(this.store).arm(f.cardId,f.coreRunId)
           if (failed.ok && mapped === 'cancelled' && !this.store.kernel.cancelTask(f.cardId, error ?? '人工取消')) throw new Error(`无法归档已取消任务 ${f.cardId}`)
           return failed
         },

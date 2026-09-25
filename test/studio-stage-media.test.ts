@@ -36,6 +36,7 @@ test('real WAV and PNG metadata bind to host file receipts and recheck without f
  assert.deepEqual(ir.outputs[0].media,{kind:'image',codecName:'png',width:32,height:48,frames:1});assert.equal(ir.qualityApproved,false)
  const original=process.env.FFPROBE_PATH;try{process.env.FFPROBE_PATH='/nonexistent-probe';await verifyStageReceipt(s.input('sound'),ar,s.workflow);await verifyStageReceipt(s.input('visual'),ir,s.workflow);await assert.rejects(registerStageFiles(s.input('sound'),audio,s.workflow,s.db),/ffprobe_unavailable/);assert.deepEqual(s.receipts.get('sound'),ar)}finally{if(original===undefined)delete process.env.FFPROBE_PATH;else process.env.FFPROBE_PATH=original}
  const legacy=structuredClone(ar);delete legacy.outputs[0].media;await assert.rejects(verifyStageReceipt(s.input('sound'),legacy,s.workflow),/media_probe_receipt_missing/)
+ const v2=structuredClone(ar);v2.stageContractVersion=2;delete v2.soundBinding.audioRequirements;await verifyStageReceipt(s.input('sound'),v2,s.workflow)
  const old=structuredClone(ar);delete old.stageContractVersion;delete old.soundBinding;await verifyStageReceipt(s.input('sound'),old,s.workflow)
  const stripped=structuredClone(ar);delete stripped.soundBinding;await assert.rejects(verifyStageReceipt(s.input('sound'),stripped,s.workflow),/missing sound binding/)
  const changed=structuredClone(ar);changed.soundBinding.tracks[0].sha256='b'.repeat(64);await assert.rejects(verifyStageReceipt(s.input('sound'),changed,s.workflow),/Sound binding changed/)
@@ -57,7 +58,7 @@ test('sound registration rejects the real missing music/effects pattern without 
  }
  await s.soundPlan({bgm:[{id:'music',sourcePath:'stages/r1/sound/voice.wav',path:'assets/music/future.wav',start:0,end:0.3}],sfx:[{id:'cue',path:'stages/r1/sound/voice.wav',start:2,end:3}]})
  const r=await registerStageFiles(s.input('sound'),path,s.workflow,s.db)
- assert.equal(r.stageContractVersion,2);assert.equal(r.soundBinding!.tracks.length,3);assert.equal(r.qualityApproved,false)
+ assert.equal(r.stageContractVersion,3);assert.equal(r.soundBinding!.tracks.length,3);assert.equal(r.qualityApproved,false)
  s.script.sha256='b'.repeat(64);await assert.rejects(verifyStageReceipt(s.input('sound'),r,s.workflow),/Frozen script differs/)
 })
 test('new sound registration needs one plan and cannot alias one output twice',async t=>{

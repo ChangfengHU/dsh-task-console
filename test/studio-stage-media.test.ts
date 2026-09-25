@@ -103,3 +103,31 @@ test('signal receipt is bound to real source hash and replay does not re-run FFm
  const corrupt=structuredClone(receipt);corrupt.outputs[0].media.signalEvidence.sha256='b'.repeat(64)
  await assert.rejects(verifyStageReceipt(s.input('sound'),corrupt,s.workflow),/signal receipt is invalid/)
 })
+
+test('confirmed JSON and HTML downloads give exact native recovery schema without body or credential exposure',async t=>{
+ const s=await setup(t)
+ for(const [body,responseKind] of [[JSON.stringify({error:'Authentication required',url:'https://private.test/?token=DO_NOT_LEAK',token:'SECRET_VALUE'}),'json_response'],['<!DOCTYPE html><html><body>private account SECRET_VALUE</body></html>','html_response']]){
+  const path=await s.manifest('sound',['download.wav']);await writeFile(join(s.cwd,'stages/r1/sound/download.wav'),body)
+  await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),(error:any)=>{
+   const detail=JSON.parse(error.message.slice(error.message.indexOf(': ')+2))
+   assert.equal(detail.error_code,'studio-stage-media-invalid');assert.equal(detail.reason,'probe_failed_or_invalid_media');assert.equal(detail.outputIndex,0);assert.equal(detail.responseKind,responseKind)
+   assert.equal(detail.retryable,false);assert.equal(detail.retryAfterRepair,true)
+   assert.equal(detail.recoveryTool.name,'studio_download_asset');assert.deepEqual(Object.keys(detail.recoveryTool.requiredArguments),['id','path'])
+   assert.equal(detail.recoveryTool.sourceOnly.optionalArgument,'sourcePolicy');assert.equal(detail.recoveryTool.sourceOnly.fields.purpose,'video_soundtrack')
+   assert.match(detail.action,/Do not repeat anonymous/);assert.match(detail.action,/do not silently remove required BGM\/SFX/)
+   assert.doesNotMatch(error.message,/Authentication required|SECRET_VALUE|DO_NOT_LEAK|private\.test/);assert.ok(!error.message.includes(s.cwd));return true
+  })
+  assert.equal(s.receipts.has('sound'),false)
+ }
+})
+test('unconfirmed corrupt binary is not mislabeled an auth response; missing ffprobe points only to dependency repair',async t=>{
+ const s=await setup(t),path=await s.manifest('sound',['broken.wav']);await writeFile(join(s.cwd,'stages/r1/sound/broken.wav'),Buffer.from([0xff,0,0x10,0x99]))
+ await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),(error:any)=>{const d=JSON.parse(error.message.split(': ').slice(1).join(': '));assert.equal(d.responseKind,undefined);assert.equal(d.recoveryTool,undefined);assert.equal(d.reason,'probe_failed_or_invalid_media');return true})
+ await writeFile(join(s.cwd,'stages/r1/sound/broken.wav'),'{"error":"Authentication required"}')
+ const original=process.env.FFPROBE_PATH
+ try{
+  process.env.FFPROBE_PATH=join(s.cwd,'missing-ffprobe')
+  await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),(error:any)=>{const d=JSON.parse(error.message.split(': ').slice(1).join(': '));assert.equal(d.reason,'ffprobe_unavailable');assert.equal(d.responseKind,undefined);assert.equal(d.recoveryTool,undefined);assert.match(d.action,/FFPROBE_PATH/);assert.match(d.action,/do not re-download/);return true})
+ }finally{if(original===undefined)delete process.env.FFPROBE_PATH;else process.env.FFPROBE_PATH=original}
+ assert.equal(s.receipts.has('sound'),false)
+})

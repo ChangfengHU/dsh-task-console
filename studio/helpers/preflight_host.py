@@ -1,6 +1,8 @@
 """Run-bound dependency preflight and project-local Git setup. No quality approval is issued."""
 import hashlib,json,os,pathlib,re,shutil,subprocess,sys,time,urllib.request,urllib.parse,urllib.error,socket,ssl
 
+from prepare_execution_assets import prepare_execution_assets
+
 NETWORK_EVENTS=[]
 def retry_read(label,fn):
     """Retry idempotent reads once on transport failure; never hide denial or bad data."""
@@ -103,6 +105,51 @@ def ensure_project_git(root):
     git('var','GIT_AUTHOR_IDENT')
     return {'scope':'project_local_git','identity_ready':True,'push_configured':bool(git('remote')),'automatic_push':False}
 
+def verify_smoke_pixels(early,late):
+    """Decoded video evidence: a moving yellow block and a font-loaded green badge."""
+    def sample(raw):
+        if len(raw)!=108*192*3:raise ValueError('Smoke frame dimensions invalid')
+        badge=raw[(5*108+5)*3:(5*108+5)*3+3]
+        if not (badge[1]>140 and badge[0]<100 and badge[2]<140):raise ValueError('Smoke font load not verified')
+        xs=[]
+        for y in range(30,40):
+            for x in range(108):
+                r,g,b=raw[(y*108+x)*3:(y*108+x)*3+3]
+                if r>180 and g>120 and b<130:xs.append(x)
+        if len(xs)<50:raise ValueError('Smoke animated block missing')
+        return sum(xs)/len(xs)
+    first,last=sample(early),sample(late)
+    if last-first<30:raise ValueError('Smoke GSAP timeline did not advance')
+    return {'firstCenterX':first,'lastCenterX':last,'decodedWidth':108,'timeline_verified':True,'font_loaded_verified':True}
+
+def render_hyperframes_smoke(root,out,runtime,ffmpeg,assets):
+    if assets.get('ok') is not True:raise ValueError('Execution assets unavailable')
+    smoke=out/'hyperframes-smoke';smoke.mkdir(exist_ok=True)
+    for name,key in [('gsap.min.js','gsap'),('Chinese.ttf','font')]:
+        source=pathlib.Path(assets[key]['absolutePath'])
+        if digest(source)!=assets[key]['sha256']:raise ValueError('Execution asset changed')
+        shutil.copyfile(source,smoke/name)
+    (smoke/'index.html').write_text('''<!doctype html><html><head><style>
+    @font-face{font-family:StudioProbe;src:url('Chinese.ttf')}html,body{margin:0;background:#24354b}
+    #root{position:relative;width:1080px;height:1920px}#dot{position:absolute;left:100px;top:300px;width:100px;height:100px;background:#ffcc55}
+    #font-ready{position:absolute;left:20px;top:20px;width:80px;height:80px;background:#ff0000}
+    #chinese{position:absolute;left:80px;top:600px;font-family:StudioProbe;font-size:60px;color:white}
+    </style></head><body><div id="root" data-composition-id="smoke" data-width="1080" data-height="1920" data-duration="1"><div id="dot"></div><div id="font-ready"></div><div id="chinese">中文字体动作测试</div></div>
+    <script src="gsap.min.js"></script><script>
+    window.__timelines={smoke:gsap.timeline({paused:true}).to('#dot',{x:600,duration:1,ease:'none'})};
+    document.fonts.load('60px StudioProbe','中文字体动作测试').then(fonts=>{if(fonts.length&&fonts.every(f=>f.status==='loaded'))document.getElementById('font-ready').style.background='#00ff00'});
+    </script></body></html>''')
+    binary=runtime/'node_modules/hyperframes/bin/hyperframes.mjs'
+    env=dict(os.environ);env['FFMPEG_PATH']=ffmpeg;env['PATH']=str(pathlib.Path(ffmpeg).parent)+os.pathsep+env.get('PATH','');env.setdefault('PUPPETEER_EXECUTABLE_PATH','/usr/bin/google-chrome')
+    target=smoke/'smoke.mp4'
+    completed=subprocess.run(['/usr/bin/node',str(binary),'render','--quality','draft','--output',str(target)],cwd=str(smoke),env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180)
+    (smoke/'render.log').write_bytes(completed.stdout+completed.stderr)
+    if completed.returncode or not target.is_file():raise RuntimeError('HyperFrames render failed')
+    run_cmd([ffmpeg,'-v','error','-i',str(target),'-f','null','-'])
+    samples=[run_cmd([ffmpeg,'-v','error','-ss',str(t),'-i',str(target),'-frames:v','1','-vf','scale=108:192','-pix_fmt','rgb24','-f','rawvideo','-']) for t in (.1,.8)]
+    verification=verify_smoke_pixels(*samples)
+    return {'scope':'actual_hyperframes_smoke_render','path':str(target),'sha256':digest(target),'hyperframes_verified':True,'runtimeAssetsManifestSha256':assets['bundleManifestSha256'],**verification,'quality_pass':False}
+
 def run(task):
     NETWORK_EVENTS.clear()
     cfg=task.get('design',{}).get('studio',task.get('studio',task));root=pathlib.Path(task['cwd'])
@@ -118,6 +165,7 @@ def run(task):
         except Exception as e:
             data={'ok':False,'error_type':type(e).__name__,'http_status':getattr(e,'code',None)};data['proofPath']=write(out/(key+'-proof.json'),data);result['capabilities'][key]=data;result['errors'].append(key)
     check('project_git',lambda:ensure_project_git(root))
+    check('execution_assets',lambda:prepare_execution_assets(root))
     def character():
         p=rpc('character_get',{'character_id':cfg['characterId']})
         if p.get('character_id')!=cfg['characterId'] or not p.get('profile'):raise ValueError('Character not found')
@@ -154,21 +202,7 @@ def run(task):
         return {'scope':'actual_ffmpeg_encode_decode_only','path':str(path),'sha256':digest(path),'hyperframes_verified':False,'quality_pass':False}
     check('frames',frames);check('render',render)
     def hyperframes():
-        smoke=out/'hyperframes-smoke';smoke.mkdir(exist_ok=True)
-        (smoke/'index.html').write_text('<!doctype html><html><head><style>html,body{margin:0;background:#24354b} #dot{position:absolute;left:400px;top:700px;width:280px;height:280px;border-radius:50%;background:#ffcc55}</style></head><body><div data-composition-id="smoke" data-width="1080" data-height="1920" data-duration="0.5"><div id="dot"></div></div></body></html>')
-        binary=runtime/'node_modules/hyperframes/bin/hyperframes.mjs'
-        env=dict(os.environ);env['FFMPEG_PATH']=ffmpeg;env['PATH']=str(pathlib.Path(ffmpeg).parent)+os.pathsep+env.get('PATH','');env.setdefault('PUPPETEER_EXECUTABLE_PATH','/usr/bin/google-chrome')
-        gsap=runtime/'node_modules/gsap/dist/gsap.min.js'
-        if gsap.is_file():
-            shutil.copyfile(gsap,smoke/'gsap.min.js')
-            html=(smoke/'index.html').read_text().replace('</body>','<script src="gsap.min.js"></script><script>window.__timelines=window.__timelines||{};window.__timelines.smoke=gsap.timeline({paused:true}).to("#dot",{x:80,duration:0.5});</script></body>')
-            (smoke/'index.html').write_text(html)
-        target=smoke/'smoke.mp4'
-        completed=subprocess.run(['/usr/bin/node',str(binary),'render','--quality','draft','--output',str(target)],cwd=str(smoke),env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180)
-        (smoke/'render.log').write_bytes(completed.stdout+completed.stderr)
-        if completed.returncode or not target.is_file():raise RuntimeError('HyperFrames render failed')
-        run_cmd([ffmpeg,'-v','error','-i',str(target),'-f','null','-'])
-        return {'scope':'actual_hyperframes_smoke_render','path':str(target),'sha256':digest(target),'hyperframes_verified':True,'quality_pass':False}
+        return render_hyperframes_smoke(root,out,runtime,ffmpeg,result['capabilities']['execution_assets'])
     check('hyperframes',hyperframes)
     result['networkAttempts']=list(NETWORK_EVENTS)
     result['ok']=all(x['ok'] for x in result['capabilities'].values());result['proofPath']=str(out/'preflight.json');write(out/'preflight.json',result)

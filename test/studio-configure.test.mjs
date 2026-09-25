@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,writeFile,readFile,readdir,lstat,rm,cp} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,readFile,readdir,lstat,rm,cp,symlink} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname,join,resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
@@ -71,4 +71,44 @@ test('shipped CLI defaults to dry run and rejects conflicting flags with safe di
  assert.throws(()=>parseArguments([...args,'--install','--dry-run']),/argument-conflict/)
  const failed=spawnSync(process.execPath,[script,...args,'--unknown','SECRET_VALUE'],{encoding:'utf8'})
  assert.equal(failed.status,1);assert.doesNotMatch(failed.stderr,/SECRET_VALUE|PRIVATE_/)
+})
+
+test('optional upload group derives both helper pins from packaged manifest and creates no upload state',async t=>{
+ const s=await fixture(t),uploadStateRoot=join(s.root,'private upload state');await mkdir(uploadStateRoot,{mode:0o700})
+ const options={...s.options,uploadStateRoot,uploadPublicOrigin:'https://preview.example.test'}
+ const result=await configureStudio(options,s.pkg),manifest=JSON.parse(await readFile(join(s.pkg,'studio/manifest.json'),'utf8'))
+ assert.equal(result.checks.previewUpload,'configured-unverified');assert.equal(result.installed,false)
+ assert.equal(result.config.uploadScript,join(s.pkg,'studio/helpers/studio_preview_upload_host.py'))
+ assert.equal(result.config.uploadScriptSha256,manifest.files['helpers/studio_preview_upload_host.py'])
+ assert.equal(result.config.uploadLibrarySha256,manifest.files['helpers/studio_upload.py'])
+ assert.equal(result.config.uploadStateRoot,uploadStateRoot);assert.deepEqual(result.config.uploadPublicOrigins,['https://preview.example.test'])
+ assert.equal(result.config.vaultTokenFile,s.options.vaultTokenFile);assert.deepEqual(await readdir(uploadStateRoot),[])
+ assert.doesNotMatch(JSON.stringify(result),/PRIVATE_TOKEN_CONTENT|PRIVATE_PROFILE_CONTENT/)
+ const installed=await configureStudio({...options,install:true},s.pkg);assert.equal(installed.installed,true)
+ assert.equal((await lstat(s.options.outputPath)).mode&0o777,0o600);assert.deepEqual(JSON.parse(await readFile(s.options.outputPath,'utf8')),result.config)
+})
+
+test('upload omissions remain disabled; partial group, nonprivate/missing directory and noncanonical origins fail closed',async t=>{
+ const s=await fixture(t),privateRoot=join(s.root,'private'),publicRoot=join(s.root,'public');await mkdir(privateRoot,{mode:0o700});await mkdir(publicRoot,{mode:0o755})
+ const original=await composeStudioConfiguration(s.options,s.pkg);assert.equal(original.checks.previewUpload,'disabled');assert.equal(original.config.uploadScript,undefined)
+ const linked=join(s.root,'linked-state');await symlink(privateRoot,linked,'dir')
+ const good={uploadStateRoot:privateRoot,uploadPublicOrigin:'https://preview.example.test'}
+ for(const [change,error] of [
+  [{uploadStateRoot:undefined},/upload-pair-required/], [{uploadPublicOrigin:undefined},/upload-pair-required/],
+  [{uploadStateRoot:join(s.root,'missing')},/upload-state-unavailable/], [{uploadStateRoot:publicRoot},/upload-state-not-private/], [{uploadStateRoot:linked},/upload-state-type-invalid/],
+  [{uploadStateRoot:s.options.vaultTokenFile},/upload-state-type-invalid/], [{uploadScript:'/untrusted/SECRET.py'},/upload-host-fields-derived/],
+  ...['http://preview.example.test','https://preview.example.test/','https://preview.example.test/path','https://SECRET@preview.example.test','https://preview.example.test?SECRET','not an origin'].map(uploadPublicOrigin=>[{uploadPublicOrigin},/upload-origin-invalid/]),
+ ]) await assert.rejects(composeStudioConfiguration({...s.options,...good,...change},s.pkg),error)
+ await assert.rejects(lstat(s.options.outputPath),{code:'ENOENT'})
+})
+
+test('shipped CLI accepts only paired host upload options and never accepts a helper path',async t=>{
+ const s=await fixture(t),uploadStateRoot=join(s.root,'upload state');await mkdir(uploadStateRoot,{mode:0o700})
+ const args=['--output',s.options.outputPath,'--runtime',s.options.renderRuntime,'--profile',s.options.dshProfilePath,'--vault-token-file',s.options.vaultTokenFile,'--cache-root',s.options.observationCacheRoot,'--upload-state-root',uploadStateRoot,'--upload-public-origin','https://preview.example.test']
+ const result=JSON.parse(execFileSync(process.execPath,[join(s.pkg,'scripts/configure-studio.mjs'),...args],{encoding:'utf8'}))
+ assert.equal(result.checks.previewUpload,'configured-unverified');assert.equal(result.installed,false)
+ assert.deepEqual(parseArguments(args).uploadPublicOrigin,'https://preview.example.test')
+ assert.throws(()=>parseArguments([...args,'--upload-script','SECRET.py']),/argument-invalid/)
+ const failed=spawnSync(process.execPath,[join(s.pkg,'scripts/configure-studio.mjs'),...args.slice(0,-2)],{encoding:'utf8'})
+ assert.equal(failed.status,1);assert.match(failed.stderr,/upload-pair-required/);assert.doesNotMatch(failed.stderr,/PRIVATE_/)
 })

@@ -45,7 +45,22 @@ export async function composeStudioConfiguration(options,root=packageRoot){
  }
  if(proofs.calibrationPath.path&&proofs.calibrationPath.path===proofs.calibrationRegressionPath.path)fail('proof-reference-conflict')
  const helper=name=>join(root,'studio','helpers',name)
+ const uploadEnabled=options.uploadStateRoot!==undefined||options.uploadPublicOrigin!==undefined
+ let upload={}
+ if(['uploadScript','uploadScriptSha256','uploadLibrarySha256','uploadPublicOrigins'].some(field=>options[field]!==undefined))fail('upload-host-fields-derived')
+ if(uploadEnabled){
+  if(options.uploadStateRoot===undefined||options.uploadPublicOrigin===undefined)fail('upload-pair-required')
+  const origin=options.uploadPublicOrigin
+  try{const url=new URL(origin);if(typeof origin!=='string'||url.protocol!=='https:'||url.origin!==origin||url.username||url.password)fail('upload-origin-invalid')}catch{fail('upload-origin-invalid')}
+  const state=await local(options.uploadStateRoot,'upload-state',true)
+  if((await lstat(state.path)).mode&0o077)fail('upload-state-not-private')
+  try{await access(state.path,constants.W_OK)}catch{fail('upload-state-unavailable')}
+  const adapter='helpers/studio_preview_upload_host.py',library='helpers/studio_upload.py'
+  if(!/^[a-f0-9]{64}$/.test(manifest.files[adapter]??'')||!/^[a-f0-9]{64}$/.test(manifest.files[library]??''))fail('upload-helpers-unavailable')
+  upload={uploadScript:helper('studio_preview_upload_host.py'),uploadScriptSha256:manifest.files[adapter],uploadLibrarySha256:manifest.files[library],uploadStateRoot:state.path,uploadPublicOrigins:[origin]}
+ }
  const config={
+  ...upload,
   dshProfilePath:profile.path,renderRuntime:runtime.path,vaultTokenFile:token.path,observationCacheRoot:cache.path,
   preflightScript:helper('preflight_host.py'),audioScript:helper('audio_observe_host.py'),speechScript:helper('speech_check_host.py'),visionScript:helper('vision_observe_host.py'),
   storyboardCompilerScript:helper('compiler_host_bridge.py'),storyboardCompilerSha256:manifest.files['helpers/compiler_host_bridge.py'],
@@ -53,7 +68,7 @@ export async function composeStudioConfiguration(options,root=packageRoot){
   renderJobScript:helper('render_job_host.py'),renderJobSha256:manifest.files['helpers/render_job_host.py'],
   ...Object.fromEntries(Object.entries(proofs).filter(([,v])=>v.path).map(([k,v])=>[k,v.path])),
  }
- return {schema:'studio-config-plan-v1',config,checks:{helperClosure:'verified',roleTemplates:'hash-verified',hostPaths:'present',proofs:Object.fromEntries(Object.entries(proofs).map(([k,v])=>[k,v.state]))},runtimeVerified:false,calibrationVerified:false,rolesInstalled:false,profileModified:false}
+ return {schema:'studio-config-plan-v1',config,checks:{helperClosure:'verified',roleTemplates:'hash-verified',hostPaths:'present',previewUpload:uploadEnabled?'configured-unverified':'disabled',proofs:Object.fromEntries(Object.entries(proofs).map(([k,v])=>[k,v.state]))},runtimeVerified:false,calibrationVerified:false,rolesInstalled:false,profileModified:false}
 }
 
 /** Atomic create via same-directory hard link: a concurrent destination is never replaced. */
@@ -78,11 +93,11 @@ export async function configureStudio(options,root=packageRoot){
  return result
 }
 
-const usage=`Usage: node scripts/configure-studio.mjs --output /private/studio-host.json --runtime /render-runtime --profile /dsh/profile.yml --vault-token-file /private/token --cache-root /private/cache [--calibration-path /proofs/calibration.json --regression-path /proofs/regression.json] [--install]
-Default: read-only dry run. --install creates a new mode-0600 config; existing files are never replaced. Both proof paths must be provided together, or omitted; missing proofs remain unverified. No provider, role, dependency or profile installation is performed.`
+const usage=`Usage: node scripts/configure-studio.mjs --output /private/studio-host.json --runtime /render-runtime --profile /dsh/profile.yml --vault-token-file /private/token --cache-root /private/cache [--calibration-path /proofs/calibration.json --regression-path /proofs/regression.json] [--upload-state-root /private/upload-state --upload-public-origin https://preview.example.test] [--install]
+Default: read-only dry run. --install creates a new mode-0600 config; existing files are never replaced. Both proof paths must be provided together, or omitted; missing proofs remain unverified. Upload is disabled unless both upload options are supplied; the existing state directory must be private (no group/other permissions) and writable. Helper paths/hashes come only from the verified package manifest. No provider, role, dependency or profile installation is performed.`
 export function parseArguments(args){
  const options={proofPaths:{}}
- const fields={'--output':'outputPath','--runtime':'renderRuntime','--profile':'dshProfilePath','--vault-token-file':'vaultTokenFile','--cache-root':'observationCacheRoot','--calibration-path':'calibrationPath','--regression-path':'calibrationRegressionPath'}
+ const fields={'--output':'outputPath','--runtime':'renderRuntime','--profile':'dshProfilePath','--vault-token-file':'vaultTokenFile','--cache-root':'observationCacheRoot','--calibration-path':'calibrationPath','--regression-path':'calibrationRegressionPath','--upload-state-root':'uploadStateRoot','--upload-public-origin':'uploadPublicOrigin'}
  const seen=new Set()
  for(let i=0;i<args.length;i++){
   const flag=args[i];if(seen.has(flag))fail('argument-duplicate');seen.add(flag)

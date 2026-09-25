@@ -1,0 +1,22 @@
+{
+  "schema": "studio-runtime-asset-sources-v1",
+  "retrievedAt": "2026-09-24",
+  "gsap": {
+    "version": "3.13.0",
+    "commit": "9f8eca1cc21cab9fc41fa1a3edb984d7ef02fd89",
+    "url": "https://raw.githubusercontent.com/greensock/GSAP/9f8eca1cc21cab9fc41fa1a3edb984d7ef02fd89/dist/gsap.min.js",
+    "license": "GSAP Standard No Charge License (not MIT)",
+    "licenseUrl": "https://gsap.com/community/standard-license/"
+  },
+  "font": {
+    "originalFilename": "DroidSansFallbackFull.ttf",
+    "sourcePath": "/usr/share/fonts/google-droid-sans-fonts/DroidSansFallbackFull.ttf",
+    "package": "google-droid-sans-fonts-20200215-11.el9.2.noarch",
+    "noticeSourcePath": "/usr/share/licenses/google-droid-sans-fonts/NOTICE",
+    "embeddedCopyright": "Digitized data copyright Google Corporation © 2006",
+    "embeddedLicense": "Licensed under the Apache License, Version 2.0",
+    "embeddedLicenseURL": "http://www.apache.org/licenses/LICENSE-2.0",
+    "packageLicenseCaveat": "RPM metadata ASL 2.0 and OFL covers package; this specific font name table declares Apache-2.0."
+  },
+  "qualityApproved": false
+}

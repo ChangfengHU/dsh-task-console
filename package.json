@@ -68,7 +68,8 @@
     "scripts/package-studio.mjs",
     "scripts/configure-studio.mjs",
     "scripts/prepare-package.mjs",
-    "docs/studio-configuration.md"
+    "docs/studio-configuration.md",
+    "studio/runtime-assets"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",

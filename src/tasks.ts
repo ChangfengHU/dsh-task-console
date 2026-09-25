@@ -613,6 +613,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
     '当前schema支持boardPath时，将完整执行板保存在项目内JSON，调用 studio_compile_storyboard({boardPath:相对JSON路径})，无需每次重新发送整份JSON；旧schema才用board对象。编译器负责创建输出目录，不预建目录、不先把源JSON写进输出目录，也不删除旧版规避output-exists。保持有效分镜，局部修正明确错误；失败编译不能直接交渲染。')
   if(task.design?.evidenceContract==='studio-video-v1'&&card.role==='executor')lines.push('', '[STUDIO REAL RENDER]',
     '先检查同轮实际素材、冻结台词及当前渲染依赖，再使用已安装并可用的 HyperFrames/FFmpeg 执行能力产出真实视频；只能按当前会话实际工具 schema 调用渲染工具或执行能力；缺少时不臆造接口、名称或参数。渲染命令返回执行编号时持续查询该编号；结果未知先对账，不盲目重复启动。',
+    '真实候选经studio_register_candidate登记后，调用studio_upload_preview({candidateSha256:当前登记候选SHA})上传R2审核预览；宿主解析实际文件和上传配置，不传路径/URL/key/凭据。保留真实URL、SHA、bytes与公开校验回执，unknown继续对账原intent，不改名绕过；此工具不发布社交平台也不批准质量。',
     '渲染缺依赖或命令失败时先 studio_status 核对宿主能力，记录失败命令、退出码、脱敏错误和受影响步骤；能够在授权范围修复则修复，否则 task_block(reason,kind="capability") 如实交接确切故障。preflight 通过不覆盖之后真实发生的渲染失败。',
     '禁止 touch 空 .mp4、把文本/占位文件改名成视频，或以黑屏/单色占位片作为候选完成任务。已有坏文件应保留失败记录，修复后生成新真实产物；只有成功渲染的实际 MP4 和真实 manifest 才能调用 studio_register_candidate({path,manifestPath,revision})。文件存在或命令成功不等于质量通过，仍须独立视听检查。')
   if (card.brief?.trim()) lines.push('', '[YOUR PART]', card.brief.trim())

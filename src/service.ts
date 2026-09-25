@@ -1,3 +1,4 @@
+import {uploadStudioPreview} from './studio-upload-host.js'
 import {assertStudioProgressWritable} from './studio-progress.js'
 import type {StudioConfigBinding} from './studio-config.js'
 import {planStudioRoleInstall,applyStudioRoleInstall,type StudioRoleInstallOptions} from './studio-role-install.js'
@@ -90,6 +91,25 @@ const KNOWN_MODELS = [
   'llm-deepseek/qwen-plus-latest', 'llm-deepseek/deepseek-v3',
 ]
 
+/** Current registered candidate and write lease are host inputs, never tool paths. */
+export function studioPreviewUploadBinding(input:any,workflow:any,store:any,isActive:()=>boolean,configPath?:string,upload=uploadStudioPreview){
+ return async(args:{candidateSha256:string})=>{
+  if(input.card?.role!=='executor')throw Error('studio-role-denied')
+  const candidate=workflow.status(input).candidate,location=workflow.candidateLocation(input)
+  const assertActive=()=>{
+   const c=store.kernel.getTask(input.card.id),r=[...store.s.runs.values()].find((r:any)=>r.cardId===input.card.id&&r.sessionId===input.sessionId&&r.status==='running') as any
+   if(!isActive()||!r||c?.status!=='running'||c.current_run_id!==store.coreRunId(r.id)||!c.claim_expires||c.claim_expires<=Math.floor(Date.now()/1000))throw Error('studio-upload-stale-run')
+   assertStudioProgressWritable(store.kernel.db,input,store.coreRunId(r.id));assertPreparationWritable(store.kernel.db,input)
+   const current=workflow.status(input).candidate,now=workflow.candidateLocation(input)
+   if(!candidate||current?.sha256!==candidate.sha256||current?.manifestSha256!==candidate.manifestSha256||current?.revision!==candidate.revision||now.path!==location.path||now.manifestPath!==location.manifestPath||now.sha256!==location.sha256)throw Error('studio-upload-current-candidate-changed')
+  }
+  assertActive()
+  const result=await upload(input.task,{candidate,location},args,{configPath,assertActive})
+  assertActive()
+  return result
+ }
+}
+
 export class TaskConsoleService extends TypertRemoteService {
   static inject = ['loader', 'tools', 'agents', 'workspaceRegistry', 'permissionPresets']
 
@@ -169,7 +189,7 @@ export class TaskConsoleService extends TypertRemoteService {
           const assertActive=()=>{const c=this.runner.store.kernel.getTask(input.card.id),r=[...this.runner.store.s.runs.values()].find(r=>r.cardId===input.card.id&&r.sessionId===input.sessionId&&r.status==='running');if(!isActive()||!r||c?.status!=='running'||c.current_run_id!==this.runner.store.coreRunId(r.id)||!c.claim_expires||c.claim_expires<=Math.floor(Date.now()/1000))throw Error('studio-render-stale-run');assertStudioProgressWritable(this.runner.store.kernel.db,input,this.runner.store.coreRunId(r.id))}
           return invokeStudioRenderJob(input,action,args,workflow.renderLedger,()=>{assertActive();if(action==='start')assertPreparationWritable(this.runner.store.kernel.db,input)},studioHostDeps)
         }
-        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,renderJob,requestPreparationRevision:value=>new StudioPreparation(this.runner.store).request(input,value),downloadAsset:args=>downloadStudioAsset(input.task,args,studioHostDeps),registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task,studioHostDeps),audioObserve:args=>observeStudioAudio(input.task,args,studioHostDeps),visionObserve:args=>observeStudioVision(input.task,args,studioHostDeps),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
+        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,renderJob,uploadPreview:studioPreviewUploadBinding(input,workflow,this.runner.store,isActive,config.studioConfigPath),requestPreparationRevision:value=>new StudioPreparation(this.runner.store).request(input,value),downloadAsset:args=>downloadStudioAsset(input.task,args,studioHostDeps),registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task,studioHostDeps),audioObserve:args=>observeStudioAudio(input.task,args,studioHostDeps),visionObserve:args=>observeStudioVision(input.task,args,studioHostDeps),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
         let skillGate:()=>void=()=>{},speech:()=>void=()=>{},board:()=>void=()=>{}
         try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args,studioHostDeps)});board=await registerStudioBoardTools(agentCtx,{input,workflow,isActive,compile:args=>compileStudioStoryboard(input.task,args,studioHostDeps)});return ()=>{board();speech();skillGate();media()} } catch(e){board();speech();skillGate();media();throw e}
       },

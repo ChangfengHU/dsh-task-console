@@ -64,8 +64,22 @@ async function preflightIdentity(config:any){
  return {files,environment:preflightEnvironment()}
 }
 const characterProfileLock=(p:any):StudioCharacterProfileLock=>({path:p.profilePath,sha256:p.sha256,characterId:p.characterId,...(p.profileVersion!==undefined?{profileVersion:p.profileVersion}:{})})
-async function preflightFiles(value:any,task:any):Promise<Record<string,string>>{
+async function executionAssetFiles(value:any,task:any):Promise<Record<string,string>>{
+ const p=value?.capabilities?.execution_assets,h=value?.capabilities?.hyperframes
+ if(p?.ok!==true||p.schema!=='studio-execution-assets-v1'||!p.proofPath||!Array.isArray(p.files)||p.files.length!==7||!/^[a-f0-9]{64}$/.test(p.bundleManifestSha256??''))throw Error('execution assets proof missing')
+ if(h?.timeline_verified!==true||h?.font_loaded_verified!==true||h.runtimeAssetsManifestSha256!==p.bundleManifestSha256)throw Error('animation/font smoke proof missing')
+ const paths=['assets/vendor/gsap.min.js','assets/Chinese.ttf','assets/licenses/GSAP-LICENSE.txt','assets/licenses/DROID-NOTICE.txt','assets/licenses/GSAP-STANDARD-LICENSE.html','assets/licenses/SOURCES.json','assets/licenses/runtime-assets-manifest.json']
  const files:Record<string,string>={}
+ for(const expected of paths){const rows=p.files.filter((f:any)=>f?.path===expected);if(rows.length!==1)throw Error('execution asset file missing')
+  const f=rows[0],path=await studioPath(task.cwd,expected,true)
+  if(path!==f.absolutePath||!/^[a-f0-9]{64}$/.test(f.sha256??'')||await fileSha256(path)!==f.sha256||(await stat(path)).size!==f.bytes)throw Error('execution asset changed')
+  files[path]=f.sha256
+ }
+ if(files[await studioPath(task.cwd,'assets/licenses/runtime-assets-manifest.json',true)]!==p.bundleManifestSha256)throw Error('execution asset manifest changed')
+ files[p.proofPath]=await fileSha256(p.proofPath);return files
+}
+async function preflightFiles(value:any,task:any):Promise<Record<string,string>>{
+ const files:Record<string,string>=await executionAssetFiles(value,task)
  if(value?.ok===false)throw Error('preflight failed')
  for(const name of ['character','reference','frames','hyperframes']){
   const p=value?.capabilities?.[name]
@@ -103,6 +117,7 @@ export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any
   try{snapshot=await sharedPreflight(key,task,()=>exec(config.preflightScript,[],task,config,JSON.stringify(task)));result=snapshot.value}catch{result={capabilities:{}}}
   for(const [name,source] of [['character','character'],['reference','reference'],['frames','frames'],['render','hyperframes']]){const p=result?.capabilities?.[source];try{
    if(p?.ok!==true||!p.proofPath)throw Error('preflight unavailable');if(source==='hyperframes'&&(p.hyperframes_verified!==true||p.scope!=='actual_hyperframes_smoke_render'))throw Error('actual HyperFrames proof required')
+   if(source==='hyperframes')await executionAssetFiles(result,task)
    if(source==='character'){if(p.characterId!==task.design.studio.characterId||await fileSha256(p.imagePath)!==p.imageSha256||await fileSha256(p.profilePath)!==p.sha256)throw Error('character lock mismatch');const ref={id:p.profileAssetId??'character-primary',path:p.imagePath,sha256:p.imageSha256,...(p.profileAssetId?{assetId:p.profileAssetId}:{}),...(p.sourceUrl!==undefined?{sourceUrl:p.sourceUrl,sourceSha256:p.sourceSha256}:{})};publicCharacterReference(ref);const profileLock=characterProfileLock(p);await readStudioCharacterProfile(task,profileLock);characterReferences=[ref];characterProfile=profileLock}
    else {if(await fileSha256(p.path)!==p.sha256)throw Error('preflight asset changed');if(source==='reference'){if(p.sha256!==task.design.studio.referenceSha256)throw Error('reference lock mismatch');reference={path:p.path,sha256:p.sha256}}}
    const proofHash=await fileSha256(p.proofPath)

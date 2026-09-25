@@ -86,7 +86,8 @@
         "studio_render_start",
         "studio_render_status",
         "studio_register_candidate",
-        "studio_register_speech_plan"
+        "studio_register_speech_plan",
+        "studio_upload_preview"
       ]
     },
     {

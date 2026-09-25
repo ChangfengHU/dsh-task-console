@@ -43,3 +43,38 @@ A reference card must be linked to that character, have `kind: reference`, use a
 Submit `task_create_submit` with a JSON plan containing only `decision: create`, `reason`, and `studioRequest`. The request supplies the resolved character/reference, six distinct installed role IDs, and explicit authorized generation limits; the topic may be omitted for autonomous selection. The host builds the complete pending plan and a reusable topic Action. The composer supports zero to two repair rounds, does not silently lower larger requests, and preserves bounded execution retries. Independent plan review remains required; submission does not start production or authorize publication.
 
 Existing Creator presets with a frozen tool fence need an explicit capability audit and regeneration before opening a new session with the new source-discovery tool. A bundle upgrade alone does not grant newly added tools to an old saved preset. Preserve authored customizations when regenerating; report unexpected drift instead of overwriting it.
+
+## Packaged compiler resources
+
+The public payload now includes exactly seven files in `studio/runtime-assets/`: `gsap.min.js`, `Chinese.ttf`, `GSAP-LICENSE.txt`, `DROID-NOTICE.txt`, `GSAP-STANDARD-LICENSE.html`, `SOURCES.json`, and `manifest.json`. They are separate from private Task media and host calibration proofs. Package MIT licensing applies to the owned helper code, not to these vendors: GSAP retains its Standard No Charge License, and the bundled Droid Sans Fallback Full font retains its Apache-2.0 notice. Preserve the vendor notices and source records with copied resources; consult their actual terms for the intended use.
+
+At development packaging, `packageStudio(packageRoot, sourceRoot)` reads helpers from `sourceRoot` (normally `../autonomous-studio`) and vendors from `resolve(sourceRoot, '../runtime-assets')`. It verifies the exact filenames, real regular files/no symlinks, inner byte counts/hashes/target paths, and the helper's fixed manifest SHA before writing. The outer Studio manifest hashes every vendor file, including the inner manifest, and declares `runtimeAssetsPackaged:true`. Unexpected or missing files fail verification. An installed package verifies its own payload and requires no parent checkout.
+
+The packaged `prepare_execution_assets.py` resolves `Path(__file__).parent.parent / 'runtime-assets'` by default. Its offline CLI is `python3 <package>/studio/helpers/prepare_execution_assets.py --project-root <existing real Task directory>`; it prepares GSAP/font/notices using the fixed targets and returns actual paths/hashes. This is host setup, not an instruction to models to create arbitrary workspaces. No network, provider call or user-home default is needed. `qualityApproved` and `compilerRuntimeVerified` remain false: local resource preparation is neither successful rendering nor film approval.
+
+The payload test uses a disposable `npm pack --ignore-scripts` tarball, verifies all seven shipped members, imports the isolated helper closure with network/subprocess effects blocked, and executes only the offline preparation helper in a path containing spaces. Full bundle build/prepack lifecycle has separate package-bundle coverage; passing this payload test alone does not claim a new build or deployment.
+
+## Registered candidate preview upload
+
+The native `studio_upload_preview({candidateSha256})` is available only to the active Studio executor/editor. The argument is the exact SHA of the currently registered candidate; there is no model-supplied file path, object key, URL, token or configuration override. The service resolves candidate/location through the current workflow, verifies its live claim and progress/preparation fences, and rechecks candidate identity around dispatch and before returning. Public preview delivery does not approve the film or publish to a social platform.
+
+The private host JSON selected by DSH `studioConfigPath` may provide this complete optional group:
+
+```json
+{
+  "uploadScript": "/HOST/PACKAGE/studio/helpers/studio_preview_upload_host.py",
+  "uploadScriptSha256": "<actual thin-adapter SHA256>",
+  "uploadLibrarySha256": "<actual sibling studio_upload.py SHA256>",
+  "vaultTokenFile": "/HOST/PRIVATE/vault-token",
+  "uploadStateRoot": "/HOST/PRIVATE/durable-preview-intents",
+  "uploadPublicOrigins": ["https://YOUR-CONFIGURED-PUBLIC-ORIGIN"]
+}
+```
+
+These are placeholders, not working credentials or origins. Host paths must be absolute. `uploadStateRoot`, helper files and credential references must be outside Task workspaces; the upload module enforces its containment and file hash checks. The library path is fixed to `studio_upload.py` beside the adapter, not another configuration input. Public origins must be exact canonical HTTPS origins, without credentials, paths or query strings. Missing or malformed members in a supplied upload group fail with a sanitized configuration error. Omitting the whole group preserves installations without preview upload; invoking the tool then reports the missing host capability. No credentials are included in tool outputs or schemas.
+
+Enable this optional group through the existing configuration composer by adding both `--upload-state-root /HOST/PRIVATE/durable-preview-intents` and `--upload-public-origin https://YOUR-CONFIGURED-PUBLIC-ORIGIN` to the normal setup command. The state directory must already exist, have no group/other permission bits (normally mode 0700), and be readable/writable by the configuring host process. The composer does not create it or change permissions. Symlink directories, missing directories, partial option groups and noncanonical origins are rejected.
+
+The composer derives `uploadScript`, `uploadScriptSha256` and `uploadLibrarySha256` only from the verified packaged helper manifest; it accepts no helper path or hash override. It reuses the existing `vaultTokenFile` reference without reading its contents. With neither upload flag, older non-upload setup remains valid and `checks.previewUpload` explicitly reads `disabled`; enabled plans report `configured-unverified`, never connectivity or publication success. The default remains a reviewable dry run; explicit `--install` atomically creates only a new mode-0600 configuration. The shipped two-helper closure is required before upload can be enabled. No provider call, upload, dependency installation or deployment occurs during composition.
+
+Save the actual completed URL, SHA, bytes and public-hash verification receipt with the candidate's delivery record. `unknown` retains the original intent: a same-SHA call may verify that existing public object, never issue a blind replacement PUT. A verified saved receipt is restart-reusable. The uploader does not automatically register Fleet assets or evidence artifacts; those remain explicit existing workflow actions. Editor `requiredHostTools` now includes the real tool, while existing authored presets need the normal reviewed capability sync to obtain its schema; no active session/preset is rewritten.

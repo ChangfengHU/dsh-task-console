@@ -2,7 +2,7 @@
   "schema": "studio-package-v1",
   "files": {
     "roles/README.md": "c58af62234f87e69fcd2405a458c653e8a81b61dc8744a6f2d3e617d521478a0",
-    "roles/manifest.json": "fed4357333a621afc67a1b6d552965fc03d3ab94bc8c34ca4736df89b1ed2aad",
+    "roles/manifest.json": "fb98ae70a7de7e6e4e4e0e99d6c1631de961771b539cdfea0b082fddc147da13",
     "roles/director/task-console.json": "bb3e6bc30d9e927c908968f7151c103b11d0ed2abbf738e465edeee6ecdf972f",
     "roles/storyboard/task-console.json": "8e95e1a1d443878ffa823b8df2099a63116646d14f52ed7a8aad0ccd6e1dbed7",
     "roles/visual/task-console.json": "a13749359f02b94381d3606e21268c48e944e90c83deddbc3aeb5a4be658700e",
@@ -18,9 +18,19 @@
     "helpers/observation_cache.py": "571102aef3793b6777b9245e33767354c27a74f49f7f5bf0a76f275c683bb28d",
     "helpers/render_job_host.py": "f45133eb47fc2837bc1821fb7a31682ca39e157077cebda878eae521d1264b12",
     "helpers/speech_check_host.py": "f67f3861e804624c7cf8842fecb102beab1f27de9eb04b09eacc0c2ed4bccdf8",
-    "helpers/preflight_host.py": "e6736a0c5a5853528edaf56e655aba4095baf4a62f417761c91548865786c8e1",
+    "helpers/preflight_host.py": "8bb1aa88718ba62f91f884636ae1c688bb0ea1074dfb591bcc8f3a8fffb070ea",
+    "helpers/prepare_execution_assets.py": "212fe0d8ec8829b249ad18891a957773e88d5a428d3e4c1c446cf7450ffee11d",
     "helpers/download_existing_asset.py": "0884000d613fdaff7ba3637a254a0a1015b9f3438ca4ba6a48f2c503d8b9a30b",
-    "helpers/acquire_incompetech_source.py": "e5e2e83264fa6bbbf1a4ea1b5f422627d1180772379c955cda04443789e64e3c"
+    "helpers/acquire_incompetech_source.py": "e5e2e83264fa6bbbf1a4ea1b5f422627d1180772379c955cda04443789e64e3c",
+    "helpers/studio_preview_upload_host.py": "d9b48192bcf01a587e1df6eab9cb35c28040df1a1712a3831d30f8b83d686922",
+    "helpers/studio_upload.py": "b904e36bbf5696fcc86edae33f8aedb0b9351e39efbd0e501de19f9a66ec9967",
+    "runtime-assets/gsap.min.js": "96c01b81f44a3290e2b4532f55e2c9534b2adc43273a19f3756b2cb41f0fd0b6",
+    "runtime-assets/Chinese.ttf": "2392015530438bafc48edfc4aee6d9de2387f627a6134d8ab3dfcc99d21c8240",
+    "runtime-assets/GSAP-LICENSE.txt": "52473a7c78dce3a0a37980a2a80a7e55f0035c2e195c32df0fdad20b9a609dd1",
+    "runtime-assets/DROID-NOTICE.txt": "38751245389e1e23f73e6f5384b5cbe7fa972cc4410c5adc9c04b082a0b9561a",
+    "runtime-assets/GSAP-STANDARD-LICENSE.html": "75820122aa6ca50c7c43631694d186376406cf6931c4877f10e3ac764698a369",
+    "runtime-assets/SOURCES.json": "c2f97b813c2fe6bf894a8c7d4f2c221b29e79a406df8d5a74360cec6b71242f5",
+    "runtime-assets/manifest.json": "6def3bb5e1b27cee45277f72b36c2e34918a698f9da8bcd98a5b3d6cc8e53e8f"
   },
   "requiredHostProofs": [
     "speech-calibration.json",
@@ -28,6 +38,7 @@
   ],
   "proofsPackaged": false,
   "rolesPackaged": true,
-  "scope": "python-helper-closure-and-role-templates",
+  "runtimeAssetsPackaged": true,
+  "scope": "python-helper-closure-role-templates-and-licensed-runtime-assets",
   "runtimeVerified": false
 }

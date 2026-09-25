@@ -27,7 +27,13 @@ export async function reconcileStudioKnownOperation(store:any,value:any,poll:(op
  if(['completed','failed'].includes(before.op.state))return {ok:true,alreadyTerminal:true,state:before.op.state,assisted:true,resumed:false,qualityApproved:false}
  let observation
  try{observation=await poll(before.op)}catch{throw Error('studio-known-reconcile-poll-unavailable: original reservation retained; no retry or resume performed')}
- const same=()=>{try{const now=context();return ['intent','kind','tool','job_id','state'].every(k=>now.op[k]===before.op[k])}catch{return false}}
+ const sameIdentity=(op:any)=>['intent','kind','tool','job_id'].every(k=>op[k]===before.op[k])
+ const same=()=>{try{const now=context();return sameIdentity(now.op)&&now.op.state===before.op.state}catch{return false}}
+ const current=context()
+ if(!sameIdentity(current.op))throw Error('studio-known-reconcile-context-changed')
+ // A concurrent replay may have committed the same original job while we awaited
+ // the provider. Accept its terminal state only after revalidating the task/run.
+ if(['completed','failed'].includes(current.op.state))return {ok:true,alreadyTerminal:true,state:current.op.state,terminal:true,assisted:true,resumed:false,qualityApproved:false}
  if(!same())throw Error('studio-known-reconcile-context-changed')
  await ops.invoke(before.input,observation.name,observation.args,async()=>observation.result,undefined,undefined,{operation:before.op,canApply:same})
  const after=context()

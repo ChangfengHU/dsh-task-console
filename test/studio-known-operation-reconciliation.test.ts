@@ -46,3 +46,19 @@ for(const mode of ['unknown-id','wrong-run','injected-result','active-run','wron
  if(['unknown-id','wrong-run','injected-result','active-run'].includes(mode))assert.equal(calls,0)
  else assert.equal(calls,1)
 })
+
+for(const changeIdentity of [false,true])test('concurrent operator replay '+(changeIdentity?'rejects replacement job':'accepts same terminal job'),async t=>{
+ const f=await fixture(t)
+ let releaseA!:()=>void,releaseB!:()=>void,startedA!:()=>void,startedB!:()=>void
+ const enteredA=new Promise<void>(r=>startedA=r),enteredB=new Promise<void>(r=>startedB=r)
+ const gateA=new Promise<void>(r=>releaseA=r),gateB=new Promise<void>(r=>releaseB=r)
+ const a=reconcileStudioKnownOperation(f.store,f.input,async()=>{startedA();await gateA;return f.poll()})
+ const b=reconcileStudioKnownOperation(f.store,f.input,async()=>{startedB();await gateB;return f.poll()})
+ await Promise.all([enteredA,enteredB]);releaseA();assert.equal((await a).state,'completed')
+ if(changeIdentity)f.store.kernel.db.prepare('UPDATE dsh_studio_operations SET job_id=?').run('dt_replacement')
+ releaseB()
+ if(changeIdentity)await assert.rejects(b,/context-changed/)
+ else {const result=await b;assert.equal(result.alreadyTerminal,true);assert.equal(result.state,'completed')}
+ assert.equal(new StudioInterventions(f.store).list({taskId:'T',batchId:'B'}).length,1)
+ assert.equal(f.ops.snapshot(f.context).used.imageCalls,1)
+})

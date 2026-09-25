@@ -1,3 +1,5 @@
+import {projectStudioStatus} from './studio-status-projection.js'
+import {studioStageFor} from './studio-stages.js'
 import {studioGuide,studioGuideList} from './studio-guides.js'
 import {readStudioCharacterProfile,studioCharacterProfileSummary,characterProfileFallback,type StudioCharacterProfileLock} from './studio-character-profile.js'
 import {publicCharacterReference,type StudioCharacterReference} from './studio-character-source.js'
@@ -71,7 +73,8 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
  const directory=async()=>{const root=await realpath(input.task.cwd),base=join(root,'.studio-review');await mkdir(base,{recursive:true,mode:0o700});if(await realpath(base)!==base)throw Error('studio-review-directory-symlink');return mkdtemp(join(base,'sample-'))}
  const interval=(args:any,duration:number,max:number)=>{const {start,end}=args;if(!Number.isFinite(start)||!Number.isFinite(end)||start<0||end<=start||end>duration||end-start>max)throw Error(`studio-invalid-sample-range: durationSeconds=${duration}; require 0 <= start < end <= ${duration}, maxWindowSeconds=${max}`);return [start,end]}
  let refreshingPreflight:Promise<void>|undefined,lastRefreshAttempt=0
- register('studio_status','Read host preflight and current version-bound state. Expired/missing host proofs trigger actual dependency revalidation; never aesthetic approval.',{},async()=>{
+ register('studio_status','Read current host state. Default compact view keeps frozen dialogue, locks, global budgets, original jobs/nextCalls, assisted facts and candidate/QA indices; identical fields have explicit aliases and other-stage receipts are indexed. Use {view:"full"} for complete original receipt/probe details. Expired/missing host proofs trigger actual dependency revalidation; never aesthetic approval.',{view:{type:'string',enum:['compact','full'],description:'compact (default) or full original state and receipts'}},async(args)=>{
+  const view=args.view??'compact';if(view!=='compact'&&view!=='full')throw Error('studio-status-view-invalid: use compact or full')
   let preflight=workflow.preflight(input.task)
   const needsRefresh=preflight.ok!==true&&preflight.checks?.some((c:any)=>['expired','missing','policy_mismatch','unknown'].includes(c.status))
   if(needsRefresh&&options.refreshPreflight){
@@ -86,7 +89,8 @@ export async function registerStudioTools(agentCtx:any,options:StudioToolOptions
   // snapshot at both levels, avoiding split results at an expiration boundary.
   preflight=state.preflight??workflow.preflight(input.task)
   const artifacts=state.candidate?(()=>{const loc=workflow.candidateLocation(input);return {manifestPath:relative(input.task.cwd,loc.manifestPath),videoPath:relative(input.task.cwd,loc.path)}})():null
-  return {guides:studioGuideList(),preflight,generationAllowance:state.generationAllowance??null,state:{...state,preflight},artifacts,executionAssets:await studioExecutionAssets(input.task.cwd),reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(publicCharacterReference),characterProfile:await studioCharacterProfileSummary(input.task,options.characterProfile)}
+  let stageId:string|undefined;try{stageId=studioStageFor(input)?.id}catch{/* Unknown audience keeps full receipts; projection adds no authorization gate. */}
+  return projectStudioStatus({guides:studioGuideList(),preflight,generationAllowance:state.generationAllowance??null,state:{...state,preflight},artifacts,executionAssets:await studioExecutionAssets(input.task.cwd),reference:options.reference?{sha256:options.reference.sha256,durationSeconds:(await lockedReference()).duration}:null,characterReferences:(options.characterReferences??[]).map(publicCharacterReference),characterProfile:await studioCharacterProfileSummary(input.task,options.characterProfile)},{role:input.card?.role,stageId},view)
  })
  register('studio_character_profile','Planner/producer/reviewer/preparation specialist: read the complete UTF-8 JSON character_get response from the exact host-locked profile file. No arguments, hidden-path override, provider call or refresh. Includes personality, scene plans and voice recommendations as recorded; design plans do not prove assets were generated.',{},async()=>{
   requireRole(['planner','executor','reviewer','studio-stage'])

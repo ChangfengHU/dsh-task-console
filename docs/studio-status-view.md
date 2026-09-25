@@ -1,0 +1,11 @@
+# Studio status presentation views
+
+`studio_status({})` now returns the compact presentation view. `studio_status({view:"full"})` returns the original complete response structure. This changes tool presentation only: workflow state, persisted receipts, permissions, host preflight, recovery accounting and validation remain unchanged.
+
+Compact output retains the complete frozen dialogue, character/voice locks, global generation allowance and budget, assisted/intervention facts, every original operation/job ID with its state and next calls, and candidate/QA evidence indices. No strings or candidate/job arrays are truncated. Exact duplicate preflight, generation allowance and intervention records are represented once, with explicit `statusProjection.aliases`; conflicting values remain visible.
+
+For a recognized preparation specialist, only other stages receive an indexed receipt presentation. Every output file, ID, SHA, byte size and all audio track timing/identity fields remain. Duplicate track probe objects are referenced through the matching output path and SHA. Only explanatory receipt prose and selected technical probe details are omitted. The current stage remains complete. Planner, editor, reviewer and unknown audiences retain all complete stage receipts. The index is not a new verification receipt and must not be submitted as one. `statusProjection.fullRead` provides the exact full-view call.
+
+The unchanged full view and immutable input are covered by pure projection and real DSH ToolRuntime tests, including session/stale guards. An offline projection of the first actual Trial08 visual recovery status reduced 32,026 to 23,254 characters (32,352 to 23,388 UTF-8 bytes; 27.39% fewer characters). All 113 distinct structured identity/hash/path values, original jobs/next calls, frozen script, global budget, assisted assessment and registered output files were preserved; editor receipts remained structurally exact. The sanitized measurement is stored in the parent workspace at `evidence/trial08-status-projection-size-comparison-20260925.json`.
+
+This is a measured reduction in status noise, not proof of improved creative decisions, autonomous completion or video quality. No live Task or provider operation was changed for this comparison.

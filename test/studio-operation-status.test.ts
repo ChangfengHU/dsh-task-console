@@ -124,6 +124,6 @@ test('fresh status does not invent limits or create tables and overrides stale s
  const tools:any={};await registerStudioTools({tools:{register:(tool:any)=>{tools[tool.name]=tool;return()=>{}}}},{input,workflow,isActive:()=>true})
  const response=await tools.studio_status.execute({})
  assert.equal(response.generationAllowance.canSubmitImages,false);assert.equal(response.generationAllowance.imageItems.remaining,4)
- assert.deepEqual(response.generationAllowance,response.state.generationAllowance)
+ assert.equal(response.state.generationAllowance,undefined);assert.equal(response.statusProjection.aliases['state.generationAllowance'],'generationAllowance')
  assert.equal(response.state.budget.used.imageCalls,0)
 })

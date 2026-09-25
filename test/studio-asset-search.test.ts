@@ -1,6 +1,6 @@
 import {test} from 'node:test'
 import assert from 'node:assert/strict'
-import {searchStudioAssets,assetSearchPage} from '../src/studio-asset-search.js'
+import {searchStudioAssets,assetSearchPage,summarizeStudioAssetSearchResult} from '../src/studio-asset-search.js'
 const page=(assets:any[],next_cursor:string|null,scanned=5)=>({content:[{type:'text',text:JSON.stringify({assets,next_cursor,scanned})}]})
 test('empty storage pages advance with identical scope; first matches keep continuation',async()=>{
  const calls:any[]=[];const args={kind:'bgm',query:'轻快',character_id:'x',limit:5,tags_all:['campus']}
@@ -38,7 +38,7 @@ test('one invocation budgets exact and catalog separately, retains filters and b
  const catalogArgs={...args};delete (catalogArgs as any).query;delete (catalogArgs as any).cursor
  assert.deepEqual(calls[2],catalogArgs);assert.equal(calls[2].limit,5)
  assert.deepEqual(r.assets,[]);assert.equal(r.next_cursor,'exact-2')
- assert.deepEqual(r.catalogDiscovery.assets,[source]);assert.equal(r.catalogDiscovery.next_cursor,'catalog-next')
+ assert.deepEqual(r.catalogDiscovery.assets.map((a:any)=>({id:a.id,kind:a.kind,object:a.object,license:a.license})),[source]);assert.equal(r.catalogDiscovery.next_cursor,'catalog-next')
  assert.equal(r.catalogDiscovery.availability[0].archiveState,'source_card');assert.equal(r.catalogDiscovery.availability[0].downloadVerified,false)
  assert.equal(r.catalogDiscovery.availability[0].rightsApproved,false)
  assert.equal(r.searchRecovery.continueCall.arguments.cursor,'exact-2')
@@ -54,7 +54,7 @@ test('total budget never multiplies; query-free search has no second scan',async
  const plain=assetSearchPage(await searchStudioAssets({kind:'bgm'},async()=>page([],String(++n)),4))
  assert.equal(n,4);assert.equal(plain.catalogDiscovery,undefined)
  const wrapped={structuredContent:{assets:[],next_cursor:'next',studioSearch:{pages:20}}}
- n=0;assert.equal(await searchStudioAssets({query:'q'},async()=>{n++;return wrapped}),wrapped);assert.equal(n,1)
+ n=0;const projected=assetSearchPage(await searchStudioAssets({query:'q'},async()=>{n++;return wrapped}));assert.equal(projected.next_cursor,'next');assert.equal(projected.studioSearch.pages,20);assert.equal(n,1)
 })
 test('total deadline returns original retry cursor, dispatches no discovery or late followups',async()=>{
  let calls=0,resolveLate:any
@@ -76,4 +76,39 @@ test('host budget cannot exceed twenty requests or sixty seconds',async()=>{
  await assert.rejects(searchStudioAssets({},invoke,21),/budget-invalid/)
  await assert.rejects(searchStudioAssets({},invoke,20,{timeoutMs:60_001}),/budget-invalid/)
  assert.equal(calls,0)
+})
+
+test('search projects all candidate IDs while omitting full profiles, prose, data URLs and signed download links',async()=>{
+ const large={id:'profile-1',kind:'image',title:'Campus expressions',tags:['campus','expression'],character_ids:['c1'],duration_seconds:1.5,object:{sha256:'a'.repeat(64),bytes:1234,key:'PRIVATE_OBJECT_KEY'},license:{status:'unverified',archive_allowed:false,evidence:'PRIVATE_EVIDENCE'},metadata:{profile:{personality:'PRIVATE_PROFILE'.repeat(6000)}},provenance:{prompt:'PRIVATE_PROMPT'.repeat(6000)},data:'data:image/png;base64,PRIVATE_BINARY',download_url:'https://private.test/?token=PRIVATE_TOKEN'}
+ const original=structuredClone(large),args={query:'campus',character_id:'c1',tags_all:['expression'],limit:5,cursor:'before'}
+ const r=assetSearchPage(await searchStudioAssets(args,async()=>page([large,{id:'second',kind:'image',object:null}],'after')))
+ assert.deepEqual(r.assets.map((a:any)=>a.id),['profile-1','second']);assert.equal(r.next_cursor,'after');assert.deepEqual(large,original)
+ assert.deepEqual(r.assets[0].tags,['campus','expression']);assert.equal(r.assets[0].durationSeconds,1.5);assert.equal(r.assets[0].license.archive_allowed,false)
+ assert.equal(r.assets[0].archiveState,'archived');assert.equal(r.assets[1].archiveState,'source_card');assert.equal(r.assets[0].rightsApproved,false);assert.equal(r.assets[0].downloadVerified,false)
+ assert.deepEqual(r.assets[0].details,{tool:'asset_get',arguments:{id:'profile-1'}});assert.doesNotMatch(JSON.stringify(r),/PRIVATE_|base64|private\.test/)
+ assert.ok(JSON.stringify(r).length<3000);assert.equal(r.searchProjection.metadataOnly,true)
+})
+test('oversized upstream page reports partial failure and original cursor rather than dropping IDs or advancing',async()=>{
+ const args={query:'q',kind:'image',character_id:'c',tags_all:['x'],cursor:'original',limit:100}
+ const oversized=Array.from({length:101},(_,i)=>({id:'asset-'+i,kind:'image'}))
+ const result=await searchStudioAssets(args,async()=>page(oversized,'advanced'))
+ assert.equal(result.isError,true);const r=assetSearchPage(result)
+ assert.equal(r.partial,true);assert.equal(r.candidatesDelivered,false);assert.equal(r.assets,undefined);assert.equal(r.next_cursor,undefined)
+ assert.deepEqual(r.retryArguments,{...args,limit:5});assert.match(r.nextAction,/No candidate subset or advanced cursor/)
+})
+test('malformed IDs and aggregate summary overflow fail explicitly, preserving exact input filters',()=>{
+ const args={kind:'image',cursor:'keep',tags_all:['campus'],limit:10}
+ for(const assets of [[{title:'missing identity'}],Array.from({length:90},(_,i)=>({id:'i'+i,title:'x'.repeat(200),tags:Array(16).fill('y'.repeat(100))}))]){
+  const r=summarizeStudioAssetSearchResult(page(assets,'do-not-advance'),args)
+  assert.equal(r.isError,true);assert.deepEqual(assetSearchPage(r).retryArguments,{...args,limit:5})
+ }
+})
+test('upstream failure with asset-shaped fields is not laundered into a successful empty search',async()=>{
+ const denied={structuredContent:{ok:false,assets:[],error_code:'denied'}};let calls=0
+ assert.equal(await searchStudioAssets({query:'q'},async()=>{calls++;return denied}),denied);assert.equal(calls,1)
+ const error={isError:true,content:[{type:'text',text:'denied'}]};assert.equal(summarizeStudioAssetSearchResult(error,{}),error)
+})
+test('text and structured outputs carry one canonical summary without altering MCP output contract',async()=>{
+ const r=await searchStudioAssets({},async()=>page([{id:'a'}],null))
+ assert.equal(r.content.length,1);assert.deepEqual(JSON.parse(r.content[0].text),r.structuredContent)
 })

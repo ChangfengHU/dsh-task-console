@@ -191,6 +191,7 @@ test('migration preserves original and runtime refreshes append a verified chain
  await verifyExecutionBinding(s.ctx,effectiveExecutionBinding(s.store.kernel.db,s.binding),'task','batch','a',s.runtime)
  const reloaded=new EventStore(join(s.root,'store'));await reloaded.load();assert.equal(effectiveExecutionBinding(reloaded.kernel.db,reloaded.s.batches.get('batch')!.turn!.executionBinding!).sha256,p.binding.sha256);reloaded.kernel.db.close()
  await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/runtime-current/)
+ s.store.kernel.db.exec('DROP TABLE dsh_execution_binding_runtime_refreshes') // legacy database first encountered by a runtime-refresh release
  s.setRuntime('c'.repeat(64));const p2=await previewExecutionMigration(s.store,s.ctx,args,s.options)
  assert.equal(p2.previousEffectiveSha256,p.binding.sha256);assert.equal(p2.sequence,1)
  await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p2.previewSha256,reason:'verify the next pinned runtime release'},s.options)

@@ -118,7 +118,8 @@ export async function previewExecutionMigration(store:any,ctx:any,value:any,opti
  if(binding.runtimeSha256===previous.runtimeSha256)fail('runtime-current')
  for(const a of binding.agents)await verifyExecutionBinding(ctx,binding,value.taskId,value.batchId,a.id,options.runtime??executionRuntimeIdentity)
  if(context().original.sha256!==original.sha256)fail('original-changed')
- const sequence=previous.sha256===original.sha256?undefined:(store.kernel.db.prepare('SELECT COALESCE(MAX(sequence),0)+1 AS n FROM dsh_execution_binding_runtime_refreshes WHERE batch_id=?').get(value.batchId) as any).n
+ const hasRefreshTable=!!store.kernel.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_execution_binding_runtime_refreshes'").get()
+ const sequence=previous.sha256===original.sha256?undefined:(hasRefreshTable?(store.kernel.db.prepare('SELECT COALESCE(MAX(sequence),0)+1 AS n FROM dsh_execution_binding_runtime_refreshes WHERE batch_id=?').get(value.batchId) as any).n:1)
  const body={schemaVersion:1,taskId:value.taskId,batchId:value.batchId,originalSha256:original.sha256,previousEffectiveSha256:previous.sha256,...(sequence?{sequence}:{}),snapshotSha256:sha(await safeBytes(join(dir,'snapshot.json'))),binding,assisted:true,unblocked:false}
  return {...body,previewSha256:digest(body)}
 }

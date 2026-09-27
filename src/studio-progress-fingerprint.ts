@@ -52,8 +52,14 @@ function failed(result:any,depth=0):boolean {
 }
 function safeField(value:any):string|undefined {
  if(typeof value!=='string'||value.length>100||!/^(?:\$\.)?[A-Za-z][A-Za-z0-9_]*(?:\[\d+\]|\.[A-Za-z][A-Za-z0-9_]*)*$/.test(value)||/secret|token|password|authorization|cookie|credential|api.?key/i.test(value))return
- if(!/^(?:\$\.)?(?:root|arguments|lines|sources|outputs|manifest|board|scenes|script|plan|bgm|sfx|layers|audio|duration|tracks|segments|items|reference|visualRequirements|path)(?:[.[]|$)/.test(value))return
+ if(!/^(?:\$\.)?(?:root|arguments|lines|sources|outputs|manifest|board|scenes|script|plan|bgm|sfx|layers|audio|duration|tracks|segments|items|reference|visualRequirements|path|storyboard|visualPlan|executionBoard|sidecar|characterIds|requirements|components|mappings|componentId|requirementId|componentKey|sceneIndex|layerIndex|sha256|kind|usage)(?:[.[]|$)/.test(value))return
  return value.replace(/\[\d+\]/g,'[]')
+}
+function safeReason(value:any):string|undefined {
+ // Validator reasons are stable machine slugs. Never copy prose, paths,
+ // provider messages, or arbitrary model-authored text into durable run errors.
+ if(typeof value!=='string'||value.length>96||!/^[a-z0-9]+(?:-[a-z0-9]+){0,10}$/.test(value)||/secret|token|password|authorization|cookie|credential|api.?key/i.test(value))return
+ return value
 }
 function normalizeError(text:string){
  return text.replace(/https?:\/\/[^\s"'<>]+/gi,'<url>')
@@ -72,7 +78,8 @@ function errorInfo(result:any,tool:string){
  // that provider-controlled body is copied into the model-facing summary.
  const noisy=new Set(['action','nextAction','retryable','retryAfterRepair','requiresHuman','qualityApproved','tool','arguments','manifestSchema','eligibleExistingMedia','scan','pathContract'])
  const body=object(detail)&&!(detail instanceof Error)?Object.fromEntries(Object.entries(detail).filter(([key])=>!noisy.has(key))):message
- return {errorFingerprint:hash({tool,error:normalizeError(typeof body==='string'?body:JSON.stringify(canonical(body)))}),errorSummary:[publicCode,field].filter(Boolean).join(' at ')}
+ const reason=safeReason(detail?.reason)
+ return {errorFingerprint:hash({tool,error:normalizeError(typeof body==='string'?body:JSON.stringify(canonical(body)))}),errorSummary:[publicCode,field&&`at ${field}`,reason&&`(${reason})`].filter(Boolean).join(' ').slice(0,200)}
 }
 /** Classify a completed dispatch only. This does not select media, approve rights,
  * count attempts, or claim that an asset_get response is a verified download. */

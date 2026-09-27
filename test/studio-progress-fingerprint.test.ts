@@ -31,6 +31,16 @@ test('plain errors and unsafe error fields expose only bounded safe summaries',(
  const warnings=classifyStudioTool(call('read'),{ok:true,message:'this document mentions an error'})
  assert.equal(warnings.errorFingerprint,undefined);assert.equal(warnings.acquired,false)
 })
+test('visual compiler diagnostics retain safe field paths and machine reasons for same-node repair',()=>{
+ const detail=(field:string,reason:string)=>failure('studio-visual-components-invalid: '+JSON.stringify({error_code:'studio-visual-components-invalid',field,reason,action:'Do not echo this arbitrary action.'}))
+ const missing=classifyStudioTool(call('studio_compile_storyboard'),detail('visualPlan.items[2].componentId','unknown-component'))
+ assert.equal(missing.errorSummary,'studio-visual-components-invalid at visualPlan.items[].componentId (unknown-component)')
+ const stale=classifyStudioTool(call('studio_compile_storyboard'),detail('sidecar.executionBoardSha256','stale-source-binding'))
+ assert.equal(stale.errorSummary,'studio-visual-components-invalid at sidecar.executionBoardSha256 (stale-source-binding)')
+ const unsafe=classifyStudioTool(call('studio_compile_storyboard'),detail('visualPlan.components[0].path','PRIVATE_TOKEN /home/private/file'))
+ assert.equal(unsafe.errorSummary,'studio-visual-components-invalid at visualPlan.components[].path')
+ assert.doesNotMatch(JSON.stringify([missing,stale,unsafe]),/PRIVATE_TOKEN|Do not echo|\/home\/private/)
+})
 test('all original voice/image polling bypasses repeated error classification, including exact hashed public names',()=>{
  for(const name of ['vyibc-voice_status','vyibc-voice_result','vyibc-image_get_task','studio_render_status'])for(const server of ['media','vyibc-media-long-server-1234567890']){
   const out=classifyStudioTool(call(publicToolName(server,name),{job_id:'original-job'}),failure('studio-provider-timeout: PRIVATE_DETAILS'))

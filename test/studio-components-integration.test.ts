@@ -61,7 +61,8 @@ test('new stage rejects background-to-character false coverage and replay detect
 })
 test('v2 requires sidecar and rejects omissions, substitutions and stale plan before compiler dispatch',async t=>{
  const s=await fixture(t)
- await assert.rejects(s.tool.execute({boardPath:'execution.json'}),/components-binding-required/)
+ assert.ok(s.tool.parameters.required.includes('bindingPath'),'components-v2 must expose bindingPath as a schema-level required argument')
+ await assert.rejects(s.tool.execute({boardPath:'execution.json'}),/missing required property "bindingPath"/)
  s.sidecar.mappings.pop();await s.saveSidecar();await assert.rejects(s.execute(),/required-component-not-rendered/)
  assert.equal(s.calls(),0);assert.ok(!(await readdir(s.cwd)).includes('.studio-boards'))
 })

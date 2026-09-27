@@ -61,6 +61,13 @@ test('actual SDK compiles object DSL and validates arguments, appends immutable 
  await assert.rejects(s.execute({board:'serialized JSON'}),/invalid arguments/);await assert.rejects(s.tool.execute({}),/input-required/);await assert.rejects(s.execute({extra:'ignored-by-DSL'}),/unknown-argument/)
  const r=await s.execute();assert.equal(r.ok,true);assert.equal(r.qualityApproved,false);assert.equal(r.composition,join(s.cwd,'composition-r1'));assert.equal(r.boardSha256,sha(JSON.stringify(board())));assert.equal(await readFile(r.boardPath,'utf8'),JSON.stringify(board()));assert.equal(r.indexSha256,sha(await readFile(r.indexPath)));assert.equal(r.inputReused,false);assert.equal(s.calls(),1);s.dispose();assert.equal(s.disposed(),true)
 })
+test('bindingPath is schema-required only for components-v2 Tasks',async t=>{
+ const modern=await setup(t,{policy:{visualCoverage:'components-v2'}})
+ assert.ok(modern.tool.parameters.required.includes('bindingPath'))
+ const legacy=await setup(t,{policy:{visualCoverage:'requirements-v1'}})
+ assert.ok(!legacy.tool.parameters.required?.includes('bindingPath'))
+ await assert.rejects(legacy.tool.execute({board:board(),outputDirectory:'composition-r1',bindingPath:'binding.json'}),/components-contract-required/)
+})
 test('role, session and inactive checks precede all compiler work',async t=>{
  for(const role of ['planner','reviewer','notifier']){const s=await setup(t,{role});await assert.rejects(s.execute(),/role-denied/);assert.equal(s.calls(),0)}
  const s=await setup(t);await assert.rejects(s.execute({}, {agent:{session:{id:'other'}}}),/session-mismatch/);s.stop();await assert.rejects(s.execute(),/stale/);assert.equal(s.calls(),0)

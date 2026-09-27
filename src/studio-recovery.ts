@@ -32,8 +32,15 @@ export async function recoverStudioFailure(store: EventStore, input: StudioRecov
     const descendants = new Set([cardId])
     let changed = true
     while (changed) { changed = false; for (const id of batch.cardIds) { const c = store.s.cards.get(id)!; if (!descendants.has(id) && c.deps.some(d => descendants.has(d))) { descendants.add(id); changed = true } } }
-    const cancelled = batch.cardIds.filter(id => store.s.cards.get(id)?.status === 'cancelled')
-    if (batch.cardIds.some(id => id !== cardId && store.s.cards.get(id)?.status === 'failed') || cancelled.some(id => !descendants.has(id))) throw Error('studio-recovery-unrelated-terminal-node')
+    // A preparation revision can leave canceled cards from an older round in
+    // this same batch. They are historical, superseded work, not descendants
+    // of the current failed editor, and must stay untouched. Only enforce the
+    // terminal-node closure on this round and later rounds.
+    const round = card.round ?? 0
+    const currentOrLater = (id: string) => (store.s.cards.get(id)?.round ?? 0) >= round
+    const unrelatedFailed = batch.cardIds.some(id => id !== cardId && currentOrLater(id) && store.s.cards.get(id)?.status === 'failed')
+    const cancelled = batch.cardIds.filter(id => currentOrLater(id) && store.s.cards.get(id)?.status === 'cancelled')
+    if (unrelatedFailed || cancelled.some(id => !descendants.has(id))) throw Error('studio-recovery-unrelated-terminal-node')
     // Reopen root before descendants so dependency checks remain authoritative.
     const restored = [cardId,...cancelled].map(id => ({id,status:store.kernel.recoverStudioNode(id,id === cardId ? 'triage' : 'archived',input.recoveryId)}))
     audit(at)

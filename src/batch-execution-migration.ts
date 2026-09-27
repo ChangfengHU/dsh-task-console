@@ -13,19 +13,42 @@ const sha=(x:string|Buffer)=>createHash('sha256').update(x).digest('hex')
 const digest=(x:unknown)=>sha(canonical(x))
 const fail=(s:string):never=>{throw new ExecutionBindingError('migration-'+s)}
 const runtimeRoot=dirname(dirname(fileURLToPath(import.meta.url)))
-export function migrationTable(db:any){db.exec('CREATE TABLE IF NOT EXISTS dsh_execution_binding_migrations (batch_id TEXT PRIMARY KEY, original_sha TEXT NOT NULL, preview_sha TEXT NOT NULL, payload TEXT NOT NULL)')}
-export function effectiveExecutionBinding(db:any,original:BatchExecutionBinding):BatchExecutionBinding{
- assertBinding(original,original.taskId,original.batchId)
- if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_execution_binding_migrations'").get())return original
- const row=db.prepare('SELECT * FROM dsh_execution_binding_migrations WHERE batch_id=?').get(original.batchId)
- if(!row)return original
+export function migrationTable(db:any){
+ db.exec('CREATE TABLE IF NOT EXISTS dsh_execution_binding_migrations (batch_id TEXT PRIMARY KEY, original_sha TEXT NOT NULL, preview_sha TEXT NOT NULL, payload TEXT NOT NULL)')
+ db.exec('CREATE TABLE IF NOT EXISTS dsh_execution_binding_runtime_refreshes (batch_id TEXT NOT NULL, sequence INTEGER NOT NULL, previous_sha TEXT NOT NULL, preview_sha TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(batch_id,sequence))')
+}
+function readInitialOverlay(row:any,original:BatchExecutionBinding){
  let p:any;try{p=JSON.parse(row.payload)}catch{return fail('invalid-overlay')}
  const {previewSha256,...body}=p
  if(row.original_sha!==original.sha256||p.originalSha256!==original.sha256||p.taskId!==original.taskId||p.batchId!==original.batchId||previewSha256!==row.preview_sha||digest(body)!==previewSha256)fail('invalid-overlay')
  assertBinding(p.binding,original.taskId,original.batchId)
- return p.binding
+ return p.binding as BatchExecutionBinding
+}
+export function effectiveExecutionBinding(db:any,original:BatchExecutionBinding):BatchExecutionBinding{
+ assertBinding(original,original.taskId,original.batchId)
+ let current=original
+ if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_execution_binding_migrations'").get()){
+  const row=db.prepare('SELECT * FROM dsh_execution_binding_migrations WHERE batch_id=?').get(original.batchId)
+  if(row)current=readInitialOverlay(row,original)
+ }
+ if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_execution_binding_runtime_refreshes'").get()){
+  const rows=db.prepare('SELECT * FROM dsh_execution_binding_runtime_refreshes WHERE batch_id=? ORDER BY sequence').all(original.batchId) as any[]
+  for(let i=0;i<rows.length;i++){
+   const row=rows[i];let p:any;try{p=JSON.parse(row.payload)}catch{return fail('invalid-runtime-refresh')}
+   const {previewSha256,...body}=p
+   if(row.sequence!==i+1||row.previous_sha!==current.sha256||p.schemaVersion!==1||p.sequence!==row.sequence||p.taskId!==original.taskId||p.batchId!==original.batchId||p.previousEffectiveSha256!==current.sha256||previewSha256!==row.preview_sha||digest(body)!==previewSha256)fail('invalid-runtime-refresh')
+   assertBinding(p.binding,original.taskId,original.batchId)
+   if(canonical(p.binding.agents)!==canonical(current.agents)||canonical(p.binding.fallback)!==canonical(current.fallback)||p.binding.runtimeSha256===current.runtimeSha256)fail('invalid-runtime-refresh')
+   current=p.binding
+  }
+ }
+ return current
 }
 export function executionMigrationSha(db:any,batchId:string):string|null{
+ if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_execution_binding_runtime_refreshes'").get()){
+  const refresh=db.prepare('SELECT preview_sha FROM dsh_execution_binding_runtime_refreshes WHERE batch_id=? ORDER BY sequence DESC LIMIT 1').get(batchId)?.preview_sha
+  if(refresh)return refresh
+ }
  if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_execution_binding_migrations'").get())return null
  return db.prepare('SELECT preview_sha FROM dsh_execution_binding_migrations WHERE batch_id=?').get(batchId)?.preview_sha??null
 }
@@ -59,10 +82,10 @@ export async function previewExecutionMigration(store:any,ctx:any,value:any,opti
   // Global quiescence includes durable claims and ready/review dispatch queues.
   assertQuiescent(store)
   const original=batch.turn.executionBinding;assertBinding(original,base.id,batch.id)
-  if(effectiveExecutionBinding(store.kernel.db,original).sha256!==original.sha256)fail('already-migrated')
-  return {task:taskForBatch(base,batch),batch,original}
+  const previous=effectiveExecutionBinding(store.kernel.db,original)
+  return {task:taskForBatch(base,batch),batch,original,previous}
  }
- const {task,original}=context(),root=options.runtimeRoot??runtimeRoot,dir=join(dirname(root),'evidence/execution-binding-snapshots',original.sha256)
+ const {task,original,previous}=context(),root=options.runtimeRoot??runtimeRoot,dir=join(dirname(root),'evidence/execution-binding-snapshots',original.sha256)
  const manifest=JSON.parse((await safeBytes(join(dir,'snapshot.json'))).toString())
  if(manifest.bindingSha256!==original.sha256||manifest.runtimeSha256!==original.runtimeSha256||!Array.isArray(manifest.roles)||manifest.roles.length!==original.agents.length)fail('snapshot-identity')
  const current=await captureExecutionBinding(ctx,task,original.batchId,original.fallback,options.runtime??executionRuntimeIdentity)
@@ -76,20 +99,27 @@ export async function previewExecutionMigration(store:any,ctx:any,value:any,opti
    if(expected===null){if(row[0].files[name]!==undefined&&row[0].files[name]!==null)fail('snapshot-hash');continue}
    bytes[name]=await safeBytes(join(dir,old.id,name));if(sha(bytes[name])!==expected||row[0].files[name]!==expected)fail('snapshot-hash')
   }
-  const {compositionSha256:oc,capabilitySha256:ok,...oa}=old,{compositionSha256:nc,capabilitySha256:nk,...na}=now
-  if(canonical(oa)!==canonical(na))fail('authored-or-authority-drift')
-  const composition=(await safeBytes(join(now.directory,'agent.cordis.yml'))).toString()
-  if(!releasePathOnly(bytes['agent.cordis.yml'].toString(),composition,root))fail('composition-not-path-only')
-  const oldCap=JSON.parse(bytes['capabilities.lock.json'].toString()),newBytes=await safeBytes(join(now.directory,'capabilities.lock.json')),newCap=JSON.parse(newBytes.toString())
-  if(sha(newBytes)!==now.capabilitySha256||sha(composition)!==now.compositionSha256)fail('current-changed')
-  delete oldCap.compositionSha256;delete newCap.compositionSha256
-  if(canonical(oldCap)!==canonical(newCap))fail('capabilities-changed')
+  if(previous.sha256!==original.sha256){
+   const before=previous.agents.find((a:any)=>a.id===old.id)
+   if(!before||canonical(before)!==canonical(now))fail('authored-or-authority-drift')
+  }else{
+   const {compositionSha256:oc,capabilitySha256:ok,...oa}=old,{compositionSha256:nc,capabilitySha256:nk,...na}=now
+   if(canonical(oa)!==canonical(na))fail('authored-or-authority-drift')
+   const composition=(await safeBytes(join(now.directory,'agent.cordis.yml'))).toString()
+   if(!releasePathOnly(bytes['agent.cordis.yml'].toString(),composition,root))fail('composition-not-path-only')
+   const oldCap=JSON.parse(bytes['capabilities.lock.json'].toString()),newBytes=await safeBytes(join(now.directory,'capabilities.lock.json')),newCap=JSON.parse(newBytes.toString())
+   if(sha(newBytes)!==now.capabilitySha256||sha(composition)!==now.compositionSha256)fail('current-changed')
+   delete oldCap.compositionSha256;delete newCap.compositionSha256
+   if(canonical(oldCap)!==canonical(newCap))fail('capabilities-changed')
+  }
  }
  const bindingBody={...current,capturedAt:original.capturedAt};delete (bindingBody as any).sha256
  const binding={...bindingBody,sha256:digest(bindingBody)}
+ if(binding.runtimeSha256===previous.runtimeSha256)fail('runtime-current')
  for(const a of binding.agents)await verifyExecutionBinding(ctx,binding,value.taskId,value.batchId,a.id,options.runtime??executionRuntimeIdentity)
  if(context().original.sha256!==original.sha256)fail('original-changed')
- const body={schemaVersion:1,taskId:value.taskId,batchId:value.batchId,originalSha256:original.sha256,snapshotSha256:sha(await safeBytes(join(dir,'snapshot.json'))),binding,assisted:true,unblocked:false}
+ const sequence=previous.sha256===original.sha256?undefined:(store.kernel.db.prepare('SELECT COALESCE(MAX(sequence),0)+1 AS n FROM dsh_execution_binding_runtime_refreshes WHERE batch_id=?').get(value.batchId) as any).n
+ const body={schemaVersion:1,taskId:value.taskId,batchId:value.batchId,originalSha256:original.sha256,previousEffectiveSha256:previous.sha256,...(sequence?{sequence}:{}),snapshotSha256:sha(await safeBytes(join(dir,'snapshot.json'))),binding,assisted:true,unblocked:false}
  return {...body,previewSha256:digest(body)}
 }
 export async function applyExecutionMigration(store:any,ctx:any,value:any,options:any={}){
@@ -110,9 +140,17 @@ export async function applyExecutionMigration(store:any,ctx:any,value:any,option
   const base=store.tasks.get(value.taskId),batch=store.s.batches.get(value.batchId)
   if(!base||base.archivedAt||!batch||batch.taskId!==value.taskId||batch.archivedAt||batch.settled)fail('context')
   const original=batch.turn?.executionBinding
-  if(!original||original.sha256!==preview.originalSha256||effectiveExecutionBinding(store.kernel.db,original).sha256!==original.sha256)fail('original-changed')
-  store.kernel.db.prepare('INSERT INTO dsh_execution_binding_migrations VALUES (?,?,?,?)').run(value.batchId,original.sha256,preview.previewSha256,JSON.stringify(preview))
-  audit.record({id:'runtime-migration:'+preview.previewSha256,taskId:value.taskId,batchId:value.batchId,kind:'operator-runtime-migration',reason:value.reason})
+  if(!original||original.sha256!==preview.originalSha256||effectiveExecutionBinding(store.kernel.db,original).sha256!==preview.previousEffectiveSha256)fail('original-changed')
+  if(preview.previousEffectiveSha256===original.sha256){
+   store.kernel.db.prepare('INSERT INTO dsh_execution_binding_migrations VALUES (?,?,?,?)').run(value.batchId,original.sha256,preview.previewSha256,JSON.stringify(preview))
+   audit.record({id:'runtime-migration:'+preview.previewSha256,taskId:value.taskId,batchId:value.batchId,kind:'operator-runtime-migration',reason:value.reason})
+  }else{
+   migrationTable(store.kernel.db)
+   const sequence=preview.sequence
+   if(typeof sequence!=='number'||sequence!==(store.kernel.db.prepare('SELECT COALESCE(MAX(sequence),0)+1 AS n FROM dsh_execution_binding_runtime_refreshes WHERE batch_id=?').get(value.batchId) as any).n)fail('preview-changed')
+   store.kernel.db.prepare('INSERT INTO dsh_execution_binding_runtime_refreshes VALUES (?,?,?,?,?)').run(value.batchId,sequence,preview.previousEffectiveSha256,preview.previewSha256,JSON.stringify(preview))
+   audit.record({id:'runtime-refresh:'+preview.previewSha256,taskId:value.taskId,batchId:value.batchId,kind:'operator-runtime-refresh',reason:value.reason})
+  }
  },()=>undefined)
  }
  await locked(0)

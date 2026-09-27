@@ -183,14 +183,20 @@ async function migrationFixture(t:any){
  await writeFile(join(dir,'snapshot.json'),JSON.stringify({bindingSha256:binding.sha256,runtimeSha256:binding.runtimeSha256,roles}))
  s.setRuntime('b'.repeat(64));return {...s,batch,binding,dir,options:{runtime:s.runtime,runtimeRoot}}
 }
-test('migration preserves original, records assistance, resolves after reload, refuses second migration',async t=>{
+test('migration preserves original and runtime refreshes append a verified chain',async t=>{
  const s=await migrationFixture(t),args={taskId:'task',batchId:'batch'},before=JSON.stringify(s.batch.turn),p=await previewExecutionMigration(s.store,s.ctx,args,s.options)
  assert.equal(p.binding.runtimeSha256,'b'.repeat(64));await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p.previewSha256,reason:'platform fix'},s.options)
  assert.equal(JSON.stringify(s.batch.turn),before);assert.equal(effectiveExecutionBinding(s.store.kernel.db,s.binding).sha256,p.binding.sha256)
  assert.equal(s.store.kernel.db.prepare('SELECT count(*) AS n FROM dsh_studio_interventions').get().n,1)
  await verifyExecutionBinding(s.ctx,effectiveExecutionBinding(s.store.kernel.db,s.binding),'task','batch','a',s.runtime)
  const reloaded=new EventStore(join(s.root,'store'));await reloaded.load();assert.equal(effectiveExecutionBinding(reloaded.kernel.db,reloaded.s.batches.get('batch')!.turn!.executionBinding!).sha256,p.binding.sha256);reloaded.kernel.db.close()
- await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/already-migrated/)
+ await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/runtime-current/)
+ s.setRuntime('c'.repeat(64));const p2=await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ assert.equal(p2.previousEffectiveSha256,p.binding.sha256);assert.equal(p2.sequence,1)
+ await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p2.previewSha256,reason:'verify the next pinned runtime release'},s.options)
+ const effective=effectiveExecutionBinding(s.store.kernel.db,s.binding);assert.equal(effective.runtimeSha256,'c'.repeat(64));assert.equal(effective.sha256,p2.binding.sha256)
+ assert.equal(s.store.kernel.db.prepare('SELECT count(*) AS n FROM dsh_execution_binding_runtime_refreshes WHERE batch_id=?').get('batch').n,1)
+ assert.equal(s.store.kernel.db.prepare('SELECT count(*) AS n FROM dsh_execution_binding_migrations WHERE batch_id=?').get('batch').n,1)
  s.store.kernel.db.prepare("UPDATE dsh_execution_binding_migrations SET original_sha='bad'").run();assert.throws(()=>effectiveExecutionBinding(s.store.kernel.db,s.binding),/invalid-overlay/)
 })
 test('migration refuses stale preview, authority drift, untrusted evidence and dispatchable queue',async t=>{

@@ -610,6 +610,7 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
     '采用结构化编译时先调用 studio_read_guide({id:"execution"}) 读取随包固定执行契约，并核对当前 studio_compile_storyboard schema；该指南不假定项目中存在文档文件；规划分镜不是执行板。根字段为 schema=studio-board-v1、duration秒数、gsap、font、script、scenes、audio。沿用冻结台词，voice音轨逐条含lineId/text；场景需start/duration/layers，不能把frame描述当可执行图层。',
     'scene.duration是视觉镜头持续时间，不是某句配音长度；台词、反应与无对白动作共同构成镜头，音轨时间单独按真实音频计算。编译前用短程序打印所有镜头start/duration/end及相邻差值，同时打印音轨边界，修正后复查。关键时刻之间不能留未渲染的空档；不能压缩整片、删剧情或静态填空来过检查。',
     '先读取 studio_status.executionAssets 中实际发现的本地GSAP/字体路径；若没有该字段则查现有工程文件。不能填包名、字体名或用Skill哈希猜运行库版本。根据同轮实际登记文件核对每个src；pending-generation不是存在的图片，缺失文件名应定位后处理，不能靠改绝对路径或反复重试解决。',
+    '若Task启用visualCoverage=components-v2，bindingPath必须指向单独的studio-execution-components-v2 sidecar，绝不能复用visual-plan-v2或visual-plan文件。sidecar仅含schema、storyboardSha256、visualPlanSha256、executionBoardSha256、mappings；三个hash分别取登记storyboard、visual-plan与当前执行板的实际原始文件。mappings逐项对应实际执行板的零基sceneIndex/layerIndex与原sceneId、requirementId、componentId。编译前先读取execution指南并核对这五项；schema报错时先修正唯一错误文件，不要轮换规划文件反复试。',
     '当前schema支持boardPath时，将完整执行板保存在项目内JSON，调用 studio_compile_storyboard({boardPath:相对JSON路径})，无需每次重新发送整份JSON；旧schema才用board对象。编译器负责创建输出目录，不预建目录、不先把源JSON写进输出目录，也不删除旧版规避output-exists。保持有效分镜，局部修正明确错误；失败编译不能直接交渲染。')
   if(task.design?.evidenceContract==='studio-video-v1'&&card.role==='executor')lines.push('', '[STUDIO REAL RENDER]',
     '先检查同轮实际素材、冻结台词及当前渲染依赖，再使用已安装并可用的 HyperFrames/FFmpeg 执行能力产出真实视频；只能按当前会话实际工具 schema 调用渲染工具或执行能力；缺少时不臆造接口、名称或参数。渲染命令返回执行编号时持续查询该编号；结果未知先对账，不盲目重复启动。',

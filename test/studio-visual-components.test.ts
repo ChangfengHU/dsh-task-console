@@ -22,6 +22,16 @@ test('composite components, reuse and split scenes bind without claiming pixel o
  assert.equal(coverage.items.length,3);assert.equal(execution.mappings.length,4);assert.equal(execution.sidecarSha256,input.sidecar.sha256)
  assert.equal(coverage.qualityApproved,false);assert.equal(execution.pixelEvidence,'unverified');assert.equal(JSON.stringify(input),before)
 })
+test('visual plan cannot be passed as the execution sidecar and returns the exact separate-sidecar contract',()=>{
+ const input=fixture();input.sidecar=input.visualPlan
+ assert.throws(()=>validateExecutionComponents(input),(e:any)=>{
+  assert.match(e.message,/studio-visual-components-invalid:/)
+  const body=JSON.parse(e.message.slice(e.message.indexOf(': ')+2))
+  assert.equal(body.field,'sidecar.schema');assert.equal(body.reason,'visual-plan-is-not-execution-sidecar')
+  assert.match(body.action,/studio-execution-components-v2/);assert.match(body.action,/storyboardSha256/);assert.match(body.action,/executionBoardSha256/)
+  return true
+ })
+})
 test('background binding cannot silently satisfy character requirement',()=>{
  const input=fixture(),plan=parse(input.visualPlan);plan.items[0].componentId='room-component';input.visualPlan=doc(plan)
  assert.throws(()=>bindVisualComponents(input),error('visualPlan.items[0].componentId','component-does-not-fulfill-required-kind-or-identity'))

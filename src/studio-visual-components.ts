@@ -89,8 +89,10 @@ export function bindVisualComponents(input:VisualComponentInputs){
 /** Revalidates original source bytes, then checks the execution mapping. No visual approval. */
 export function validateExecutionComponents(input:VisualComponentInputs&{executionBoard:ComponentDocument;sidecar:ComponentDocument}){
  const coverage=bindVisualComponents(input),board=document(input.executionBoard,'executionBoard'),sidecar=document(input.sidecar,'sidecar')
+ if(!sidecar||typeof sidecar!=='object'||Array.isArray(sidecar))fail('sidecar','object-required','Use a separate execution sidecar JSON object; the visual plan is not the execution sidecar.')
+ if(sidecar.schema==='visual-plan-v2')fail('sidecar.schema','visual-plan-is-not-execution-sidecar','bindingPath must point to a separate execution sidecar, not the visual plan. Create a JSON document with schema "studio-execution-components-v2", storyboardSha256, visualPlanSha256, executionBoardSha256, and mappings; compute all three hashes from the exact registered source files.')
+ if(sidecar.schema!=='studio-execution-components-v2')fail('sidecar.schema','execution-components-v2-required','Use the exact schema "studio-execution-components-v2" in a separate execution sidecar; do not add planning metadata to the rendering board.')
  obj(sidecar,'sidecar',['schema','storyboardSha256','visualPlanSha256','executionBoardSha256','mappings'])
- if(sidecar.schema!=='studio-execution-components-v2')fail('sidecar.schema','execution-components-v2-required','Use the explicit execution sidecar schema; do not add unsupported fields to the rendering board.')
  for(const [key,expected] of [['storyboardSha256',coverage.storyboardSha256],['visualPlanSha256',coverage.visualPlanSha256],['executionBoardSha256',input.executionBoard.sha256]])if(sidecar[key]!==expected)fail('sidecar.'+key,'stale-source-binding','Recheck the exact changed source and its layer mapping before producing a new sidecar hash.')
  if(board?.schema!=='studio-board-v1')fail('executionBoard.schema','execution-board-required','Use the actual structured execution board; this sidecar does not convert planning JSON into rendering instructions.')
  const scenes=list(board.scenes,'executionBoard.scenes',60),seenRequirements=new Set<string>(),mappedImages=new Set<string>(),seenMappings=new Set<string>(),originalByScene=new Map<number,string>()

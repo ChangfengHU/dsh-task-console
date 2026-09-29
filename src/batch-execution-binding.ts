@@ -29,7 +29,7 @@ function fallback(value:any):BoundFallback|null {
  const s=selection(value);return {fromProvider:value.fromProvider,provider:s.provider,model:s.model}
 }
 async function optionalHash(path:string){try{return sha(await readFile(path))}catch(e:any){if(e.code==='ENOENT')return null;throw e}}
-async function captureAgent(ctx:any,id:string):Promise<BoundAgent>{
+async function captureAgent(ctx:any,id:string,frozenDefault?:BoundSelection):Promise<BoundAgent>{
  try{
   const preset=await ctx.get('agentPresets').resolve(id),directory=await realpath(dirname(String(preset.path)))
   if(preset.broken||preset.id!==id)fail('preset-unavailable')
@@ -38,7 +38,7 @@ async function captureAgent(ctx:any,id:string):Promise<BoundAgent>{
   const capabilityBytes=await readFile(join(directory,'capabilities.lock.json')),capability=JSON.parse(capabilityBytes.toString())
   if(capability.schema!==CAPABILITY_SCHEMA||capability.specSha256!==digest(spec)||capability.compositionSha256!==sha(composition))fail('preset-lock-invalid')
   const fromSpec=spec.model.includes('/'),parts=spec.model.split('/')
-  const chosen=fromSpec?{provider:parts.shift(),model:parts.join('/'),...(spec.effort?{reasoningEffort:spec.effort}:{})}:ctx.get('agentDefaultModel')?.currentSelection?.()
+  const chosen=fromSpec?{provider:parts.shift(),model:parts.join('/'),...(spec.effort?{reasoningEffort:spec.effort}:{})}:frozenDefault??ctx.get('agentDefaultModel')?.currentSelection?.()
   return {id,presetId:preset.id,directory,selection:selection(chosen),selectionSource:fromSpec?'spec':'default',permission:spec.permissionPreset,
    specSha256:sha(await readFile(join(directory,'task-console.json'))),compositionSha256:sha(composition),capabilitySha256:sha(capabilityBytes),
    skillLockSha256:await optionalHash(join(directory,'skills.lock.json')),
@@ -91,11 +91,14 @@ export function assertBinding(binding:BatchExecutionBinding,taskId:string,batchI
  const {sha256,...body}=binding??{} as BatchExecutionBinding
  if(body.schemaVersion!==1||body.mode!=='agent-runtime-v1'||body.taskId!==taskId||body.batchId!==batchId||!Array.isArray(body.agents)||sha256!==digest(body))fail('invalid')
 }
-export async function captureExecutionBinding(ctx:any,task:any,batchId:string,allowedFallback:any,runtime=executionRuntimeIdentity):Promise<BatchExecutionBinding>{
+export async function captureExecutionBinding(ctx:any,task:any,batchId:string,allowedFallback:any,runtime=executionRuntimeIdentity,frozen?:BatchExecutionBinding):Promise<BatchExecutionBinding>{
+ if(frozen)assertBinding(frozen,task.id,batchId)
  const agents:BoundAgent[]=[]
  for(const id of taskAgentIds(task)){
   const p=await ctx.get('agentPresets').resolve(id)
-  agents.push(await withPresetLock(dirname(String(p.path)),()=>captureAgent(ctx,id)))
+  const previous=frozen?.agents.find(a=>a.id===id)
+  if(frozen&&!previous)fail('assignee-unbound')
+  agents.push(await withPresetLock(dirname(String(p.path)),()=>captureAgent(ctx,id,previous?.selectionSource==='default'?previous.selection:undefined)))
  }
  const runtimeSha256=await runtime();if(!/^[a-f0-9]{64}$/.test(runtimeSha256))fail('runtime-invalid')
  const body={schemaVersion:1 as const,mode:'agent-runtime-v1' as const,taskId:task.id,batchId,capturedAt:new Date().toISOString(),agents,runtimeSha256,fallback:fallback(allowedFallback)}
@@ -104,7 +107,9 @@ export async function captureExecutionBinding(ctx:any,task:any,batchId:string,al
 export async function verifyExecutionBinding(ctx:any,binding:BatchExecutionBinding,taskId:string,batchId:string,agentId:string,runtime=executionRuntimeIdentity){
  assertBinding(binding,taskId,batchId)
  const expected=binding.agents.find(a=>a.id===agentId);if(!expected)fail('assignee-unbound')
- if(digest(await captureAgent(ctx,agentId))!==digest(expected))fail('agent-drift')
+ // Bound runs already dispatch this exact selection. A global chat default is
+ // only an input to NEW batches, never a reason to change or stall an old one.
+ if(digest(await captureAgent(ctx,agentId,expected.selectionSource==='default'?expected.selection:undefined))!==digest(expected))fail('agent-drift')
  if(await runtime()!==binding.runtimeSha256)fail('runtime-drift')
  return expected
 }

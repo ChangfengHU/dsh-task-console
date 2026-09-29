@@ -113,7 +113,7 @@ export async function previewExecutionMigration(store:any,ctx:any,value:any,opti
  if(digest(currentRuntime)!==(options.runtime?await options.runtime():await executionRuntimeIdentity(root)))fail('runtime-snapshot-current-mismatch')
  if(!manifest.runtime||digest(manifest.runtime)!==original.runtimeSha256)fail('runtime-snapshot-unavailable')
  const runtimeDiff=runtimeChanges(manifest.runtime,currentRuntime)
- const current=await captureExecutionBinding(ctx,task,original.batchId,original.fallback,options.runtime??executionRuntimeIdentity)
+ const current=await captureExecutionBinding(ctx,task,original.batchId,original.fallback,options.runtime??executionRuntimeIdentity,previous)
  if(current.agents.length!==original.agents.length)fail('roles-changed')
  for(const old of original.agents){
   if(!/^[A-Za-z0-9_-]+$/.test(old.id))fail('snapshot-agent-id')
@@ -160,7 +160,6 @@ export async function applyExecutionMigration(store:any,ctx:any,value:any,option
   if(options.quiescent&&!options.quiescent())fail('sessions-not-quiescent')
   for(const a of preview.binding.agents){
    for(const [name,expected] of Object.entries({'task-console.json':a.specSha256,'agent.cordis.yml':a.compositionSha256,'capabilities.lock.json':a.capabilitySha256,'skills.lock.json':a.skillLockSha256})){if(expected!==null){const path=join(a.directory,name);if(realpathSync(path)!==path||!lstatSync(path).isFile()||sha(readFileSync(path))!==expected)fail('current-changed')}}
-   if(a.selectionSource==='default'&&canonical(ctx.get('agentDefaultModel')?.currentSelection?.())!==canonical(a.selection))fail('default-model-changed')
   }
   assertQuiescent(store)
   const base=store.tasks.get(value.taskId),batch=store.s.batches.get(value.batchId)

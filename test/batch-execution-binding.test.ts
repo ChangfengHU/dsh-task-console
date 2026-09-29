@@ -30,8 +30,8 @@ async function fixture(t:any){
  const task:any={id:'task',title:'Task',brief:'objective',participants:[{agentId:'a'},{agentId:'b'}],trigger:{kind:'once'},cwd:root,timeoutSec:60,onFail:'retry',maxTries:2,enabled:true,createdAt:'2026-09-24T00:00:00Z',design:validateDesign({executionBinding:'agent-runtime-v1',scope:'scope',branches:[{id:'work',when:'ready',action:'work',evidence:'output'}],coordination:'sequence',failurePolicy:{isolateItems:false,maxAttempts:2,stopConditions:['failure']},acceptance:['done']})}
  return {root,ctx,task,save,sessions,runtime:async()=>runtime,setRuntime:(value:string)=>runtime=value,setModel:(value:any)=>model=value,setMount:(value:any)=>mount=value}
 }
-test('host binding captures resolved identity and rejects model/default/permission/tool/skill/runtime drift',async t=>{
- for(const change of ['model','default','permission','tool','skill','runtime'])await t.test(change,async t=>{
+test('host binding rejects authored model/permission/tool/skill/runtime drift',async t=>{
+ for(const change of ['model','permission','tool','skill','runtime'])await t.test(change,async t=>{
   const s=await fixture(t);if(change==='default')await s.save('a',{model:''})
   const binding=await captureExecutionBinding(s.ctx,s.task,'batch',undefined,s.runtime)
   assert.equal(binding.agents.length,2);assert.equal(binding.agents[0].selection.provider,change==='default'?'default-provider':'provider')
@@ -43,6 +43,27 @@ test('host binding captures resolved identity and rejects model/default/permissi
   if(change==='runtime')s.setRuntime('b'.repeat(64))
   await assert.rejects(verifyExecutionBinding(s.ctx,binding,s.task.id,'batch','a',s.runtime),/binding-(agent|runtime)-drift/)
  })
+})
+test('bound batch keeps frozen default selection; new batches capture a changed global default',async t=>{
+ const s=await fixture(t);await s.save('a',{model:''})
+ const original=await captureExecutionBinding(s.ctx,s.task,'original',undefined,s.runtime)
+ s.setModel({provider:'new-provider',model:'new-model'})
+ await verifyExecutionBinding(s.ctx,original,'task','original','a',s.runtime)
+ const next=await captureExecutionBinding(s.ctx,s.task,'next',undefined,s.runtime)
+ assert.equal(original.agents[0].selection.model,'default-model');assert.equal(next.agents[0].selection.model,'new-model')
+ await s.save('a',{model:'explicit/new-model'})
+ await assert.rejects(verifyExecutionBinding(s.ctx,original,'task','original','a',s.runtime),/agent-drift/)
+})
+
+test('successor dispatch uses the frozen default even after global chat changes provider',async t=>{
+ const s=await runnerFixture(t);await s.save('a',{model:''});await s.save('b',{model:''})
+ const batch=await s.runner.fire('task','manual',{batchId:'batch'})
+ s.setModel({provider:'new-provider',model:'new-model'})
+ const first=s.store.kernel.getTask(batch.cardIds[0]);s.store.kernel.completeTask(first.id,{expectedRunId:first.current_run_id})
+ const card=s.store.s.cards.get(batch.cardIds[1])!;s.store.kernel.db.prepare("UPDATE tasks SET status='ready' WHERE id=?").run(card.id)
+ await (s.runner as any).startRun(s.task,batch,card)
+ assert.equal(s.sessions.length,2);assert.deepEqual(s.sessions[1].options.agentOptions,{provider:'default-provider',model:'default-model'})
+ assert.equal(s.ctx.get('agentDefaultModel').currentSelection().provider,'new-provider')
 })
 test('new batch captures new settings; original cannot be rebound, assigned outside roster, or tampered',async t=>{
  const s=await fixture(t),first=await captureExecutionBinding(s.ctx,s.task,'one',undefined,s.runtime)
@@ -193,8 +214,9 @@ test('batch workspace and execution identity freeze together before any director
 
 // Migration fixture reuses the real SQLite runner and authored preset locks.
 import {previewExecutionMigration,applyExecutionMigration,effectiveExecutionBinding,releasePathOnly} from '../src/batch-execution-migration.ts'
-async function migrationFixture(t:any){
+async function migrationFixture(t:any,useDefault=false){
  const s=await runnerFixture(t),oldRuntimeRoot=join(s.root,'releases/runtime-aaaaaaaaaaaa'),runtimeRoot=join(s.root,'releases/runtime-bbbbbbbbbbbb')
+ if(useDefault)for(const id of ['a','b'])await s.save(id,{model:''})
  await mkdir(join(oldRuntimeRoot,'src'),{recursive:true});await writeFile(join(oldRuntimeRoot,'package.json'),'{"dependencies":{}}');await writeFile(join(oldRuntimeRoot,'src/entry.js'),'export {}')
  s.setRuntime(await executionRuntimeIdentity(oldRuntimeRoot))
  const batch=await s.runner.fire('task','manual',{batchId:'batch'});s.runner.stop()
@@ -206,6 +228,15 @@ async function migrationFixture(t:any){
  s.setRuntime(newRuntime)
  return {...s,batch,binding,dir:join(snapshotRoot,binding.sha256),options:{runtime:s.runtime,runtimeRoot}}
 }
+test('runtime migration preserves frozen default without changing global model or authored grants',async t=>{
+ const s=await migrationFixture(t,true),args={taskId:'task',batchId:'batch'}
+ s.setModel({provider:'new-provider',model:'new-model'})
+ const p=await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ assert.deepEqual(p.binding.agents,s.binding.agents)
+ await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p.previewSha256,reason:'platform fix with frozen model'},s.options)
+ await verifyExecutionBinding(s.ctx,effectiveExecutionBinding(s.store.kernel.db,s.binding),'task','batch','a',s.runtime)
+ assert.equal(s.ctx.get('agentDefaultModel').currentSelection().provider,'new-provider')
+})
 test('migration preserves original and runtime refreshes append a verified chain',async t=>{
  const s=await migrationFixture(t),args={taskId:'task',batchId:'batch'},before=JSON.stringify(s.batch.turn),p=await previewExecutionMigration(s.store,s.ctx,args,s.options)
  assert.equal(p.binding.runtimeSha256,await s.runtime());assert.deepEqual(p.runtimeChanges.changedFiles,[]);assert.deepEqual(p.runtimeChanges.addedFiles,[]);assert.deepEqual(p.runtimeChanges.removedFiles,[]);await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p.previewSha256,reason:'platform fix'},s.options)

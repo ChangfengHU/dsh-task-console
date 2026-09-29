@@ -23,7 +23,7 @@ import { reconcileStudioKnownOperation } from './studio-known-operation-reconcil
 import { requireSettledStudioOperations } from './studio-stage-operations.js'
 import { assertFrozenVoiceSynthesis } from './studio-voice-script.js'
 import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard, downloadStudioAsset } from './studio-host.js'
-import { registerStudioTools,STUDIO_TOOL_NAMES } from './studio-tools.js'
+import { registerStudioTools,STUDIO_TOOL_NAMES,studioPath,fileSha256 } from './studio-tools.js'
 import { StudioWorkflow } from './studio-workflow.js'
 import { registerStudioSkillGate } from './studio-skill-gate.js'
 /**
@@ -40,8 +40,9 @@ import { registerStudioSkillGate } from './studio-skill-gate.js'
 
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID, createHash } from 'node:crypto'
+import { readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, resolve } from 'node:path'
+import { dirname, resolve, extname } from 'node:path'
 import { readActions, saveActions } from './agent-action-store.ts'
 import { renderAction, parameterVisible, type ActionCatalog } from './agent-actions.ts'
 import { optionPage, sourceTool, type ActionOptionQuery } from './action-options.ts'
@@ -1322,6 +1323,51 @@ export class TaskConsoleService extends TypertRemoteService {
     if (!artifact) throw new Error('没有这个产物')
     const data = await readArtifact(this.runner.store.root, task, artifact)
     return JSON.stringify({ artifact: this.artifactView(artifact), base64: data.toString('base64') })
+  }
+
+  /** User-facing projection of immutable Studio stage receipts for one exact Batch. */
+  async studioTaskWorkspace(payload: string): Promise<string> {
+    const { taskId, batchId } = JSON.parse(payload) as { taskId: string; batchId: string }
+    const store = this.runner.store, task = store.s.tasks.get(taskId), batch = store.s.batches.get(batchId)
+    if (!task || !batch || batch.taskId !== taskId) throw new Error('没有这个任务执行记录')
+    const execution = taskForBatch(task, batch), stages = execution.design?.studioStages
+    if (execution.design?.evidenceContract !== 'studio-video-v1' || !Array.isArray(stages)) throw new Error('此 Task 没有配置 Studio 阶段工作流')
+    const allowed = new Set(stages.map((stage: any) => stage.id).filter((id: string) => ['storyboard', 'visual', 'sound'].includes(id)))
+    const hasStageLedger = store.kernel.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_studio_state'").get()
+    const rows = hasStageLedger ? store.kernel.db.prepare("SELECT kind,payload FROM dsh_studio_state WHERE task_id=? AND batch_id=? AND kind GLOB 'stage:[0-9]*:*'").all(taskId, batchId) as { kind: string; payload: string }[] : []
+    const receipts = rows.flatMap(row => {
+      try {
+        const receipt = JSON.parse(row.payload), round = Number(/^stage:(\d+):/.exec(row.kind)?.[1])
+        if (!allowed.has(receipt.stage) || !Number.isInteger(round) || round < 1 || receipt.round !== round || receipt.batchId !== batchId || !Array.isArray(receipt.outputs)) return []
+        return [{ stage: receipt.stage, round, cardId: receipt.cardId, sessionId: receipt.sessionId, summary: receipt.summary, manifest: receipt.manifest, qualityApproved: false, outputs: receipt.outputs.map((file: any) => ({ path: file.path, sha256: file.sha256, bytes: file.bytes, media: file.media })) }]
+      } catch { return [] }
+    }).sort((a, b) => a.round - b.round || ['storyboard', 'visual', 'sound'].indexOf(a.stage) - ['storyboard', 'visual', 'sound'].indexOf(b.stage))
+    const cards = batch.cardIds.map((id: string) => store.s.cards.get(id)).filter(Boolean).map((card: any) => {
+      const runs = card.runIds.map((id: string) => store.s.runs.get(id)).filter(Boolean).map((run: any) => ({ id: run.id, status: run.status, sessionId: run.sessionId ?? null, startedAt: run.startedAt ?? null, endedAt: run.endedAt ?? null, question: run.question ?? null, error: run.error ?? null, terminalBlock: run.terminalBlock === true, blockKind: run.blockKind ?? null, summary: run.summary ?? null }))
+      return { id: card.id, role: card.role ?? null, round: card.round ?? null, title: card.title, status: card.status, error: card.error ?? null, deps: card.deps, currentRunId: card.currentRunId ?? null, wakeAt: card.wakeAt ?? null, runs }
+    })
+    return JSON.stringify({ task: { id: task.id, title: task.title }, batch: { id: batch.id, firedAt: batch.firedAt, outcome: batch.settled?.outcome ?? null, archivedAt: batch.archivedAt ?? null }, stages: stages.map((stage: any) => ({ id: stage.id, agentId: stage.agentId })), cards, receipts })
+  }
+
+  /** Reads only a byte-for-byte current output named by a registered stage receipt. */
+  async studioStageArtifactContent(payload: string): Promise<string> {
+    const { taskId, batchId, stage, round, path, sha256 } = JSON.parse(payload) as { taskId: string; batchId: string; stage: string; round: number; path: string; sha256: string }
+    if (!['storyboard', 'visual', 'sound'].includes(stage) || !Number.isInteger(round) || round < 1 || typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('阶段文件参数无效')
+    const store = this.runner.store, task = store.s.tasks.get(taskId), batch = store.s.batches.get(batchId)
+    if (!task || !batch || batch.taskId !== taskId || taskForBatch(task, batch).design?.evidenceContract !== 'studio-video-v1') throw new Error('没有这个 Studio 执行记录')
+    if (!store.kernel.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_studio_state'").get()) throw new Error('这个阶段尚未登记交付')
+    const row = store.kernel.db.prepare('SELECT payload FROM dsh_studio_state WHERE task_id=? AND batch_id=? AND kind=?').get(taskId, batchId, `stage:${round}:${stage}`) as { payload: string } | undefined
+    if (!row) throw new Error('这个阶段尚未登记交付')
+    const receipt = JSON.parse(row.payload), file = receipt.outputs?.find((item: any) => item.path === path && item.sha256 === sha256)
+    const prefix = `stages/r${round}/${stage}/`
+    if (receipt.stage !== stage || receipt.round !== round || receipt.batchId !== batchId || !file || typeof path !== 'string' || !path.startsWith(prefix) || !Number.isInteger(file.bytes) || file.bytes < 1 || file.bytes > 8 * 1024 * 1024) throw new Error('文件不在已登记的阶段交付中或超过 8 MiB 预览上限')
+    const local = await studioPath(task.cwd, path, true), actualSha = await fileSha256(local)
+    if (actualSha !== sha256) throw new Error('阶段文件已变化，当前回执不能作为预览依据')
+    const info = await stat(local)
+    if (info.size !== file.bytes) throw new Error('阶段文件大小与登记回执不一致')
+    const data = await readFile(local), ext = extname(path).toLowerCase()
+    const mime = ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.json': 'application/json', '.txt': 'text/plain' } as Record<string, string>)[ext] ?? 'application/octet-stream'
+    return JSON.stringify({ file: { path, sha256, bytes: data.length, mime }, base64: data.toString('base64') })
   }
 
   async publishArtifact(payload: string): Promise<string> {

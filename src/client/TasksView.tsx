@@ -39,9 +39,12 @@ export interface TasksApi {
   taskEvents: (id: string) => Promise<TaskEvent[]>
   taskArtifacts: (id: string, batchId?: string) => Promise<ArtifactView[]>
   artifactContent: (id: string, artifactId: string, batchId?: string) => Promise<{ artifact: ArtifactView; base64: string }>
+  studioTaskWorkspace: (taskId: string, batchId: string) => Promise<import('./TaskStageWorkspace.tsx').StudioTaskWorkspace>
+  studioStageArtifactContent: (query: { taskId: string; batchId: string; stage: string; round: number; path: string; sha256: string }) => Promise<{ file: { path: string; sha256: string; bytes: number; mime: string }; base64: string }>
   publishArtifact: (id: string, artifactId: string) => Promise<{ publicUrl: string }>
   reviewCard: (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => Promise<void>
   unblockCard: (cardId: string) => Promise<void>
+  recoverStudioCard: (input: { taskId: string; batchId: string; cardId: string; expectedRunId: string; recoveryId: string; reason: string; revalidateFrom?: 'storyboard' | 'visual' | 'sound' }) => Promise<{ ok: boolean; restored: { id: string; status: string }[] }>
   openSession: (sessionId: string) => Promise<void>
   sessionTurns: (sessionId: string) => Promise<import('../wire.ts').TurnLedger>
 }

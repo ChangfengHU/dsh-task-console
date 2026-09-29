@@ -1354,14 +1354,16 @@ export class TaskConsoleService extends TypertRemoteService {
     const { taskId, batchId, stage, round, path, sha256 } = JSON.parse(payload) as { taskId: string; batchId: string; stage: string; round: number; path: string; sha256: string }
     if (!['storyboard', 'visual', 'sound'].includes(stage) || !Number.isInteger(round) || round < 1 || typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('阶段文件参数无效')
     const store = this.runner.store, task = store.s.tasks.get(taskId), batch = store.s.batches.get(batchId)
-    if (!task || !batch || batch.taskId !== taskId || taskForBatch(task, batch).design?.evidenceContract !== 'studio-video-v1') throw new Error('没有这个 Studio 执行记录')
+    if (!task || !batch || batch.taskId !== taskId) throw new Error('没有这个 Studio 执行记录')
+    const execution = taskForBatch(task, batch)
+    if (execution.design?.evidenceContract !== 'studio-video-v1') throw new Error('没有这个 Studio 执行记录')
     if (!store.kernel.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_studio_state'").get()) throw new Error('这个阶段尚未登记交付')
     const row = store.kernel.db.prepare('SELECT payload FROM dsh_studio_state WHERE task_id=? AND batch_id=? AND kind=?').get(taskId, batchId, `stage:${round}:${stage}`) as { payload: string } | undefined
     if (!row) throw new Error('这个阶段尚未登记交付')
     const receipt = JSON.parse(row.payload), file = receipt.outputs?.find((item: any) => item.path === path && item.sha256 === sha256)
     const prefix = `stages/r${round}/${stage}/`
     if (receipt.stage !== stage || receipt.round !== round || receipt.batchId !== batchId || !file || typeof path !== 'string' || !path.startsWith(prefix) || !Number.isInteger(file.bytes) || file.bytes < 1 || file.bytes > 8 * 1024 * 1024) throw new Error('文件不在已登记的阶段交付中或超过 8 MiB 预览上限')
-    const local = await studioPath(task.cwd, path, true), actualSha = await fileSha256(local)
+    const local = await studioPath(execution.cwd, path, true), actualSha = await fileSha256(local)
     if (actualSha !== sha256) throw new Error('阶段文件已变化，当前回执不能作为预览依据')
     const info = await stat(local)
     if (info.size !== file.bytes) throw new Error('阶段文件大小与登记回执不一致')

@@ -14,7 +14,7 @@ function serviceFixture(t: any) {
   const db = { prepare(sql: string) { return { get: (...args: any[]) => sql.includes('sqlite_master') ? { yes: 1 } : sql.includes('kind=?') ? (args.at(-1) === 'stage:1:visual' ? { payload: JSON.stringify(receipt) } : undefined) : undefined, all: () => stageRows } } }
   const stageCard = { id: 'batch-1#s1-visual', role: 'studio-stage', round: 1, title: '视觉素材', status: 'done', deps: [], runIds: ['run-1'], error: undefined }
   const run = { id: 'run-1', status: 'completed', sessionId: 'session-visual', startedAt: '2026-09-28T12:00:00Z', endedAt: '2026-09-28T12:01:00Z', terminalBlock: false, summary: '交接完成' }
-  const batch = { id: 'batch-1', taskId: 'task-1', firedAt: '2026-09-28T12:00:00Z', cardIds: [stageCard.id], settled: null }
+  const batch = { id: 'batch-1', taskId: 'task-1', firedAt: '2026-09-28T12:00:00Z', cardIds: [stageCard.id], settled: null, turn: undefined as any }
   const task = { id: 'task-1', title: '样例短片', cwd: '', design: { evidenceContract: 'studio-video-v1', studioStages: [{ id: 'storyboard', agentId: 'editor' }, { id: 'visual', agentId: 'artist' }, { id: 'sound', agentId: 'audio' }] } }
   const store: any = { s: { tasks: new Map([[task.id, task]]), batches: new Map([[batch.id, batch]]), cards: new Map([[stageCard.id, stageCard]]), runs: new Map([[run.id, run]]) }, kernel: { db } }
   const instance: any = Object.create(TaskConsoleService.prototype); instance.runner = { store }
@@ -38,14 +38,16 @@ test('stage workspace lists only task-scoped receipts and run state, with qualit
 
 test('stage preview requires receipt path and exact current SHA and enforces the browser-size limit', async t => {
   const f = serviceFixture(t), cwd = await f.cwdPromise
-  await mkdir(join(cwd, 'stages/r1/visual'), { recursive: true })
+  const batchCwd = join(cwd, 'batches/batch-1')
+  await mkdir(join(batchCwd, 'stages/r1/visual'), { recursive: true })
   const bytes = Buffer.from('image')
-  await writeFile(join(cwd, 'stages/r1/visual/pose.png'), bytes)
+  await writeFile(join(batchCwd, 'stages/r1/visual/pose.png'), bytes)
   const sha = createHash('sha256').update(bytes).digest('hex')
   f.receipt.outputs[0].sha256 = sha
   f.receipt.outputs[0].bytes = bytes.length
   f.stageRows[0].payload = JSON.stringify(f.receipt)
   f.instance.runner.store.s.tasks.get('task-1').cwd = cwd
+  f.instance.runner.store.s.batches.get('batch-1').turn = { objective: 'test', participants: [], cwd: batchCwd }
   const args = { taskId: 'task-1', batchId: 'batch-1', stage: 'visual', round: 1, path: 'stages/r1/visual/pose.png', sha256: sha }
   const result = JSON.parse(await f.instance.studioStageArtifactContent(JSON.stringify(args)))
   assert.equal(Buffer.from(result.base64, 'base64').toString(), 'image')

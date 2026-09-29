@@ -38,3 +38,9 @@ test('DB replay advances visible run evidence for bound, session, prompt, and he
   const legacy = [...events.slice(0, 5), event(6, 'p1', 'heartbeat', {}, 9)]
   assert.equal(replayGraph(legacy).runs[0].claim_expires, null)
 })
+
+test('DB replay distinguishes terminal blocks from open questions', () => {
+  const events = [event(1, 'e1', 'created', { title: '执行', role: 'executor' }), event(2, 'e1', 'claimed', {}, 9), event(3, 'e1', 'blocked', { reason: 'stop', terminal: true }, 9)]
+  assert.equal(replayGraph(events).runs[0].terminal_block, true)
+  assert.equal(replayGraph([...events.slice(0, 2), event(3, 'e1', 'blocked', { reason: 'question', terminal: false }, 9)]).runs[0].terminal_block, false)
+})

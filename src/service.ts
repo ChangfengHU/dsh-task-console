@@ -8,7 +8,9 @@ import {StudioPreparation,assertPreparationWritable} from './studio-preparation.
 import {pollStudioOperation} from './studio-operation-poll.js'
 import {WorkflowEvidence} from './workflow-evidence.js'
 import {WorkflowExtensions,type WorkflowExtension} from './workflow-extensions.js'
-import { invokeStudioRenderJob } from './studio-render-host.js'
+import { invokeStudioRenderJob, studioRenderJob } from './studio-render-host.js'
+import { StudioRenderLedger } from './studio-render-ledger.js'
+import { studioProgressPending } from './studio-progress.js'
 import { inspectCapabilityContract } from './capability-contract.ts'
 import { taskAgentIds } from './task-design.ts'
 import {registerStageFiles,requireStudioStages,verifyStageReceipt} from './studio-stage-files.js'
@@ -1398,6 +1400,27 @@ export class TaskConsoleService extends TypertRemoteService {
 
   async recoverStudioCard(payload: string): Promise<string> {
     return JSON.stringify(await this.runner.recoverStudioCard(JSON.parse(payload)))
+  }
+
+  /** Reconcile the original Studio render intent, then create a fresh Run while preserving the blocked Run. */
+  async resumeStudioCard(payload: string): Promise<string> {
+    const {taskId,batchId,cardId,expectedCoreRunId}=JSON.parse(payload) as {taskId:string;batchId:string;cardId:string;expectedCoreRunId:number}
+    const store=this.runner.store,template=store.tasks.get(taskId),batch=store.s.batches.get(batchId),card=store.s.cards.get(cardId)
+    if(!template||template.archivedAt||!batch||batch.taskId!==taskId||batch.archivedAt||batch.settled||!card||card.taskId!==taskId||card.batchId!==batchId||card.role!=='executor'||card.status!=='blocked'||card.runIds.at(-1)===undefined||store.coreRunId(card.runIds.at(-1)!)!==expectedCoreRunId||store.s.runs.get(card.runIds.at(-1)!)?.status!=='blocked')throw Error('studio-resume-blocked-run-changed')
+    const execution=taskForBatch(template,batch)
+    if(execution.design?.evidenceContract!=='studio-video-v1'||execution.design?.progressPolicy!=='studio-bounded-v1')throw Error('studio-resume-contract-required')
+    const workflow=new StudioWorkflow(store),source=store.s.runs.get(card.runIds.at(-1)!) as any,input={task:execution,batch,card,sessionId:source?.sessionId??''},rows=workflow.renderLedger.rows(input).filter((row:any)=>row.cardId===card.id&&row.round===card.round&&!['completed','failed','rejected'].includes(row.state))
+    if(rows.length!==1)throw Error('studio-resume-requires-one-original-pending-render')
+    const row=rows[0]
+    if(typeof row.intentId!=='string'||!row.originSessionId||!row.composition||!row.output||!row.helperPath||!row.runtimePath||!row.helperSha256)throw Error('studio-resume-original-render-provenance-incomplete')
+    input.sessionId=row.originSessionId
+    const action=row.jobId?'status':'start',args=action==='status'?{jobId:row.jobId}:{composition:row.composition,output:row.output},config={renderJobScript:row.helperPath,renderJobSha256:row.helperSha256,renderRuntime:row.runtimePath}
+    const result=await studioRenderJob(execution,action,args, {config},row.intentId)
+    workflow.renderLedger.record(input,row,result)
+    const pending=studioProgressPending(store.kernel.db,{task:execution,batch,card})
+    if(pending)return JSON.stringify({ok:true,newRun:false,pending,renderState:result.state??'unknown',reused:result.reused===true})
+    await this.runner.unblockCard(card.id)
+    return JSON.stringify({ok:true,newRun:true,renderState:result.state??'unknown',reused:result.reused===true,oldRunPreserved:true})
   }
 
   /** Console operator recovery only; never registered as an Agent tool. */

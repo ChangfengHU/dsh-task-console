@@ -45,6 +45,7 @@ export interface TasksApi {
   reviewCard: (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => Promise<void>
   unblockCard: (cardId: string) => Promise<void>
   recoverStudioCard: (input: { taskId: string; batchId: string; cardId: string; expectedRunId: string; recoveryId: string; reason: string; revalidateFrom?: 'storyboard' | 'visual' | 'sound' }) => Promise<{ ok: boolean; restored: { id: string; status: string }[] }>
+  resumeStudioCard: (input: { taskId: string; batchId: string; cardId: string; expectedCoreRunId: number }) => Promise<{ ok: boolean; pending?: string; renderState?: string; newRun?: boolean }>
   openSession: (sessionId: string) => Promise<void>
   sessionTurns: (sessionId: string) => Promise<import('../wire.ts').TurnLedger>
 }

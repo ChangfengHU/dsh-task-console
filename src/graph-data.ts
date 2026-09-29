@@ -32,6 +32,7 @@ export interface GraphRunRow {
   started_at: number
   ended_at: number | null
   outcome: string | null
+  terminal_block?: boolean
   summary: string | null
   error: string | null
   session_id: string | null
@@ -132,7 +133,7 @@ export function replayGraph(events: GraphEventRow[], count = events.length): Gra
       if (e.run_id !== null) { const run = runs.get(e.run_id); if (run) { run.status = 'scheduled'; run.outcome = 'deferred'; run.summary = String(p.reason ?? ''); run.ended_at = e.created_at } }
     } else if (e.kind === 'blocked' && task) {
       task.status = String(p.status ?? 'blocked'); task.current_run_id = null
-      if (e.run_id !== null) { const run = runs.get(e.run_id); if (run) { run.status = 'blocked'; run.outcome = 'blocked'; run.error = String(p.reason ?? ''); run.ended_at = e.created_at } }
+      if (e.run_id !== null) { const run = runs.get(e.run_id); if (run) { run.status = 'blocked'; run.outcome = 'blocked'; run.error = String(p.reason ?? ''); run.terminal_block = p.terminal === true; run.ended_at = e.created_at } }
     } else if (['failed', 'crashed', 'timed_out', 'cancelled', 'protocol_violation', 'reclaimed'].includes(e.kind) && task) {
       task.status = e.kind === 'cancelled' ? 'archived' : String(p.retry_status ?? 'ready'); task.current_run_id = null
       if (e.run_id !== null) { const run = runs.get(e.run_id); if (run) { run.status = 'failed'; run.outcome = String(p.outcome ?? 'failed'); run.error = String(p.error ?? ''); run.ended_at = e.created_at } }

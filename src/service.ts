@@ -25,6 +25,7 @@ import { reconcileStudioKnownOperation } from './studio-known-operation-reconcil
 import { requireSettledStudioOperations } from './studio-stage-operations.js'
 import { assertFrozenVoiceSynthesis } from './studio-voice-script.js'
 import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard, downloadStudioAsset } from './studio-host.js'
+import {studioInstallationBlock} from './studio-installation.js'
 import { registerStudioTools,STUDIO_TOOL_NAMES,studioPath,fileSha256 } from './studio-tools.js'
 import { StudioWorkflow } from './studio-workflow.js'
 import { registerStudioSkillGate } from './studio-skill-gate.js'
@@ -231,6 +232,8 @@ export class TaskConsoleService extends TypertRemoteService {
           catch(error){return {kind:'capability',reason:error instanceof Error?error.message:String(error)}}
         }
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return
+        const installationBlock=await studioInstallationBlock(studioHostDeps)
+        if(installationBlock)return installationBlock
         assertPreparationWritable(this.runner.store.kernel.db,input)
         const workflow = new StudioWorkflow(this.runner.store)
         await requireStudioStages(input,workflow,this.runner.store.kernel.db)

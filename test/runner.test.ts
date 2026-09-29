@@ -1,4 +1,5 @@
 import {StudioInterventions} from '../src/studio-interventions.js'
+import {studioInstallationBlock} from '../src/studio-installation.js'
 import {WorkflowExtensions} from '../src/workflow-extensions.js'
 import assert from 'node:assert/strict'
 import { mkdtemp, writeFile, mkdir, readFile, stat, rm } from 'node:fs/promises'
@@ -67,6 +68,17 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
   return { host, store, runner, task, root }
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
+
+test('incomplete Studio installation blocks once without creating a model session or retry loop',async()=>{
+ const {runner,store,host}=await setup({}, {beforeStart:()=>studioInstallationBlock({config:{}})})
+ const batch=await runner.fire('T','manual')
+ await runner.tick();await runner.tick()
+ assert.equal(host.sessions.size,0)
+ const card=store.s.cards.get(batch.cardIds[0])!
+ assert.equal(card.status,'blocked')
+ assert.equal(card.runIds.length,1)
+ assert.ok(JSON.stringify(store.all()).includes('visionScript:missing-or-invalid-path'))
+})
 
 test('startup fallback retains run/session and permissions, retries once, and releases scoped hooks', async () => {
   const { runner, store, host } = await setup({ participants:[{agentId:'a'}], onFail:'stop', maxTries:1 })

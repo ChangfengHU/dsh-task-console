@@ -8,7 +8,7 @@ import {StudioPreparation,assertPreparationWritable} from './studio-preparation.
 import {pollStudioOperation} from './studio-operation-poll.js'
 import {WorkflowEvidence} from './workflow-evidence.js'
 import {WorkflowExtensions,type WorkflowExtension} from './workflow-extensions.js'
-import { invokeStudioRenderJob, studioRenderJob } from './studio-render-host.js'
+import { invokeStudioRenderJob, reconcileStudioRenderIntent, studioRenderJob } from './studio-render-host.js'
 import { StudioRenderLedger } from './studio-render-ledger.js'
 import { studioProgressPending } from './studio-progress.js'
 import { inspectCapabilityContract } from './capability-contract.ts'
@@ -1415,12 +1415,13 @@ export class TaskConsoleService extends TypertRemoteService {
     if(typeof row.intentId!=='string'||!row.originSessionId||!row.composition||!row.output||!row.helperPath||!row.runtimePath||!row.helperSha256)throw Error('studio-resume-original-render-provenance-incomplete')
     input.sessionId=row.originSessionId
     const action=row.jobId?'status':'start',args=action==='status'?{jobId:row.jobId}:{composition:row.composition,output:row.output},config={renderJobScript:row.helperPath,renderJobSha256:row.helperSha256,renderRuntime:row.runtimePath}
-    const result=await studioRenderJob(execution,action,args, {config},row.intentId)
+    const result=action==='status'?await studioRenderJob(execution,'status',args,{config},row.intentId):await reconcileStudioRenderIntent(execution,{composition:row.composition,output:row.output},{config},row.intentId)
     workflow.renderLedger.record(input,row,result)
     const pending=studioProgressPending(store.kernel.db,{task:execution,batch,card})
     if(pending)return JSON.stringify({ok:true,newRun:false,pending,renderState:result.state??'unknown',reused:result.reused===true})
     await this.runner.unblockCard(card.id)
-    return JSON.stringify({ok:true,newRun:true,renderState:result.state??'unknown',reused:result.reused===true,oldRunPreserved:true})
+    const settled=workflow.renderLedger.rows(input).find((item:any)=>item.intentId===row.intentId)
+    return JSON.stringify({ok:true,newRun:true,renderState:result.state??settled?.state??'unknown',reconciledAbsent:result.reconciledAbsent===true,errorCode:result.errorCode,reused:result.reused===true,oldRunPreserved:true})
   }
 
   /** Console operator recovery only; never registered as an Agent tool. */

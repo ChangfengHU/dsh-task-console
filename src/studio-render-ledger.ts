@@ -45,6 +45,10 @@ export class StudioRenderLedger {
   const revision=row.revision??0,expectedRevision=intent.revision??0
   if(result?.ok!==true){
    if(revision!==expectedRevision||['completed','failed','rejected'].includes(row.state))return row
+   // Only the operator reconciliation bridge can mint this fact. The pinned host
+   // checks this exact intent before composition validation; this error therefore
+   // proves no worker/job was ever created for the original request.
+   if(result?.reconciledAbsent===true&&result.errorCode==='plain_directory_required'&&!row.jobId){row.state='failed';row.revision=revision+1;row.errorCode='plain_directory_required';row.reconciledAbsentAt=new Date().toISOString();this.save(row);return row}
    // A generic failure or reserved output does NOT prove no job was dispatched.
    // Keep ownership/pending protection; retry only this original intent.
    if(!row.jobId){row.state='unknown';row.revision=revision+1;row.errorCode=result?.errorCode??'render_host_failed';this.save(row)}

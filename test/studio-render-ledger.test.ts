@@ -41,3 +41,14 @@ test('ambiguous helper error preserves pending ownership and pinned origin confi
  assert.equal(saved.state,'unknown');assert.equal(saved.helperSha256,h('d'));assert.equal(saved.helperPath,'/trusted/render.py')
  assert.throws(()=>ledger.prepare(i,'start',{...args,output:'new.mp4'},config),/prior-job-pending/)
 })
+
+test('exact host proof that no job exists closes only the original invalid intent',t=>{
+ const {ledger,i}=fixture(t),config={renderJobScript:'/trusted/render.py',renderJobSha256:h('d'),renderRuntime:'/trusted/runtime'}
+ const intent=ledger.prepare(i,'start',args,config)
+ ledger.record(i,intent,{ok:false,errorCode:'plain_directory_required'})
+ assert.equal(ledger.rows(i)[0].state,'unknown')
+ const retry=ledger.rows(i)[0]
+ ledger.record(i,retry,{ok:false,errorCode:'plain_directory_required',reconciledAbsent:true})
+ assert.equal(ledger.rows(i)[0].state,'failed');assert.equal(ledger.rows(i)[0].jobId,undefined)
+ assert.throws(()=>ledger.requireCandidate(i,candidate,'/project/film.mp4'),/current-render-required/)
+})

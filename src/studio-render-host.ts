@@ -32,7 +32,7 @@ async function execute(script:string,args:string[]):Promise<any>{
  })
 }
 /** All checks before this returns are read-only and cannot dispatch a renderer. */
-export async function prepareStudioRenderJob(task:any,action:'start'|'status',args:{composition?:string;output?:string;jobId?:string},deps:Dependencies={}){
+export async function prepareStudioRenderJob(task:any,action:'start'|'status',args:{composition?:string;output?:string;jobId?:string},deps:Dependencies={},reconcileExistingIntent=false){
  args={...args}
  const config={...(deps.config??await studioRenderConfiguration(deps.configPath))}
  if(!config.renderJobScript||!digest.test(config.renderJobSha256??'')||!config.renderRuntime)throw Error('studio-render-host-not-configured')
@@ -42,9 +42,11 @@ export async function prepareStudioRenderJob(task:any,action:'start'|'status',ar
  const argv=[action,'--project-root',root]
  if(action==='start'){
   if(!safeRelative(args.composition)||!safeRelative(args.output)||!args.output!.endsWith('.mp4'))throw Error('studio-render-path-invalid')
-  const composition=await realpath(resolve(root,args.composition!)),rel=relative(root,composition)
-  if(!rel||rel==='..'||rel.startsWith('..'+sep)||isAbsolute(rel)||!(await stat(composition)).isDirectory())throw Error('studio-render-composition-invalid')
-  await studioPath(root,`${args.composition}/index.html`,true)
+  if(!reconcileExistingIntent){
+   const composition=await realpath(resolve(root,args.composition!)),rel=relative(root,composition)
+   if(!rel||rel==='..'||rel.startsWith('..'+sep)||isAbsolute(rel)||!(await stat(composition)).isDirectory())throw Error('studio-render-composition-invalid')
+   await studioPath(root,`${args.composition}/index.html`,true)
+  }
   argv.push('--composition',args.composition!,'--output',args.output!,'--runtime',config.renderRuntime,'--width',String(policy.width),'--height',String(policy.height),'--fps',String(policy.fps))
  }else{
   if(!digest.test(args.jobId??''))throw Error('studio-render-job-id-invalid')
@@ -78,6 +80,14 @@ export async function prepareStudioRenderJob(task:any,action:'start'|'status',ar
 
 export async function studioRenderJob(task:any,action:'start'|'status',args:{composition?:string;output?:string;jobId?:string},deps:Dependencies={},intentId?:string){
  return (await prepareStudioRenderJob(task,action,args,deps)).dispatch(intentId)
+}
+
+/** Operator-only reconciliation. The pinned host checks the exact intent before inspecting current inputs.
+ * If no job exists it validates the composition and safely returns plain_directory_required without dispatch. */
+export async function reconcileStudioRenderIntent(task:any,args:{composition:string;output:string},deps:Dependencies,intentId:string){
+ if(!digest.test(intentId))throw Error('studio-render-intent-invalid')
+ const result=await (await prepareStudioRenderJob(task,'start',args,deps,true)).dispatch(intentId)
+ return result?.ok===false&&result.errorCode==='plain_directory_required'?{...result,reconciledAbsent:true}:result
 }
 
 

@@ -168,6 +168,7 @@ export function DynamicTaskReplay({ api, agents, task, batches, archivedTotal, b
   const [inspectorOpen, setInspectorOpen] = useState(false)
   const [resuming, setResuming] = useState(false)
   const [migrationReview, setMigrationReview] = useState(false)
+  const displayedGraph = useRef<{ api: TasksApi; key: string } | null>(null)
   const closeSessions = () => { setSessionsOpen(false); if (sessionId) go(`tasks/${task.id}/runs/${batchId}`) }
   const timer = useRef<number | undefined>(undefined)
   useEffect(() => {
@@ -177,7 +178,10 @@ export function DynamicTaskReplay({ api, agents, task, batches, archivedTotal, b
     graphCaches.set(api, cache)
     const cacheKey = JSON.stringify([task.id, batchId])
     let accumulated: GraphSnapshot | null = cache.peek(cacheKey) ?? null
-    setData(null); setArtifacts([]); setError(''); setCursor(null); setPlaying(false); setEventsReady(false)
+    const sameGraph = displayedGraph.current?.api === api && displayedGraph.current.key === cacheKey
+    displayedGraph.current = { api, key: cacheKey }
+    if (!sameGraph) { setData(null); setArtifacts([]); setSyncedAt(null) }
+    setError(''); setCursor(null); setPlaying(false); setEventsReady(false)
     if (accumulated) { setData(accumulated); setEventsReady(true) }
     const load = async () => {
       try {

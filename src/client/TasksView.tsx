@@ -46,6 +46,8 @@ export interface TasksApi {
   unblockCard: (cardId: string) => Promise<void>
   recoverStudioCard: (input: { taskId: string; batchId: string; cardId: string; expectedRunId: string; recoveryId: string; reason: string; revalidateFrom?: 'storyboard' | 'visual' | 'sound' }) => Promise<{ ok: boolean; restored: { id: string; status: string }[] }>
   resumeStudioCard: (input: { taskId: string; batchId: string; cardId: string; expectedCoreRunId: number }) => Promise<{ ok: boolean; pending?: string; renderState?: string; newRun?: boolean }>
+  previewExecutionMigration: (input:{taskId:string;batchId:string})=>Promise<any>
+  applyExecutionMigration: (input:{taskId:string;batchId:string;expectedPreviewSha256:string;reason:string})=>Promise<any>
   openSession: (sessionId: string) => Promise<void>
   sessionTurns: (sessionId: string) => Promise<import('../wire.ts').TurnLedger>
 }

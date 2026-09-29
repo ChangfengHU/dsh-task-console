@@ -1,10 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,readFile,rm,cp} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {createHash} from 'node:crypto'
-import {captureExecutionBinding,verifyExecutionBinding,withBoundPreset,executionRuntimeIdentity} from '../src/batch-execution-binding.ts'
+import {captureExecutionBinding,verifyExecutionBinding,withBoundPreset,executionRuntimeIdentity,executionRuntimeManifest} from '../src/batch-execution-binding.ts'
+import {persistExecutionBindingSnapshot} from '../src/execution-binding-snapshot.ts'
 import {renderComposition,validateSpec} from '../src/presets.ts'
 import {TaskRunner} from '../src/runner.ts'
 import {EventStore} from '../src/tasks.ts'
@@ -70,7 +71,7 @@ test('runtime digest detects changed source bytes and invalid installed manifest
  assert.match(installed,/^[a-f0-9]{64}$/);await writeFile(join(root,'src/tool.ts'),'mutated');await assert.rejects(executionRuntimeIdentity(root),/manifest-changed/)
 })
 async function runnerFixture(t:any,options:any={}){
- const s=await fixture(t),store=new EventStore(join(s.root,'store')),runner=new TaskRunner(s.ctx,store,{maxInProgress:1,executionRuntimeIdentity:s.runtime,...options})
+ const s=await fixture(t),store=new EventStore(join(s.root,'store')),runner=new TaskRunner(s.ctx,store,{maxInProgress:1,executionRuntimeIdentity:s.runtime,persistExecutionBindingSnapshot:async()=>({testOnly:true}),...options})
  t.after(()=>{runner.stop();if(store.kernel.db.open)store.kernel.db.close()})
  await runner.start()
  await store.append({t:'task/created',at:'2026-09-24T00:00:00Z',taskId:s.task.id,task:s.task})
@@ -88,6 +89,12 @@ test('new opted-in fire atomically persists binding; later stage drift blocks wi
  assert.equal(s.store.kernel.db.prepare('SELECT turn_json FROM dsh_batches WHERE id=?').get('batch').turn_json,frozen)
  assert.equal(s.sessions[0].options.agentOptions.model,'model')
  assert.ok(s.store.kernel.listEvents(batch.cardIds[0]).some((e:any)=>e.kind==='execution_binding_verified'))
+})
+test('bound batch is not committed or dispatched when its immutable execution snapshot cannot be written',async t=>{
+ const s=await runnerFixture(t,{persistExecutionBindingSnapshot:async()=>{throw Error('snapshot storage unavailable')}})
+ await assert.rejects(s.runner.fire('task','manual',{batchId:'no-snapshot'}),/snapshot storage unavailable/)
+ assert.equal(s.store.s.batches.has('no-snapshot'),false)
+ assert.equal(s.sessions.length,0)
 })
 test('binding drift during beforeStart blocks before mount and cannot be supplied by the caller',async t=>{
  const s=await runnerFixture(t);(s.runner as any).beforeStart=async()=>{await s.save('a',{model:'provider/changed'})}
@@ -144,6 +151,18 @@ test('retry after a terminal attempt rechecks the same binding without silently 
  await (s.runner as any).startRun(s.task,batch,s.store.s.cards.get(first.id))
  assert.equal(s.sessions.length,1);assert.equal(s.store.kernel.getTask(first.id).status,'blocked');assert.equal(s.store.s.batches.get(batch.id)!.turn!.executionBinding!.sha256,previous)
 })
+test('manual unblock checks the frozen execution identity before creating a retry Run',async t=>{
+ const s=await runnerFixture(t),batch=await s.runner.fire('task','manual',{batchId:'batch'}),cardId=batch.cardIds[0],run=s.store.s.cards.get(cardId)!.runIds.at(-1)!,core=s.store.coreRunId(run)!
+ await s.save('a',{model:'provider/changed'})
+ assert.equal(s.store.kernel.blockTask(cardId,{expectedRunId:core,reason:'test block',kind:'capability'}),true)
+ s.store.kernel.db.prepare("UPDATE tasks SET status='blocked' WHERE id=?").run(cardId)
+ s.store.s.cards.get(cardId)!.status='blocked'
+ const runs=s.store.kernel.listRuns(cardId).length,sessions=s.sessions.length
+ await assert.rejects(s.runner.unblockCard(cardId),/task-recovery-binding-migration-required:batch-execution-binding-agent-drift/)
+ assert.equal(s.store.kernel.getTask(cardId).status,'blocked')
+ assert.equal(s.store.kernel.listRuns(cardId).length,runs)
+ assert.equal(s.sessions.length,sessions)
+})
 
 test('binding persists on reload, and preparation specialists are captured with the full selected roster',async t=>{
  const s=await runnerFixture(t)
@@ -175,27 +194,31 @@ test('batch workspace and execution identity freeze together before any director
 // Migration fixture reuses the real SQLite runner and authored preset locks.
 import {previewExecutionMigration,applyExecutionMigration,effectiveExecutionBinding,releasePathOnly} from '../src/batch-execution-migration.ts'
 async function migrationFixture(t:any){
- const s=await runnerFixture(t),batch=await s.runner.fire('task','manual',{batchId:'batch'});s.runner.stop()
+ const s=await runnerFixture(t),oldRuntimeRoot=join(s.root,'releases/runtime-aaaaaaaaaaaa'),runtimeRoot=join(s.root,'releases/runtime-bbbbbbbbbbbb')
+ await mkdir(join(oldRuntimeRoot,'src'),{recursive:true});await writeFile(join(oldRuntimeRoot,'package.json'),'{"dependencies":{}}');await writeFile(join(oldRuntimeRoot,'src/entry.js'),'export {}')
+ s.setRuntime(await executionRuntimeIdentity(oldRuntimeRoot))
+ const batch=await s.runner.fire('task','manual',{batchId:'batch'});s.runner.stop()
  for(const card of batch.cardIds){const core=s.store.kernel.getTask(card);if(core.current_run_id)s.store.kernel.failRun(card,{expectedRunId:core.current_run_id,outcome:'failed',error:'fixture'});s.store.kernel.db.prepare("UPDATE tasks SET status='blocked',current_run_id=NULL,claim_lock=NULL,claim_expires=NULL,worker_pid=NULL WHERE id=?").run(card)}
- const binding=batch.turn!.executionBinding!,runtimeRoot=join(s.root,'releases/runtime-bbbbbbbbbbbb'),dir=join(s.root,'releases/evidence/execution-binding-snapshots',binding.sha256)
- const roles=[]
- for(const a of binding.agents){const files:any={};await mkdir(join(dir,a.id),{recursive:true});for(const name of ['task-console.json','agent.cordis.yml','capabilities.lock.json']){const bytes=await readFile(join(a.directory,name));await writeFile(join(dir,a.id,name),bytes);files[name]=createHash('sha256').update(bytes).digest('hex')}roles.push({agentId:a.id,files})}
- await writeFile(join(dir,'snapshot.json'),JSON.stringify({bindingSha256:binding.sha256,runtimeSha256:binding.runtimeSha256,roles}))
- s.setRuntime('b'.repeat(64));return {...s,batch,binding,dir,options:{runtime:s.runtime,runtimeRoot}}
+ const binding=batch.turn!.executionBinding!,snapshotRoot=join(s.root,'releases/evidence/execution-binding-snapshots')
+ await cp(oldRuntimeRoot,runtimeRoot,{recursive:true})
+ const oldRuntime=await executionRuntimeManifest(oldRuntimeRoot),newRuntime=await executionRuntimeIdentity(runtimeRoot)
+ await persistExecutionBindingSnapshot(binding,{root:snapshotRoot,runtime:oldRuntime})
+ s.setRuntime(newRuntime)
+ return {...s,batch,binding,dir:join(snapshotRoot,binding.sha256),options:{runtime:s.runtime,runtimeRoot}}
 }
 test('migration preserves original and runtime refreshes append a verified chain',async t=>{
  const s=await migrationFixture(t),args={taskId:'task',batchId:'batch'},before=JSON.stringify(s.batch.turn),p=await previewExecutionMigration(s.store,s.ctx,args,s.options)
- assert.equal(p.binding.runtimeSha256,'b'.repeat(64));await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p.previewSha256,reason:'platform fix'},s.options)
+ assert.equal(p.binding.runtimeSha256,await s.runtime());assert.deepEqual(p.runtimeChanges.changedFiles,[]);assert.deepEqual(p.runtimeChanges.addedFiles,[]);assert.deepEqual(p.runtimeChanges.removedFiles,[]);await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p.previewSha256,reason:'platform fix'},s.options)
  assert.equal(JSON.stringify(s.batch.turn),before);assert.equal(effectiveExecutionBinding(s.store.kernel.db,s.binding).sha256,p.binding.sha256)
  assert.equal(s.store.kernel.db.prepare('SELECT count(*) AS n FROM dsh_studio_interventions').get().n,1)
  await verifyExecutionBinding(s.ctx,effectiveExecutionBinding(s.store.kernel.db,s.binding),'task','batch','a',s.runtime)
  const reloaded=new EventStore(join(s.root,'store'));await reloaded.load();assert.equal(effectiveExecutionBinding(reloaded.kernel.db,reloaded.s.batches.get('batch')!.turn!.executionBinding!).sha256,p.binding.sha256);reloaded.kernel.db.close()
  await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/runtime-current/)
  s.store.kernel.db.exec('DROP TABLE dsh_execution_binding_runtime_refreshes') // legacy database first encountered by a runtime-refresh release
- s.setRuntime('c'.repeat(64));const p2=await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ const runtimeNext=join(s.root,'releases/runtime-cccccccccccc');await cp(s.options.runtimeRoot,runtimeNext,{recursive:true});s.options.runtimeRoot=runtimeNext;s.setRuntime(await executionRuntimeIdentity(runtimeNext));const p2=await previewExecutionMigration(s.store,s.ctx,args,s.options)
  assert.equal(p2.previousEffectiveSha256,p.binding.sha256);assert.equal(p2.sequence,1)
  await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p2.previewSha256,reason:'verify the next pinned runtime release'},s.options)
- const effective=effectiveExecutionBinding(s.store.kernel.db,s.binding);assert.equal(effective.runtimeSha256,'c'.repeat(64));assert.equal(effective.sha256,p2.binding.sha256)
+ const effective=effectiveExecutionBinding(s.store.kernel.db,s.binding);assert.equal(effective.runtimeSha256,await s.runtime());assert.equal(effective.sha256,p2.binding.sha256)
  assert.equal(s.store.kernel.db.prepare('SELECT count(*) AS n FROM dsh_execution_binding_runtime_refreshes WHERE batch_id=?').get('batch').n,1)
  assert.equal(s.store.kernel.db.prepare('SELECT count(*) AS n FROM dsh_execution_binding_migrations WHERE batch_id=?').get('batch').n,1)
  s.store.kernel.db.prepare("UPDATE dsh_execution_binding_migrations SET original_sha='bad'").run();assert.throws(()=>effectiveExecutionBinding(s.store.kernel.db,s.binding),/invalid-overlay/)

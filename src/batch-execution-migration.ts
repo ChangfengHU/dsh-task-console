@@ -6,7 +6,8 @@ import {readFile,lstat,realpath} from 'node:fs/promises'
 import {dirname,join,resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
 import {canonical} from './capability-contract.ts'
-import {captureExecutionBinding,verifyExecutionBinding,executionRuntimeIdentity,assertBinding,ExecutionBindingError,type BatchExecutionBinding} from './batch-execution-binding.ts'
+import {captureExecutionBinding,verifyExecutionBinding,executionRuntimeIdentity,executionRuntimeManifest,assertBinding,ExecutionBindingError,type BatchExecutionBinding,type ExecutionRuntimeManifest} from './batch-execution-binding.ts'
+import {readExecutionBindingSnapshot} from './execution-binding-snapshot.ts'
 import {StudioInterventions} from './studio-interventions.js'
 import {taskForBatch} from './tasks.js'
 const sha=(x:string|Buffer)=>createHash('sha256').update(x).digest('hex')
@@ -73,6 +74,18 @@ function assertQuiescent(store:any){
  if(ready.some((r:any)=>{const task=store.tasks.get(r.spec_id);return task&&!task.archivedAt}))fail('not-quiescent')
 }
 async function safeBytes(path:string){if(await realpath(path)!==resolve(path)||(await lstat(path)).isSymbolicLink()||!(await lstat(path)).isFile())fail('snapshot-path');return readFile(path)}
+function runtimeChanges(before:ExecutionRuntimeManifest,after:ExecutionRuntimeManifest){
+ const oldFiles=new Map(before.files),newFiles=new Map(after.files),oldDeps=new Map(before.dependencies.map(d=>[d.name,d])),newDeps=new Map(after.dependencies.map(d=>[d.name,d]))
+ return {
+  fromRoot:before.root,toRoot:after.root,
+  addedFiles:[...newFiles.keys()].filter(k=>!oldFiles.has(k)).sort(),
+  removedFiles:[...oldFiles.keys()].filter(k=>!newFiles.has(k)).sort(),
+  changedFiles:[...oldFiles.keys()].filter(k=>newFiles.has(k)&&oldFiles.get(k)!==newFiles.get(k)).sort(),
+  dependencyChanges:[...new Set([...oldDeps.keys(),...newDeps.keys()])].sort().flatMap(name=>{const old=oldDeps.get(name),next=newDeps.get(name);return canonical(old??null)===canonical(next??null)?[]:[{name,before:old??null,after:next??null}]}),
+  nodeVersionChanged:before.nodeVersion!==after.nodeVersion,
+  nodeExecutableChanged:before.nodeExecutable!==after.nodeExecutable,
+ }
+}
 export async function previewExecutionMigration(store:any,ctx:any,value:any,options:{runtime?:()=>Promise<string>;runtimeRoot?:string;quiescent?:()=>boolean}={}){
  if(!value||Object.keys(value).some(k=>!['taskId','batchId'].includes(k))||typeof value.taskId!=='string'||typeof value.batchId!=='string')fail('input')
  const context=()=>{
@@ -85,9 +98,21 @@ export async function previewExecutionMigration(store:any,ctx:any,value:any,opti
   const previous=effectiveExecutionBinding(store.kernel.db,original)
   return {task:taskForBatch(base,batch),batch,original,previous}
  }
- const {task,original,previous}=context(),root=options.runtimeRoot??runtimeRoot,dir=join(dirname(root),'evidence/execution-binding-snapshots',original.sha256)
- const manifest=JSON.parse((await safeBytes(join(dir,'snapshot.json'))).toString())
+ const {task,original,previous}=context(),root=options.runtimeRoot??runtimeRoot
+ let sealed:any
+ try{sealed=await readExecutionBindingSnapshot(original,join(dirname(root),'evidence','execution-binding-snapshots'))}catch(error){
+  if(error instanceof ExecutionBindingError)throw error
+  const message=error instanceof Error?error.message:''
+  if(message.includes('execution-snapshot-file-invalid'))return fail('snapshot-hash')
+  if(message.includes('execution-snapshot-runtime-invalid'))return fail('runtime-snapshot-unavailable')
+  return fail(message.includes('ENOENT')?'snapshot-unavailable':'snapshot-invalid')
+ }
+ const manifest=sealed.snapshot,dir=sealed.path
  if(manifest.bindingSha256!==original.sha256||manifest.runtimeSha256!==original.runtimeSha256||!Array.isArray(manifest.roles)||manifest.roles.length!==original.agents.length)fail('snapshot-identity')
+ const currentRuntime=await executionRuntimeManifest(root)
+ if(digest(currentRuntime)!==(options.runtime?await options.runtime():await executionRuntimeIdentity(root)))fail('runtime-snapshot-current-mismatch')
+ if(!manifest.runtime||digest(manifest.runtime)!==original.runtimeSha256)fail('runtime-snapshot-unavailable')
+ const runtimeDiff=runtimeChanges(manifest.runtime,currentRuntime)
  const current=await captureExecutionBinding(ctx,task,original.batchId,original.fallback,options.runtime??executionRuntimeIdentity)
  if(current.agents.length!==original.agents.length)fail('roles-changed')
  for(const old of original.agents){
@@ -120,7 +145,7 @@ export async function previewExecutionMigration(store:any,ctx:any,value:any,opti
  if(context().original.sha256!==original.sha256)fail('original-changed')
  const hasRefreshTable=!!store.kernel.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_execution_binding_runtime_refreshes'").get()
  const sequence=previous.sha256===original.sha256?undefined:(hasRefreshTable?(store.kernel.db.prepare('SELECT COALESCE(MAX(sequence),0)+1 AS n FROM dsh_execution_binding_runtime_refreshes WHERE batch_id=?').get(value.batchId) as any).n:1)
- const body={schemaVersion:1,taskId:value.taskId,batchId:value.batchId,originalSha256:original.sha256,previousEffectiveSha256:previous.sha256,...(sequence?{sequence}:{}),snapshotSha256:sha(await safeBytes(join(dir,'snapshot.json'))),binding,assisted:true,unblocked:false}
+ const body={schemaVersion:1,taskId:value.taskId,batchId:value.batchId,originalSha256:original.sha256,previousEffectiveSha256:previous.sha256,...(sequence?{sequence}:{}),snapshotSha256:sealed.snapshotSha256,runtimeChanges:runtimeDiff,binding,assisted:true,unblocked:false}
  return {...body,previewSha256:digest(body)}
 }
 export async function applyExecutionMigration(store:any,ctx:any,value:any,options:any={}){

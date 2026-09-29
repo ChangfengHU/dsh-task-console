@@ -1409,7 +1409,18 @@ export class TaskConsoleService extends TypertRemoteService {
     if(!template||template.archivedAt||!batch||batch.taskId!==taskId||batch.archivedAt||batch.settled||!card||card.taskId!==taskId||card.batchId!==batchId||card.role!=='executor'||card.status!=='blocked'||card.runIds.at(-1)===undefined||store.coreRunId(card.runIds.at(-1)!)!==expectedCoreRunId||store.s.runs.get(card.runIds.at(-1)!)?.status!=='blocked')throw Error('studio-resume-blocked-run-changed')
     const execution=taskForBatch(template,batch)
     if(execution.design?.evidenceContract!=='studio-video-v1'||execution.design?.progressPolicy!=='studio-bounded-v1')throw Error('studio-resume-contract-required')
-    const workflow=new StudioWorkflow(store),source=store.s.runs.get(card.runIds.at(-1)!) as any,input={task:execution,batch,card,sessionId:source?.sessionId??''},rows=workflow.renderLedger.rows(input).filter((row:any)=>row.cardId===card.id&&row.round===card.round&&!['completed','failed','rejected'].includes(row.state))
+    await this.runner.assertRecoveryExecutionIdentity(card.id)
+    const workflow=new StudioWorkflow(store),source=store.s.runs.get(card.runIds.at(-1)!) as any,input={task:execution,batch,card,sessionId:source?.sessionId??''},allRows=workflow.renderLedger.rows(input).filter((row:any)=>row.cardId===card.id&&row.round===card.round),rows=allRows.filter((row:any)=>!['completed','failed','rejected'].includes(row.state))
+    // A prior reconciliation can prove that the original host render never
+    // existed. If the follow-up Run was then rejected before dispatch because
+    // the frozen executor identity had drifted, an audited identity migration
+    // makes it safe to create a fresh Run without reopening that absent intent.
+    const latestEvents=store.kernel.listEvents(card.id).filter((event:any)=>event.run_id===store.coreRunId(card.runIds.at(-1)!)),bindingRejected=latestEvents.some((event:any)=>event.kind==='execution_binding_rejected'&&typeof event.payload?.code==='string'&&event.payload.code.includes('batch-execution-binding-'))
+    const reconciledAbsent=allRows.some((row:any)=>row.state==='failed'&&row.reconciledAbsentAt&&row.errorCode==='plain_directory_required')
+    if(rows.length===0&&reconciledAbsent&&bindingRejected){
+      await this.runner.unblockCard(card.id)
+      return JSON.stringify({ok:true,newRun:true,renderState:'absent',reconciledAbsent:true,errorCode:'plain_directory_required',oldRunPreserved:true})
+    }
     if(rows.length!==1)throw Error('studio-resume-requires-one-original-pending-render')
     const row=rows[0]
     if(typeof row.intentId!=='string'||!row.originSessionId||!row.composition||!row.output||!row.helperPath||!row.runtimePath||!row.helperSha256)throw Error('studio-resume-original-render-provenance-incomplete')

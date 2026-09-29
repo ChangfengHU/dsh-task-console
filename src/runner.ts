@@ -4,6 +4,7 @@ import {StudioOperations} from './studio-operations.js'
 import {StudioProgress,registerStudioProgress,studioProgressPending,studioProgressResume} from './studio-progress.js'
 import {StudioInterventions} from './studio-interventions.js'
 import {captureExecutionBinding,verifyExecutionBinding,withBoundPreset,executionRuntimeIdentity,ExecutionBindingError,type BatchExecutionBinding,type BoundFallback} from './batch-execution-binding.ts'
+import {persistExecutionBindingSnapshot} from './execution-binding-snapshot.ts'
 import {workflowDefinition} from './workflow-plan.ts'
 import {planStudioBatchWorkspace,ensureStudioBatchWorkspace} from './studio-workspace.js'
 import {StudioPreparation,preparationBarrier,preparationOriginExited} from './studio-preparation.js'
@@ -75,6 +76,8 @@ interface Flight {
 export interface RunnerOptions {
   /** Host-owned identity reader; tests may provide an isolated runtime fixture. */
   executionRuntimeIdentity?:()=>Promise<string>
+  /** Test seam. Production defaults to the host-private immutable snapshot writer. */
+  persistExecutionBindingSnapshot?:(binding:BatchExecutionBinding)=>Promise<unknown>
   maxInProgress?: number
   now?: () => number
   onBatchSettled?: (batch: Batch) => void | Promise<void>
@@ -111,6 +114,7 @@ export interface FireOptions {
 
 export class TaskRunner {
   private readonly executionIdentity:()=>Promise<string>
+  private readonly persistExecutionSnapshot:(binding:BatchExecutionBinding)=>Promise<unknown>
   modelFallback?: { fromProvider: string; provider: string; model: string }
   private readonly ctx: Context
   readonly store: EventStore
@@ -146,6 +150,7 @@ export class TaskRunner {
 
   constructor(ctx: Context, store: EventStore, opts: RunnerOptions = {}) {
     this.executionIdentity=opts.executionRuntimeIdentity??executionRuntimeIdentity
+    this.persistExecutionSnapshot=opts.persistExecutionBindingSnapshot??(opts.executionRuntimeIdentity?async()=>undefined:persistExecutionBindingSnapshot)
     this.ctx = ctx; this.store = store
     this.maxInProgress = opts.maxInProgress ?? 3
     this.clock = opts.now ?? (() => Date.now())
@@ -512,7 +517,9 @@ export class TaskRunner {
     if(task.design?.executionBinding==='agent-runtime-v1'){
       const definition=workflowDefinition(task)
       const turn=options.turn??{objective:task.brief,participants:task.participants,cwd:task.cwd,workflow:{id:createHash('sha256').update(JSON.stringify(definition)).digest('hex'),definition}}
-      options={...options,turn:{...turn,executionBinding:await captureExecutionBinding(this.ctx,task,batchId,this.modelFallback,this.executionIdentity)}}
+      const binding=await captureExecutionBinding(this.ctx,task,batchId,this.modelFallback,this.executionIdentity)
+      await this.persistExecutionSnapshot(binding)
+      options={...options,turn:{...turn,executionBinding:binding}}
     }
     const cards = task.graphMode === 'dynamic-rounds'
       ? [{ id: `${batchId}#p1`, agentId: task.participants[0].agentId, ...(task.participants[0].brief ? { brief: task.participants[0].brief } : {}), deps: [], kind: 'agent' as const, role: 'planner' as const, round: 1 }]
@@ -1202,12 +1209,27 @@ export class TaskRunner {
     return { ok: true, ...result }
   }
 
+  /** Fail closed before an operator retry creates a new Session/Run. */
+  async assertRecoveryExecutionIdentity(cardId:string):Promise<void>{
+    const card=this.store.s.cards.get(cardId),batch=card&&this.store.s.batches.get(card.batchId),template=card&&this.store.tasks.get(card.taskId)
+    if(!card||!batch||!template||batch.settled||batch.archivedAt||template.archivedAt)throw Error('task-recovery-context-changed')
+    const task=taskForBatch(template,batch),binding=batch.turn?.executionBinding
+    if(task.design?.executionBinding==='agent-runtime-v1'&&!binding)throw Error('task-recovery-execution-binding-missing')
+    if(!binding)return
+    try{await verifyExecutionBinding(this.ctx,effectiveExecutionBinding(this.store.kernel.db,binding),task.id,batch.id,card.agentId,this.executionIdentity)}
+    catch(error){
+      if(error instanceof ExecutionBindingError&&['batch-execution-binding-agent-drift','batch-execution-binding-runtime-drift'].includes(error.message))throw Error(`task-recovery-binding-migration-required:${error.message}`)
+      throw error
+    }
+  }
+
   /** Hermes unblock semantics: a blocked run stays closed and a new run is claimed. */
   async unblockCard(cardId: string): Promise<void> {
     const card = this.store.s.cards.get(cardId)
     if (card && this.store.s.batches.get(card.batchId)?.archivedAt) throw new Error('执行记录已归档；请新建执行重新检查，不改写历史阻塞')
     if (!card || card.status !== 'blocked') throw new Error('这张卡不在阻塞状态')
     if (card.wakeAt && Date.parse(card.wakeAt) > this.clock()) throw new Error('定时等待尚未到期，不能提前当作复验完成')
+    await this.assertRecoveryExecutionIdentity(cardId)
     const ok = await this.store.transition(
       () => {
         const changed=this.store.kernel.unblockTask(cardId)

@@ -48,7 +48,8 @@ async function captureAgent(ctx:any,id:string):Promise<BoundAgent>{
 
 /** The installed manifest is authoritative when present. Local source builds
  * use package/lock/src bytes. External secret files are never followed. */
-export async function executionRuntimeIdentity(root=dirname(dirname(fileURLToPath(import.meta.url)))):Promise<string>{
+export interface ExecutionRuntimeManifest {root:string;files:[string,string][];dependencies:{name:string;sha256:string|null;path:string|null}[];nodeVersion:string;nodeExecutable:string}
+export async function executionRuntimeManifest(root=dirname(dirname(fileURLToPath(import.meta.url)))):Promise<ExecutionRuntimeManifest>{
  try{
   const paths:string[]=[]
   const manifest=await optionalHash(join(root,'DEPLOY_MANIFEST.json'))
@@ -68,7 +69,7 @@ export async function executionRuntimeIdentity(root=dirname(dirname(fileURLToPat
    const walk=async(dir:string)=>{for(const entry of await readdir(join(root,dir),{withFileTypes:true})){if(entry.isSymbolicLink())fail('runtime-symlink');if(entry.isDirectory())await walk(join(dir,entry.name));else if(entry.isFile())paths.push(join(dir,entry.name))}}
    await walk('src')
   }
-  const files=await Promise.all(paths.sort().map(async name=>[name,sha(await readFile(join(root,name)))]))
+  const files=await Promise.all(paths.sort().map(async name=>[name,sha(await readFile(join(root,name))) as string] as [string,string]))
   // Shared packages are outside deployment archives. Bind their installed
   // manifests and resolved locations rather than assuming package.json ranges
   // identify what this host actually loaded. No transport config is included.
@@ -78,8 +79,12 @@ export async function executionRuntimeIdentity(root=dirname(dirname(fileURLToPat
    const path=join(root,'node_modules',name,'package.json'),bytes=await optionalHash(path)
    return {name,sha256:bytes,path:bytes?await realpath(path):null}
   }))
-  return digest({root:await realpath(root),files,dependencies,nodeVersion:process.version,nodeExecutable:await realpath(process.execPath)})
+  return {root:await realpath(root),files,dependencies,nodeVersion:process.version,nodeExecutable:await realpath(process.execPath)}
  }catch(e){if(e instanceof ExecutionBindingError)throw e;return fail('runtime-unavailable')}
+}
+export async function executionRuntimeIdentity(root=dirname(dirname(fileURLToPath(import.meta.url)))):Promise<string>{
+ const manifest=await executionRuntimeManifest(root)
+ return digest(manifest)
 }
 
 export function assertBinding(binding:BatchExecutionBinding,taskId:string,batchId:string){

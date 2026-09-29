@@ -504,7 +504,7 @@ export class EventStore {
     if (!batch) throw new Error('没有这个任务运行')
     const tasks = db.prepare(`SELECT id,title,body,assignee,status,created_at,started_at,completed_at,result,node_kind,round,role,current_run_id FROM tasks WHERE tenant = ? ORDER BY created_at,id`).all(batchId) as GraphTaskRow[]
     const links = db.prepare(`SELECT l.parent_id,l.child_id,l.kind,l.created_at FROM task_links l JOIN tasks c ON c.id=l.child_id WHERE c.tenant=? ORDER BY COALESCE(l.created_at,0),l.rowid`).all(batchId) as GraphLinkRow[]
-    const rawRuns = db.prepare(`SELECT r.id,b.external_run_id,r.task_id,r.profile,r.status,r.started_at,r.ended_at,r.outcome,r.summary,r.error,b.session_id,b.message_id,r.claim_expires,r.last_heartbeat_at,EXISTS(SELECT 1 FROM task_events e WHERE e.run_id=r.id AND e.kind='blocked' AND json_extract(e.payload,'$.terminal')=1) AS terminal_block FROM task_runs r JOIN tasks t ON t.id=r.task_id LEFT JOIN dsh_run_bindings b ON b.core_run_id=r.id WHERE t.tenant=? ORDER BY r.started_at,r.id`).all(batchId) as Omit<GraphRunRow, 'phase' | 'evidence'>[]
+    const rawRuns = db.prepare(`SELECT r.id,b.external_run_id,r.task_id,r.profile,r.status,r.started_at,r.ended_at,r.outcome,r.summary,r.error,b.session_id,b.message_id,r.claim_expires,r.last_heartbeat_at FROM task_runs r JOIN tasks t ON t.id=r.task_id LEFT JOIN dsh_run_bindings b ON b.core_run_id=r.id WHERE t.tenant=? ORDER BY r.started_at,r.id`).all(batchId) as Omit<GraphRunRow, 'phase' | 'evidence' | 'terminal_block'>[]
     if (after !== undefined && (!Number.isSafeInteger(after) || after < 0)) throw new Error('Invalid event cursor')
     const eventRows = (after === undefined
       ? db.prepare(`SELECT id,graph_id,task_id,run_id,kind,payload,created_at FROM task_events WHERE graph_id=? ORDER BY id`).all(batchId)
@@ -523,7 +523,8 @@ export class EventStore {
     }
     const runs = rawRuns.map(run => {
       const evidence = evidenceByRun.get(run.id) ?? []
-      return { ...run, phase: evidence.at(-1) ?? 'claimed', evidence: [...new Set(evidence)] }
+      const runtimeRun=run.external_run_id?this.s.runs.get(run.external_run_id):undefined
+      return { ...run, terminal_block: runtimeRun?.terminalBlock===true, phase: evidence.at(-1) ?? 'claimed', evidence: [...new Set(evidence)] }
     })
     return { graphId: batchId, taskId, batch: { id: batch.id, firedAt: batch.fired_at, settledAt: batch.settled_at, outcome: batch.outcome }, live: { tasks, links, runs }, events, ...(after === undefined ? {} : { eventPage: { after, next: events.at(-1)?.id ?? after, hasMore } }) }
   }

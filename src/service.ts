@@ -12,6 +12,7 @@ import { invokeStudioRenderJob, reconcileStudioRenderIntent, studioRenderJob } f
 import { StudioRenderLedger } from './studio-render-ledger.js'
 import { studioProgressPending } from './studio-progress.js'
 import { inspectCapabilityContract } from './capability-contract.ts'
+import { awaitAgentCapabilities } from './agent-capability-readiness.ts'
 import { taskAgentIds } from './task-design.ts'
 import {registerStageFiles,requireStudioStages,verifyStageReceipt} from './studio-stage-files.js'
 import {studioStageFor} from './studio-stages.js'
@@ -208,7 +209,12 @@ export class TaskConsoleService extends TypertRemoteService {
       beforeStart: async input => {
         const ids=input.card.role==='planner' ? taskAgentIds(input.task) : [input.profileId]
         for(const id of ids){
-          const audit=JSON.parse(await this.agentCapabilityStatus(JSON.stringify({id})))
+          const readiness=await awaitAgentCapabilities({
+            inspect:()=>this.inspectAgentCapabilities(id),isActive:input.isActive,
+            onEvent:event=>{const card=this.runner.store.kernel.getTask(input.card.id);if(card?.current_run_id)this.runner.store.kernel.recordEvent(input.card.id,'agent_capability_readiness',{agentId:id,...event},card.current_run_id)},
+          })
+          const audit=readiness.audit
+          if(readiness.timedOut)return {kind:'capability' as const,reason:JSON.stringify({error_code:'agent-mcp-readiness-timeout',agentId:id,missingDependencies:audit.missingDependencies,attempts:readiness.attempts,elapsedMs:readiness.elapsedMs,retryable:true,nextAction:'Configured MCP tools did not register within 60 seconds. Inspect MCP connection health, then retry this node; do not regenerate the Agent preset for a connection delay.'})}
           // Legacy authored presets remain usable only when their actual fence matches;
           // they are never labelled live-verified or certified by this compatibility path.
           if(['composition-missing','tool-drift','dependency-missing','contract-drift','local-edit'].includes(audit.status))return {
@@ -811,13 +817,18 @@ export class TaskConsoleService extends TypertRemoteService {
   /** Read-only drift audit. A green configuration is not a passed live invocation. */
   async agentCapabilityStatus(payload:string):Promise<string>{
     const {id}=JSON.parse(payload)
+    return JSON.stringify((await this.inspectAgentCapabilities(id)).audit)
+  }
+
+  private async inspectAgentCapabilities(id:string){
     if(typeof id!=='string'||!id.trim())throw Error('Agent id required')
     const presets=(this.ctx as any).get('agentPresets'),preset=await presets?.resolve(id)
     if(!preset)throw Error('Agent not found')
     const dir=dirname(String(preset.path)),spec=await readSpec(dir)
-    if(!spec)return JSON.stringify({id,ready:false,status:'unmanaged',scope:'configuration-only',liveVerified:false})
-    const expected=renderComposition(spec,this.hostMcp(),this.hostToolNames()).capabilities!
-    return JSON.stringify({id,...await inspectCapabilityContract(dir,expected)})
+    if(!spec)return {audit:{id,ready:false,status:'unmanaged',scope:'configuration-only',liveVerified:false},sources:[]}
+    // Audit and connection classification must use the same inventory snapshot.
+    const sources=this.hostMcp(),expected=renderComposition(spec,sources,this.hostToolNames()).capabilities!
+    return {audit:{id,...await inspectCapabilityContract(dir,expected)},sources}
   }
 
   async saveAgent(payload: string): Promise<string> {

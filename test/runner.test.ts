@@ -1,4 +1,5 @@
 import {StudioInterventions} from '../src/studio-interventions.js'
+import {awaitAgentCapabilities} from '../src/agent-capability-readiness.ts'
 import {studioInstallationBlock} from '../src/studio-installation.js'
 import {WorkflowExtensions} from '../src/workflow-extensions.js'
 import assert from 'node:assert/strict'
@@ -68,6 +69,38 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
   return { host, store, runner, task, root }
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
+
+test('restart waits for MCP discovery, retains completed predecessor and claims successor once',async()=>{
+ const {runner,store,host,root}=await setup({participants:[{agentId:'a'},{agentId:'b'}]})
+ const batch=await runner.fire('T','manual');await tick()
+ const first=[...host.sessions.keys()][0]
+ host.consumeFirst(first)
+ await host.callTool(first,'task_complete',{summary:'upstream complete'});host.endTurn(first);await tick()
+ const [doneId,nextId]=batch.cardIds
+ assert.equal(store.s.cards.get(doneId)!.status,'done');assert.equal(store.s.cards.get(nextId)!.status,'running')
+ runner.stop()
+ const recoveredStore=new EventStore(join(root,'store')),recoveredHost=fakeHost(join(root,'presets'))
+ let connected=false,release!:()=>void,entered!:()=>void
+ const pending=new Promise<void>(resolve=>{release=resolve}),waiting=new Promise<void>(resolve=>{entered=resolve})
+ const recovered=new TaskRunner(recoveredHost.ctx,recoveredStore,{beforeStart:async input=>{
+  const result=await awaitAgentCapabilities({isActive:input.isActive,inspect:async()=>({
+   audit:connected?{status:'in-sync'}:{status:'dependency-missing',missingDependencies:['mcp:assets:asset_get']},
+   sources:[{serverName:'assets',live:true,tools:connected?['asset_get']:[]}],
+  }),sleep:()=>pending,onEvent:e=>{if(e.phase==='waiting')entered()}})
+  if(result.timedOut||result.audit.status!=='in-sync')return {kind:'capability',reason:'fixture discovery failure'}
+ }})
+ testResources.push({root,runner:recovered,store:recoveredStore})
+ const starting=recovered.start();await waiting
+ assert.equal(recoveredHost.sessions.size,0,'no model before tools are registered')
+ assert.equal(recoveredStore.s.cards.get(doneId)!.status,'done')
+ assert.equal(recoveredStore.s.cards.get(nextId)!.status,'running','pending discovery stays within one claim')
+ await recovered.tick();await recovered.tick()
+ connected=true;release();await starting;await tick()
+ assert.equal(recoveredHost.sessions.size,1)
+ assert.equal(recoveredStore.s.cards.get(doneId)!.runIds.length,1)
+ assert.equal(recoveredStore.s.cards.get(nextId)!.runIds.length,2,'one crashed run and exactly one recovery run')
+ assert.equal([...recoveredStore.s.runs.values()].filter(r=>r.status==='blocked').length,0)
+})
 
 test('incomplete Studio installation blocks once without creating a model session or retry loop',async()=>{
  const {runner,store,host}=await setup({}, {beforeStart:()=>studioInstallationBlock({config:{}})})

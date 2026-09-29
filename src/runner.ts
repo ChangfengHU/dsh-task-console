@@ -100,7 +100,7 @@ export interface RunnerOptions {
 
 export interface BlockDecision { reason: string; kind: BlockKind }
 export interface CompletionDecision { summary: string; metadata: Record<string, unknown>; artifacts?:{path:string;sha256:string}[] }
-export interface CompletionCheck { task: TaskSpec; batch: Batch; card: Card; sessionId: string; profileId: string; metadata?: Record<string, unknown>; artifactPaths?:string[]; finalArtifactPath?:string }
+export interface CompletionCheck { task: TaskSpec; batch: Batch; card: Card; sessionId: string; profileId: string; isActive?:()=>boolean; metadata?: Record<string, unknown>; artifactPaths?:string[]; finalArtifactPath?:string }
 
 export interface FireOptions {
   /** Stable IDs let an external signal resume safely after a host restart. */
@@ -638,7 +638,7 @@ export class TaskRunner {
         await (assertEffectiveBinding(this.store.kernel.db,originalBinding!,binding),verifyExecutionBinding(this.ctx,binding,task.id,batch.id,profileId,this.executionIdentity))
       }
       // Host preflight runs after a durable claim, before any model or paid work.
-      const blocked = await this.beforeStart?.({ task, batch, card, sessionId, profileId })
+      const blocked = await this.beforeStart?.({ task, batch, card, sessionId, profileId, isActive:()=>!this.stopped&&this.flights.get(sessionId)===flight&&this.store.kernel.getTask(card.id)?.current_run_id===flight.coreRunId&&!preparationBarrier(this.store.kernel.db,card.id) })
       if (blocked) { await this.finishBlocked(flight, blocked.reason, blocked.kind); return }
       assertStartupActive()
       try{await this.checkBatchWorkspace(task,batch)}catch(error){await this.finishBlocked(flight,error instanceof Error?error.message:'studio-workspace-invalid','capability');return}
@@ -831,6 +831,8 @@ export class TaskRunner {
       await this.append({ t: 'run/prompt_dispatched', taskId: task.id, runId, messageId })
       this.arm(flight)
     } catch (error) {
+      // A disposed host cannot close or reclassify a run being recovered elsewhere.
+      if(this.stopped)return
       if(error instanceof ExecutionBindingError){
         this.store.kernel.recordEvent(card.id,'execution_binding_rejected',{bindingSha256:binding?.sha256??null,code:error.message},flight.coreRunId)
         await this.finishBlocked(flight,error.message,'capability');return

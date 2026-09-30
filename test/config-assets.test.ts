@@ -83,6 +83,7 @@ test('MiB-sized binary Skill resources and encrypted envelopes validate without 
     assets.skills = [skill]
     const {sealConfig,openConfig} = await import('../src/config-migration.ts')
     const envelope=createEnvelope({agents:[],tasks:[],assets},'test'),sealed=sealConfig(envelope)
+    assert.ok(sealed.data.length < 100000,'compress before encryption, not ciphertext afterward')
     assert.equal(openConfig(JSON.parse(sealed.data.toString()),sealed.fragment).digest.value,envelope.digest.value)
   } finally { await rm(root,{recursive:true,force:true}) }
 })

@@ -87,6 +87,8 @@ test('encrypted R2 URL round-trip strips fragment from every HTTP request; no ke
     assert.equal(seen.length, 2, 'installer gets no decryption key or HTTP request')
     const modified = JSON.parse(sealed.data.toString()); modified.tag = 'AAAAAAAAAAAAAAAAAAAAAA'
     assert.throws(() => openConfig(modified, sealed.fragment), /解密校验失败/)
+    const wrongEncoding=JSON.parse(sealed.data.toString());delete wrongEncoding.encoding
+    assert.throws(() => openConfig(wrongEncoding,sealed.fragment), /解密校验失败/)
     assert.throws(() => openConfig(JSON.parse(sealed.data.toString()), '#key=' + 'A'.repeat(43)), /解密校验失败/)
     assert.deepEqual(openConfig(envelope), envelope, 'old plaintext exports remain supported')
   } finally { globalThis.fetch = original }

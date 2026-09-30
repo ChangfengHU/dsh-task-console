@@ -1,4 +1,5 @@
 import { createHash, randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
+import {gzipSync,gunzipSync} from 'node:zlib'
 import type { AgentSpec } from './wire.ts'
 import type { AgentAction } from './agent-actions.ts'
 import type { TaskSpec } from './fold.ts'
@@ -18,9 +19,9 @@ const SEALED_SCHEMA = 'dsh-task-console/encrypted-config-v1'
 export function sealConfig(envelope: ConfigEnvelope): { data: Buffer; fragment: string } {
   const key = randomBytes(32), nonce = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', key, nonce)
-  cipher.setAAD(Buffer.from(SEALED_SCHEMA))
-  const ciphertext = Buffer.concat([cipher.update(encodeEnvelope(envelope)), cipher.final()])
-  const data = Buffer.from(JSON.stringify({ schema: SEALED_SCHEMA, algorithm: 'aes-256-gcm', nonce: nonce.toString('base64url'), tag: cipher.getAuthTag().toString('base64url'), ciphertext: ciphertext.toString('base64') }))
+  cipher.setAAD(Buffer.from(SEALED_SCHEMA + '/gzip'))
+  const ciphertext = Buffer.concat([cipher.update(gzipSync(encodeEnvelope(envelope))), cipher.final()])
+  const data = Buffer.from(JSON.stringify({ schema: SEALED_SCHEMA, algorithm: 'aes-256-gcm', encoding: 'gzip', nonce: nonce.toString('base64url'), tag: cipher.getAuthTag().toString('base64url'), ciphertext: ciphertext.toString('base64') }))
   return { data, fragment: `#key=${key.toString('base64url')}` }
 }
 
@@ -30,12 +31,13 @@ export function openConfig(raw: any, fragment = ''): ConfigEnvelope {
     return parseEnvelope(raw) // Existing definition exports remain importable.
   }
   if (!/^#key=[A-Za-z0-9_-]{43}$/.test(fragment)) throw Error('加密配置包需要完整迁移链接（包含 #key=）；请重新复制导出地址')
-  if (raw.algorithm !== 'aes-256-gcm' || !/^[A-Za-z0-9_-]{16}$/.test(raw.nonce ?? '') || !/^[A-Za-z0-9_-]{22}$/.test(raw.tag ?? '') || typeof raw.ciphertext !== 'string' || raw.ciphertext.length > MAX_R2_BYTES || !canonicalBase64(raw.ciphertext)) throw Error('加密配置包格式无效')
+  if (raw.algorithm !== 'aes-256-gcm' || raw.encoding !== undefined && raw.encoding !== 'gzip' || !/^[A-Za-z0-9_-]{16}$/.test(raw.nonce ?? '') || !/^[A-Za-z0-9_-]{22}$/.test(raw.tag ?? '') || typeof raw.ciphertext !== 'string' || raw.ciphertext.length > MAX_R2_BYTES || !canonicalBase64(raw.ciphertext)) throw Error('加密配置包格式无效')
   let plaintext: Buffer
   try {
     const cipher = createDecipheriv('aes-256-gcm', Buffer.from(fragment.slice(5), 'base64url'), Buffer.from(raw.nonce, 'base64url'))
-    cipher.setAAD(Buffer.from(SEALED_SCHEMA)); cipher.setAuthTag(Buffer.from(raw.tag, 'base64url'))
+    cipher.setAAD(Buffer.from(SEALED_SCHEMA + (raw.encoding === 'gzip' ? '/gzip' : ''))); cipher.setAuthTag(Buffer.from(raw.tag, 'base64url'))
     plaintext = Buffer.concat([cipher.update(Buffer.from(raw.ciphertext, 'base64')), cipher.final()])
+    if (raw.encoding === 'gzip') plaintext = gunzipSync(plaintext,{maxOutputLength:MAX_CONFIG_BYTES})
   } catch { throw Error('配置包解密校验失败：链接密钥错误或内容已被篡改') }
   if (plaintext.length > MAX_CONFIG_BYTES) throw Error('解密后的配置包超过 40 MiB')
   let value: unknown

@@ -11,7 +11,7 @@ import { validateTaskActions } from './task-actions.ts'
 import { taskAgentIds, validateDesign } from './task-design.ts'
 
 export const CONFIG_SCHEMA = 'dsh-task-console/config-v1' as const
-export const MAX_CONFIG_BYTES = 40 * 1024 * 1024
+export const MAX_CONFIG_BYTES = 96 * 1024 * 1024
 export const MAX_R2_BYTES = Math.ceil(MAX_CONFIG_BYTES * 4 / 3) + 2048
 const SEALED_SCHEMA = 'dsh-task-console/encrypted-config-v1'
 
@@ -39,7 +39,7 @@ export function openConfig(raw: any, fragment = ''): ConfigEnvelope {
     plaintext = Buffer.concat([cipher.update(Buffer.from(raw.ciphertext, 'base64')), cipher.final()])
     if (raw.encoding === 'gzip') plaintext = gunzipSync(plaintext,{maxOutputLength:MAX_CONFIG_BYTES})
   } catch { throw Error('配置包解密校验失败：链接密钥错误或内容已被篡改') }
-  if (plaintext.length > MAX_CONFIG_BYTES) throw Error('解密后的配置包超过 40 MiB')
+  if (plaintext.length > MAX_CONFIG_BYTES) throw Error('解密后的配置包超过 96 MiB')
   let value: unknown
   try { value = JSON.parse(plaintext.toString('utf8')) } catch { throw Error('解密后的配置包不是有效 JSON') }
   return parseEnvelope(value)
@@ -183,7 +183,7 @@ export function parseEnvelope(raw: unknown): ConfigEnvelope {
 
 export function encodeEnvelope(envelope: ConfigEnvelope): Buffer {
   const data = Buffer.from(`${JSON.stringify(envelope, null, 2)}\n`)
-  if (data.byteLength > MAX_CONFIG_BYTES) throw Error('配置包超过 40 MiB，需拆分资产后重试')
+  if (data.byteLength > MAX_CONFIG_BYTES) throw Error('配置包超过 96 MiB，需拆分资产后重试')
   return data
 }
 

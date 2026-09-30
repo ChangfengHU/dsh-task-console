@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, symlink, stat } from
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
-import { collectSkillAsset, deduplicateSkills, materializeSkills, parseAssets, portableHostConfig, remapPath, stageHostConfigs, writeSkillAsset, profilePatchPath, type ConfigAssets } from '../src/config-assets.ts'
+import { MAX_ASSET_BYTES, collectSkillAsset, deduplicateSkills, materializeSkills, parseAssets, portableHostConfig, remapPath, stageHostConfigs, writeSkillAsset, profilePatchPath, type ConfigAssets } from '../src/config-assets.ts'
 import { createEnvelope, parseEnvelope, taskConfig } from '../src/config-migration.ts'
 import { TaskConsoleService } from '../src/service.ts'
 import { TaskActions } from '../src/task-actions.ts'
@@ -86,6 +86,25 @@ test('MiB-sized binary Skill resources and encrypted envelopes validate without 
     assert.ok(sealed.data.length < 100000,'compress before encryption, not ciphertext afterward')
     assert.equal(openConfig(JSON.parse(sealed.data.toString()),sealed.fragment).digest.value,envelope.digest.value)
   } finally { await rm(root,{recursive:true,force:true}) }
+})
+
+test('merged target Skill versions above the former 24 MiB source limit re-export, but remain bounded', async () => {
+  const assets = empty(), files = []
+  // Seven distinct 4 MiB resources model retained local + imported versions.
+  for (let i = 0; i < 7; i++) {
+    const data = Buffer.alloc(4 * 1024 * 1024, i)
+    files.push({ path: `resource-${i}.bin`, base64: data.toString('base64'), sha256: createHash('sha256').update(data).digest('hex'), executable: false })
+  }
+  const guide = Buffer.from('Retained and imported Skill assets.\n')
+  files.unshift({ path: 'SKILL.md', base64: guide.toString('base64'), sha256: createHash('sha256').update(guide).digest('hex'), executable: false })
+  assets.skills = [{ name: 'merged-skill', files }]
+  const { sealConfig, openConfig } = await import('../src/config-migration.ts')
+  const envelope = parseEnvelope(createEnvelope({ agents: [], tasks: [], assets }, 'test'))
+  const sealed = sealConfig(envelope)
+  assert.equal(openConfig(JSON.parse(sealed.data.toString()), sealed.fragment).digest.value, envelope.digest.value)
+  // No references: each occurrence consumes the strict package budget.
+  assets.skills[0].files = [files[0], ...Array.from({ length: Math.floor(MAX_ASSET_BYTES / (4 * 1024 * 1024)) + 1 }, (_, i) => ({ ...files[1], path: `bounded-${i}.bin` }))]
+  assert.throws(() => parseAssets(assets), /大小或文件数量限制/)
 })
 
 test('MCP/model credentials and opaque argv become references; plaintext cannot be imported', () => {

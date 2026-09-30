@@ -5,7 +5,9 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { parseDocument, isSeq } from 'yaml'
 
-export const MAX_ASSET_BYTES = 24 * 1024 * 1024
+// A target may retain its own Skill versions alongside imported ones. Bound the
+// merged backup, not just the source package, so import -> re-export stays usable.
+export const MAX_ASSET_BYTES = 64 * 1024 * 1024
 export const MAX_FILE_BYTES = 4 * 1024 * 1024
 /** Avoid repeating-group regexes: V8 overflows its regexp stack on real MiB assets. */
 export function canonicalBase64(value: string): boolean {

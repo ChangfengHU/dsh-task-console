@@ -88,7 +88,7 @@ import { SessionShortcuts, shortcutChange } from './session-shortcuts.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
 import { createBootstrapCommand, createEnvelope, downloadConfig, encodeEnvelope, MAX_CONFIG_BYTES, parseEnvelope, portableAgentSpec, taskConfig, uploadConfig, type ConfigEnvelope } from './config-migration.ts'
 import { runtimeBootstrapStatus, startRuntimeBootstrap } from './config-runtime-bootstrap.ts'
-import { backupPreset, collectSkillAsset, portableHostConfig, profilePatchPath, remapPath, safeDirectory, stageHostConfigs, writeSkillAsset, type ConfigAssets } from './config-assets.ts'
+import { backupPreset, collectSkillAsset, deduplicateSkills, materializeSkills, portableHostConfig, profilePatchPath, remapPath, safeDirectory, stageHostConfigs, writeSkillAsset, type ConfigAssets } from './config-assets.ts'
 import { isExternalWorkflow } from './task-kind.ts'
 
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
@@ -621,7 +621,8 @@ export class TaskConsoleService extends TypertRemoteService {
     let version = 'unknown'
     try { version = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json', import.meta.url), 'utf8')).version ?? version } catch { /* package metadata is optional */ }
     const library = await scanSkills(), skills: ConfigAssets['skills'] = []
-    for (const skill of library) {
+    const requiredSkills = new Set(agents.flatMap(a => a.spec.skills))
+    for (const skill of library.filter(s => requiredSkills.has(s.name))) {
       if (skills.some(s => !s.agentId && s.name === skill.name)) throw Error(`Skill ${skill.name} 在多个来源重复，请先消除歧义`)
       skills.push(await collectSkillAsset(skill.name, skill.dir))
     }
@@ -656,7 +657,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const llm = (this.ctx as any).get('llm')
     const providers = await Promise.all((llm?.listProviders() ?? []).map(async (p: any) => ({ id: String(p.id), models: (await llm.listModels(p.id).catch(() => [])).map((m: any) => String(m.id)) })))
     const selection = (this.ctx as any).get('agentDefaultModel')?.currentSelection()
-    const assets: ConfigAssets = { schema: 'dsh-task-console/assets-v1', skills, hostConfigs, requirements, models: { providers, defaultSelection: selection ? { provider: String(selection.provider), model: String(selection.model) } : null } }
+    const assets: ConfigAssets = { schema: 'dsh-task-console/assets-v1', skills: deduplicateSkills(skills), hostConfigs, requirements, models: { providers, defaultSelection: selection ? { provider: String(selection.provider), model: String(selection.model) } : null } }
     return parseEnvelope(createEnvelope({ agents, tasks, assets }, version))
   }
 
@@ -705,7 +706,7 @@ export class TaskConsoleService extends TypertRemoteService {
       const installedModules = new Set([...((this.ctx as any).loader.entries())].map((e: any) => typeof e.options?.name === 'string' ? portableModule(e.options.name) : ''))
       installedModules.add('dsh-task-console')
       const providers = new Set(((this.ctx as any).get('llm')?.listProviders() ?? []).map((p: any) => p.id))
-      const assets = a ? { skills: a.skills.map(s => ({ name: s.name, agentId: s.agentId ?? null, files: s.files.length, conflict: !s.agentId && skills.has(s.name) })), hostConfigs: a.hostConfigs.map(h => ({ id: h.id, kind: h.kind, module: h.module, secretRefs: h.secrets.map(s => s.ref), disabledOnImport: true })), missingModules: a.requirements.filter(r => !installedModules.has(r.module)), missingProviders: a.models.providers.filter(p => !providers.has(p.id)).map(p => p.id), defaultSelection: a.models.defaultSelection } : null
+      const assets = a ? { skills: materializeSkills(a.skills).map(s => ({ name: s.name, agentId: s.agentId ?? null, files: s.files.length, conflict: !s.agentId && skills.has(s.name) })), hostConfigs: a.hostConfigs.map(h => ({ id: h.id, kind: h.kind, module: h.module, secretRefs: h.secrets.map(s => s.ref), disabledOnImport: true })), missingModules: a.requirements.filter(r => !installedModules.has(r.module)), missingProviders: a.models.providers.filter(p => !providers.has(p.id)).map(p => p.id), defaultSelection: a.models.defaultSelection } : null
       return { agents, tasks, runtime, assets, counts: { agents: agents.length, tasks: tasks.length }, exportedAt: envelope.exportedAt, sourceVersion: envelope.source.version, digest: envelope.digest.value }
     })
   }
@@ -760,7 +761,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const importedLibrary: (typeof library)[number][] = []
     const assets = pending.envelope.payload.assets
     if (assets && pending.options.installAssets) {
-      for (const skill of assets.skills) {
+      for (const skill of materializeSkills(assets.skills)) {
         if (!skill.agentId && library.some(s => s.name === skill.name)) { skippedSkills.push(skill.name); continue }
         const root = skill.agentId ? join(backupRoot, 'agent-skills', skill.agentId) : join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'skills')
         const dir = await writeSkillAsset(skill, root)

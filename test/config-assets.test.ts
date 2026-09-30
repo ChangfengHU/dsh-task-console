@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, symlink, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { collectSkillAsset, parseAssets, portableHostConfig, remapPath, stageHostConfigs, writeSkillAsset, profilePatchPath, type ConfigAssets } from '../src/config-assets.ts'
+import { collectSkillAsset, deduplicateSkills, materializeSkills, parseAssets, portableHostConfig, remapPath, stageHostConfigs, writeSkillAsset, profilePatchPath, type ConfigAssets } from '../src/config-assets.ts'
 import { createEnvelope, parseEnvelope, taskConfig } from '../src/config-migration.ts'
 import { TaskConsoleService } from '../src/service.ts'
 import { TaskActions } from '../src/task-actions.ts'
@@ -57,6 +57,20 @@ test('reject traversal, case collisions, file/directory collisions and symlink r
     await assert.rejects(() => collectSkillAsset('fixture-skill', join(root, 'source')), /软链接/)
     await symlink(join(root, 'source'), join(root, 'linked-target'))
     await assert.rejects(() => writeSkillAsset(asset, join(root, 'linked-target')), /普通目录/)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('shared Skill content is stored once; Agent-specific versions and permissions remain exact', async () => {
+  const root = await temp(), assets = empty()
+  try {
+    const a = await fixtureSkill(join(root, 'source'))
+    const b = { ...a, agentId: 'agent-b' }, c = { ...a, agentId: 'agent-c', files: a.files.map(f => f.path === 'pixel.bin' ? { ...f, executable: true } : f) }
+    assets.skills = deduplicateSkills([a,b,c])
+    assert.equal(assets.skills[1].files.length, 0); assert.equal(assets.skills[1].filesRef, 'library/fixture-skill')
+    const parsed = parseAssets(assets)
+    assert.deepEqual(materializeSkills(parsed.skills), [a,b,c])
+    assets.skills[1].filesRef = 'outside/nonexistent'
+    assert.throws(() => parseAssets(assets), /文件引用无效/)
   } finally { await rm(root, { recursive: true, force: true }) }
 })
 

@@ -8,8 +8,8 @@ import { parseDocument, isSeq } from 'yaml'
 export const MAX_ASSET_BYTES = 24 * 1024 * 1024
 export const MAX_FILE_BYTES = 4 * 1024 * 1024
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
-export interface AssetFile { path: string; base64: string; sha256: string; executable: boolean }
-export interface SkillAsset { name: string; agentId?: string; files: AssetFile[] }
+export interface AssetFile { path: string; base64: string; sha256: string; executable: boolean; contentRef?: string }
+export interface SkillAsset { name: string; agentId?: string; files: AssetFile[]; filesRef?: string }
 export interface SecretRef { path: string; ref: string }
 export interface HostConfigAsset {
   id: string; module: string; kind: 'mcp' | 'model' | 'plugin'; config: Record<string, unknown>
@@ -22,6 +22,27 @@ export interface ConfigAssets {
   hostConfigs: HostConfigAsset[]
   models: { defaultSelection: { provider: string; model: string } | null; providers: { id: string; models: string[] }[] }
   requirements: { module: string; version: string }[]
+}
+const skillKey = (s: SkillAsset) => `${s.agentId ?? 'library'}/${s.name}`
+/** Same-name Skills with different bytes remain separate; only byte-identical trees share storage. */
+export function deduplicateSkills(skills: SkillAsset[]): SkillAsset[] {
+  const seen = new Map<string, string>()
+  const blobs = new Set<string>()
+  return skills.map(s => {
+    const digest = hash(Buffer.from(JSON.stringify(s.files))), ref = seen.get(digest)
+    if (ref) return { name: s.name, ...(s.agentId ? { agentId: s.agentId } : {}), files: [], filesRef: ref }
+    seen.set(digest, skillKey(s))
+    return { ...s, files: s.files.map(f => { if (blobs.has(f.sha256)) return { path: f.path, base64: '', sha256: f.sha256, executable: f.executable, contentRef: f.sha256 }; blobs.add(f.sha256); return f }) }
+  })
+}
+export function materializeSkills(skills: SkillAsset[]): SkillAsset[] {
+  const source = new Map<string, AssetFile[]>()
+  const blobs = new Map<string, string>()
+  return skills.map(s => {
+    const rows = s.filesRef ? source.get(s.filesRef) : s.files; if (!rows) throw Error('Skill 文件引用不存在')
+    const files = rows.map(f => { const base64 = f.contentRef ? blobs.get(f.contentRef) : f.base64; if (base64 === undefined) throw Error('Skill 文件内容引用不存在'); blobs.set(f.sha256, base64); return { path: f.path, base64, sha256: f.sha256, executable: f.executable } })
+    source.set(skillKey(s), files); return { name: s.name, ...(s.agentId ? { agentId: s.agentId } : {}), files }
+  })
 }
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/
 const SECRET_KEY = /token|secret|password|passwd|api.?key|authorization|cookie|credential|private.?key/i
@@ -92,22 +113,31 @@ export function parseAssets(raw: any): ConfigAssets {
   if (raw?.schema !== 'dsh-task-console/assets-v1' || !Array.isArray(raw.skills) || raw.skills.length > 500 || !Array.isArray(raw.hostConfigs) || raw.hostConfigs.length > 300 || !Array.isArray(raw.requirements)) throw Error('资产清单无效')
   let total = 0, count = 0
   const skillIds = new Set<string>()
+  const fileSets = new Map<string, AssetFile[]>()
+  const blobs = new Map<string, string>()
   const skills = raw.skills.map((s: any): SkillAsset => {
     const skillName = name(s?.name), agentId = s.agentId === undefined ? undefined : name(s.agentId), id = `${agentId ?? ''}/${skillName}`
     if (skillIds.has(id) || !Array.isArray(s.files)) throw Error('Skill 重复或文件清单无效')
     skillIds.add(id)
+    if (s.filesRef !== undefined) {
+      if (typeof s.filesRef !== 'string' || !fileSets.has(s.filesRef) || s.files.length) throw Error('Skill 文件引用无效；只允许引用包内之前的完整文件集')
+      return { name: skillName, ...(agentId ? { agentId } : {}), files: [], filesRef: s.filesRef }
+    }
     const paths = new Set<string>()
     const files = s.files.map((f: any): AssetFile => {
       const path = assetPath(f?.path), folded = path.toLowerCase()
       if (paths.has(folded) || typeof f.base64 !== 'string' || f.base64.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(f.base64)) throw Error('资产文件重复或内容无效')
       paths.add(folded)
-      const data = Buffer.from(f.base64, 'base64'); total += data.length; count++
+      if (f.contentRef !== undefined && (f.contentRef !== f.sha256 || !blobs.has(f.contentRef) || f.base64 !== '')) throw Error('资产文件内容引用无效')
+      const data = Buffer.from(f.contentRef ? blobs.get(f.contentRef)! : f.base64, 'base64'); if (!f.contentRef) total += data.length; count++
       if (total > MAX_ASSET_BYTES || count > 10000 || data.length > MAX_FILE_BYTES) throw Error('配置资产超过大小或文件数量限制')
       if (hash(data) !== f.sha256 || typeof f.executable !== 'boolean') throw Error('资产文件 SHA256 或权限校验失败')
-      return { path, base64: f.base64, sha256: f.sha256, executable: f.executable }
+      if (!f.contentRef) blobs.set(f.sha256, f.base64)
+      return { path, base64: f.base64, sha256: f.sha256, executable: f.executable, ...(f.contentRef ? { contentRef: f.contentRef } : {}) }
     })
     for (const path of paths) if (path.split('/').slice(0, -1).some((_, i, a) => paths.has(a.slice(0, i + 1).join('/')))) throw Error('资产文件与目录路径冲突')
     if (!files.some(f => f.path === 'SKILL.md')) throw Error('Skill 缺少 SKILL.md')
+    fileSets.set(`${agentId ?? 'library'}/${skillName}`, files)
     return { name: skillName, ...(agentId ? { agentId } : {}), files }
   })
   const hostIds = new Set<string>()

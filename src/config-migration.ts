@@ -5,17 +5,21 @@ import type { TaskSpec } from './fold.ts'
 import { validateActions } from './agent-actions.ts'
 import { validateSpec } from './presets.ts'
 import { parseCron, validTimeZone } from './cron.ts'
+import { parseAssets, type ConfigAssets } from './config-assets.ts'
+import { validateTaskActions } from './task-actions.ts'
+import { taskAgentIds, validateDesign } from './task-design.ts'
 
 export const CONFIG_SCHEMA = 'dsh-task-console/config-v1' as const
-export const MAX_CONFIG_BYTES = 5 * 1024 * 1024
+export const MAX_CONFIG_BYTES = 40 * 1024 * 1024
 
 export interface ConfigAgent { spec: AgentSpec; actions: AgentAction[] }
 export interface ConfigTask {
   id: string; title: string; brief: string; trigger: TaskSpec['trigger']; participants: TaskSpec['participants']
   graphMode?: TaskSpec['graphMode']; workflowRecipe?: TaskSpec['workflowRecipe']; design?: TaskSpec['design']
   cwd: string; timeoutSec: number; onFail: TaskSpec['onFail']; maxTries: number; actions: AgentAction[]
+  workflowKind?: 'chat' | 'manual' | 'external'
 }
-export interface ConfigPayload { agents: ConfigAgent[]; tasks: ConfigTask[] }
+export interface ConfigPayload { agents: ConfigAgent[]; tasks: ConfigTask[]; assets?: ConfigAssets }
 export interface ConfigRuntime {
   schema: 'dsh-task-console/fleet-runtime-v1'
   mcps: { serverName: string; transport: 'streamable-http' | 'stdio'; credentialRef: 'fleet-admin' | 'onboard-vault-resolve'; runtime: string }[]
@@ -57,7 +61,8 @@ export function taskConfig(task: TaskSpec, actions: AgentAction[]): ConfigTask {
     participants: task.participants, ...(task.graphMode ? { graphMode: task.graphMode } : {}),
     ...(task.workflowRecipe ? { workflowRecipe: task.workflowRecipe } : {}),
     ...(task.design ? { design: task.design } : {}), cwd: task.cwd, timeoutSec: task.timeoutSec,
-    onFail: task.onFail, maxTries: task.maxTries, actions: validateActions(actions),
+    onFail: task.onFail, maxTries: task.maxTries, actions: validateTaskActions(actions),
+    ...(task.configMigration ? { workflowKind: task.configMigration.workflowKind } : task.origin ? { workflowKind: task.origin.source === 'task-chat' ? 'chat' as const : 'external' as const } : {}),
   }
 }
 
@@ -65,6 +70,7 @@ export function createEnvelope(payload: ConfigPayload, version: string, now = ne
   const normalized: ConfigPayload = {
     agents: [...payload.agents].sort((a, b) => a.spec.id.localeCompare(b.spec.id)),
     tasks: [...payload.tasks].sort((a, b) => a.id.localeCompare(b.id)),
+    ...(payload.assets ? { assets: parseAssets(payload.assets) } : {}),
   }
   return { schema: CONFIG_SCHEMA, exportedAt: now.toISOString(), source: { plugin: 'dsh-task-console', version }, digest: { algorithm: 'sha256', value: payloadDigest(normalized) }, payload: normalized, ...(runtime ? { runtime } : {}) }
 }
@@ -96,16 +102,22 @@ export function parseEnvelope(raw: unknown): ConfigEnvelope {
     if (!Array.isArray(row.participants) || !row.participants.length || row.participants.length > 32) throw Error(`Task ${id} 的参与者无效`)
     if (row.participants.some((p: any) => !p || typeof p.agentId !== 'string' || !p.agentId.trim() || p.agentId.length > 160 || p.brief !== undefined && (typeof p.brief !== 'string' || p.brief.length > 10_000))) throw Error(`Task ${id} 的参与者无效`)
     if (!Number.isFinite(row.timeoutSec) || row.timeoutSec < 60 || row.timeoutSec > 21_600 || !Number.isInteger(row.maxTries) || row.maxTries < 1 || row.maxTries > 5 || !['stop', 'retry'].includes(row.onFail)) throw Error(`Task ${id} 的运行策略无效`)
-    return taskConfig({
+    if (row.workflowKind !== undefined && !['chat','manual','external'].includes(row.workflowKind)) throw Error('工作流类型无效')
+    if (row.graphMode !== undefined && !['static-chain','dynamic-rounds'].includes(row.graphMode)) throw Error('任务图模式无效')
+    const config = taskConfig({
       id, title: text(row.title, 'Task 标题', 300), brief: text(row.brief, 'Task 任务书', 50_000), trigger,
       participants: row.participants, graphMode: row.graphMode, workflowRecipe: row.workflowRecipe, design: row.design,
       cwd: text(row.cwd, 'Task 工作目录', 4096), timeoutSec: row.timeoutSec, onFail: row.onFail,
       maxTries: row.maxTries, enabled: false, createdAt: new Date(0).toISOString(),
     } as TaskSpec, row.actions ?? [])
+    if (row.workflowKind !== undefined) config.workflowKind = row.workflowKind
+    if (row.design) validateDesign(row.design)
+    return config
   })
-  const payload = { agents, tasks }
+  const payload: ConfigPayload = { agents, tasks, ...(e.payload.assets ? { assets: parseAssets(e.payload.assets) } : {}) }
+  for (const skill of payload.assets?.skills ?? []) if (skill.agentId && !agentIds.has(skill.agentId)) throw Error('Skill 引用了不存在的 Agent')
   for (const task of tasks) {
-    const missing = task.participants.map(row => row.agentId).filter(id => !agentIds.has(id))
+    const missing = taskAgentIds(task).filter(id => !agentIds.has(id))
     if (missing.length) throw Error(`Task ${task.id} 引用了配置包中不存在的 Agent:${missing.join('、')}`)
   }
   if (!/^[a-f0-9]{64}$/.test(e.digest.value) || payloadDigest(payload) !== e.digest.value) throw Error('配置包 SHA256 校验失败')
@@ -127,7 +139,7 @@ export function parseEnvelope(raw: unknown): ConfigEnvelope {
 
 export function encodeEnvelope(envelope: ConfigEnvelope): Buffer {
   const data = Buffer.from(`${JSON.stringify(envelope, null, 2)}\n`)
-  if (data.byteLength > MAX_CONFIG_BYTES) throw Error('配置包超过 5 MiB，需减少 Agent 或 Task 后重试')
+  if (data.byteLength > MAX_CONFIG_BYTES) throw Error('配置包超过 40 MiB，需拆分资产后重试')
   return data
 }
 
@@ -162,9 +174,14 @@ export async function downloadConfig(value: string, publicDomain: string): Promi
   const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(30_000), headers: { accept: 'application/json' } })
   if (!response.ok) throw Error(`配置包下载失败（HTTP ${response.status}）`)
   const declared = Number(response.headers.get('content-length') || 0)
-  if (declared > MAX_CONFIG_BYTES) throw Error('配置包超过 5 MiB')
-  const data = Buffer.from(await response.arrayBuffer())
-  if (data.byteLength > MAX_CONFIG_BYTES) throw Error('配置包超过 5 MiB')
+  if (declared > MAX_CONFIG_BYTES) throw Error('配置包超过 40 MiB')
+  const reader = response.body?.getReader()
+  if (!reader) throw Error('配置包响应没有内容')
+  const chunks: Uint8Array[] = []; let size = 0
+  try {
+    for (;;) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > MAX_CONFIG_BYTES) throw Error('配置包超过 40 MiB'); chunks.push(value) }
+  } finally { await reader.cancel() }
+  const data = Buffer.concat(chunks)
   let parsed: unknown
   try { parsed = JSON.parse(data.toString('utf8')) } catch { throw Error('配置包不是有效 JSON') }
   return { envelope: parseEnvelope(parsed), bytes: data.byteLength, fileSha256: createHash('sha256').update(data).digest('hex') }

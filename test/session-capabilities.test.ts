@@ -130,10 +130,26 @@ test('actual native ToolRuntime inherits by default, enforces explicit tool/serv
       assert.equal((await invoke()).isError, true); assert.equal(executed, 1)
     }
     cap.policy = {}; await invoke(); assert.equal(executed, 2)
+    const capabilities = await runtime.execute({ name: 'session_capabilities', arguments: {}, agent, callId: 'capability-output', signal: new AbortController().signal } as any)
+    assert.notEqual(capabilities.isError, true, 'standard session output must pass the real native lossless JSON boundary')
+    const snapshot = await cap.describe(agent)
+    assert.equal(snapshot.definition.name, null)
+    assert.deepEqual(JSON.parse(JSON.stringify(snapshot)), snapshot)
     const undo = runtime.guard(() => 'native permission denied')
     assert.equal((await invoke()).isError, true); assert.equal(executed, 2)
     undo()
   } finally { dispose(); stop(); db.close() }
+})
+
+test('missing optional Skill provider is explicit null, not undefined', async () => {
+  const db = new DatabaseSync(':memory:')
+  const agent = { session: { id: 'session-provider-fixture', header: {}, events: [] } }
+  const ctx = { tools: { schemas: () => [{ name: 'skill' }] }, get: (name: string) => name === 'skills' ? { snapshot: async () => ({ complete: true, skills: [{ name: 'fixture' }] }) } : undefined }
+  try {
+    const snapshot = await new SessionCapabilities(ctx, async () => ({}), db).describe(agent)
+    assert.equal(snapshot.current.skills[0].provider, null)
+    assert.deepEqual(JSON.parse(JSON.stringify(snapshot)), snapshot)
+  } finally { db.close() }
 })
 
 test('native waterfall filters earlier registered slash-skill injection after next; authored roles unchanged', async () => {

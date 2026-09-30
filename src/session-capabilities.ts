@@ -142,7 +142,7 @@ export class SessionCapabilities {
     if (this.ctx.get('skills')) {
       try {
         const catalog = await this.ctx.get('skills').snapshot({ scope: agent, cwd: session.header?.cwd })
-        skills = catalog.skills.filter((s: any) => s.invocation?.modelInvocable !== false).map((s: any) => ({ name: s.name, source: spec?.skills.includes(s.name) ? 'agent-definition' : 'environment-inherited', state: this.skillRestricted(s.name, agent) ? 'restricted' : loaded.has(s.name) ? 'loaded-in-session-history' : availableNames.has('skill') ? 'available-on-demand' : 'not-callable', provider: s.provider }))
+        skills = catalog.skills.filter((s: any) => s.invocation?.modelInvocable !== false).map((s: any) => ({ name: s.name, source: spec?.skills.includes(s.name) ? 'agent-definition' : 'environment-inherited', state: this.skillRestricted(s.name, agent) ? 'restricted' : loaded.has(s.name) ? 'loaded-in-session-history' : availableNames.has('skill') ? 'available-on-demand' : 'not-callable', provider: s.provider ?? null }))
         skillDiscovery = catalog.complete ? 'complete' : 'partial'
       } catch { skillDiscovery = 'discovery-failed' }
     }
@@ -156,7 +156,7 @@ export class SessionCapabilities {
     const out = {
       sessionId: session.id, checkedAt: new Date().toISOString(), live: true,
       inheritancePolicy: { mcp: this.policy.standardMcpInheritance ?? 'inherit', skills: this.policy.standardSkillInheritance ?? 'inherit', excludedSkills: this.policy.standardExcludedSkills ?? [], excludedMcpServers: this.policy.standardExcludedMcpServers ?? [], excludedTools: this.policy.standardExcludedTools ?? [], appliesTo: 'standard-native-session', maxSteps: this.policy.standardMaxSteps ?? STANDARD_LIMIT },
-      definition: { role, name: spec?.name, authored: !!spec, observation: spec ? 'task-console-definition' : 'no-task-console-definition; use runtime facts, not an assumed empty preset', tools: [...declared], skills: spec?.skills ?? [] },
+      definition: { role, name: spec?.name ?? null, authored: !!spec, observation: spec ? 'task-console-definition' : 'no-task-console-definition; use runtime facts, not an assumed empty preset', tools: [...declared], skills: spec?.skills ?? [] },
       current: { tools, skills, skillDiscovery, permissionPreset: this.ctx.get('permissionPresets')?.current(session.events ?? []) ?? 'not-observed', configuredButNotRegistered: [...declared].filter(n => !schemas.some((s: any) => s.name === n) && !registeredStable.has(n)) },
       answerContract: { language: '用户当前消息的语言', registeredIsNotAuthorized: true, cannotCall: tools.filter((t: any) => t.state === 'restricted').map((t: any) => t.name), requiredCaveat: '必须单独说明受限工具不可调用；其余已注册工具也不保证凭据有效或具体操作获授权。禁止总结为全部能力都可使用。Skill 是可按需加载，不等于已加载。' },
       boundaries: ['registered 表示当前工具已注册，不保证凭据有效或目标操作获授权。', '历史加载的 Skill 不证明其全文仍保留在当前上下文。', '底层 CLI 自行加载的能力未获得运行时证据时标为未知，不能算作已加载。'],

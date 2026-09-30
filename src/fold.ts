@@ -91,6 +91,8 @@ export interface TaskSpec {
   origin?: TaskOrigin
   /** Present only on the execution view for one signal-specific turn. */
   targets?: TaskTarget[]
+  /** Configuration provenance, not an authenticated chat-origin or historical receipt. */
+  configMigration?: { digest: string; workflowKind: 'chat' | 'manual' | 'external' }
 }
 
 export type BlockKind = 'needs_input' | 'dependency' | 'capability' | 'transient'

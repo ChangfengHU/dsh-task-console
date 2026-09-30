@@ -158,7 +158,7 @@ test('SDK client negotiates MCP, lists and invokes a real fixture-backed server'
 
 test('packaged stdio MCP initializes without credentials and defaults to deny-all',async()=>{
   const client=new Client({name:'proxy-stdio-test',version:'1.0.0'})
-  const transport=new StdioClientTransport({command:'/usr/bin/node',args:['--import','tsx','src/proxy-mcp.ts'],cwd:process.cwd(),stderr:'pipe'})
+  const transport=new StdioClientTransport({command:process.execPath,args:['--import','tsx','src/proxy-mcp.ts'],cwd:process.cwd(),stderr:'pipe'})
   try{
     await client.connect(transport)
     assert.equal((await client.listTools()).tools.length,3)

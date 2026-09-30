@@ -15,6 +15,7 @@ import { validateDesign, taskAgentIds, type TaskDesign } from './task-design.ts'
 import { TaskActions, validateTaskActions, type TaskActionInput } from './task-actions.ts'
 import type { AgentAction } from './agent-actions.ts'
 import fleetTaskActions from '../presets/fleet-task-actions.json' with { type: 'json' }
+import { isChatWorkflow } from './task-kind.ts'
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export function userInput(exec: ToolExecutionLike) {
@@ -52,7 +53,7 @@ export class TaskCreator {
   get actions() { return new TaskActions(this.runner) }
 
   catalog() {
-    return [...this.runner.store.tasks.values()].filter(t => !t.archivedAt && (t.enabled || t.trigger.kind === 'cron') && t.origin?.source === 'task-chat')
+    return [...this.runner.store.tasks.values()].filter(t => !t.archivedAt && (t.enabled || t.trigger.kind === 'cron') && isChatWorkflow(t))
       .map(({ id, title, brief, participants, graphMode, workflowRecipe, design, trigger }) => ({ id, title, brief, participants, trigger,
         actionCount: this.actions.read(id).actions.filter(a => a.enabled !== false).length,
         scheduleEnabled: trigger.kind === 'cron' ? this.runner.store.tasks.get(id)!.enabled : null,
@@ -76,7 +77,7 @@ export class TaskCreator {
         quality:'Complete design scope, branches, coordination, failurePolicy and acceptance remain mandatory. Actual stage files, frozen dialogue, reference comparison, complete audio and continuous-motion evidence are required by the runtime. Valid schema, successful render and completed handoff do not approve quality. Preview delivery does not authorize social publication.',
       },
       fleetRecipeDesign: { recipe:'fleet-base-v3', use:'选择该配方且无额外设计约束时可省略 design，宿主将按 login 策略填入以下可审查默认设计。显式传入 design 时仍完整校验并独立审查，不覆盖自定义约束。', preserve:fleetRecipeDesign('preserve'), provisionGemini:fleetRecipeDesign('provision-gemini') },
-      revisionCandidates: [...this.runner.store.tasks.values()].filter(t=>!t.enabled && !t.archivedAt && t.origin?.source === 'task-chat')
+      revisionCandidates: [...this.runner.store.tasks.values()].filter(t=>!t.enabled && !t.archivedAt && isChatWorkflow(t))
         .map(t=>({id:t.id,title:t.title,trigger:t.trigger,...(t.workflowRecipe ? {workflowRecipe:t.workflowRecipe} : {}),manualAvailable:t.trigger.kind === 'cron'})),
       loginDiagnosis: '巡查可显式审查 browserPatrol.resumeAfterCopyLimit=1（需 actions 包含 resume）：复制预算耗尽但有同 Task 同故障已确认导入时，保留计数，允许额外一次正常登录续接。先新鲜 verify；canResume=true 应冻结 resume 而非再次 provision。原账号由 MCP 跨会话解析并核对当前授权，禁止静默换号；不再次导入、不重启、不绕过验证码。续接后独立20分钟4样本；失败只报告真实原因。一个目标失败，继续其他目标，本轮有界收口；未登录或未知不等于整轮执行协议应永久阻塞。旧计划不自动获得额外预算，必须 revise 审查。',
       recurringInput: 'create/revise 定时计划可显式提供顶层 recurringObjective：完整可复用的业务执行目标，包含原始目标的范围、禁令、验收与通知约束，但不含“生成待审查计划/等待审批”这类 Creator 控制指令。它与原始请求并列供独立审查，批准后才用于后续 cron；不提供时保留旧输入语义。不得省略原请求中的操作限制。reuse 不允许改写它。',
@@ -329,7 +330,7 @@ export class TaskCreator {
       let task: TaskSpec, previous: TaskSpec | undefined
       if (proposal.decision === 'reuse' || proposal.decision === 'revise') {
         const found = store.tasks.get(proposal.taskId ?? '')
-        if (!found || found.archivedAt || (proposal.decision !== 'revise' && !found.enabled && found.trigger.kind !== 'cron') || found.origin?.source !== 'task-chat') throw new Error('只能复用未归档且允许手动执行的聊天工作流；不能重放巡检 Signal')
+        if (!found || found.archivedAt || (proposal.decision !== 'revise' && !found.enabled && found.trigger.kind !== 'cron') || !isChatWorkflow(found)) throw new Error('只能复用未归档且允许手动执行的聊天工作流；不能重放巡检 Signal')
         task = found
         if(found.origin?.reviewPlanId){
           const reviewed=this.plansDb().prepare('SELECT payload FROM dsh_task_plans WHERE id=?').get(found.origin.reviewPlanId) as any

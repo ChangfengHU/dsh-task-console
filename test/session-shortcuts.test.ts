@@ -60,7 +60,8 @@ test('supported native sidebar bridge is additive, syntactically valid, idempote
   new Script(patched)
   assert.equal(patchSessionShortcuts(patched), patched)
   assert.ok(patched.includes('if (id === "archive") onArchive(node.id);'))
-  assert.ok(patched.includes('archivedSessionIds: undiscoverableSessionIds'))
+  // Archive visibility comes from another host bridge; this additive patch must preserve it.
+  assert.equal(/archivedSessionIds:\s*undiscoverableSessionIds/.test(patched), /archivedSessionIds:\s*undiscoverableSessionIds/.test(source))
   assert.throws(() => patchSessionShortcuts(source.replace('const sessionMenuItems = [', 'const changedMenu = [')))
   assert.throws(() => patchSessionShortcuts('/* dtc:session-shortcuts-v1 */'))
 })

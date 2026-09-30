@@ -44,9 +44,10 @@ import { registerStudioSkillGate } from './studio-skill-gate.js'
 
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID, createHash } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
+import { access, lstat, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, resolve, extname } from 'node:path'
+import { basename, dirname, join, resolve, extname } from 'node:path'
+import { createRequire } from 'node:module'
 import { readActions, saveActions } from './agent-action-store.ts'
 import { renderAction, parameterVisible, type ActionCatalog } from './agent-actions.ts'
 import { optionPage, sourceTool, type ActionOptionQuery } from './action-options.ts'
@@ -84,8 +85,11 @@ import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
 import { SessionShortcuts, shortcutChange } from './session-shortcuts.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
-import { createBootstrapCommand, createEnvelope, downloadConfig, taskConfig, uploadConfig, type ConfigEnvelope } from './config-migration.ts'
+import { createBootstrapCommand, createEnvelope, downloadConfig, encodeEnvelope, MAX_CONFIG_BYTES, parseEnvelope, taskConfig, uploadConfig, type ConfigEnvelope } from './config-migration.ts'
 import { runtimeBootstrapStatus, startRuntimeBootstrap } from './config-runtime-bootstrap.ts'
+import { backupPreset, collectSkillAsset, portableHostConfig, profilePatchPath, remapPath, safeDirectory, stageHostConfigs, writeSkillAsset, type ConfigAssets } from './config-assets.ts'
+import { isExternalWorkflow } from './task-kind.ts'
+import { taskAgentIds } from './task-design.ts'
 
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
 const TOOL_PREFIX = /^mcp__(.+?)__(.+)$/
@@ -146,7 +150,8 @@ export class TaskConsoleService extends TypertRemoteService {
   private readonly ready: Promise<void>
   private headerCache?: { at: number; value: AgentSessionHeader[] }
   private headerRead?: Promise<AgentSessionHeader[]>
-  private readonly pendingConfigImports = new Map<string, { envelope: ConfigEnvelope; expiresAt: number }>()
+  private readonly pendingConfigImports = new Map<string, { envelope: ConfigEnvelope; expiresAt: number; options: { pathMappings: Record<string, string>; overwriteAgents: boolean; installAssets: boolean } }>()
+  private configImportBusy = false
 
   private shortcutHidden(): Set<string> {
     const registry = (this.ctx as any).get('workspaceRegistry')
@@ -590,26 +595,73 @@ export class TaskConsoleService extends TypertRemoteService {
   }
 
   private taskActionsForExport(taskId: string) {
-    return this.creator.actions.read(taskId).actions
+    return this.creator.actions.exportDefinition(taskId)
   }
 
   /** Export definitions only. Sessions, runs, events, artifacts and secret values never enter the envelope. */
-  async exportConfig(): Promise<string> {
+  private async configurationEnvelope(): Promise<ConfigEnvelope> {
     await this.ready
     const presets = (this.ctx as any).get('agentPresets')
     const agents = [] as { spec: AgentSpec; actions: import('./agent-actions.ts').AgentAction[] }[]
+    const sources = new Map<string, string>()
     for (const preset of (presets ? await presets.list() : []) as any[]) {
-      if (preset.trust !== 'user') continue
       const dir = dirname(String(preset.path)), spec = await readSpec(dir)
-      if (!spec) continue
+      if (!spec) {
+        if (preset.trust === 'user') throw Error(`Agent ${preset.id} 没有可迁移的 task-console.json；请先在 Agent 编辑器保存，避免漏导资产`)
+        continue
+      }
+      if (sources.has(spec.id)) throw Error(`Agent ID 重复:${spec.id}`)
+      sources.set(spec.id, dir)
       agents.push({ spec, actions: (await readActions(dir)).actions })
     }
     const tasks = [...this.runner.store.tasks.values()].filter(task => !task.archivedAt).map(task => taskConfig(task, this.taskActionsForExport(task.id)))
     let version = 'unknown'
     try { version = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json', import.meta.url), 'utf8')).version ?? version } catch { /* package metadata is optional */ }
-    const envelope = createEnvelope({ agents, tasks }, version)
+    const library = await scanSkills(), skills: ConfigAssets['skills'] = []
+    for (const skill of library) {
+      if (skills.some(s => !s.agentId && s.name === skill.name)) throw Error(`Skill ${skill.name} 在多个来源重复，请先消除歧义`)
+      skills.push(await collectSkillAsset(skill.name, skill.dir))
+    }
+    for (const agent of agents) for (const skillName of agent.spec.skills) {
+      const source = library.find(s => s.name === skillName || basename(s.dir) === skillName)
+      const copied = join(sources.get(agent.spec.id)!, 'skills', source ? basename(source.dir) : skillName)
+      const dir = await access(join(copied, 'SKILL.md')).then(() => copied).catch(() => source?.dir)
+      if (!dir) throw Error(`Agent ${agent.spec.id} 的 Skill ${skillName} 缺失，拒绝生成不完整资产包`)
+      skills.push(await collectSkillAsset(skillName, dir, agent.spec.id))
+    }
+    const entries = [...(this.ctx as any).loader.entries()] as any[]
+    const hostConfigs: ConfigAssets['hostConfigs'] = []
+    for (const entry of entries) {
+      const module = entry.options?.name, id = entry.options?.id
+      if (typeof module !== 'string' || typeof id !== 'string') continue
+      const kind = module === MCP_CLIENT ? 'mcp' : /dsh-llm|dsh-codex-claude-cli|dsh-model-console|dsh-agent-default-model/.test(module) ? 'model' : null
+      if (kind) hostConfigs.push(portableHostConfig(id, module, kind, entry.options.config ?? {}, !!entry.disabled, kind === 'mcp' ? this.hostMcp().find(m => m.entryId === id)?.tools ?? [] : []))
+    }
+    const require = createRequire(import.meta.url)
+    const modules = [...new Set(entries.map(e => e.options?.name).filter((n: any): n is string => typeof n === 'string'))]
+    const requirements = await Promise.all(modules.map(async module => {
+      const pkg = module.startsWith('@') ? module.split('/').slice(0, 2).join('/') : module.split('/')[0]
+      let version = 'unknown'
+      try { version = JSON.parse(await readFile(require.resolve(`${pkg}/package.json`), 'utf8')).version ?? version } catch { /* retained as an explicit unverified requirement */ }
+      return { module, version }
+    }))
+    const llm = (this.ctx as any).get('llm')
+    const providers = await Promise.all((llm?.listProviders() ?? []).map(async (p: any) => ({ id: String(p.id), models: (await llm.listModels(p.id).catch(() => [])).map((m: any) => String(m.id)) })))
+    const selection = (this.ctx as any).get('agentDefaultModel')?.currentSelection()
+    const assets: ConfigAssets = { schema: 'dsh-task-console/assets-v1', skills, hostConfigs, requirements, models: { providers, defaultSelection: selection ? { provider: String(selection.provider), model: String(selection.model) } : null } }
+    return parseEnvelope(createEnvelope({ agents, tasks, assets }, version))
+  }
+
+  async exportConfig(): Promise<string> {
+    const envelope = await this.configurationEnvelope()
     const result = await uploadConfig(envelope, this.configR2())
-    return JSON.stringify({ ...result, exportedAt: envelope.exportedAt, digest: envelope.digest.value, counts: { agents: agents.length, tasks: tasks.length }, omitted: ['sessions', 'runs', 'events', 'artifacts', 'attachments', 'logs', 'credentials'] })
+    return JSON.stringify({ ...result, exportedAt: envelope.exportedAt, digest: envelope.digest.value, counts: { agents: envelope.payload.agents.length, tasks: envelope.payload.tasks.length }, omitted: ['sessions', 'runs', 'events', 'artifacts', 'attachments', 'logs', 'credential-values'], secretRefs: envelope.payload.assets?.hostConfigs.flatMap(h => h.secrets) ?? [] })
+  }
+
+  /** Private downloadable JSON, no R2 credentials or network upload required. */
+  async exportLocalConfig(): Promise<string> {
+    const envelope = await this.configurationEnvelope(), data = encodeEnvelope(envelope)
+    return JSON.stringify({ filename: `dsh-assets-${Date.now()}.json`, json: data.toString('utf8'), bytes: data.length, sha256: createHash('sha256').update(data).digest('hex'), counts: { agents: envelope.payload.agents.length, tasks: envelope.payload.tasks.length, skills: envelope.payload.assets?.skills.length ?? 0, hostConfigs: envelope.payload.assets?.hostConfigs.length ?? 0 } })
   }
 
   /** Available only to the server process; the browser receives a scoped command. */
@@ -621,7 +673,7 @@ export class TaskConsoleService extends TypertRemoteService {
     return JSON.stringify({ command, expiresInSeconds })
   }
 
-  private configImportView(envelope: ConfigEnvelope) {
+  private configImportView(envelope: ConfigEnvelope, pathMappings: Record<string, string> = {}, installAssets = true) {
     const existingAgents = new Set<string>(), existingTasks = new Set(this.runner.store.tasks.keys())
     const presets = (this.ctx as any).get('agentPresets')
     const skills = new Set<string>(), mcp = new Set(this.hostMcp().map(row => row.serverName))
@@ -629,64 +681,121 @@ export class TaskConsoleService extends TypertRemoteService {
       for (const row of rows as any[]) existingAgents.add(String(row.id))
       for (const row of skillRows) skills.add(row.name)
       const agents = envelope.payload.agents.map(row => {
-        const missingSkills = row.spec.skills.filter(name => !skills.has(name))
+        const missingSkills = row.spec.skills.filter(name => !skills.has(name) && !(installAssets && envelope.payload.assets?.skills.some(s => s.name === name && (!s.agentId || s.agentId === row.spec.id))))
         const manifest=renderComposition(row.spec,this.hostMcp(),this.hostToolNames()).capabilities!
         const missingMcp = Object.keys(row.spec.mcpTools).filter(name => !mcp.has(name))
         return { id: row.spec.id, name: row.spec.name, conflict: existingAgents.has(row.spec.id), missingSkills, missingMcp, missingCapabilities:manifest.missing, readinessScope:'definition-only', liveVerified:false, ready: !missingSkills.length && !manifest.missing.length }
       })
       const available = new Set(envelope.payload.agents.map(row => row.spec.id))
-      const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: taskAgentIds(row).filter(id => !available.has(id) && !existingAgents.has(id)), scheduleDisabled: row.trigger.kind === 'cron' }))
+      const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: taskAgentIds(row).filter(id => !available.has(id) && !existingAgents.has(id)), scheduleDisabled: row.trigger.kind === 'cron', cwd: remapPath(row.cwd, pathMappings), workflowKind: row.workflowKind ?? 'manual', actionCount: row.actions.length }))
       const runtime = envelope.runtime ? {
         missingMcp: envelope.runtime.mcps.map(row => row.serverName).filter(name => !mcp.has(name)),
         missingSkills: envelope.runtime.skills.map(row => row.id).filter(name => !skills.has(name)),
         bootstrapAvailable: Boolean(envelope.runtime.bootstrap && Date.parse(envelope.runtime.bootstrap.expiresAt) > Date.now()),
       } : undefined
-      return { agents, tasks, runtime, counts: { agents: agents.length, tasks: tasks.length }, exportedAt: envelope.exportedAt, sourceVersion: envelope.source.version, digest: envelope.digest.value }
+      const a = envelope.payload.assets
+      const installedModules = new Set([...((this.ctx as any).loader.entries())].map((e: any) => e.options?.name))
+      const providers = new Set(((this.ctx as any).get('llm')?.listProviders() ?? []).map((p: any) => p.id))
+      const assets = a ? { skills: a.skills.map(s => ({ name: s.name, agentId: s.agentId ?? null, files: s.files.length, conflict: !s.agentId && skills.has(s.name) })), hostConfigs: a.hostConfigs.map(h => ({ id: h.id, kind: h.kind, module: h.module, secretRefs: h.secrets.map(s => s.ref), disabledOnImport: true })), missingModules: a.requirements.filter(r => !installedModules.has(r.module)), missingProviders: a.models.providers.filter(p => !providers.has(p.id)).map(p => p.id), defaultSelection: a.models.defaultSelection } : null
+      return { agents, tasks, runtime, assets, counts: { agents: agents.length, tasks: tasks.length }, exportedAt: envelope.exportedAt, sourceVersion: envelope.source.version, digest: envelope.digest.value }
     })
   }
 
   async previewConfigImport(payload: string): Promise<string> {
     await this.ready
-    const { url } = JSON.parse(payload) as { url?: string }
+    const { url, ...options } = JSON.parse(payload) as { url?: string; pathMappings?: Record<string, string>; overwriteAgents?: boolean; installAssets?: boolean }
     if (!url) throw Error('请输入 R2 配置地址')
     const downloaded = await downloadConfig(url, this.configR2().domain)
+    return this.cacheConfigImport(downloaded.envelope, downloaded.bytes, downloaded.fileSha256, options)
+  }
+
+  async previewLocalConfigImport(payload: string): Promise<string> {
+    const { json, ...options } = JSON.parse(payload)
+    if (typeof json !== 'string' || Buffer.byteLength(json) > MAX_CONFIG_BYTES) throw Error('本地配置包无效或超过 40 MiB')
+    let raw: unknown
+    try { raw = JSON.parse(json) } catch { throw Error('配置包不是有效 JSON') }
+    return this.cacheConfigImport(parseEnvelope(raw), Buffer.byteLength(json), createHash('sha256').update(json).digest('hex'), options)
+  }
+
+  private async cacheConfigImport(envelope: ConfigEnvelope, bytes: number, fileSha256: string, raw: any): Promise<string> {
+    await this.ready
+    const options = { pathMappings: raw.pathMappings ?? {}, overwriteAgents: raw.overwriteAgents === true, installAssets: raw.installAssets !== false }
+    if (!options.pathMappings || typeof options.pathMappings !== 'object' || Array.isArray(options.pathMappings) || Object.keys(options.pathMappings).length > 50 || Object.values(options.pathMappings).some(v => typeof v !== 'string')) throw Error('路径映射无效')
+    remapPath('/', options.pathMappings)
+    const view = await this.configImportView(envelope, options.pathMappings, options.installAssets)
     const importId = randomUUID()
     const now = Date.now()
     for (const [id, row] of this.pendingConfigImports) if (row.expiresAt <= now) this.pendingConfigImports.delete(id)
-    this.pendingConfigImports.set(importId, { envelope: downloaded.envelope, expiresAt: now + 10 * 60_000 })
-    return JSON.stringify({ importId, expiresAt: new Date(now + 10 * 60_000).toISOString(), bytes: downloaded.bytes, fileSha256: downloaded.fileSha256, ...(await this.configImportView(downloaded.envelope)) })
+    while (this.pendingConfigImports.size >= 3) this.pendingConfigImports.delete(this.pendingConfigImports.keys().next().value!)
+    this.pendingConfigImports.set(importId, { envelope, expiresAt: now + 10 * 60_000, options })
+    return JSON.stringify({ importId, expiresAt: new Date(now + 10 * 60_000).toISOString(), bytes, fileSha256, ...view, options })
   }
 
   async applyConfigImport(payload: string): Promise<string> {
     await this.ready
+    if (this.configImportBusy) throw Error('另一个配置导入正在进行，请稍后重试')
     const { importId } = JSON.parse(payload) as { importId?: string }
     const pending = importId ? this.pendingConfigImports.get(importId) : undefined
     if (!pending || pending.expiresAt <= Date.now()) throw Error('导入预览已过期，请重新校验 R2 地址')
+    this.configImportBusy = true
     this.pendingConfigImports.delete(importId!)
-    const view = await this.configImportView(pending.envelope)
+    const backupRoot = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'config-migrations', importId!)
+    try {
+    await safeDirectory(backupRoot)
+    await writeFile(join(backupRoot, 'package.json'), encodeEnvelope(pending.envelope), { mode: 0o600, flag: 'wx' })
+    const view = await this.configImportView(pending.envelope, pending.options.pathMappings, pending.options.installAssets)
     const importedAgents: string[] = [], skippedAgents: { id: string; reason: string }[] = []
     const importedTasks: string[] = [], skippedTasks: { id: string; reason: string }[] = []
     const library = await scanSkills(), hostMcp = this.hostMcp(), hostTools = this.hostToolNames()
+    const importedSkills: string[] = [], skippedSkills: string[] = [], stagedHostConfigs: string[] = []
+    const importedLibrary: (typeof library)[number][] = []
+    const assets = pending.envelope.payload.assets
+    if (assets && pending.options.installAssets) {
+      for (const skill of assets.skills) {
+        if (!skill.agentId && library.some(s => s.name === skill.name)) { skippedSkills.push(skill.name); continue }
+        const root = skill.agentId ? join(backupRoot, 'agent-skills', skill.agentId) : join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'skills')
+        const dir = await writeSkillAsset(skill, root)
+        importedLibrary.push({ name: skill.name, dir, description: '', root: skill.agentId ? `migration-agent:${skill.agentId}` : 'user-dsh' })
+        importedSkills.push(`${skill.agentId ?? 'library'}/${skill.name}`)
+      }
+      // New MCP/model configs are dormant. Never replace a live transport or reuse a secret from another service.
+      stagedHostConfigs.push(...await stageHostConfigs(profilePatchPath(), assets.hostConfigs, backupRoot, new Set([...((this.ctx as any).loader.entries())].map((e: any) => String(e.options?.id)))))
+      for (const config of assets.hostConfigs.filter(h => h.kind === 'mcp' && stagedHostConfigs.includes(h.id))) {
+        const serverName = String(config.config.serverName ?? config.id)
+        if (!hostMcp.some(h => h.serverName === serverName)) hostMcp.push({ entryId: config.id, sourceEntryId: config.id, serverName, tools: config.tools, target: '', disabled: true, config: config.config, live: false })
+      }
+      await writeFile(join(backupRoot, 'runtime-manifest.json'), JSON.stringify(assets, null, 2), { mode: 0o600 })
+    }
     for (const row of pending.envelope.payload.agents) {
-      const saved = await writePreset(row.spec, hostMcp, library, userPresetRoot(), hostTools, { allowMissingSkills: true })
+      const conflict = view.agents.find(a => a.id === row.spec.id)?.conflict
+      if (conflict && !pending.options.overwriteAgents) { skippedAgents.push({ id: row.spec.id, reason: '同 ID Agent 已存在；默认保留，覆盖需预览时明确选择' }); continue }
+      const dir = join(userPresetRoot(), row.spec.id)
+      await backupPreset(dir, join(backupRoot, 'agents-before'), row.spec.id)
+      const selectedLibrary = [...importedLibrary.filter(s => s.root === `migration-agent:${row.spec.id}`), ...importedLibrary.filter(s => s.root === 'user-dsh'), ...library]
+      const saved = await writePreset(row.spec, hostMcp, selectedLibrary, userPresetRoot(), hostTools, { allowMissingSkills: true })
       const current = await readActions(saved.path)
       await saveActions(saved.path, row.actions, current.revision)
       importedAgents.push(row.spec.id)
     }
-    const availableAgents = new Set<string>(importedAgents)
+    const availableAgents = new Set<string>([...importedAgents, ...view.agents.filter(a => a.conflict).map(a => a.id)])
     for (const row of pending.envelope.payload.tasks) {
       if (this.runner.store.tasks.has(row.id)) { skippedTasks.push({ id: row.id, reason: '同 ID Task 已存在' }); continue }
-      const missing = row.participants.map(p => p.agentId).filter(id => !availableAgents.has(id))
+      const missing = taskAgentIds(row).filter(id => !availableAgents.has(id))
       if (missing.length) { skippedTasks.push({ id: row.id, reason: `缺少 Agent:${missing.join('、')}` }); continue }
-      const task = { ...row, actions: undefined, enabled: false, createdAt: new Date().toISOString() } as any
+      const task = { ...row, actions: undefined, cwd: remapPath(row.cwd, pending.options.pathMappings), enabled: false, createdAt: new Date().toISOString(), configMigration: { digest: pending.envelope.digest.value, workflowKind: row.workflowKind ?? 'manual' } } as any
       delete task.actions
+      delete task.workflowKind
       await this.runner.store.append({ t: 'task/created', at: task.createdAt, taskId: task.id, task })
-      // Task Actions are intentionally restricted to task-chat origins. A
-      // definition export has no authenticated chat-origin receipt, so never
-      // fabricate one just to restore a shortcut on another machine.
+      this.creator.actions.restoreDefinition(task.id, row.actions)
       importedTasks.push(row.id)
     }
-    return JSON.stringify({ importedAgents, skippedAgents, importedTasks, skippedTasks, schedulesEnabled: false })
+    const result = { importedAgents, skippedAgents, importedTasks, skippedTasks, importedSkills, skippedSkills, stagedHostConfigs, backupRoot, schedulesEnabled: false, credentialsImported: false, runtimeActivationRequired: Boolean(stagedHostConfigs.length || assets?.hostConfigs.some(h => h.secrets.length)), missingModules: view.assets?.missingModules ?? [] }
+    await writeFile(join(backupRoot, 'result.json'), JSON.stringify(result, null, 2), { mode: 0o600 })
+    return JSON.stringify(result)
+    } catch (error) {
+      await writeFile(join(backupRoot, 'failed.json'), JSON.stringify({ state: 'failed', backupRoot, note: '部分资产可能已写入；不会派发任务。检查备份和目标后重新预览，冲突默认跳过。' }), { mode: 0o600 }).catch(() => undefined)
+      throw Error(`配置导入失败；恢复资料:${backupRoot}。${error instanceof Error ? error.message : String(error)}`)
+    } finally { this.configImportBusy = false }
   }
 
   async installConfigRuntime(payload: string): Promise<string> {
@@ -1204,6 +1313,8 @@ export class TaskConsoleService extends TypertRemoteService {
   async setTaskEnabled(payload: string): Promise<string> {
     const { id, enabled } = JSON.parse(payload) as { id: string; enabled: boolean }
     if (!this.runner.store.tasks.has(id)) throw new Error('没有这个任务')
+    if (enabled && isExternalWorkflow(this.runner.store.tasks.get(id)!)) throw Error('外部来源任务必须由来源系统重新授权提交，配置迁移不迁移执行授权')
+    if (enabled && this.runner.store.tasks.get(id)?.configMigration) await lstat(this.runner.store.tasks.get(id)!.cwd).then(s => { if (!s.isDirectory()) throw Error('工作目录不是目录') }).catch(() => { throw Error('导入任务的工作目录不可用，请重新映射或建立对应目录后再启用') })
     if (enabled) await this.creator.assertScheduleActivation(this.runner.store.tasks.get(id)!)
     await this.runner.store.append({ t: 'task/enabled', at: new Date().toISOString(), taskId: id, enabled: !!enabled })
     this.runner.schedule.sync(this.runner.store.tasks.get(id)!, Date.now(), true)
@@ -1255,6 +1366,7 @@ export class TaskConsoleService extends TypertRemoteService {
   async fireTask(payload: string): Promise<string> {
     const { id, by, requestId } = JSON.parse(payload) as { id: string; by?: 'manual' | 'retry'; requestId?:string }
     if(requestId!==undefined&&!/^[a-zA-Z0-9-]{16,80}$/.test(requestId))throw Error('Invalid execution requestId')
+    if (this.runner.store.tasks.get(id)?.configMigration?.workflowKind === 'external') throw Error('迁移不授予外部来源任务的执行权限，请从来源系统重新提交')
     const presets = (this.ctx as any).get('agentPresets')
     for (const p of presets ? (await presets.list() as any[]) : []) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
     const batch = await this.runner.fire(id, by === 'retry' ? 'retry' : 'manual', {dispatch:'background',...(requestId?{batchId:'b-manual-'+requestId}:{})})

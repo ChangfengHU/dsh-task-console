@@ -21,8 +21,10 @@ export function activate(ctx: any): Promise<Api> {
     }
     return {
       exportConfig: () => call('exportConfig'),
+      exportLocalConfig: () => call('exportLocalConfig'),
       createConfigBootstrap: (url: string) => call('createConfigBootstrap', { url }),
-      previewConfigImport: (url: string) => call('previewConfigImport', { url }),
+      previewConfigImport: (url, options) => call('previewConfigImport', { url, ...options }),
+      previewLocalConfigImport: (json, options) => call('previewLocalConfigImport', { json, ...options }),
       applyConfigImport: (importId: string) => call('applyConfigImport', { importId }),
       installConfigRuntime: (url: string) => call('installConfigRuntime', { url }),
       configRuntimeStatus: (jobId: string) => call('configRuntimeStatus', { jobId }),

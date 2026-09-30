@@ -7,7 +7,7 @@ if(!/^[a-f0-9]{40}$/.test(revision??''))throw Error('Full source revision requir
 const pkg=JSON.parse(await readFile(join(root,'package.json'),'utf8'))
 const uiName=`studio-task-console-ui-${revision.slice(0,12)}`,ui=join(root,'ui-package')
 await mkdir(ui,{recursive:true})
-await writeFile(join(ui,'package.json'),JSON.stringify({name:uiName,version:pkg.version,type:'module',license:pkg.license,main:'./host.js',exports:{'.':{default:'./host.js'},'./client':{default:'./client.js'},'./package.json':'./package.json'},dsh:pkg.dsh},null,2)+'\n')
+await writeFile(join(ui,'package.json'),JSON.stringify({name:uiName,version:pkg.version,type:'module',license:pkg.license,main:'./host.js',exports:{'.':{default:'./host.js'},'./client':{default:'./client.js'},'./package.json':'./package.json'},dsh:{client:pkg.dsh.client}},null,2)+'\n')
 const client=(await readFile(join(root,'lib/client.js'),'utf8')).replace(`id: ${JSON.stringify(pkg.name)},`,`id: ${JSON.stringify(uiName)},`).replaceAll('/dsh-task-console/client-heavy.js',`/${uiName}/client-heavy.js`)
 if(!client.includes(`id: ${JSON.stringify(uiName)},`))throw Error('Client module staging failed')
 await writeFile(join(ui,'client.js'),client)

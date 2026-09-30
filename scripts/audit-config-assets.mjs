@@ -4,6 +4,7 @@
 import {readFile} from 'node:fs/promises'
 import {join} from 'node:path'
 import YAML from 'yaml'
+import Database from 'better-sqlite3'
 import {TaskConsoleService} from '../src/service.ts'
 import {encodeEnvelope,parseEnvelope,sealConfig,openConfig} from '../src/config-migration.ts'
 
@@ -15,12 +16,15 @@ async function rpc(method,payload){
 }
 const agents=await rpc('agents'),listing=await rpc('tasks'),catalog=await rpc('catalog')
 const taskActions=new Map()
-for(let offset=0;offset<listing.tasks.length;offset+=6)await Promise.all(listing.tasks.slice(offset,offset+6).map(async t=>taskActions.set(t.id,(await rpc('taskActions',{taskId:t.id})).actions)))
+// Legacy Task action RPC rejects non-chat workflows; read their definition
+// catalog directly with a strictly read-only SQLite connection, no migrations.
+const db=new Database(join(process.env.DSH_HOME??'/home/claude/.dsh','task-console','task.db'),{readonly:true})
+try { for(const t of listing.tasks){const row=db.prepare('SELECT actions_json FROM dsh_task_action_catalog WHERE task_id=?').get(t.id);taskActions.set(t.id,row?JSON.parse(row.actions_json):[])} } finally {db.close()}
 const profile=join(process.env.DSH_HOME??'/home/claude/.dsh','profiles','web','cordis.patch.yml')
 const patch=YAML.parse(await readFile(profile,'utf8'),{customTags:[{tag:'tag:yaml.org,2002:js',resolve:s=>s}]})
 const entries=[]
 function walk(rows){for(const e of rows??[]){if(e.id&&e.name)entries.push({options:e,disabled:e.disabled===true});walk(e.insert)}}walk(patch)
-const ctx={loader:{entries:()=>entries},tools:{schemas:()=>[]},get:key=>key==='agentPresets'?{list:async()=>agents}:key==='llm'?{listProviders:()=>[],listModels:async()=>[]}:key==='agentDefaultModel'?{currentSelection:()=>catalog.defaultModel}:undefined}
+const ctx={loader:{entries:()=>entries},tools:{schemas:()=>[]},get:key=>key==='agentPresets'?{list:async()=>agents.map(a=>({...a,path:join(a.path,'agent.cordis.yml')}))}:key==='llm'?{listProviders:()=>[],listModels:async()=>[]}:key==='agentDefaultModel'?{currentSelection:()=>catalog.defaultModel}:undefined}
 const service=Object.create(TaskConsoleService.prototype)
 Object.defineProperty(service,'ctx',{value:ctx});service.ready=Promise.resolve()
 service.runner={store:{tasks:new Map(listing.tasks.map(t=>[t.id,t]))}}

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, writeFile, readFile, realpath, rm, symlink, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { collectSkillAsset, deduplicateSkills, materializeSkills, parseAssets, portableHostConfig, remapPath, stageHostConfigs, writeSkillAsset, profilePatchPath, type ConfigAssets } from '../src/config-assets.ts'
 import { createEnvelope, parseEnvelope, taskConfig } from '../src/config-migration.ts'
 import { TaskConsoleService } from '../src/service.ts'
@@ -72,6 +73,18 @@ test('shared Skill content is stored once; Agent-specific versions and permissio
     assets.skills[1].filesRef = 'outside/nonexistent'
     assert.throws(() => parseAssets(assets), /文件引用无效/)
   } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('MiB-sized binary Skill resources and encrypted envelopes validate without regexp stack overflow', async () => {
+  const root = await temp()
+  try {
+    const skill = await fixtureSkill(join(root,'source')), data = Buffer.alloc(2 * 1024 * 1024, 0x32), assets = empty()
+    skill.files.push({path:'large.bin',base64:data.toString('base64'),sha256:createHash('sha256').update(data).digest('hex'),executable:false})
+    assets.skills = [skill]
+    const {sealConfig,openConfig} = await import('../src/config-migration.ts')
+    const envelope=createEnvelope({agents:[],tasks:[],assets},'test'),sealed=sealConfig(envelope)
+    assert.equal(openConfig(JSON.parse(sealed.data.toString()),sealed.fragment).digest.value,envelope.digest.value)
+  } finally { await rm(root,{recursive:true,force:true}) }
 })
 
 test('MCP/model credentials and opaque argv become references; plaintext cannot be imported', () => {

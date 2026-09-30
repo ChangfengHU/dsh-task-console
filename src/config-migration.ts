@@ -5,7 +5,7 @@ import type { TaskSpec } from './fold.ts'
 import { validateActions } from './agent-actions.ts'
 import { validateSpec } from './presets.ts'
 import { parseCron, validTimeZone } from './cron.ts'
-import { parseAssets, type ConfigAssets } from './config-assets.ts'
+import { canonicalBase64, parseAssets, type ConfigAssets } from './config-assets.ts'
 import { validateTaskActions } from './task-actions.ts'
 import { taskAgentIds, validateDesign } from './task-design.ts'
 
@@ -30,7 +30,7 @@ export function openConfig(raw: any, fragment = ''): ConfigEnvelope {
     return parseEnvelope(raw) // Existing definition exports remain importable.
   }
   if (!/^#key=[A-Za-z0-9_-]{43}$/.test(fragment)) throw Error('加密配置包需要完整迁移链接（包含 #key=）；请重新复制导出地址')
-  if (raw.algorithm !== 'aes-256-gcm' || !/^[A-Za-z0-9_-]{16}$/.test(raw.nonce ?? '') || !/^[A-Za-z0-9_-]{22}$/.test(raw.tag ?? '') || typeof raw.ciphertext !== 'string' || raw.ciphertext.length > MAX_R2_BYTES || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(raw.ciphertext)) throw Error('加密配置包格式无效')
+  if (raw.algorithm !== 'aes-256-gcm' || !/^[A-Za-z0-9_-]{16}$/.test(raw.nonce ?? '') || !/^[A-Za-z0-9_-]{22}$/.test(raw.tag ?? '') || typeof raw.ciphertext !== 'string' || raw.ciphertext.length > MAX_R2_BYTES || !canonicalBase64(raw.ciphertext)) throw Error('加密配置包格式无效')
   let plaintext: Buffer
   try {
     const cipher = createDecipheriv('aes-256-gcm', Buffer.from(fragment.slice(5), 'base64url'), Buffer.from(raw.nonce, 'base64url'))

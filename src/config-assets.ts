@@ -7,6 +7,10 @@ import { parseDocument, isSeq } from 'yaml'
 
 export const MAX_ASSET_BYTES = 24 * 1024 * 1024
 export const MAX_FILE_BYTES = 4 * 1024 * 1024
+/** Avoid repeating-group regexes: V8 overflows its regexp stack on real MiB assets. */
+export function canonicalBase64(value: string): boolean {
+  return value.length % 4 === 0 && !/[^A-Za-z0-9+/=]/.test(value) && Buffer.from(value, 'base64').toString('base64') === value
+}
 const hash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex')
 export interface AssetFile { path: string; base64: string; sha256: string; executable: boolean; contentRef?: string }
 export interface SkillAsset { name: string; agentId?: string; files: AssetFile[]; filesRef?: string }
@@ -126,7 +130,7 @@ export function parseAssets(raw: any): ConfigAssets {
     const paths = new Set<string>()
     const files = s.files.map((f: any): AssetFile => {
       const path = assetPath(f?.path), folded = path.toLowerCase()
-      if (paths.has(folded) || typeof f.base64 !== 'string' || f.base64.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(f.base64)) throw Error('资产文件重复或内容无效')
+      if (paths.has(folded) || typeof f.base64 !== 'string' || f.base64.length > Math.ceil(MAX_FILE_BYTES / 3) * 4 || !canonicalBase64(f.base64)) throw Error('资产文件重复或内容无效')
       paths.add(folded)
       if (f.contentRef !== undefined && (f.contentRef !== f.sha256 || !blobs.has(f.contentRef) || f.base64 !== '')) throw Error('资产文件内容引用无效')
       const data = Buffer.from(f.contentRef ? blobs.get(f.contentRef)! : f.base64, 'base64'); if (!f.contentRef) total += data.length; count++

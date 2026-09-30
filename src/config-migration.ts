@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomUUID, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
 import type { AgentSpec } from './wire.ts'
 import type { AgentAction } from './agent-actions.ts'
 import type { TaskSpec } from './fold.ts'
@@ -11,6 +11,37 @@ import { taskAgentIds, validateDesign } from './task-design.ts'
 
 export const CONFIG_SCHEMA = 'dsh-task-console/config-v1' as const
 export const MAX_CONFIG_BYTES = 40 * 1024 * 1024
+export const MAX_R2_BYTES = Math.ceil(MAX_CONFIG_BYTES * 4 / 3) + 2048
+const SEALED_SCHEMA = 'dsh-task-console/encrypted-config-v1'
+
+/** The fragment key never reaches R2. The complete URL is a private bearer capability. */
+export function sealConfig(envelope: ConfigEnvelope): { data: Buffer; fragment: string } {
+  const key = randomBytes(32), nonce = randomBytes(12)
+  const cipher = createCipheriv('aes-256-gcm', key, nonce)
+  cipher.setAAD(Buffer.from(SEALED_SCHEMA))
+  const ciphertext = Buffer.concat([cipher.update(encodeEnvelope(envelope)), cipher.final()])
+  const data = Buffer.from(JSON.stringify({ schema: SEALED_SCHEMA, algorithm: 'aes-256-gcm', nonce: nonce.toString('base64url'), tag: cipher.getAuthTag().toString('base64url'), ciphertext: ciphertext.toString('base64') }))
+  return { data, fragment: `#key=${key.toString('base64url')}` }
+}
+
+export function openConfig(raw: any, fragment = ''): ConfigEnvelope {
+  if (raw?.schema !== SEALED_SCHEMA) {
+    if (fragment) throw Error('链接中的解密信息与配置包不匹配')
+    return parseEnvelope(raw) // Existing definition exports remain importable.
+  }
+  if (!/^#key=[A-Za-z0-9_-]{43}$/.test(fragment)) throw Error('加密配置包需要完整迁移链接（包含 #key=）；请重新复制导出地址')
+  if (raw.algorithm !== 'aes-256-gcm' || !/^[A-Za-z0-9_-]{16}$/.test(raw.nonce ?? '') || !/^[A-Za-z0-9_-]{22}$/.test(raw.tag ?? '') || typeof raw.ciphertext !== 'string' || raw.ciphertext.length > MAX_R2_BYTES || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(raw.ciphertext)) throw Error('加密配置包格式无效')
+  let plaintext: Buffer
+  try {
+    const cipher = createDecipheriv('aes-256-gcm', Buffer.from(fragment.slice(5), 'base64url'), Buffer.from(raw.nonce, 'base64url'))
+    cipher.setAAD(Buffer.from(SEALED_SCHEMA)); cipher.setAuthTag(Buffer.from(raw.tag, 'base64url'))
+    plaintext = Buffer.concat([cipher.update(Buffer.from(raw.ciphertext, 'base64')), cipher.final()])
+  } catch { throw Error('配置包解密校验失败：链接密钥错误或内容已被篡改') }
+  if (plaintext.length > MAX_CONFIG_BYTES) throw Error('解密后的配置包超过 40 MiB')
+  let value: unknown
+  try { value = JSON.parse(plaintext.toString('utf8')) } catch { throw Error('解密后的配置包不是有效 JSON') }
+  return parseEnvelope(value)
+}
 
 export interface ConfigAgent { spec: AgentSpec; actions: AgentAction[] }
 export interface ConfigTask {
@@ -80,13 +111,24 @@ function text(value: unknown, name: string, max = 8000): string {
   return value
 }
 
+/** Migration must never silently remove unknown authored permissions or fields. */
+export function portableAgentSpec(raw: any): AgentSpec {
+  const spec = validateSpec(raw)
+  const allowed = new Set(['id','name','description','persona','model','effort','permissionPreset','tools','mcp','mcpTools','mcpPolicy','skills','taskExpertise'])
+  const unsupported = Object.keys(raw ?? {}).filter(key => !allowed.has(key))
+  const tools = Array.isArray(raw?.tools) ? raw.tools.filter((t: any) => !spec.tools.includes(t)) : []
+  if (unsupported.length || tools.length) throw Error(`Agent ${spec.id} 包含当前插件不支持的配置：${[...unsupported, ...tools].join('、')}；请同步支持该能力的插件，不能静默丢失资产`)
+  if (raw.effort !== undefined && raw.effort !== spec.effort || raw.permissionPreset !== undefined && raw.permissionPreset !== spec.permissionPreset) throw Error(`Agent ${spec.id} 的模型推理或权限配置不能无损迁移`)
+  return spec
+}
+
 export function parseEnvelope(raw: unknown): ConfigEnvelope {
   const e = raw as any
   if (!e || e.schema !== CONFIG_SCHEMA || e.source?.plugin !== 'dsh-task-console' || e.digest?.algorithm !== 'sha256') throw Error('不是受支持的 dsh-task-console 配置包')
   if (!e.payload || !Array.isArray(e.payload.agents) || !Array.isArray(e.payload.tasks) || e.payload.agents.length > 500 || e.payload.tasks.length > 1000) throw Error('配置包清单无效或超过数量限制')
   const agentIds = new Set<string>(), taskIds = new Set<string>()
   const agents = e.payload.agents.map((row: any): ConfigAgent => {
-    const spec = validateSpec(row?.spec)
+    const spec = portableAgentSpec(row?.spec)
     if (agentIds.has(spec.id)) throw Error(`Agent id 重复:${spec.id}`)
     agentIds.add(spec.id)
     return { spec, actions: validateActions(row?.actions ?? []) }
@@ -152,7 +194,7 @@ export function assertPublicConfigUrl(value: string, publicDomain: string): URL 
 
 export async function uploadConfig(envelope: ConfigEnvelope, config: { endpoint: string; domain: string; token: string }, fixedName?: string): Promise<{ publicUrl: string; bytes: number; sha256: string }> {
   if (!config.token) throw Error('宿主未配置配置导出所需的 R2 凭据')
-  const data = encodeEnvelope(envelope), name = fixedName ?? `dsh-config-${Date.now()}-${randomUUID().slice(0, 8)}.json`
+  const { data, fragment } = sealConfig(envelope), name = fixedName ?? `dsh-config-${Date.now()}-${randomUUID().slice(0, 8)}.json`
   if (!/^dsh-config-[A-Za-z0-9._-]+\.json$/.test(name)) throw Error('R2 配置文件名无效')
   const form = new FormData()
   form.set('file', new Blob([data], { type: 'application/json' }), name); form.set('domain', config.domain); form.set('name', name); form.set('path', 'dsh-task-console/config-exports')
@@ -162,29 +204,34 @@ export async function uploadConfig(envelope: ConfigEnvelope, config: { endpoint:
   let publicUrl = ''
   try { const parsed = JSON.parse(body); publicUrl = String(parsed.url ?? parsed.image_url ?? parsed.data?.url ?? parsed.result?.url ?? '') } catch { publicUrl = body.trim() }
   if (!publicUrl.startsWith(`${config.domain.replace(/\/$/, '')}/`)) publicUrl = `${config.domain.replace(/\/$/, '')}/dsh-task-console/config-exports/${name}`
-  assertPublicConfigUrl(publicUrl, config.domain)
-  const check = await fetch(`${publicUrl}?verify=${createHash('sha256').update(data).digest('hex').slice(0, 16)}`, { redirect: 'error', signal: AbortSignal.timeout(30_000), cache: 'no-store' })
+  const verifiedUrl = assertPublicConfigUrl(publicUrl, config.domain)
+  verifiedUrl.hash = ''; verifiedUrl.searchParams.set('verify', createHash('sha256').update(data).digest('hex').slice(0, 16))
+  const check = await fetch(verifiedUrl, { redirect: 'error', signal: AbortSignal.timeout(30_000), cache: 'no-store' })
   const stored = check.ok ? Buffer.from(await check.arrayBuffer()) : Buffer.alloc(0)
   if (!check.ok || !stored.equals(data)) throw Error('R2 上传后内容校验失败')
-  return { publicUrl, bytes: data.byteLength, sha256: createHash('sha256').update(data).digest('hex') }
+  verifiedUrl.searchParams.delete('verify')
+  return { publicUrl: verifiedUrl.toString() + fragment, bytes: data.byteLength, sha256: createHash('sha256').update(data).digest('hex') }
 }
 
 export async function downloadConfig(value: string, publicDomain: string): Promise<{ envelope: ConfigEnvelope; bytes: number; fileSha256: string }> {
   const url = assertPublicConfigUrl(value, publicDomain)
+  const fragment = url.hash
+  if (fragment && !/^#key=[A-Za-z0-9_-]{43}$/.test(fragment)) throw Error('迁移链接解密信息无效')
+  url.hash = ''
   const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(30_000), headers: { accept: 'application/json' } })
   if (!response.ok) throw Error(`配置包下载失败（HTTP ${response.status}）`)
   const declared = Number(response.headers.get('content-length') || 0)
-  if (declared > MAX_CONFIG_BYTES) throw Error('配置包超过 40 MiB')
+  if (declared > MAX_R2_BYTES) throw Error('R2 配置包超过传输限制')
   const reader = response.body?.getReader()
   if (!reader) throw Error('配置包响应没有内容')
   const chunks: Uint8Array[] = []; let size = 0
   try {
-    for (;;) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > MAX_CONFIG_BYTES) throw Error('配置包超过 40 MiB'); chunks.push(value) }
+    for (;;) { const { done, value } = await reader.read(); if (done) break; size += value.length; if (size > MAX_R2_BYTES) throw Error('R2 配置包超过传输限制'); chunks.push(value) }
   } finally { await reader.cancel() }
   const data = Buffer.concat(chunks)
   let parsed: unknown
   try { parsed = JSON.parse(data.toString('utf8')) } catch { throw Error('配置包不是有效 JSON') }
-  return { envelope: parseEnvelope(parsed), bytes: data.byteLength, fileSha256: createHash('sha256').update(data).digest('hex') }
+  return { envelope: openConfig(parsed, fragment), bytes: data.byteLength, fileSha256: createHash('sha256').update(data).digest('hex') }
 }
 
 /** Issue a package-bound, time-limited command through the trusted Fleet service.
@@ -192,6 +239,7 @@ export async function downloadConfig(value: string, publicDomain: string): Promi
  * fetched by the installer into owner-only files and never pass through R2. */
 export async function createBootstrapCommand(value: string, config: { domain: string; endpoint: string; token: string }): Promise<{ command: string; expiresInSeconds: number; bootstrapToken: string }> {
   const url = assertPublicConfigUrl(value, config.domain)
+  if (url.hash) throw Error('加密资产链接请在已部署的新机器「配置资产迁移」页面导入；旧引导安装器不支持解密，不会向它发送迁移密钥')
   if (!config.token) throw Error('宿主未配置新机器引导授权')
   const response = await fetch(config.endpoint, {
     method: 'POST', headers: { Authorization: `Bearer ${config.token}`, 'content-type': 'application/json' },

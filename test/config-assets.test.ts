@@ -101,6 +101,17 @@ test('path remapping is longest-prefix and segment-aware; isolated DSH_HOME is r
   assert.equal(profilePatchPath(['dsh', '--profile=custom'], '/isolated'), '/isolated/profiles/custom/cordis.patch.yml')
 })
 
+test('plugin policy and Studio configuration are retained, never inserted as a duplicate host service', async () => {
+  const root = await temp(), assets = empty()
+  try {
+    assets.hostConfigs = [portableHostConfig('studio-task-console', 'dsh-task-console', 'plugin', { standardMaxSteps: 24, workflowModules: [{ path: '/source/adapter.mjs', sha256: 'a'.repeat(64) }], taskFallbackModel: 'provider/model' }), portableHostConfig('studio-runtime', 'dsh-task-console/studio-runtime', 'plugin', { storyboardCompilerScript: '/source/compiler.py', vaultTokenFile: '/private/token' })]
+    const parsed = parseAssets(assets)
+    assert.equal((parsed.hostConfigs[0].config.workflowModules as any[])[0].path, '/source/adapter.mjs')
+    assert.equal(parsed.hostConfigs[1].config.vaultTokenFile, null)
+    assert.deepEqual(await stageHostConfigs(join(root, 'profile.yml'), parsed.hostConfigs, join(root, 'backup'), new Set()), [])
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
 test('service imports into a fresh isolated machine: Skills, MCP references, Actions, paths, no runs; repeat is safe', async () => {
   const root = await temp(), oldDsh = process.env.DSH_HOME, oldAgents = process.env.DSH_AGENTS_HOME
   process.env.DSH_HOME = join(root, 'dsh'); process.env.DSH_AGENTS_HOME = join(root, 'agents')

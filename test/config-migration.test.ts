@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { assertPublicConfigUrl, createBootstrapCommand, createEnvelope, encodeEnvelope, FLEET_RUNTIME, parseEnvelope, taskConfig, uploadConfig } from '../src/config-migration.ts'
+import { assertPublicConfigUrl, createBootstrapCommand, createEnvelope, downloadConfig, encodeEnvelope, FLEET_RUNTIME, openConfig, parseEnvelope, portableAgentSpec, sealConfig, taskConfig, uploadConfig } from '../src/config-migration.ts'
 import type { AgentSpec } from '../src/wire.ts'
 import type { TaskSpec } from '../src/fold.ts'
 
@@ -20,6 +20,14 @@ test('digest rejects tampering', () => {
   const envelope = createEnvelope({ agents: [{ spec: agent, actions: [] }], tasks: [] }, '1.0.0')
   envelope.payload.agents[0].spec.name = '被篡改'
   assert.throws(() => parseEnvelope(envelope), /SHA256/)
+})
+
+test('migration preserves Studio and workflow native grants and refuses unsupported authored configuration', () => {
+  const studio = { ...agent, tools: ['studio-runtime','workflow-runtime','fs-text'], taskExpertise: ['studio:review'] }
+  assert.deepEqual(portableAgentSpec(studio), studio)
+  assert.throws(() => portableAgentSpec({ ...studio, tools: [...studio.tools, 'uninstalled-custom-tool'] }), /不能静默丢失/)
+  assert.throws(() => portableAgentSpec({ ...studio, customPluginPolicy: { write: false } }), /不能静默丢失/)
+  assert.throws(() => portableAgentSpec({ ...studio, permissionPreset: 'unknown' }), /不能无损迁移/)
 })
 
 test('runtime bootstrap capability survives validation without entering the payload digest', () => {
@@ -43,7 +51,6 @@ test('import URL is restricted to configured R2 origin and JSON', () => {
 
 test('R2 upload keeps credentials in the request and verifies exact public bytes', async () => {
   const envelope = createEnvelope({ agents: [], tasks: [] }, '1.0.0', new Date('2026-09-16T01:00:00.000Z'))
-  const expected = encodeEnvelope(envelope)
   const original = globalThis.fetch
   let uploaded: Buffer | undefined, authorization = ''
   globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -60,8 +67,28 @@ test('R2 upload keeps credentials in the request and verifies exact public bytes
   try {
     const result = await uploadConfig(envelope, { endpoint: 'https://upload.example', domain: 'https://resource.example', token: 'test-only-token' })
     assert.equal(authorization, 'Bearer test-only-token')
-    assert.deepEqual(uploaded, expected)
-    assert.equal(result.bytes, expected.length)
+    assert.equal(result.bytes, uploaded!.length)
+    assert.match(result.publicUrl, /#key=[A-Za-z0-9_-]{43}$/)
+    assert.doesNotMatch(uploaded!.toString(), /exportedAt|payload|agents|test-only-token/)
+    assert.deepEqual(openConfig(JSON.parse(uploaded!.toString()), new URL(result.publicUrl).hash), envelope)
+  } finally { globalThis.fetch = original }
+})
+
+test('encrypted R2 URL round-trip strips fragment from every HTTP request; no key means no import', async () => {
+  const envelope = createEnvelope({ agents: [{ spec: agent, actions: [] }], tasks: [] }, 'test')
+  const sealed = sealConfig(envelope), original = globalThis.fetch, seen: string[] = []
+  globalThis.fetch = (async (input: any) => { seen.push(String(input)); return new Response(sealed.data) }) as typeof fetch
+  try {
+    const url = 'https://resource.example/a.json'
+    assert.deepEqual((await downloadConfig(url + sealed.fragment, 'https://resource.example')).envelope, envelope)
+    assert.deepEqual(seen, [url])
+    await assert.rejects(() => downloadConfig(url, 'https://resource.example'), /完整迁移链接/)
+    await assert.rejects(() => createBootstrapCommand(url + sealed.fragment, { domain: 'https://resource.example', endpoint: 'https://example.test', token: 'test' }), /旧引导安装器/)
+    assert.equal(seen.length, 2, 'installer gets no decryption key or HTTP request')
+    const modified = JSON.parse(sealed.data.toString()); modified.tag = 'AAAAAAAAAAAAAAAAAAAAAA'
+    assert.throws(() => openConfig(modified, sealed.fragment), /解密校验失败/)
+    assert.throws(() => openConfig(JSON.parse(sealed.data.toString()), '#key=' + 'A'.repeat(43)), /解密校验失败/)
+    assert.deepEqual(openConfig(envelope), envelope, 'old plaintext exports remain supported')
   } finally { globalThis.fetch = original }
 })
 

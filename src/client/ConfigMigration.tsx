@@ -37,22 +37,23 @@ export function ConfigMigration({ api, toast }: { api: TasksApi; toast: (text: s
         <span className="dtc-kicker">CONFIGURATION ASSETS</span><h2>导出当前资产</h2>
         <p>支持的内置及用户 Agent、任务定义、定时规则、两类 Actions、Skill 正文/脚本/资源、MCP 策略和运行配置、模型选择与依赖版本。</p>
         <ul><li>密钥仅保留宿主引用，新机器单独绑定</li><li>保留各 Agent 的 Skill 副本，避免同名版本混淆</li><li>发现缺失或不支持的用户配置时拒绝导出，不静默丢失</li></ul>
-        <button className="dtc-btn pri" disabled={!!busy} onClick={download}>{busy === 'export' ? '生成中…' : '下载本地资产包'}</button>
+        <p>线上生成迁移链接 → 在本地或新机器粘贴链接 → 校验预览 → 确认导入。R2 只存加密内容，解密信息在链接的 #key= 后；完整链接等同迁移凭证，请勿公开分享。</p>
+        <button className="dtc-btn pri" disabled={!!busy} onClick={exportNow}>{busy === 'export' ? '生成中…' : '导出到 R2，生成迁移链接'}</button>
         {downloaded ? <div className="dtc-migration-result"><b>本地资产包已生成</b><small>{downloaded.bytes.toLocaleString()} bytes</small><code>SHA256 {downloaded.sha256}</code></div> : null}
-        <details><summary>可选：发布到 R2</summary><p>上传后可通过链接读取。配置/Skill 可能含业务信息，请先检查本地包；需要宿主 R2 授权。</p><button className="dtc-btn" disabled={!!busy} onClick={exportNow}>生成并上传到 R2</button></details>
-        {exported ? <div className="dtc-migration-result"><a href={exported.publicUrl} target="_blank" rel="noreferrer">查看 R2 配置包</a><code>SHA256 {exported.sha256}</code><button className="dtc-btn sm" onClick={() => void navigator.clipboard.writeText(exported.publicUrl)}>复制地址</button></div> : null}
+        <details><summary>可选：下载本地备份</summary><p>离线明文备份仅交给当前浏览器；请保存在私有目录，不要上传到公开仓库。</p><button className="dtc-btn" disabled={!!busy} onClick={download}>下载本地资产包</button></details>
+        {exported ? <div className="dtc-migration-result"><b>迁移链接已生成：{exported.counts.agents} Agents · {exported.counts.tasks} Tasks</b><code>SHA256 {exported.sha256}</code><button className="dtc-btn sm" onClick={() => void navigator.clipboard.writeText(exported.publicUrl).then(() => toast('完整迁移链接已复制，请在目标机器粘贴')).catch(() => setError('剪贴板不可用，请使用下方文本框复制'))}>复制完整迁移链接</button><input aria-label="完整迁移链接" readOnly value={exported.publicUrl} onFocus={event => event.target.select()} /></div> : null}
       </section>
       <section className="dtc-migration-card">
         <span className="dtc-kicker">PREVIEW BEFORE IMPORT</span><h2>导入配置资产</h2>
         <p>兼容旧定义包。默认保留已有资产；新增 MCP/模型条目停用，补齐凭据、依赖并检查路径后再启用。</p>
-        <label>本地 JSON 文件<input type="file" accept=".json,application/json" disabled={!!busy} onChange={async event => {
+        <label>R2 迁移链接<input value={url} disabled={!!busy} onChange={event => { setUrl(event.target.value); setFileJson(''); setFilename(''); reset() }} placeholder="https://resource.vyibc.com/...json#key=..." /></label>
+        <details><summary>或者选择本地明文备份</summary><label>本地 JSON 文件<input type="file" accept=".json,application/json" disabled={!!busy} onChange={async event => {
           reset(); setFileJson(''); setFilename(''); setError('')
           const file = event.target.files?.[0]; if (!file) return
           if (file.size > 40 * 1024 * 1024) { setError('配置包超过 40 MiB'); return }
           try { setFileJson(await file.text()); setFilename(file.name) } catch { setError('本地文件读取失败') }
-        }} /></label>
+        }} /></label></details>
         {filename ? <small>已选择 {filename}，优先使用本地文件。</small> : null}
-        <label>或者 R2 地址<input value={url} disabled={!!busy} onChange={event => { setUrl(event.target.value); reset() }} placeholder="https://resource.vyibc.com/...json" /></label>
         <label>工作目录映射（JSON）<textarea aria-label="工作目录映射" value={mapping} disabled={!!busy} onChange={event => { setMapping(event.target.value); reset() }} placeholder={'{"/home/claude/work":"/Users/name/work"}'} /></label>
         <label className="dtc-action-check"><input type="checkbox" checked={installAssets} disabled={!!busy} onChange={event => { setInstallAssets(event.target.checked); reset() }} />恢复 Skill 文件及停用的宿主配置</label>
         <label className="dtc-action-check"><input type="checkbox" checked={overwrite} disabled={!!busy} onChange={event => { setOverwrite(event.target.checked); reset() }} />覆盖同 ID Agent（先备份；不覆盖 Task/Skill/宿主配置）</label>
@@ -60,7 +61,7 @@ export function ConfigMigration({ api, toast }: { api: TasksApi; toast: (text: s
         {preview ? <div className="dtc-migration-preview"><b>导入预览</b><p>{preview.counts.agents} Agents · {preview.counts.tasks} Tasks · 来源版本 {preview.sourceVersion}</p>
           {preview.assets ? <><h3>运行资产</h3><p>{preview.assets.skills.length} Skill 副本 · {preview.assets.hostConfigs.length} MCP/模型配置</p>
             {preview.assets.skills.map(s => <div className="dtc-migration-row" key={(s.agentId ?? 'library') + '/' + s.name}><span>{s.agentId ?? 'Skill 库'} / {s.name}<small>{s.files} 文件</small></span><em>{s.conflict ? '保留同名库；Agent 用独立副本' : installAssets ? '恢复文件' : '仅导入引用'}</em></div>)}
-            {preview.assets.hostConfigs.map(h => <div className="dtc-migration-row" key={h.id}><span>{h.id}<small>{h.module}</small></span><em>新增项停用 · {h.secretRefs.length} 项需重绑</em></div>)}
+            {preview.assets.hostConfigs.map(h => <div className="dtc-migration-row" key={h.id}><span>{h.id}<small>{h.module}</small></span><em>{h.kind === 'plugin' ? '保存到迁移清单，需适配宿主' : '新增项停用'} · {h.secretRefs.length} 项需重绑</em></div>)}
             {preview.assets.defaultSelection ? <p>源默认模型：{preview.assets.defaultSelection.provider}/{preview.assets.defaultSelection.model}；保留目标机器当前默认模型。</p> : null}
             {preview.assets.missingModules.length ? <div className="dtc-err">需核对/安装插件：{preview.assets.missingModules.map(r => r.module + '@' + r.version).join('、')}。不会执行安装脚本。</div> : null}
             {preview.assets.missingProviders.length ? <p>缺少模型提供方：{preview.assets.missingProviders.join('、')}</p> : null}

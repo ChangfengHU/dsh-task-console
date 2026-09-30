@@ -12,7 +12,7 @@ export interface AssetFile { path: string; base64: string; sha256: string; execu
 export interface SkillAsset { name: string; agentId?: string; files: AssetFile[] }
 export interface SecretRef { path: string; ref: string }
 export interface HostConfigAsset {
-  id: string; module: string; kind: 'mcp' | 'model'; config: Record<string, unknown>
+  id: string; module: string; kind: 'mcp' | 'model' | 'plugin'; config: Record<string, unknown>
   wasDisabled: boolean; secrets: SecretRef[]
   tools: string[]
 }
@@ -41,7 +41,7 @@ function name(value: unknown): string {
 /** Remove secret-bearing fields, headers/env values and opaque argument vectors.
  * CLI args can contain positional tokens, so preserve them as a private host reference,
  * not by guessing that only --token is sensitive. Rebind on the destination. */
-export function portableHostConfig(id: string, module: string, kind: 'mcp' | 'model', config: Record<string, unknown>, wasDisabled = false, tools: string[] = []): HostConfigAsset {
+export function portableHostConfig(id: string, module: string, kind: HostConfigAsset['kind'], config: Record<string, unknown>, wasDisabled = false, tools: string[] = []): HostConfigAsset {
   const secrets: SecretRef[] = []
   const omit = (path: string) => { secrets.push({ path, ref: `host-config:${id}:${path}` }); return null }
   const walk = (v: any, path: string, key: string): any => {
@@ -113,7 +113,7 @@ export function parseAssets(raw: any): ConfigAssets {
   const hostIds = new Set<string>()
   const hostConfigs = raw.hostConfigs.map((h: any): HostConfigAsset => {
     const id = name(h?.id)
-    if (hostIds.has(id) || typeof h.module !== 'string' || !/^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)?$/.test(h.module) || !['mcp','model'].includes(h.kind) || !h.config || Array.isArray(h.config) || typeof h.config !== 'object' || !Array.isArray(h.secrets) || typeof h.wasDisabled !== 'boolean') throw Error('宿主配置资产无效')
+    if (hostIds.has(id) || typeof h.module !== 'string' || !/^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+(?:\/[a-z0-9_.-]+)?$/.test(h.module) || !['mcp','model','plugin'].includes(h.kind) || !h.config || Array.isArray(h.config) || typeof h.config !== 'object' || !Array.isArray(h.secrets) || typeof h.wasDisabled !== 'boolean') throw Error('宿主配置资产无效')
     hostIds.add(id)
     if (!Array.isArray(h.tools) || h.tools.length > 3000 || h.tools.some((t: any) => typeof t !== 'string')) throw Error('MCP 工具清单无效')
     const clean = portableHostConfig(id, h.module, h.kind, h.config, h.wasDisabled, h.tools)
@@ -196,7 +196,9 @@ export async function stageHostConfigs(file: string, rows: HostConfigAsset[], ba
   const ids = new Set(existingIds)
   const walk = (items: any[]) => { for (const item of items) { if (item?.get?.('id')) ids.add(String(item.get('id'))); const inserted = item?.get?.('insert', true); if (isSeq(inserted)) walk(inserted.items) } }
   walk(doc.contents.items)
-  const added = rows.filter(r => !ids.has(r.id))
+  // Plugin policies are retained in the recovery manifest, not inserted as a
+  // second live service. Applying them requires the destination host's review.
+  const added = rows.filter(r => r.kind !== 'plugin' && !ids.has(r.id))
   if (!added.length) return []
   if (info) await copyFile(file, join(backupDir, 'cordis.patch.yml.before'))
   if (info) await chmod(join(backupDir, 'cordis.patch.yml.before'), 0o600)

@@ -2,6 +2,7 @@ import {previewExecutionMigration,applyExecutionMigration} from './batch-executi
 import {uploadStudioPreview} from './studio-upload-host.js'
 import {assertStudioProgressWritable} from './studio-progress.js'
 import type {StudioConfigBinding} from './studio-config.js'
+import {readStudioHostConfiguration} from './studio-config.js'
 import {planStudioRoleInstall,applyStudioRoleInstall,type StudioRoleInstallOptions} from './studio-role-install.js'
 import {discoverStudioSourcesFromHost} from './studio-source-host.js'
 import {StudioPreparation,assertPreparationWritable} from './studio-preparation.js'
@@ -85,13 +86,13 @@ import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
 import { SessionShortcuts, shortcutChange } from './session-shortcuts.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
-import { createBootstrapCommand, createEnvelope, downloadConfig, encodeEnvelope, MAX_CONFIG_BYTES, parseEnvelope, taskConfig, uploadConfig, type ConfigEnvelope } from './config-migration.ts'
+import { createBootstrapCommand, createEnvelope, downloadConfig, encodeEnvelope, MAX_CONFIG_BYTES, parseEnvelope, portableAgentSpec, taskConfig, uploadConfig, type ConfigEnvelope } from './config-migration.ts'
 import { runtimeBootstrapStatus, startRuntimeBootstrap } from './config-runtime-bootstrap.ts'
 import { backupPreset, collectSkillAsset, portableHostConfig, profilePatchPath, remapPath, safeDirectory, stageHostConfigs, writeSkillAsset, type ConfigAssets } from './config-assets.ts'
 import { isExternalWorkflow } from './task-kind.ts'
-import { taskAgentIds } from './task-design.ts'
 
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
+const portableModule = (name: string) => /\/(?:task-console-studio-[^/]+|dsh-task-console)\/lib\/index\.js$/.test(name) ? 'dsh-task-console' : name
 const TOOL_PREFIX = /^mcp__(.+?)__(.+)$/
 
 /** Models the picker offers besides the deployment default. */
@@ -605,7 +606,9 @@ export class TaskConsoleService extends TypertRemoteService {
     const agents = [] as { spec: AgentSpec; actions: import('./agent-actions.ts').AgentAction[] }[]
     const sources = new Map<string, string>()
     for (const preset of (presets ? await presets.list() : []) as any[]) {
-      const dir = dirname(String(preset.path)), spec = await readSpec(dir)
+      const dir = dirname(String(preset.path))
+      const raw = await readFile(join(dir, 'task-console.json'), 'utf8').catch((e: any) => { if (e.code === 'ENOENT') return null; throw e })
+      const spec = raw ? portableAgentSpec(JSON.parse(raw)) : null
       if (!spec) {
         if (preset.trust === 'user') throw Error(`Agent ${preset.id} 没有可迁移的 task-console.json；请先在 Agent 编辑器保存，避免漏导资产`)
         continue
@@ -632,17 +635,22 @@ export class TaskConsoleService extends TypertRemoteService {
     const entries = [...(this.ctx as any).loader.entries()] as any[]
     const hostConfigs: ConfigAssets['hostConfigs'] = []
     for (const entry of entries) {
-      const module = entry.options?.name, id = entry.options?.id
+      const rawModule = entry.options?.name, id = entry.options?.id
+      const module = typeof rawModule === 'string' ? portableModule(rawModule) : rawModule
       if (typeof module !== 'string' || typeof id !== 'string') continue
-      const kind = module === MCP_CLIENT ? 'mcp' : /dsh-llm|dsh-codex-claude-cli|dsh-model-console|dsh-agent-default-model/.test(module) ? 'model' : null
+      const kind = module === MCP_CLIENT ? 'mcp' : /dsh-llm|dsh-codex-claude-cli|dsh-model-console|dsh-agent-default-model/.test(module) ? 'model' : module === 'dsh-task-console' && !entry.disabled ? 'plugin' : null
       if (kind) hostConfigs.push(portableHostConfig(id, module, kind, entry.options.config ?? {}, !!entry.disabled, kind === 'mcp' ? this.hostMcp().find(m => m.entryId === id)?.tools ?? [] : []))
+      if (kind === 'plugin') {
+        const studio = await readStudioHostConfiguration(entry.options.config?.studioConfigPath)
+        if (Object.keys(studio).length) hostConfigs.push(portableHostConfig(`${id}-studio-runtime`, 'dsh-task-console/studio-runtime', 'plugin', studio))
+      }
     }
     const require = createRequire(import.meta.url)
-    const modules = [...new Set(entries.map(e => e.options?.name).filter((n: any): n is string => typeof n === 'string'))]
+    const modules = [...new Set(['dsh-task-console', ...hostConfigs.filter(h => h.module !== 'dsh-task-console/studio-runtime').map(h => h.module)])]
     const requirements = await Promise.all(modules.map(async module => {
       const pkg = module.startsWith('@') ? module.split('/').slice(0, 2).join('/') : module.split('/')[0]
       let version = 'unknown'
-      try { version = JSON.parse(await readFile(require.resolve(`${pkg}/package.json`), 'utf8')).version ?? version } catch { /* retained as an explicit unverified requirement */ }
+      try { version = module === 'dsh-task-console' ? JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version : JSON.parse(await readFile(require.resolve(`${pkg}/package.json`), 'utf8')).version ?? version } catch { /* retained as an explicit unverified requirement */ }
       return { module, version }
     }))
     const llm = (this.ctx as any).get('llm')
@@ -694,7 +702,8 @@ export class TaskConsoleService extends TypertRemoteService {
         bootstrapAvailable: Boolean(envelope.runtime.bootstrap && Date.parse(envelope.runtime.bootstrap.expiresAt) > Date.now()),
       } : undefined
       const a = envelope.payload.assets
-      const installedModules = new Set([...((this.ctx as any).loader.entries())].map((e: any) => e.options?.name))
+      const installedModules = new Set([...((this.ctx as any).loader.entries())].map((e: any) => typeof e.options?.name === 'string' ? portableModule(e.options.name) : ''))
+      installedModules.add('dsh-task-console')
       const providers = new Set(((this.ctx as any).get('llm')?.listProviders() ?? []).map((p: any) => p.id))
       const assets = a ? { skills: a.skills.map(s => ({ name: s.name, agentId: s.agentId ?? null, files: s.files.length, conflict: !s.agentId && skills.has(s.name) })), hostConfigs: a.hostConfigs.map(h => ({ id: h.id, kind: h.kind, module: h.module, secretRefs: h.secrets.map(s => s.ref), disabledOnImport: true })), missingModules: a.requirements.filter(r => !installedModules.has(r.module)), missingProviders: a.models.providers.filter(p => !providers.has(p.id)).map(p => p.id), defaultSelection: a.models.defaultSelection } : null
       return { agents, tasks, runtime, assets, counts: { agents: agents.length, tasks: tasks.length }, exportedAt: envelope.exportedAt, sourceVersion: envelope.source.version, digest: envelope.digest.value }

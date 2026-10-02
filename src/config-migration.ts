@@ -200,7 +200,7 @@ export async function uploadConfig(envelope: ConfigEnvelope, config: { endpoint:
   if (!/^dsh-config-[A-Za-z0-9._-]+\.json$/.test(name)) throw Error('R2 配置文件名无效')
   const form = new FormData()
   form.set('file', new Blob([data], { type: 'application/json' }), name); form.set('domain', config.domain); form.set('name', name); form.set('path', 'dsh-task-console/config-exports')
-  const response = await fetch(config.endpoint, { method: 'POST', headers: { Authorization: `Bearer ${config.token}` }, body: form, signal: AbortSignal.timeout(60_000) })
+  const response = await fetch(config.endpoint, { method: 'POST', headers: { Authorization: `Bearer ${config.token}` }, body: form, signal: AbortSignal.timeout(300_000) })
   if (!response.ok) throw Error(`R2 上传失败（HTTP ${response.status}）`)
   const body = await response.text()
   let publicUrl = ''
@@ -208,7 +208,7 @@ export async function uploadConfig(envelope: ConfigEnvelope, config: { endpoint:
   if (!publicUrl.startsWith(`${config.domain.replace(/\/$/, '')}/`)) publicUrl = `${config.domain.replace(/\/$/, '')}/dsh-task-console/config-exports/${name}`
   const verifiedUrl = assertPublicConfigUrl(publicUrl, config.domain)
   verifiedUrl.hash = ''; verifiedUrl.searchParams.set('verify', createHash('sha256').update(data).digest('hex').slice(0, 16))
-  const check = await fetch(verifiedUrl, { redirect: 'error', signal: AbortSignal.timeout(30_000), cache: 'no-store' })
+  const check = await fetch(verifiedUrl, { redirect: 'error', signal: AbortSignal.timeout(120_000), cache: 'no-store' })
   const stored = check.ok ? Buffer.from(await check.arrayBuffer()) : Buffer.alloc(0)
   if (!check.ok || !stored.equals(data)) throw Error('R2 上传后内容校验失败')
   verifiedUrl.searchParams.delete('verify')

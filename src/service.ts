@@ -47,6 +47,7 @@ import {
   type HostMcp,
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
+import { pendingOnboardOperation, onboardOperationOutcome } from './onboard-background.ts'
 import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask, taskForBatch } from './tasks.ts'
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
@@ -168,6 +169,7 @@ export class TaskConsoleService extends TypertRemoteService {
           await requireStudioStages(input,workflow,this.runner.store.kernel.db)
           return workflow.complete(input)
         }
+        if (await pendingOnboardOperation(input)) throw new Error('装机后台操作尚未结束，不能提交完成')
         if (input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId) return new TaskNotifications(this.runner.store).complete(input)
         const proxy = new ProxyWorkflow(this.runner.store)
         if (proxy.pending(input)) throw new Error('代理后台操作仍在运行，继续查询原操作回执')
@@ -209,19 +211,20 @@ export class TaskConsoleService extends TypertRemoteService {
         if (report?.summary && report.metadata) return { summary: report.summary, metadata: report.metadata }
       },
       beforeBlock: async input => {
+        if (await pendingOnboardOperation(input)) throw new Error('装机后台操作仍运行，不能提前阻塞；结束当前模型回合，由宿主等待原回执')
         if(new ProxyWorkflow(this.runner.store).pending(input))throw new Error('代理操作仍运行，请查询原回执；不能提前阻塞并遗弃操作')
         const operation = await validateWorkflowBlock(input)
         if (operation) return operation
         const report = await this.patrolEvidence(input)
         if (report?.failure) return { reason: report.failure, kind: 'capability' }
       },
-      pendingOperation: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? await pendingBrowserOperation(input),
+      pendingOperation: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? await pendingOnboardOperation(input) ?? await pendingBrowserOperation(input),
       afterBlock: async input => {
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2' || !input.task.design.notifications?.agentId || input.card.role === 'notifier') return
         const report=(await this.patrolWorkflow(input)).snapshot(input)
         await this.runner.store.createNotification(input.task,input.batch,input.card,'blocked',report)
       },
-      operationOutcome: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? (input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input)),
+      operationOutcome: async input => input.profileId === 'fleet-installer' ? onboardOperationOutcome : new ProxyWorkflow(this.runner.store).pending(input) ?? (input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input)),
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
       beforePlanRound: async (input, items, proxyItems) => {
         if (input.task.design?.evidenceContract === 'studio-video-v1') { const w=new StudioWorkflow(this.runner.store);await refreshStudioCapabilities(w,input.task);w.preflight(input.task);w.plan(input);return }

@@ -727,6 +727,23 @@ export class HermesKernel {
     })
   }
 
+  /** Explicit platform recovery; caller must validate the settled studio graph. */
+  recoverStudioNode(taskId: string, expected: 'triage' | 'archived', recoveryId: string): 'ready' | 'todo' {
+    return this.write(() => {
+      const task = this.taskRow(taskId)
+      if (!task || task.status !== expected || task.current_run_id !== null) throw new Error('studio-recovery-node-changed')
+      if (expected === 'archived') {
+        const last = this.db.prepare("SELECT kind,payload FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 1").get(taskId) as any
+        if (last?.kind !== 'cancelled' || parseJson<any>(last.payload, {}).reason !== '上游失败，任务不可达') throw new Error('studio-recovery-not-dependency-cancel')
+      }
+      const status = this.parentsSatisfied(taskId) && task.assignee ? 'ready' : 'todo'
+      const changed = this.db.prepare("UPDATE tasks SET status=?, consecutive_failures=0,claim_lock=NULL,claim_expires=NULL,worker_pid=NULL WHERE id=? AND status=? AND current_run_id IS NULL").run(status, taskId, expected)
+      if (changed.changes !== 1) throw new Error('studio-recovery-cas-failed')
+      this.appendEvent(taskId, 'studio_recovered', { recoveryId, previous_status: expected, previous_consecutive_failures: task.consecutive_failures, status })
+      return status
+    })
+  }
+
   reclaimTask(taskId: string, reason = 'manual reclaim'): boolean {
     return this.write(() => {
       const task = this.taskRow(taskId)
@@ -843,9 +860,23 @@ export class HermesKernel {
       lines.push('## Prior attempts on this task')
       prior.forEach((run, index) => {
         lines.push(`### Attempt ${index + 1} — ${run.outcome ?? run.status} (${run.profile ?? '(unknown)'})`)
-        if (run.summary) lines.push(cap(run.summary, 4_000))
-        if (run.error) lines.push(`_error_: ${cap(run.error, 4_000)}`)
-        if (run.metadata) lines.push(`_metadata_: \`${cap(run.metadata, 4_000)}\``)
+        const events = this.listEvents(taskId).filter(e => e.run_id === run.id);
+        const gateFailure = events.find(e => e.kind === 'gate_failed');
+        if (gateFailure) {
+          try {
+            const payload = JSON.parse(gateFailure.payload);
+            lines.push('**Artifact Gate Failure**:');
+            if (payload.failures) {
+              payload.failures.forEach((f: any) => lines.push(`- ${f.gate} gate: ${f.reason || 'failed'}`));
+            }
+            if (payload.paths && payload.paths.length > 0) {
+              lines.push('Failed artifacts:', ...payload.paths.map((p: string) => `- ${p}`));
+            }
+          } catch (e) {}
+        }
+        if (run.summary) lines.push(cap(run.summary, 400))
+        if (run.error) lines.push(`_error_: ${cap(run.error, 400)}`)
+        if (run.metadata) lines.push(`_metadata_: \`${cap(run.metadata, 400)}\``)
         lines.push('')
       })
     }
@@ -858,7 +889,7 @@ export class HermesKernel {
       const run = runs[0]
       if (!wroteParents) { lines.push('## Parent task results'); wroteParents = true }
       lines.push(`### ${parentId}`, cap(run?.summary || parent.result || '(no result recorded)', 4_000))
-      if (run?.metadata) lines.push(`_metadata_: \`${cap(run.metadata, 4_000)}\``)
+      if (run?.metadata) lines.push(`_metadata_: \`${cap(run.metadata, 400)}\``)
       lines.push('')
     }
 

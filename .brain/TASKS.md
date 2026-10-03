@@ -1,5 +1,7 @@
 # 后续优化
 
+2026-10-03更新：下列FLEET-FULL历史中的候选待激活描述已被本次安全窗口部署取代。当前用户指定146已完整通过：原Task的b-chat-09402ebbe2531c8989e8三角色1261/1267/1268完成，双浏览器独立20分钟验证、Runner首轮签名8项及Fleet公网回读均通过。未直接SSH目标，全部历史保留；不据此宣称旧236第二轮完成。详细证据见既有model-startup-fallback日志最终146段。
+
 - [ ] [FLEET-FULL-ACCEPTANCE-20260924] 原Task保留v3审查/角色pin/历史。Batch b-chat-5d944930d2d8c1582400失败：装机者1122基础通过，浏览器1123/1125失败；1125模型长sleep触及请求超时，仅14分钟/各15样本，不算20分钟通过，Runner未执行。Vault误套巡查预算已由linux-clash e0f7291修复，115 MCP测试通过。宿主有界TIMEOUT等待、后台唤醒不占交卷纠正次数、取消竞态、失败报告均已修复推送；最新集成97c65e6保留线上Studio ac490303更新，662测试659通过/0失败/3既有跳过，候选公网全屏DAG/报告/Trace已验证。发布包已就绪但未激活：1127 Studio活跃，禁止重载；只读安全窗口监视中。完整首轮与第二轮幂等验收待完成，未直接SSH236。详见既有model-startup-fallback日志最新段。
 
 - [x] [MANUAL-FLEET-WITHDRAW-20260923] Fleet c3ff0b7 deployed;31 Fleet tests and22 preset/Action tests pass. Browser-selected fleet-ops Action performed real236 withdrawal in session agent-fleet-ops-mue2yyrn, audit6088. Public Fleet card absent; D1 membership0/enabledRunners0; Vault value digest unchanged, access inventory unchanged; VNC page and Clash health remain200. Installer session agent-fleet-installer-mudto47m first completed all10 stages in onb-92f512d5-0bf2-4e0b-b3b1-66426c0c4b7e. Final236 state is intentionally withdrawn, not uninstalled. No developer target SSH or global reload. Full receipts in existing model-startup-fallback log.

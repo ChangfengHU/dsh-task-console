@@ -1,3 +1,4 @@
+import { observeModelConnection, type ModelConnection } from './model-connection.ts'
 /**
  * The task model, folded from an append-only event stream. Pure — shared by
  * host and browser so the replay a person scrubs through is computed by the
@@ -48,6 +49,10 @@ export interface TaskOrigin {
  * accidentally inherited from the first incident that created the Task.
  */
 export interface TaskTurn {
+  /** Host-created only at an opted-in batch fire; legacy turns have no binding. */
+  executionBinding?: import('./batch-execution-binding.ts').BatchExecutionBinding
+  /** Host-owned directory frozen with a newly opted-in batch, never supplied by callers. */
+  studioWorkspace?: import('./studio-workspace.js').StudioBatchWorkspace
   action?: import('./task-actions.ts').TaskActionSnapshot
   objective: string
   participants: Participant[]
@@ -86,6 +91,8 @@ export interface TaskSpec {
   origin?: TaskOrigin
   /** Present only on the execution view for one signal-specific turn. */
   targets?: TaskTarget[]
+  /** Configuration provenance, not an authenticated chat-origin or historical receipt. */
+  configMigration?: { digest: string; workflowKind: 'chat' | 'manual' | 'external' }
 }
 
 export type BlockKind = 'needs_input' | 'dependency' | 'capability' | 'transient'
@@ -124,14 +131,16 @@ export type CardStatus = 'todo' | 'ready' | 'running' | 'blocked' | 'done' | 're
 
 export interface Card {
   id: string
+  supersededBy?: string
   batchId: string
   taskId: string
   /** Position in the chain, for display. */
   index: number
   agentId: string
   kind?: 'agent' | 'gate'
-  role?: 'planner' | 'executor' | 'reviewer' | 'gate' | 'notifier' | 'proxy'
+  role?: 'planner' | 'executor' | 'reviewer' | 'gate' | 'notifier' | 'proxy' | 'studio-stage'
   round?: number
+  gateAudit?: { gate: string; passed: boolean; reason?: string }[]
   brief?: string
   deps: string[]
   status: CardStatus
@@ -188,6 +197,8 @@ export interface Artifact {
 }
 
 export type Event =
+  | { t:'studio/preparation-requested'; at:string; taskId:string; batchId:string; cardId:string; requestId:string; reason:string }
+  | { t:'studio/preparation-released'; at:string; taskId:string; batchId:string; requestId:string; plannerId:string; supersededCards:string[]; cancelledCards:string[]; cancelledRuns:string[]; deps:string[]; handoff:string }
   | { t: 'task/created'; at: string; taskId: string; task: TaskSpec }
   | { t: 'task/revised'; at: string; taskId: string; task: TaskSpec; previous: TaskSpec; planId: string }
   | { t: 'task/enabled'; at: string; taskId: string; enabled: boolean }
@@ -214,6 +225,9 @@ export type Event =
   | { t: 'artifact/registered'; at: string; taskId: string; artifact: Artifact }
   | { t: 'artifact/finalized'; at: string; taskId: string; batchId: string; artifactId: string; artifactCardId: string; cardId: string; runId: string; sha256: string }
   | { t: 'artifact/published'; at: string; taskId: string; artifactId: string; publicUrl: string }
+  | { t: 'batch/studio_revalidation'; at: string; taskId: string; batchId: string; cardId: string; expectedRunId: string; recoveryId: string; reason: string; revalidateFrom: string; restored: { id: string; status: 'ready' | 'todo' }[] }
+  | { t: 'batch/studio_image_reconciled'; at:string; taskId:string; batchId:string; expectedRunId:string; intent:string; jobId:string; recoveryId:string; reason:string; requestHash:string; proofSha256:string; state:string; assisted:true; method:string }
+  | { t: 'batch/studio_recovered'; at: string; taskId: string; batchId: string; cardId: string; expectedRunId: string; recoveryId: string; reason: string; restored: { id: string; status: 'ready' | 'todo' }[] }
   | { t: 'batch/settled'; at: string; taskId: string; batchId: string; outcome: 'done' | 'failed' | 'cancelled' }
   | { t: 'batch/archived'; at: string; taskId: string; batchId: string; archived: boolean }
 
@@ -233,6 +247,7 @@ export interface CardSeed {
   kind?: Card['kind']
   role?: Card['role']
   round?: number
+  gateAudit?: { gate: string; passed: boolean; reason?: string }[]
 }
 
 /** How many times the same block reason may recur on one card before it gives up (hermes BLOCK_RECURRENCE_LIMIT). */
@@ -262,6 +277,17 @@ export function fold(events: Event[]): State {
       case 'batch/fired': {
         s.batches.set(e.batch.id, { id: e.batch.id, taskId: e.taskId, firedAt: e.at, by: e.batch.by, cardIds: e.batch.cards.map(c => c.id), ...(e.batch.turn ? { turn: e.batch.turn } : {}) })
         e.batch.cards.forEach((c, i) => s.cards.set(c.id, { ...c, id: c.id, batchId: e.batch.id, taskId: e.taskId, index: i, agentId: c.agentId, brief: c.brief, deps: c.deps, status: c.deps.length ? 'todo' : 'ready', runIds: [], consecutiveFailures: 0, blockRecurrences: 0 }))
+        break
+      }
+      case 'studio/preparation-requested': {
+        const c=s.cards.get(e.cardId);if(c)c.summary=`制作前退回：${e.reason}`
+        break
+      }
+      case 'studio/preparation-released': {
+        for(const id of e.cancelledRuns){const r=s.runs.get(id);if(r)finishRun(r,'cancelled','cancelled',e.at,`制作前返修 ${e.requestId}`)}
+        for(const id of e.supersededCards){const c=s.cards.get(id);if(c)c.supersededBy=e.requestId}
+        for(const id of e.cancelledCards){const c=s.cards.get(id);if(c){c.status='cancelled';c.endedAt=e.at;c.currentRunId=undefined}}
+        const p=s.cards.get(e.plannerId);if(p){p.deps=e.deps;p.brief=[p.brief,e.handoff].filter(Boolean).join('\n\n')}
         break
       }
       case 'card/created': {
@@ -352,6 +378,15 @@ export function fold(events: Event[]): State {
         break
       }
       case 'artifact/published': { const a = s.artifacts.get(e.artifactId); if (a) a.publicUrl = e.publicUrl; break }
+      case 'batch/studio_revalidation': {
+        for(const row of e.restored){const c=s.cards.get(row.id);if(c){c.status=row.status;c.error=undefined;c.endedAt=undefined;c.currentRunId=undefined;c.reviewNote=e.reason}}
+        break
+      }
+      case 'batch/studio_recovered': {
+        const b = s.batches.get(e.batchId); if (b) b.settled = undefined
+        for (const r of e.restored) { const c = s.cards.get(r.id); if (c) { c.status = r.status; c.error = undefined; c.endedAt = undefined; c.currentRunId = undefined; c.consecutiveFailures = 0 } }
+        break
+      }
       case 'batch/settled': { const b = s.batches.get(e.batchId); if (b) b.settled = { at: e.at, outcome: e.outcome }; break }
       case 'batch/archived': { const b = s.batches.get(e.batchId); if (b) b.archivedAt = e.archived ? e.at : undefined; break }
     }
@@ -411,6 +446,8 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
   const who = (runId: string) => { const r = s.runs.get(runId); const c = r && s.cards.get(r.cardId); return r?.profileId ? agentName(r.profileId) : c ? agentName(c.agentId) : runId }
   const card = (cardId: string) => { const c = s.cards.get(cardId); return c ? agentName(c.agentId) : cardId }
   switch (e.t) {
+    case 'studio/preparation-requested': return `${card(e.cardId)} 请求制作前返修：${e.reason}`
+    case 'studio/preparation-released': return `旧轮已退役，交回${card(e.plannerId)}修订；保留原预算和产物`
     case 'task/created': return `建卡「${e.task.title}」,${e.task.participants.map(p => agentName(p.agentId)).join(' → ')}`
     case 'task/revised': return `审查更新「${e.task.title}」，保留旧执行，定时仍停用`
     case 'task/enabled': return e.enabled ? '启用时间表' : '停用时间表'
@@ -445,6 +482,9 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
     case 'artifact/registered': return `${card(e.artifact.cardId)} 登记产物:${e.artifact.name}`
     case 'artifact/finalized': return `${card(e.cardId)} 确认最终产物:${s.artifacts.get(e.artifactId)?.name ?? e.artifactId}`
     case 'artifact/published': return `产物已发布:${s.artifacts.get(e.artifactId)?.name ?? e.artifactId}`
+    case 'batch/studio_revalidation': return `阶段重新验证：${e.reason}`
+    case 'batch/studio_image_reconciled': return `生图回执对账（人工介入）：${e.reason}`
+    case 'batch/studio_recovered': return `平台故障恢复：${e.reason}`
     case 'batch/settled': return ({ done: '这次运行完成', failed: '这次运行失败', cancelled: '这次运行取消' })[e.outcome]
     case 'batch/archived': return e.archived ? '归档本次执行，原始记录保留' : '恢复本次执行的显示'
   }
@@ -492,10 +532,10 @@ export function migrate(events: LegacyEvent[]): Event[] {
 
 // ── turn ledger (folded from a session's own log) ────────────────────────
 
-export interface ToolRow { callId: string; name: string; kind: 'mcp' | 'skill' | 'native' | 'ask' | 'task'; server?: string; args: string; result: string; ok: boolean; ms: number; at: string }
+export interface ToolRow { callId: string; name: string; kind: 'mcp' | 'skill' | 'native' | 'ask' | 'task'; server?: string; args: string; result: string; ok?: boolean; state?: 'running' | 'returned' | 'no_result'; ms: number; at: string }
 export interface StepRow { step: number; provider?: string; model?: string; at: string; ms: number; usage: { input: number; output: number; reasoning: number; cacheRead: number }; tools: ToolRow[]; text: string }
-export interface TurnRow { turn: number; at: string; endedAt?: string; reason?: string; user: string; steps: StepRow[] }
-export interface TurnLedger { pagination?: { page: number; pages: number; total: number }; sessionId: string; agentPreset?: string; turns: TurnRow[]; totals: { turns: number; steps: number; mcp: number; skill: number; native: number; ask: number; task: number; input: number; output: number; ms: number; byServer: Record<string, number>; skills: string[] } }
+export interface TurnRow { turn: number; at: string; endedAt?: string; reason?: string; user: string; steps: StepRow[]; connection?: ModelConnection }
+export interface TurnLedger { pagination?: { page: number; pages: number; total: number }; sessionId: string; agentPreset?: string; turns: TurnRow[]; connection?: ModelConnection; totals: { turns: number; steps: number; mcp: number; skill: number; native: number; ask: number; task: number; input: number; output: number; ms: number; byServer: Record<string, number>; skills: string[] } }
 
 const preview = (s: unknown, n: number) => { const t = typeof s === 'string' ? s : JSON.stringify(s ?? ''); return t.length > n ? t.slice(0, n) + '…' : t }
 
@@ -506,15 +546,19 @@ export function foldTurns(sessionId: string, events: any[], agentPreset?: string
   let cur: TurnRow | undefined, step: StepRow | undefined
   let model: { provider?: string; model?: string } = {}
   let pendingUser = ''
+  let connection: ModelConnection = { status: 'unknown' }
   const iso = (t: number) => new Date(t).toISOString()
   for (const e of events) {
     const d = e.data ?? {}
+    if (e.type === 'turn/start') connection = { status: 'unknown' }
+    connection = observeModelConnection(connection, e)
+    if (cur && e.type !== 'turn/start') cur.connection = connection
     switch (e.type) {
       case 'agent/inbox/spliced': { const txt = (d.inserted ?? []).flatMap((m: any) => (m.content ?? []).filter((c: any) => c.type === 'text').map((c: any) => c.text)).join('\n'); if (txt) pendingUser = txt; break }
       case 'user/message': { if (d.source?.kind === 'user' || !d.source) { const txt = (d.content ?? []).filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n'); if (txt && !txt.startsWith('<system-reminder>')) pendingUser = txt } break }
       case 'request/context': model = { provider: d.provider, model: d.model }; break
-      case 'turn/start': cur = { turn: d.turn, at: iso(e.time), user: pendingUser, steps: [] }; pendingUser = ''; turns.push(cur); totals.turns++; break
-      case 'step/start': if (!cur) { cur = { turn: d.turn ?? turns.length + 1, at: iso(e.time), user: pendingUser, steps: [] }; turns.push(cur); totals.turns++ }
+      case 'turn/start': cur = { turn: d.turn, at: iso(e.time), user: pendingUser, steps: [], connection }; pendingUser = ''; turns.push(cur); totals.turns++; break
+      case 'step/start': if (!cur) { cur = { turn: d.turn ?? turns.length + 1, at: iso(e.time), user: pendingUser, steps: [], connection }; turns.push(cur); totals.turns++ }
         step = { step: d.step, ...model, at: iso(e.time), ms: 0, usage: { input: 0, output: 0, reasoning: 0, cacheRead: 0 }, tools: [], text: '' }; cur.steps.push(step); totals.steps++; break
       case 'assistant/message': {
         if (!step) break
@@ -530,7 +574,7 @@ export function foldTurns(sessionId: string, events: any[], agentPreset?: string
         const name = String(d.name ?? '')
         const m = /^mcp__(.+?)__(.+)$/.exec(name)
         const kind: ToolRow['kind'] = name.endsWith('ask_user_question') ? 'ask' : /^task_(complete|block|request_review)$/.test(name) ? 'task' : m ? 'mcp' : name === 'skill' ? 'skill' : 'native'
-        const row: ToolRow & { _t?: number } = { callId: d.callId, name: m ? m[2] : name, kind, server: m?.[1], args: preview(d.arguments, 240), result: '', ok: true, ms: 0, at: iso(e.time), _t: e.time }
+        const row: ToolRow & { _t?: number } = { callId: d.callId, name: m ? m[2] : name, kind, server: m?.[1], args: preview(d.arguments, 240), result: '', state: 'running', ms: 0, at: iso(e.time), _t: e.time }
         byCall.set(d.callId, row); step?.tools.push(row)
         totals[kind]++
         if (m) totals.byServer[m[1]] = (totals.byServer[m[1]] ?? 0) + 1
@@ -541,13 +585,19 @@ export function foldTurns(sessionId: string, events: any[], agentPreset?: string
         const id = d.message?.source?.callId; const row = id && byCall.get(id); if (!row) break
         const parts = (d.message?.content ?? []).flatMap((c: any) => c.type === 'tool-result' ? (c.content ?? []) : [c])
         const txt = parts.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('\n')
-        row.result = preview(txt, 400); row.ms = e.time - (row._t ?? e.time); delete row._t
-        row.ok = !/"ok":\s*false|^error|exit code [1-9]|Traceback|failed/i.test(txt.slice(0, 200))
+        row.result = preview(txt, 400); row.state = 'returned'; row.ms = e.time - (row._t ?? e.time); delete row._t
+        const explicitError=(d.message?.content??[]).some((c:any)=>c.type==='tool-result'&&c.isError===true)
+        try {
+          const value=JSON.parse(txt)
+          // A status response with `failed: 0` is not a failed tool invocation.
+          // This badge describes the call, never approval of generated media.
+          row.ok=!explicitError&&!(value?.ok===false||value?.isError===true||value?.error||['failed','error'].includes(value?.status)||Number(value?.exitCode)>0)
+        } catch { row.ok = !explicitError&&!/"ok":\s*false|^error|exit code [1-9]|Traceback|failed/i.test(txt.slice(0, 200)) }
         break
       }
       case 'step/end': if (step && !step.ms) step.ms = e.time - +new Date(step.at); step = undefined; break
-      case 'turn/end': if (cur) { cur.endedAt = iso(e.time); cur.reason = d.reason?.kind; totals.ms += e.time - +new Date(cur.at) } cur = undefined; break
+      case 'turn/end': if (cur) { cur.endedAt = iso(e.time); cur.reason = d.reason?.kind; totals.ms += e.time - +new Date(cur.at); for (const s of cur.steps) for (const r of s.tools) if (r.state === 'running') r.state = 'no_result' } cur = undefined; break
     }
   }
-  return { sessionId, agentPreset, turns, totals }
+  return { sessionId, agentPreset, turns, totals, connection }
 }

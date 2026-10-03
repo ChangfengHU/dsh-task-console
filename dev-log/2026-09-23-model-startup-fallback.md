@@ -695,3 +695,11 @@ missing console tunnel, but its connector remains inactive. Latest operation
 returns blocked/publication-connector-install-failed, not full onboarding success.
 The original visible installer session was asked to reconcile this receipt once.
 All target operations remain DSH-owned; no developer SSH was used.
+
+The subsequent same-transaction stage8 attempt returned
+publication-connector-permission-denied from the cloud receipt. This establishes
+a connector-side permission failure, not its exact file/directory yet. Do not
+blindly chmod/chown the node. The visible installer was asked to reconcile that
+terminal receipt once. Remaining target fault and safe host activation are open.
+Retain the ~0.9MiB candidate and ~4.1MiB integration checkout for pending validation;
+they are reproducible from the pushed integration branch and existing build setup.

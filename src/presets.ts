@@ -23,6 +23,7 @@ import { publicToolName } from './filtered-mcp-client.ts'
 import { WORKER_TOOL_NAMES } from './worker-tools.ts'
 import { withPresetLock } from './preset-lock.ts'
 import { ACTION_FILE } from './agent-action-store.ts'
+import { imagePolicy } from './image-policy.ts'
 import type { AgentSpec, NativeTool, Preview, SkillEntry } from './wire.ts'
 
 /** Preset ids become directory names, so containment is a property of the id. */
@@ -30,6 +31,10 @@ export const ID_RE = /^[a-z0-9][a-z0-9-]*$/
 
 /** Native tools the editor offers, each mapping to one composition row. */
 export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: string[] })[] = [
+  { id:'image-generation',label:'image_generate · Codex / Gemini',group:'图像',writes:true,
+    description:'原生生图/编辑工具，主会话模型无关。可选默认后端、授权后端与会话预算；异步回执，不通过 MCP。',
+    schemaNames:['image_generate','image_generate_status','image_generate_cancel'],
+    rows:"- id: native-image-tools\n  name: 'dsh-task-console/image-generation-tools'" },
   { id: 'task-create-runtime', label: 'Task creation', group: '任务', writes: true,
     description: '读取真实角色，生成待审查计划并查询审查与执行；不提供放行或业务运维工具，不提升参与者权限。',
     schemaNames: ['task_create_context', 'task_create_submit', 'task_create_plan_status', 'task_create_status'],
@@ -184,7 +189,7 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
   for (const id of spec.tools) {
     const tool = NATIVE_TOOLS.find(t => t.id === id)
     if (tool) {
-      parts.push(tool.rows)
+      parts.push(id === 'image-generation' ? `${tool.rows}\n  config:\n${indent(toYaml(imagePolicy(spec.imageGeneration),{lineWidth:0}).trimEnd(),4)}` : tool.rows)
       for (const name of tool.schemaNames) allowedToolNames.add(name)
     }
   }
@@ -434,6 +439,7 @@ export function validateSpec(raw: unknown): AgentSpec {
     effort,
     permissionPreset,
     tools: list(s.tools).filter(t => NATIVE_TOOLS.some(n => n.id === t)),
+    ...(s.imageGeneration !== undefined || list(s.tools).includes('image-generation') ? { imageGeneration:imagePolicy(s.imageGeneration) } : {}),
     ...(Array.isArray(s.taskExpertise) ? { taskExpertise: list(s.taskExpertise).filter(t => /^[A-Za-z][A-Za-z0-9_:-]{0,159}$/.test(t)).slice(0, 32) } : {}),
     mcpTools,
     mcpPolicy,

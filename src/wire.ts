@@ -83,6 +83,8 @@ export interface McpServer {
   target: string
   /** Tools it registered right now (public `mcp__<server>__<tool>` names, prefix stripped). */
   tools: string[]
+  /** Portable backend policy only; host authentication never travels with presets. */
+  imageGeneration?: import('./image-policy.ts').ImagePolicy
   disabled: boolean
 }
 

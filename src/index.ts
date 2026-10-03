@@ -16,11 +16,17 @@ import { TaskConsoleService } from './service.ts'
 import { registerPublicHtmlTool } from './public-upload.ts'
 import { registerTaskSignalHttp } from './task-intake-http.ts'
 import { fallbackSelection } from './model-fallback.ts'
+import { ImageJobs } from './image-jobs.ts'
+import { imageBackends, type ImageHostConfig } from './image-backends.ts'
 
 export const name = 'task-console'
 export const inject = ['loader', 'tools', 'agents', 'webServer', 'workspaceRegistry']
 export const Config = z.object({
   taskFallbackModel: z.string().default(''),
+  codexImageProvider:z.string().default('codex-local'),
+  codexImageModel:z.string().default(''),
+  geminiImagePoolDir:z.string().default(''),
+  geminiImageModel:z.string().default('gemini-3.1-flash-image'),
   taskFallbackFromProvider: z.string().default('codex-local'),
   standardMaxSteps: z.natural().min(1).default(24),
   standardMcpInheritance: z.union(['inherit', 'discover-only']).default('inherit'),
@@ -41,9 +47,12 @@ export { applyAgentPermission } from './agent-session.ts'
 export { TaskIntakeCoordinator, validateTaskIntakeDecision, validateTaskSignal } from './task-intake.ts'
 export { TASK_INTAKE_AGENT_ID } from './task-intake-agent.ts'
 
-export async function apply(ctx: Context, config: CapabilityPolicy & { taskFallbackModel?: string; taskFallbackFromProvider?: string } = {}): Promise<void> {
+export async function apply(ctx: Context, config: CapabilityPolicy & ImageHostConfig & { taskFallbackModel?: string; taskFallbackFromProvider?: string } = {}): Promise<void> {
   await ctx.plugin(TaskConsoleService)
   await (ctx as any).get('taskConsole').ready
+  const service = (ctx as any).get('taskConsole')
+  service.imageGeneration = new ImageJobs(service.runner.store.kernel.db,imageBackends(ctx,config))
+  ctx.effect(()=>()=>service.imageGeneration.dispose(), 'task-console: native image job ownership')
   const fallback = fallbackSelection(config.taskFallbackModel ?? '')
   ;(ctx as any).get('taskConsole').runner.modelFallback = fallback ? { ...fallback, fromProvider: config.taskFallbackFromProvider ?? 'codex-local' } : undefined
   ;(ctx as any).get('taskConsole').capabilities.policy = config

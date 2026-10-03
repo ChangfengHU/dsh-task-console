@@ -6,6 +6,7 @@
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
+    "./image-generation-tools": { "default": "./lib/image-generation-tools.js" },
     ".": {
       "default": "./lib/index.js"
     },

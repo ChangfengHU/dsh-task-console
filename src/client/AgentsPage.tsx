@@ -11,6 +11,7 @@ import { AgentHistory, agentTab, agentPage } from './AgentHistory.tsx'
 import { executionTime } from '../execution-label.ts'
 import { ActionEditor } from './AgentActions.tsx'
 import { QueryCache } from './query-cache.ts'
+import { imagePolicy, type ImagePolicy, type ImageBackend } from '../image-policy.ts'
 const agentPages=new WeakMap<Api,QueryCache<Awaited<ReturnType<Api['agentPage']>>>>()
 
 const EMPTY: AgentSpec = { id: '', name: '', description: '', persona: '', model: '', effort: 'medium', permissionPreset: 'workspace-write', tools: ['ask-user'], mcpTools: {}, mcpPolicy: {}, skills: [] }
@@ -23,7 +24,7 @@ const COLORS = ['#1f6f78', '#1f7a4d', '#6b4fbb', '#2563a8', '#b26a00', '#8e5a8a'
 export const colorOf = (id: string) => { let h = 0; for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return COLORS[h % COLORS.length] }
 export function derivePerm(spec: AgentSpec): Preview['permission'] {
   if (spec.tools.some(t => t === 'bash' || t === 'fs' || t === 'str-replace-editor')) return 'write'
-  if (Object.values(spec.mcpTools).some(tools => tools.length)) return 'limited-write'
+  if (spec.tools.includes('image-generation') || Object.values(spec.mcpTools).some(tools => tools.length)) return 'limited-write'
   return 'read-only'
 }
 
@@ -80,6 +81,7 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
     return { ...EMPTY, model: catalog.defaultModel }
   }, [id, row, catalog.defaultModel])
   const [spec, setSpec] = useState<AgentSpec>(initial)
+  const image = imagePolicy(spec.imageGeneration)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
@@ -202,6 +204,16 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
                 </div>
               </div>
             ))}
+            {spec.tools.includes('image-generation') ? <div className="dtc-panel" aria-label="内置生图设置">
+              <h3>内置生图 · 与主会话模型独立</h3>
+              <div className="dtc-fields">
+                <label>默认生图后端<select value={image.defaultBackend} disabled={readOnly} onChange={e=>{const b=e.target.value as ImageBackend; set('imageGeneration',{...image,defaultBackend:b,allowedBackends:[...new Set([...image.allowedBackends,b])]})}}><option value="codex">Codex · 本机登录</option><option value="gemini">Gemini · 本机 AGY Pool</option></select></label>
+                <label>失败切换<select value={image.fallback} disabled={readOnly} onChange={e=>set('imageGeneration',{...image,fallback:e.target.value as ImagePolicy['fallback']})}><option value="none">不自动切换</option><option value="unavailable-only">仅提交前未就绪时切换</option></select></label>
+                <label>每会话请求预算<input type="number" min={1} max={100} value={image.maxRequestsPerSession} disabled={readOnly} onChange={e=>set('imageGeneration',{...image,maxRequestsPerSession:Number(e.target.value)})}/></label>
+              </div>
+              <div className="dtc-chips">{(['codex','gemini'] as const).map(b=><label key={b}><input type="checkbox" checked={image.allowedBackends.includes(b)} disabled={readOnly || image.defaultBackend===b} onChange={()=>set('imageGeneration',{...image,allowedBackends:image.allowedBackends.includes(b)?image.allowedBackends.filter(x=>x!==b):[...image.allowedBackends,b]})}/>允许 {b}</label>)}<label><input type="checkbox" checked={image.allowOverride} disabled={readOnly} onChange={e=>set('imageGeneration',{...image,allowOverride:e.target.checked})}/>允许任务指定授权后端</label></div>
+              <p className="dtc-note">优先调用 image_generate；等待真实图片回执后交付。凭据不随 Agent 导出；各机器仍需自己的登录或账号池。选择后端不等于认证/额度可用。超时、执行不明、已提交失败均不自动重试或跨后端补发。</p>
+            </div> : null}
             {catalog.mcp.map(m => { const selected = selectedMcpTools(m.serverName, m.tools); return (
               <div key={m.serverName}>
                 <div className="dtc-tgroup" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>

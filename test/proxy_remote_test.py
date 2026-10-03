@@ -15,6 +15,7 @@ REQUEST = {'action': 'repair', 'operationId': '11111111-1111-4111-a111-111111111
     'expectedIp': '203.0.113.10', 'configUrl': 'https://example.invalid/private-fixture'}
 SETTINGS = {'expected_ip': REQUEST['expectedIp'], 'config_url': REQUEST['configUrl']}
 RAW = {'service_active': True, 'tun_present': True, 'proxy_enabled': True, 'configured': True}
+MACHINE_ID = '11111111111111111111111111111111'
 
 
 class AdapterTests(unittest.TestCase):
@@ -24,11 +25,16 @@ class AdapterTests(unittest.TestCase):
         return op
 
     def setUp(self):
+        # Remote Linux identity is a fixture, never the developer's real machine.
+        original_read_text = Path.read_text
+        self.machine = patch.object(Path, 'read_text', lambda path, *a, **kw:
+            MACHINE_ID if str(path) == '/etc/machine-id' else original_read_text(path, *a, **kw))
+        self.machine.start()
         self.files = patch.object(m, 'root_file', return_value=json.dumps(SETTINGS)); self.files.start()
         self.sleep = patch.object(m.time, 'sleep'); self.sleep.start()
 
     def tearDown(self):
-        self.files.stop(); self.sleep.stop()
+        self.files.stop(); self.sleep.stop(); self.machine.stop()
 
     def test_healthy_node_is_reused_without_controller_write(self):
         op = self.operation()
@@ -84,7 +90,7 @@ class AdapterTests(unittest.TestCase):
             run.assert_not_called()
 
     def test_self_repair_refuses_before_controller_calls(self):
-        op = self.operation(); op.request['operatorMachineId'] = Path('/etc/machine-id').read_text().strip()
+        op = self.operation(); op.request['operatorMachineId'] = MACHINE_ID
         with patch.object(m, 'controller') as controller:
             with self.assertRaisesRegex(m.Refused, 'self-proxy'): op.run()
         controller.assert_not_called()

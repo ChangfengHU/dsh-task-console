@@ -27,7 +27,7 @@ import { discoverLegacyArtifacts, publishHtml, readArtifact } from './artifacts.
 import { withFinalArtifact } from './artifact-delivery.ts'
 import { taskListIndex } from './task-list.ts'
 import {
-  NATIVE_TOOLS, mask, readAgentCreatedAt, readSpec, removePreset, renderComposition, scanSkills, userPresetRoot, validateSpec, writePreset,
+  NATIVE_TOOLS, mask, permissionOf, readAgentCreatedAt, readSpec, removePreset, renderComposition, scanSkills, userPresetRoot, validateSpec, writePreset,
   type HostMcp,
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
@@ -70,6 +70,7 @@ export class TaskConsoleService extends TypertRemoteService {
   static inject = ['loader', 'tools', 'agents', 'workspaceRegistry', 'permissionPresets']
 
   readonly runner: TaskRunner
+  imageGeneration?: import('./image-jobs.ts').ImageJobs
   readonly intake: TaskIntakeCoordinator
   readonly creator: TaskCreator
   capabilities!: SessionCapabilities
@@ -108,6 +109,8 @@ export class TaskConsoleService extends TypertRemoteService {
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
       beforeComplete: async input => {
+        const pendingImage = this.imageGeneration?.pending(input.sessionId)
+        if (pendingImage) throw Error(`生图仍在运行，先用 image_generate_status 等待真实图片回执：${pendingImage}`)
         if (await pendingOnboardOperation(input)) throw new Error('装机后台操作尚未结束，不能提交完成')
         if (input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId) return new TaskNotifications(this.runner.store).complete(input)
         const proxy = new ProxyWorkflow(this.runner.store)
@@ -157,7 +160,7 @@ export class TaskConsoleService extends TypertRemoteService {
         const report = await this.patrolEvidence(input)
         if (report?.failure) return { reason: report.failure, kind: 'capability' }
       },
-      pendingOperation: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? await pendingOnboardOperation(input) ?? await pendingBrowserOperation(input),
+      pendingOperation: async input => this.imageGeneration?.pending(input.sessionId) ?? new ProxyWorkflow(this.runner.store).pending(input) ?? await pendingOnboardOperation(input) ?? await pendingBrowserOperation(input),
       afterBlock: async input => {
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2' || !input.task.design.notifications?.agentId || input.card.role === 'notifier') return
         const report=(await this.patrolWorkflow(input)).snapshot(input)
@@ -359,7 +362,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const rows=all.filter(p=>!q.query||`${p.name??''} ${p.id}`.toLowerCase().includes(q.query.toLowerCase())).sort((a,b)=>String(created.get(b.id)??'').localeCompare(String(created.get(a.id)??''))||a.id.localeCompare(b.id))
     const total=rows.length,pages=Math.max(1,Math.ceil(total/10)),page=Math.min(q.page??1,pages),selected=rows.slice((page-1)*10,page*10)
     const load=async(p:any,detail=false)=>{const dir=dirname(String(p.path)),spec=p.trust==='user'?await readSpec(dir):null;return {id:p.id,name:spec?.name??p.name??p.id,description:spec?.description??p.description??'',trust:p.trust,broken:p.broken,path:dir,createdAt:created.get(p.id),firstUsedAt:null,
-      permission:spec?(spec.tools.some(t=>['bash','fs','str-replace-editor'].includes(t))?'write':Object.values(spec.mcpTools).some(t=>t.length)?'limited-write':'read-only'):null,spec:detail?spec:null}}
+      permission:spec?permissionOf(spec,()=>true):null,spec:detail?spec:null}}
     const detailId=q.id==='new'?undefined:q.id??selected[0]?.id, detailPreset=detailId?all.find(p=>p.id===detailId):undefined
     if(q.id&&q.id!=='new'&&!detailPreset)throw Error('没有这个 Agent')
     const detail=detailPreset?{...await load(detailPreset,true),firstUsedAt:firstAgentUse(await this.sessionHeaders()).get(detailPreset.id)??null}:null

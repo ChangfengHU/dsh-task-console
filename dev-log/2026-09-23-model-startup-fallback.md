@@ -677,3 +677,23 @@ An ensuing zero-native/zero-claim window allowed activation of only the two
 proxy stdio path entries. Browser capability status now has no missing or
 unexpected tools/dependencies (unverified-legacy, explicitly not certification).
 Original browser card resumed through unblockCard; no Task/history recreation.
+
+## 2026-10-03 final146 acceptance
+
+Task T-chat-b4c6fcb369f0c20a9739 batch b-chat-09402ebbe2531c8989e8
+now passes fleet-base-v3/node-and-login (checked11:31:50Z): installer1261,
+browser1267, Runner1268 all done. All10 base stages complete; both retained
+browsers passed independent20minute Gemini stability with22 samples each;
+Runner0.3.5 first signed probe job-musb9rg6-ba2f74b10e91 passes8 checks.
+Browser waiting woke the same session and automatically handed off to Runner.
+Public Chrome Task and Fleet screenshots visually verified at11:33Z:
+/tmp/dsh-onboard-146-final-20261003.png and
+/tmp/fleet-onboard-146-final-20261003.png. Fleet shows online, fresh line100
+exit, metrics and both verified logins. Existing excluded line92 is unchanged.
+All target mutations were DSH role tools, no developer SSH. Failure history,
+healthy profiles and original Task preserved. Production candidate and its
+Node22 wrapper are active dependencies, not cleanup targets. Small unique
+screenshots and integration worktree retained for evidence/rollback.
+Focused observer/tool tests38 pass; full integration suite had unrelated
+fixture/calibration failures and is not claimed green. Earlier236 repeat
+acceptance remains a separate incomplete item, not covered by this146 result.

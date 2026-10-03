@@ -27,6 +27,7 @@ export interface TaskGraphNode {
   runId?: string
   round?: number
   gateType?: 'release' | 'decision'
+  gateAudit?: { gate: string; passed: boolean; reason?: string }[]
   meta?: string
 }
 

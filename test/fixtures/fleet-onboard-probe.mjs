@@ -33,7 +33,8 @@ if (input.operation === 'inspect') {
   process.stdout.write(JSON.stringify({schema:1,ok:true,operation:'inspect',ip:input.ip,
     observed_at:new Date().toISOString(),target_fingerprint:'sha256:'+'a'.repeat(64),
     browser_stack:{managed_config_present:true,resources:[{kind:'port',id:'6080',state:'unmanaged',
-      owners:[{pid:42,process:'node',unit:'other.service',managed:false}]}]},
+      owners:[{pid:42,process:'node',unit:'other.service',managed:false}]}],
+      publication_resources:[{id:'credentials-dir',exists:true,uid:0,mode:448,symlink:false,ignored_secret:credential.password}]},
     ignored_secret:credential.password})+'\n')
   process.exit(0)
 }

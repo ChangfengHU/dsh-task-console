@@ -296,6 +296,7 @@ test('inspection returns projected ownership without creating a ledger or invoki
   const value = await adapter.inspect(IP, execution(`Inspect ${IP} only`))
   assert.equal(value.ok, true)
   assert.equal(value.phase, 'inspected')
+  assert.deepEqual(value.publication_resources, [{id:'credentials-dir',exists:true,uid:0,mode:448,symlink:false}])
   assert.equal(value.run_created, false)
   assert.deepEqual(value.browser_stack, {managed_config_present: true, resources: [
     {kind: 'port', id: '6080', state: 'unmanaged', owners: [{pid: 42, process: 'node', unit: 'other.service', managed: false}]},

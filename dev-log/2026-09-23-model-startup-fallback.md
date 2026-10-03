@@ -650,3 +650,30 @@ existing production Node22 SQLite binary via a test-only import hook (the checko
 native addon otherwise fails to load); no production dependency was rebuilt.
 Activation, full integration and real146 completion remain pending. Existing dirty
 lib client/index artifacts belong to other work and were not staged or overwritten.
+
+### 2026-10-03: real installer completion, next-role ABI blocker
+
+After activation, original Run1261 completed the base10 ledger and used
+task_complete to hand off. Fresh Fleet API shows146 reachable. Public Chrome
+rendered the original DAG/history (screenshot /tmp/dsh-onboard-146-resume-20261003.png).
+Browser1262 then failed capability preflight before session creation: proxy-read
+host MCP registered no tools. Direct bounded stdio initialize reproduced closure;
+read-only startup diagnostics identified ERR_DLOPEN_FAILED / Node ABI mismatch.
+It is NOT a server-name alias issue. No capability gate or permission bypass.
+
+Added scripts/build-proxy-runtime.mjs: builds only proxy MCP, verifies selected
+deployment SQLite wrapper in-memory using the actual deployment Node first.
+Candidate uses the existing production Node22 binary (no dependency install) and
+real initialize/tools-list succeeds with proxy_inspect/proxy_verify/proxy_status.
+Candidate: task-console-onboard-bca7c63/lib/proxy-mcp.js. It is not activated while
+other native sessions are active. Next: verify zero native activity and zero Task
+claims, point both proxy stdio entries to this candidate without other config
+changes, verify live reader readiness, then resume original browser card. Full
+Gemini20min/Runner/Fleet acceptance still pending; no complete-product claim.
+Production/candidate dependencies and small browser evidence retained; no user
+data or unrelated dirty build outputs removed.
+
+An ensuing zero-native/zero-claim window allowed activation of only the two
+proxy stdio path entries. Browser capability status now has no missing or
+unexpected tools/dependencies (unverified-legacy, explicitly not certification).
+Original browser card resumed through unblockCard; no Task/history recreation.

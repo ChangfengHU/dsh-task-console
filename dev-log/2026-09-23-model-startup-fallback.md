@@ -678,3 +678,20 @@ existing production Node22 SQLite binary via a test-only import hook (the checko
 native addon otherwise fails to load); no production dependency was rebuilt.
 Activation, full integration and real146 completion remain pending. Existing dirty
 lib client/index artifacts belong to other work and were not staged or overwritten.
+
+Integrated branch fix/onboard-background-20261003 preserves the existing Studio
+completion gates. Focused integration110/110 passed. Full suite664:630 pass,
+31 fail,3 skip; observed failures include missing /tmp/autonomous-studio fixture
+and absent local calibration. This is NOT a clean full-suite pass. Candidate host
+and installer bundles at task-console-onboard-bca7c63 import successfully using
+the existing production SQLite runtime, with no dependency installation.
+Do not activate while other native sessions are running: two Fleet operations
+sessions were active at the last check (SQLite running claims0). No live profile
+or preset was changed. Public Chrome confirms the original146 Batch still blocked,
+with browser/Runner waiting; screenshot /tmp/dsh-onboard-146-20261003.png retained.
+
+Control-plane publication bootstrap is deployed; actual DSH retry created the
+missing console tunnel, but its connector remains inactive. Latest operation
+returns blocked/publication-connector-install-failed, not full onboarding success.
+The original visible installer session was asked to reconcile this receipt once.
+All target operations remain DSH-owned; no developer SSH was used.

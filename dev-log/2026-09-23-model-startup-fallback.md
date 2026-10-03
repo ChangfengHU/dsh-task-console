@@ -625,6 +625,16 @@ notice. Only then activate candidate and use original public-browser Task launch
 
 ### 2026-10-03: installer background wait bridge (not yet activated)
 
+Subsequent activation: integrated candidate bca7c63 was activated in a verified
+zero-native-session/zero-running-claim window. HTTP, systemd and Task graph RPC
+passed; live146 full completion is not established. The scoped installer inspect
+tool now projects only allowlisted fixed-path metadata, with secret-canary test.
+Fresh visible sessions confirmed root-owned claude/.local blocked connector
+installation. Original batch retained and Run1261 started after the host runtime
+repair. Focused tool/observer suite38 passes with NODE_ENV=test. Integrated full
+suite previously630 passed/31 failed/3 skipped (Studio fixture/calibration gaps);
+do not claim full-suite acceptance. Existing client/index build edits preserved.
+
 146 exposed a missing installer pending-operation integration: durable stage
 execution continued while repeated Agent resume calls caused a block. The scoped
 onboard tools now register a same-process read-only observer for the exact Session

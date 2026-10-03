@@ -1245,6 +1245,17 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
           execution_available: this.executionAvailable, needs_input: false, run_created: false, probe_executed: true,
           observed_at: raw.observed_at, browser_stack: {managed_config_present: stack.managed_config_present, resources},
           next_action: 'Read-only observation, not repair or acceptance. Preserve unknown services. Stale candidates require fresh ownership and liveness checks under the executor lock before any cleanup.'}
+        if (Array.isArray(stack.publication_resources) && stack.publication_resources.length <= 10) {
+          const ids = new Set(['home','credentials-dir','connector-token','user-units-dir','connector-unit','system-binary','distribution-binary','user-binary','local-dir','local-bin-dir'])
+          result.publication_resources = stack.publication_resources.map((row: any) => {
+            if (!ids.has(row?.id) || (row.exists !== false && row.inaccessible !== true
+              && (row.exists !== true || !Number.isSafeInteger(row.uid) || row.uid < 0
+                || !Number.isInteger(row.mode) || row.mode < 0 || row.mode > 4095 || typeof row.symlink !== 'boolean')))
+              throw Error('inspection-invalid')
+            return row.inaccessible === true ? {id:row.id,inaccessible:true} : row.exists === false ? {id:row.id,exists:false}
+              : {id:row.id,exists:true,uid:row.uid,mode:row.mode,symlink:row.symlink}
+          })
+        }
         assertNoSecrets(result, 'inspection-result')
         return result
       })
@@ -1744,7 +1755,7 @@ export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardH
   const disposers = [
     register(strictTool(defineTool, {
       name: 'fleet_onboard_inspect',
-      description: '只读连接目标机检查浏览器/VNC 端口、显示资源及进程和服务归属。冲突时先用此工具，不启动安装、不修改机器、不创建或推进事务；不是验收通过。',
+      description: '只读检查浏览器/VNC资源归属与连接器固定路径的所有者和权限，不读取凭据内容。冲突时先用此工具，不启动安装、不修改机器、不创建或推进事务；不是验收通过。',
       parameters: {ip: {type: 'string', required: true, description: '完整 IPv4 地址。'}},
       output: {schema: OUTPUT_SCHEMA, render},
       async execute(args: any, exec: ToolExecutionLike) {

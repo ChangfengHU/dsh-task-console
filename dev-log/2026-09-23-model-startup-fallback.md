@@ -622,3 +622,21 @@ the profile hash changes. It NEVER activates, mutates or cancels anything. Curre
 watch PTY61139. Observation errors retry the same handle; expiry is not task failure.
 Recheck activity and live source before applying any configuration after a ready
 notice. Only then activate candidate and use original public-browser Task launch.
+
+### 2026-10-03: installer background wait bridge (not yet activated)
+
+146 exposed a missing installer pending-operation integration: durable stage
+execution continued while repeated Agent resume calls caused a block. The scoped
+onboard tools now register a same-process read-only observer for the exact Session
+and ledger run after an actual running receipt. TaskRunner parks its existing
+Run/Session and checks the cloud/host receipt, then wakes the installer to reconcile
+with fleet_onboard_resume. No write is performed by the observer. Block/complete
+reject an actively running operation. Unknown status or changed transaction fails
+closed; observer disposal and bounded expiry do not claim success. No cross-process
+restart persistence is claimed; the durable ledger remains authoritative.
+
+Focused onboard+observer tests:38 passed. Runner regression:60 passed using the
+existing production Node22 SQLite binary via a test-only import hook (the checkout
+native addon otherwise fails to load); no production dependency was rebuilt.
+Activation, full integration and real146 completion remain pending. Existing dirty
+lib client/index artifacts belong to other work and were not staged or overwritten.

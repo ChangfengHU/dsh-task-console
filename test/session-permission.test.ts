@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { Context } from '@deepseek-ai/cordis'
 import { applyAgentPermission } from '../src/agent-session.ts'
 import { TaskConsoleService } from '../src/service.ts'
 
@@ -15,7 +16,9 @@ test('applyAgentPermission pins the authored preset and fails closed without the
   assert.throws(() => applyAgentPermission({ get: () => undefined }, spec, session), /没有会话权限服务/)
 })
 
-test('startAgentSession applies permission before dispatching the first user message', async () => {
+test('startAgentSession applies permission before dispatching the first user message', async t => {
+  const scope = new Context()
+  t.after(() => scope.fiber.dispose())
   const root = await mkdtemp(join(tmpdir(), 'tc-permission-'))
   const presetDir = join(root, 'fleet-installer')
   await mkdir(presetDir)
@@ -36,7 +39,8 @@ test('startAgentSession applies permission before dispatching the first user mes
     agents: { create: async (options: any) => {
       session.id = options.sessionId
       order.push('create')
-      await options.setup({})
+      assert.deepEqual(options.agentOptions, { provider: 'p', model: 'm' })
+      await options.setup(scope)
       return handle
     } },
     get: (name: string) => {

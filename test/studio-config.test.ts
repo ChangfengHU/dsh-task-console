@@ -1,11 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,readFile,rm,realpath} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {pathToFileURL} from 'node:url'
+import {execFileSync} from 'node:child_process'
 import {Context} from '@deepseek-ai/cordis'
-import {readStudioHostConfiguration} from '../src/studio-config.ts'
+import {readStudioHostConfiguration,STUDIO_HOST_EXECUTABLES,studioAudioObserverModel} from '../src/studio-config.ts'
 import {refreshStudioCapabilities,observeStudioAudio} from '../src/studio-host.ts'
 import {studioRenderConfiguration,studioRenderJob} from '../src/studio-render-host.ts'
 import {fileSha256} from '../src/studio-tools.ts'
@@ -15,14 +16,14 @@ import {TaskRunner} from '../src/runner.ts'
 import {EventStore} from '../src/tasks.ts'
 
 async function fixture(t:any){
- const root=await mkdtemp(join(tmpdir(),'studio 用户 home '));t.after(()=>rm(root,{recursive:true,force:true}))
+ const root=await realpath(await mkdtemp(join(tmpdir(),'studio 用户 home ')));t.after(()=>rm(root,{recursive:true,force:true}))
  const configPath=join(root,'private config.json'),legacy=join(root,'legacy.json')
  await writeFile(legacy,JSON.stringify({renderRuntime:'/legacy/runtime'}))
  return {root,configPath,legacy:pathToFileURL(legacy)}
 }
 test('explicit configuration never falls back; legacy is used only when no path is set',async t=>{
  const s=await fixture(t);assert.equal((await readStudioHostConfiguration(undefined,s.legacy)).renderRuntime,'/legacy/runtime')
- for(const body of ['{SECRET', 'null','[]','42',JSON.stringify({dshProfilePath:'relative SECRET'})]){
+ for(const body of ['{SECRET', 'null','[]','42',JSON.stringify({dshProfilePath:'relative SECRET'}),...Object.keys(STUDIO_HOST_EXECUTABLES).map(field=>JSON.stringify({[field]:'relative SECRET'})),...['SECRET',null,1,''].map(audioObserverModel=>JSON.stringify({audioObserverModel}))]){
   await writeFile(s.configPath,body)
   await assert.rejects(readStudioHostConfiguration(s.configPath,s.legacy),(e:any)=>/^studio-host-config-/.test(e.message)&&!e.message.includes('SECRET'))
  }
@@ -34,19 +35,23 @@ test('explicit configuration never falls back; legacy is used only when no path 
 test('explicit host config reaches actual Python preflight/audio and render arguments outside original home',async t=>{
  const s=await fixture(t),profile=join(s.root,'other-user','web profile.yml'),runtime=join(s.root,'render 运行'),marker=join(s.root,'environment.json'),helper=join(s.root,'probe helper.py'),audio=join(s.root,'audio.wav')
  await writeFile(audio,'fixture');const sha=await fileSha256(audio)
- await writeFile(helper,`import os,json\nfrom pathlib import Path\nPath(${JSON.stringify(marker)}).write_text(json.dumps({k:os.environ.get(k) for k in ['STUDIO_DSH_PROFILE','STUDIO_RENDER_RUNTIME']}))\nprint(json.dumps({'ok':True,'capabilities':{},'input_modality':'input_audio','finish_reason':'stop','audio_sha256':'${sha}'}))\n`)
- const config={dshProfilePath:profile,renderRuntime:runtime,preflightScript:helper,audioScript:helper,vaultTokenFile:join(s.root,'fake token reference'),renderJobScript:helper,renderJobSha256:await fileSha256(helper)}
+ const executables=Object.fromEntries(Object.keys(STUDIO_HOST_EXECUTABLES).map(field=>[field,field==='pythonExecutable'?execFileSync('python3',['-c','import sys; print(sys.executable)'],{encoding:'utf8'}).trim():join(s.root,field+' with spaces')]))
+ const assetTokenFile=join(s.root,'bridge token reference')
+ const expectedEnvironment={STUDIO_DSH_PROFILE:profile,STUDIO_RENDER_RUNTIME:runtime,STUDIO_ASSET_TOKEN_FILE:assetTokenFile,STUDIO_AUDIO_OBSERVER_MODEL:'qwen3.8-omni-flash',...Object.fromEntries(Object.entries(executables).map(([field,path])=>[STUDIO_HOST_EXECUTABLES[field as keyof typeof STUDIO_HOST_EXECUTABLES].environment,path]))}
+ await writeFile(helper,`import os,json\nfrom pathlib import Path\nPath(${JSON.stringify(marker)}).write_text(json.dumps({k:os.environ.get(k) for k in ${JSON.stringify(Object.keys(expectedEnvironment))}}))\nprint(json.dumps({'ok':True,'capabilities':{},'input_modality':'input_audio','finish_reason':'stop','audio_sha256':'${sha}'}))\n`)
+ const config={...executables,audioObserverModel:'qwen3.8-omni-flash',assetTokenFile,dshProfilePath:profile,renderRuntime:runtime,preflightScript:helper,audioScript:helper,vaultTokenFile:join(s.root,'fake token reference'),renderJobScript:helper,renderJobSha256:await fileSha256(helper)}
  await writeFile(s.configPath,JSON.stringify(config))
  const task={id:'fixture',cwd:s.root,design:{studio:{characterId:'fixture',referenceSha256:sha,width:1080,height:1920,fps:30}}},deps={configPath:s.configPath}
  await refreshStudioCapabilities({recordCapability:()=>{},recordPreflight:()=>{}} as any,task,deps)
- assert.deepEqual(JSON.parse(await readFile(marker,'utf8')),{STUDIO_DSH_PROFILE:profile,STUDIO_RENDER_RUNTIME:runtime})
+ assert.deepEqual(JSON.parse(await readFile(marker,'utf8')),expectedEnvironment)
  await rm(marker);await observeStudioAudio(task,{wavPath:audio,start:0,end:1},deps)
- assert.deepEqual(JSON.parse(await readFile(marker,'utf8')),{STUDIO_DSH_PROFILE:profile,STUDIO_RENDER_RUNTIME:runtime})
+ assert.deepEqual(JSON.parse(await readFile(marker,'utf8')),expectedEnvironment)
  assert.deepEqual(await studioRenderConfiguration(s.configPath),config)
  await mkdir(join(s.root,'composition'));await writeFile(join(s.root,'composition/index.html'),'fixture')
  let called=false
  await studioRenderJob(task,'start',{composition:'composition',output:'out.mp4'},{...deps,execute:async(script,args)=>{
   called=true;assert.equal(script,helper);assert.equal(args[args.indexOf('--runtime')+1],runtime)
+  for(const [field,path]of Object.entries(executables))assert.equal(args[args.indexOf(STUDIO_HOST_EXECUTABLES[field as keyof typeof STUDIO_HOST_EXECUTABLES].flag)+1],path)
   return {ok:false,errorCode:'render_host_failed'}
  }})
  assert.ok(called)
@@ -54,6 +59,11 @@ test('explicit host config reaches actual Python preflight/audio and render argu
  await writeFile(s.configPath,'{SECRET')
  await assert.rejects(observeStudioAudio(task,{wavPath:audio,start:0,end:1},deps),/config-unavailable/)
  await assert.rejects(studioRenderJob(task,'status',{jobId:'a'.repeat(64)},deps),/config-unavailable/)
+})
+test('audio observer selection is reviewed and defaults only when omitted',()=>{
+ assert.equal(studioAudioObserverModel({}),'qwen3-omni-flash')
+ assert.equal(studioAudioObserverModel({audioObserverModel:'qwen3.8-omni-flash'}),'qwen3.8-omni-flash')
+ for(const audioObserverModel of ['',null,false,'other-model'])assert.throws(()=>studioAudioObserverModel({audioObserverModel}),/audio-observer-model-invalid/)
 })
 test('DSH startup validates and forwards explicit binding before creating the service',async t=>{
  const s=await fixture(t),service={ready:Promise.resolve(),runner:{},capabilities:{}},calls:any[]=[]

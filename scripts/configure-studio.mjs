@@ -23,15 +23,32 @@ async function local(path,field,directory=false,optional=false){
   fail(field+'-unavailable')
  }
 }
+// Executables are host deployment references. Canonicalize trusted package-manager
+// symlinks, but do not relax project/profile/credential file checks.
+async function executable(path,field){
+ path=absolute(path,field)
+ try{
+  path=await realpath(path)
+  if(!(await lstat(path)).isFile())fail(field+'-type-invalid')
+  await access(path,constants.R_OK|constants.X_OK)
+  return path
+ }catch(error){if(error.message?.startsWith('studio-config-'))throw error;fail(field+'-unavailable')}
+}
 
 export async function composeStudioConfiguration(options,root=packageRoot){
  let manifest
- try{root=await realpath(absolute(root,'package'));manifest=await verifyStudioPayload(root)}catch{fail('package-invalid')}
+ if(options.audioObserverModel!==undefined&&!['qwen3-omni-flash','qwen3.8-omni-flash'].includes(options.audioObserverModel))fail('audio-observer-model-invalid')
+ const pythonExecutable=options.pythonExecutable===undefined?undefined:await executable(options.pythonExecutable,'pythonExecutable')
+ try{root=await realpath(absolute(root,'package'));manifest=await verifyStudioPayload(root,{pythonExecutable})}catch{fail('package-invalid')}
  const runtime=await local(options.renderRuntime,'runtime',true)
  // Presence is not a successful render/launch. No executable is run here.
- for(const member of ['node_modules/hyperframes/package.json','node_modules/hyperframes/bin/hyperframes.mjs','node_modules/ffmpeg-static/ffmpeg'])await local(join(runtime.path,member),'runtime-member')
+ const executables={...(pythonExecutable?{pythonExecutable}:{})}
+ for(const field of ['nodeExecutable','chromeExecutable','ffmpegExecutable','ffprobeExecutable'])if(options[field]!==undefined)executables[field]=await executable(options[field],field)
+ for(const member of ['node_modules/hyperframes/package.json','node_modules/hyperframes/bin/hyperframes.mjs',...(executables.ffmpegExecutable?[]:['node_modules/ffmpeg-static/ffmpeg'])])await local(join(runtime.path,member),'runtime-member')
  const profile=await local(options.dshProfilePath,'profile')
  const token=await local(options.vaultTokenFile,'vault-reference')
+ const assetToken=options.assetTokenFile===undefined?undefined:await local(options.assetTokenFile,'asset-reference')
+ if(assetToken){const info=await lstat(assetToken.path);if((info.mode&0o077)||info.size>4096||process.getuid&&info.uid!==process.getuid())fail('asset-reference-not-private');if(assetToken.path===profile.path||assetToken.path===token.path)fail('asset-reference-conflict')}
  const cache=await local(options.observationCacheRoot,'cache',true)
  if(profile.path===token.path)fail('reference-conflict')
  const proofPaths=options.proofPaths??{}
@@ -61,6 +78,9 @@ export async function composeStudioConfiguration(options,root=packageRoot){
  }
  const config={
   ...upload,
+  ...executables,
+  ...(options.audioObserverModel!==undefined?{audioObserverModel:options.audioObserverModel}:{}),
+  ...(assetToken?{assetTokenFile:assetToken.path}:{}),
   dshProfilePath:profile.path,renderRuntime:runtime.path,vaultTokenFile:token.path,observationCacheRoot:cache.path,
   preflightScript:helper('preflight_host.py'),audioScript:helper('audio_observe_host.py'),speechScript:helper('speech_check_host.py'),visionScript:helper('vision_observe_host.py'),
   storyboardCompilerScript:helper('compiler_host_bridge.py'),storyboardCompilerSha256:manifest.files['helpers/compiler_host_bridge.py'],
@@ -77,7 +97,7 @@ export async function configureStudio(options,root=packageRoot){
  const output=absolute(options.outputPath,'output')
  const parent=await local(dirname(output),'output-parent',true)
  const target=join(parent.path,output.slice(dirname(output).length+1))
- if([plan.config.dshProfilePath,plan.config.vaultTokenFile,plan.config.calibrationPath,plan.config.calibrationRegressionPath].includes(target))fail('output-reference-conflict')
+ if([plan.config.dshProfilePath,plan.config.vaultTokenFile,plan.config.assetTokenFile,plan.config.calibrationPath,plan.config.calibrationRegressionPath].includes(target))fail('output-reference-conflict')
  try{await lstat(target);fail('output-exists')}catch(error){if(error.code!=='ENOENT')fail(error.message==='studio-config-output-exists'?'output-exists':'output-unavailable')}
  const result={...plan,outputPath:target,installed:false,dshConfig:{studioConfigPath:target}}
  if(options.install!==true)return result
@@ -94,10 +114,13 @@ export async function configureStudio(options,root=packageRoot){
 }
 
 const usage=`Usage: node scripts/configure-studio.mjs --output /private/studio-host.json --runtime /render-runtime --profile /dsh/profile.yml --vault-token-file /private/token --cache-root /private/cache [--calibration-path /proofs/calibration.json --regression-path /proofs/regression.json] [--upload-state-root /private/upload-state --upload-public-origin https://preview.example.test] [--install]
+Optional host executables: --python-executable /absolute/python3 --node-executable /absolute/node --chrome-executable /absolute/chrome --ffmpeg-executable /absolute/ffmpeg --ffprobe-executable /absolute/ffprobe. Omission preserves legacy Linux defaults; explicit FFmpeg replaces the runtime ffmpeg-static requirement. Paths are canonicalized, readable and executable. Python runs only the existing local static package verifier; renderer programs are never run by this command.
+Optional assets bridge credential reference: --asset-token-file /private/bridge-token. This distinct private file is never read by setup and is not used for Vault or the media proxy.
+Optional audio observer: --audio-observer-model qwen3-omni-flash|qwen3.8-omni-flash. Omission retains the former model. Genuine calibration must use the selected observer; this does not change planner models or content checks.
 Default: read-only dry run. --install creates a new mode-0600 config; existing files are never replaced. Both proof paths must be provided together, or omitted; missing proofs remain unverified. Upload is disabled unless both upload options are supplied; the existing state directory must be private (no group/other permissions) and writable. Helper paths/hashes come only from the verified package manifest. No provider, role, dependency or profile installation is performed.`
 export function parseArguments(args){
  const options={proofPaths:{}}
- const fields={'--output':'outputPath','--runtime':'renderRuntime','--profile':'dshProfilePath','--vault-token-file':'vaultTokenFile','--cache-root':'observationCacheRoot','--calibration-path':'calibrationPath','--regression-path':'calibrationRegressionPath','--upload-state-root':'uploadStateRoot','--upload-public-origin':'uploadPublicOrigin'}
+ const fields={'--output':'outputPath','--runtime':'renderRuntime','--profile':'dshProfilePath','--vault-token-file':'vaultTokenFile','--asset-token-file':'assetTokenFile','--cache-root':'observationCacheRoot','--calibration-path':'calibrationPath','--regression-path':'calibrationRegressionPath','--upload-state-root':'uploadStateRoot','--upload-public-origin':'uploadPublicOrigin','--python-executable':'pythonExecutable','--node-executable':'nodeExecutable','--chrome-executable':'chromeExecutable','--ffmpeg-executable':'ffmpegExecutable','--ffprobe-executable':'ffprobeExecutable','--audio-observer-model':'audioObserverModel'}
  const seen=new Set()
  for(let i=0;i<args.length;i++){
   const flag=args[i];if(seen.has(flag))fail('argument-duplicate');seen.add(flag)

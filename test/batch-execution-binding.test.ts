@@ -26,7 +26,7 @@ async function fixture(t:any){
  const sessions:any[]=[]
  const presets={resolve:async(id:string)=>({id,path:join(root,'presets',id,'agent.cordis.yml')}),mount:async(_:any,id:string)=>mount?.(id)}
  const ctx:any={on:()=>()=>{},effect:()=>{},get:(name:string)=>name==='agentPresets'?presets:name==='agentDefaultModel'?{currentSelection:()=>({...model})}:name==='permissionPresets'?{set:()=>{}}:undefined,
-  agents:{create:async(opts:any)=>{await opts.setup({});const session:any={options:opts,disposed:false,prompts:[],agent:{session:{id:opts.sessionId},ctx:{tools:{register:()=>()=>{}}},followup:(message:any)=>session.prompts.push(message)}};sessions.push(session);return {agent:session.agent,dispose:async()=>{session.disposed=true}}}}}
+  agents:{create:async(opts:any)=>{const modelHooks:any[]=[];const session:any={options:opts,modelHooks,disposed:false,prompts:[],agent:{session:{id:opts.sessionId},ctx:{on:(name:string,fn:any)=>{const hook={name,fn};modelHooks.push(hook);return()=>{const i=modelHooks.indexOf(hook);if(i>=0)modelHooks.splice(i,1)}},tools:{register:()=>()=>{}}},followup:(message:any)=>session.prompts.push(message)}};await opts.setup(session.agent.ctx);sessions.push(session);return {agent:session.agent,dispose:async()=>{session.disposed=true}}}}}
  const task:any={id:'task',title:'Task',brief:'objective',participants:[{agentId:'a'},{agentId:'b'}],trigger:{kind:'once'},cwd:root,timeoutSec:60,onFail:'retry',maxTries:2,enabled:true,createdAt:'2026-09-24T00:00:00Z',design:validateDesign({executionBinding:'agent-runtime-v1',scope:'scope',branches:[{id:'work',when:'ready',action:'work',evidence:'output'}],coordination:'sequence',failurePolicy:{isolateItems:false,maxAttempts:2,stopConditions:['failure']},acceptance:['done']})}
  return {root,ctx,task,save,sessions,runtime:async()=>runtime,setRuntime:(value:string)=>runtime=value,setModel:(value:any)=>model=value,setMount:(value:any)=>mount=value}
 }
@@ -146,12 +146,14 @@ test('preset mutation during mounting creates no prompt and blocks the bound run
  const s=await runnerFixture(t);s.setMount(async()=>s.save('a',{model:'provider/changed-during-mount'}))
  const batch=await s.runner.fire('task','manual',{batchId:'batch'})
  assert.equal(s.sessions.length,1);assert.ok(s.sessions.every(v=>v.prompts.length===0&&v.disposed));assert.equal((s.runner as any).flights.size,0);assert.equal(s.store.kernel.getTask(batch.cardIds[0]).status,'blocked')
+ assert.equal(s.sessions[0].modelHooks.length,0,'bound setup rejection releases both model selection listeners')
 })
 
 test('bound mount failure disposes the returned session and records only a safe reason',async t=>{
  const s=await runnerFixture(t);s.setMount(async()=>{throw Error('private transport SECRET')})
  const batch=await s.runner.fire('task','manual',{batchId:'batch'})
  assert.equal(s.sessions.length,1);assert.ok(s.sessions[0].disposed);assert.equal(s.sessions[0].prompts.length,0);assert.equal((s.runner as any).flights.size,0)
+ assert.equal(s.sessions[0].modelHooks.length,0,'failed preset mount cannot retain model selection hooks')
  assert.equal(s.store.kernel.getTask(batch.cardIds[0]).status,'blocked')
  const events=JSON.stringify(s.store.kernel.listEvents(batch.cardIds[0]));assert.match(events,/binding-mount-unavailable/);assert.ok(!events.includes('SECRET'))
 })

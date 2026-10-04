@@ -1,4 +1,5 @@
 import {previewExecutionMigration,applyExecutionMigration} from './batch-execution-migration.ts'
+import { readAppBinding, launchAppEpisode } from './app-episodes.ts'
 import {uploadStudioPreview} from './studio-upload-host.js'
 import {assertStudioProgressWritable} from './studio-progress.js'
 import type {StudioConfigBinding} from './studio-config.js'
@@ -30,6 +31,7 @@ import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, che
 import {studioInstallationBlock} from './studio-installation.js'
 import { registerStudioTools,STUDIO_TOOL_NAMES,studioPath,fileSha256 } from './studio-tools.js'
 import { StudioWorkflow } from './studio-workflow.js'
+import { readStudioRepairRounds } from './studio-repair-budget.js'
 import { registerStudioSkillGate } from './studio-skill-gate.js'
 /**
  * The `taskConsole` Remote service.
@@ -56,6 +58,7 @@ import { fleetActionOptions } from './fleet-action-options.ts'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { SessionCapabilities } from './session-capabilities.ts'
 import { applyAgentPermission } from './agent-session.ts'
+import { installTaskModelSelection, taskAgentOptions } from './task-model-selection.ts'
 import { agentHistory, firstAgentUse, historyQuery, type AgentSessionHeader } from './agent-history.ts'
 import { sortAgents } from './agent-order.ts'
 import { discoverLegacyArtifacts, publishHtml, readArtifact } from './artifacts.ts'
@@ -254,7 +257,7 @@ export class TaskConsoleService extends TypertRemoteService {
         const operations=new StudioOperations(this.runner.store)
         operations.configure(input,input.task.design.studio.generationLimits??{imageCalls:6,voiceSegments:80})
         const budget=operations.snapshot(input)
-        workflow.recordBudget(input,{repairRounds:Math.max(0,(workflow.status(input).candidate?.revision??1)-1),used:budget.used,limits:budget.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
+        workflow.recordBudget(input,{repairRounds:readStudioRepairRounds(this.runner.store,input),used:budget.used,limits:budget.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
         await refreshStudioCapabilities(workflow,input.task,studioHostDeps)
         const result = workflow.preflight(input.task)
         if (!result.ok) return { kind: 'capability', reason: result.reason ?? 'blocked_quality_capability' }
@@ -266,10 +269,14 @@ export class TaskConsoleService extends TypertRemoteService {
         if (input.task.design?.evidenceContract === 'studio-video-v1') {
           assertPreparationWritable(this.runner.store.kernel.db,input)
           const workflow=new StudioWorkflow(this.runner.store),operations=new StudioOperations(this.runner.store).snapshot(input)
-          if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task,studioHostDeps)
+          if(!workflow.hasRejection(input)){
+            await refreshStudioCapabilities(workflow,input.task,studioHostDeps)
+            // Recording fresh capabilities invalidates the persisted preflight.
+            // Rebuild it before completion; the workflow still checks every capability.
+            workflow.preflight(input.task)
+          }
           requireSettledStudioOperations(input,operations)
-          const candidate=workflow.status(input).candidate
-          workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
+          workflow.recordBudget(input,{repairRounds:readStudioRepairRounds(this.runner.store,input),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
           if(input.card.role==='studio-stage'){
             const stage=studioStageFor(input)!,receipt=workflow.stageReceipt(input,stage.id)
             await requireStudioStages(input,workflow,this.runner.store.kernel.db)
@@ -401,8 +408,8 @@ export class TaskConsoleService extends TypertRemoteService {
       try { return await operations.invoke(input,raw,args,dispatch,validate,/generate_image$/.test(raw)?()=>prepareStudioImageRequest(raw,args):undefined) }
       finally {
         // Include retained unknown reservations, not only successful job receipts.
-        const budget=operations.snapshot(input),candidate=workflow.status(input).candidate
-        workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:budget.used,limits:budget.limits,maxRepairRounds:task.design.studio.maxRepairRounds??3,exceeded:false})
+        const budget=operations.snapshot(input)
+        workflow.recordBudget(input,{repairRounds:readStudioRepairRounds(this.runner.store,input),used:budget.used,limits:budget.limits,maxRepairRounds:task.design.studio.maxRepairRounds??3,exceeded:false})
       }
     }
     if (/^browser_login_(copy|provision|resume)$/.test(raw) && batch.turn?.action) {
@@ -557,7 +564,7 @@ export class TaskConsoleService extends TypertRemoteService {
       permission:spec?permissionOf(spec,()=>true):null,spec:detail?spec:null}}
     const detailId=q.id==='new'?undefined:q.id??selected[0]?.id, detailPreset=detailId?all.find(p=>p.id===detailId):undefined
     if(q.id&&q.id!=='new'&&!detailPreset)throw Error('没有这个 Agent')
-    const detail=detailPreset?{...await load(detailPreset,true),firstUsedAt:firstAgentUse(await this.sessionHeaders()).get(detailPreset.id)??null}:null
+    const detail=detailPreset?{...await load(detailPreset,true),app:await readAppBinding(String(detailPreset.path),detailPreset.id),firstUsedAt:firstAgentUse(await this.sessionHeaders()).get(detailPreset.id)??null}:null
     return JSON.stringify({page,pages,total,pageSize:10,rows:await Promise.all(selected.map(p=>load(p))),detail})
   }
 
@@ -937,6 +944,21 @@ export class TaskConsoleService extends TypertRemoteService {
     return JSON.stringify({ ...preview, yml: mask(preview.yml) } satisfies Preview)
   }
 
+  /** Runs a persisted Action in a new isolated App episode; same request is replay-safe. */
+  async launchAgentAction(payload: string): Promise<string> {
+    const query = JSON.parse(payload)
+    const catalog: ActionCatalog = JSON.parse(await this.agentActions(JSON.stringify({ agentId: query.agentId })))
+    if (catalog.revision !== query.revision) throw Error('Action 已更新，请重新选择')
+    const action = catalog.actions.find(a => a.id === query.actionId && a.enabled !== false)
+    if (!action) throw Error('Action 不存在或未启用')
+    const text = renderAction(action, query.values ?? {})
+    const preset = await (this.ctx as any).get('agentPresets')?.resolve(query.agentId)
+    if (!preset || preset.broken) throw Error('Agent 不可用')
+    return JSON.stringify(await launchAppEpisode({ presetPath: String(preset.path), agentId: query.agentId, requestId: query.requestId,
+      actionId: action.id, revision: catalog.revision, text }, async (text, cwd, sessionId) =>
+      JSON.parse(await this.startAgentSession(JSON.stringify({ agentId: query.agentId, text, cwd, episodeSessionId: sessionId })))))
+  }
+
   /** Read-only drift audit. A green configuration is not a passed live invocation. */
   async agentCapabilityStatus(payload:string):Promise<string>{
     const {id}=JSON.parse(payload)
@@ -1022,6 +1044,7 @@ export class TaskConsoleService extends TypertRemoteService {
     if (!presets) throw new Error('这个部署没有 preset 服务')
     const preset = await presets.resolve(id)
     if (preset.broken) throw new Error(`preset 坏了:${preset.broken}`)
+    await assertLocalAppEnabled(String(preset.path), id)
     const spec = await readSpec(dirname(String(preset.path)))
 
     let selection = this.defaultModel()
@@ -1058,22 +1081,31 @@ export class TaskConsoleService extends TypertRemoteService {
     })
 
     let handle: any
+    let disposeModelSelection: (() => void) | undefined
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
     try {
       handle = await (this.ctx as any).agents.create({
         sessionId,
-        ...(selection ? { agentOptions: selection } : {}),
+        ...(selection ? { agentOptions: taskAgentOptions(selection) } : {}),
         meta: { cwd: homedir(), agentPreset: preset.id },
-        setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
+        setup: async (agentCtx: Context) => {
+          if (selection) disposeModelSelection = installTaskModelSelection(agentCtx, selection)
+          await presets.mount(agentCtx, preset.id)
+        },
       })
       applyAgentPermission(this.ctx, spec, handle.agent.session)
       messageId = randomUUID()
       handle.agent.followup({ id: messageId, role: 'user', content: [{ type: 'text', text: question }], source: { kind: 'user' } })
-      const timeout = new Promise<void>((_, reject) => setTimeout(() => reject(new Error('120 秒没等到回合结束')), 120_000))
+      const timeout = new Promise<void>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error('120 秒没等到回合结束')), 120_000)
+      })
       await Promise.race([done, timeout])
     } catch (error) {
       result.error = error instanceof Error ? error.message : String(error)
     } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle)
       try { typeof dispose === 'function' && dispose() } catch { /* already gone */ }
+      try { disposeModelSelection?.() } catch { /* already gone */ }
       try { await handle?.dispose?.() } catch { /* already gone */ }
     }
     result.elapsedMs = Date.now() - started
@@ -1091,23 +1123,36 @@ export class TaskConsoleService extends TypertRemoteService {
    * then opens the session; the person keeps talking to it there.
    */
   async startAgentSession(payload: string): Promise<string> {
-    const { agentId, text, cwd } = JSON.parse(payload) as { agentId: string; text?: string; cwd?: string }
+    const { agentId, text, cwd, episodeSessionId } = JSON.parse(payload) as { agentId: string; text?: string; cwd?: string; episodeSessionId?: string }
     const presets = (this.ctx as any).get('agentPresets')
     if (!presets) throw new Error('这个部署没有 preset 服务')
     const preset = await presets.resolve(agentId)
     if (preset.broken) throw new Error(`preset 坏了:${preset.broken}`)
+    const appWorkspace = await assertLocalAppEnabled(String(preset.path), agentId)
     const spec = await readSpec(dirname(String(preset.path)))
     const name = spec?.name ?? preset.name ?? preset.id
     let selection = this.defaultModel()
     if (spec?.model?.includes('/')) { const [provider, ...rest] = spec.model.split('/'); selection = { provider, model: rest.join('/'), ...(spec.effort ? { reasoningEffort: spec.effort } : {}) } }
     const workspaces = this.workspaces()
-    const dir = cwd && cwd.trim() ? cwd.trim() : (workspaces[0]?.path ?? homedir())
-    const sessionId = `agent-${agentId}-${Date.now().toString(36)}`
+    const dir = cwd && cwd.trim() ? cwd.trim() : (appWorkspace ?? workspaces[0]?.path ?? homedir())
+    // Explicit episode ID is accepted only with a matching durable App launch intent.
+    if (episodeSessionId) {
+      if (!appWorkspace || !cwd || !resolve(cwd).startsWith(resolve(appWorkspace) + '/episodes/')) throw Error('Episode workspace mismatch')
+      const intent = JSON.parse(await readFile(join(cwd, 'EPISODE_LAUNCH.json'), 'utf8'))
+      if (intent.state !== 'starting' || intent.agentId !== agentId || intent.sessionId !== episodeSessionId || resolve(intent.workspace) !== resolve(cwd)) throw Error('Episode launch intent mismatch')
+    }
+    const sessionId = episodeSessionId ?? `agent-${agentId}-${Date.now().toString(36)}`
     const handle = await (this.ctx as any).agents.create({
       sessionId,
-      ...(selection ? { agentOptions: selection } : {}),
+      ...(selection ? { agentOptions: taskAgentOptions(selection) } : {}),
       meta: { cwd: dir, agentPreset: preset.id },
-      setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
+      setup: async (agentCtx: any) => {
+        // AgentOptions does not carry effort. Pin the ordinary Agent's scoped
+        // selection before preset mounting/first assembly, just like Task runs.
+        const disposeSelection = selection ? installTaskModelSelection(agentCtx, selection) : undefined
+        try { await presets.mount(agentCtx, preset.id) }
+        catch (error) { disposeSelection?.(); throw error }
+      },
     })
     try {
       applyAgentPermission(this.ctx, spec, handle.agent.session)
@@ -1619,5 +1664,21 @@ export class TaskConsoleService extends TypertRemoteService {
     const done = cards.filter(c => c.status === 'done').length
     const failed = cards.filter(c => c.status === 'failed').length
     return JSON.stringify({ cards: cards.length, done, failed, runs: runs.length, lastRunAt: last?.startedAt ?? null, lastOutcome: last?.outcome ?? last?.status ?? null, tasks })
+  }
+}
+
+/** Optional local App ownership; missing receipt fails closed, unlike an
+ * independently authored preset with no ownership file. */
+async function assertLocalAppEnabled(presetPath: string, agentId: string): Promise<string | undefined> {
+  let owner: any
+  try { owner = JSON.parse(await readFile(join(dirname(presetPath), 'app-owner.json'), 'utf8')) }
+  catch (error: any) { if (error.code === 'ENOENT') return; throw error }
+  if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(owner.appId)) throw new Error('App owner ID 无效')
+  const receipt = JSON.parse(await readFile(join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'apps', `${owner.appId}.json`), 'utf8'))
+  if (receipt.status !== 'installed' || receipt.enabled === false || !(receipt.managedAgents ?? []).includes(agentId)) throw new Error('Agent 所属 App 未启用或未通过安装验收')
+  if (typeof owner.workspace === 'string' && owner.workspace.startsWith('/')) {
+    const runtime = JSON.parse(await readFile(join(owner.workspace, 'STUDIO_RUNTIME.json'), 'utf8'))
+    if (runtime.workspaceRoot !== owner.workspace) throw new Error('App workspace binding 不匹配')
+    return owner.workspace
   }
 }

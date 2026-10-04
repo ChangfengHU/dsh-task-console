@@ -36,6 +36,7 @@ import { publicToolName } from './filtered-mcp-client.ts'
 import { dispatchNotification } from './notification-dispatch.ts'
 import { readBrowserAcceptance } from './workflow-acceptance.ts'
 import { startupFallbackAllowed, installFallbackSelection } from './model-fallback.ts'
+import { installTaskModelSelection, taskAgentOptions } from './task-model-selection.ts'
 import { FleetRepairRequired, fullFleetRecipe, fleetRoles } from './fleet-workflow-evidence.ts'
 
 interface Flight {
@@ -50,6 +51,7 @@ interface Flight {
   fallbackUsed?: boolean
   toolCalled?: boolean
   disposeFallback?: () => void
+  disposeModelSelection?: () => void
   runId: string
   cardId: string
   taskId: string
@@ -202,7 +204,7 @@ export class TaskRunner {
     this.backgroundTick = undefined
     this.backgroundBatches.clear()
     this.disposeListener?.()
-    for (const f of this.flights.values()) { this.disarm(f); this.stopHeartbeat(f); f.disposeFallback?.(); if(!f.progressStopping||f.progressDisposed)f.disposeTools?.() }
+    for (const f of this.flights.values()) { this.disarm(f); this.stopHeartbeat(f); f.disposeFallback?.(); f.disposeModelSelection?.(); if(!f.progressStopping||f.progressDisposed)f.disposeTools?.() }
   }
 
   private now(): string { return new Date(this.clock()).toISOString() }
@@ -285,7 +287,7 @@ export class TaskRunner {
         if(f?.handle){
           // The barrier already prevents commits. Do not infer stopped from
           // absence in flights or swallow disposal failures as confirmation.
-          try{await this.disposePreparationHandle(f);this.disarm(f);this.stopHeartbeat(f);f.disposeFallback?.();f.disposeTools?.();this.flights.delete(sid)}catch{continue}
+          try{await this.disposePreparationHandle(f);this.disarm(f);this.stopHeartbeat(f);f.disposeFallback?.();f.disposeModelSelection?.();f.disposeTools?.();this.flights.delete(sid)}catch{continue}
         }else if(!f&&request.hostProcess&&preparationOriginExited(request.hostProcess))prep.markStopped(request.id,sid,'origin-process-exited')
       }
       try{await this.reconcilePreparationOperations?.(request)}catch{continue}
@@ -648,9 +650,10 @@ export class TaskRunner {
         let setupFailure:ExecutionBindingError|undefined
         flight.handle = await (this.ctx as any).agents.create({
           sessionId,
-          ...(selection ? { agentOptions: selection } : {}),
+          ...(selection ? { agentOptions: taskAgentOptions(selection) } : {}),
           meta: { cwd: task.cwd, agentPreset: preset.id,...(binding?{executionBindingSha256:binding.sha256}: {}) },
-          setup: async (agentCtx: object) => {
+          setup: async (agentCtx: Context) => {
+            if(selection)flight.disposeModelSelection=installTaskModelSelection(agentCtx,selection)
             if(!binding){await presets.mount(agentCtx,preset.id);return}
             // Return the created handle before rejecting setup so finishBlocked
             // can dispose it. No prompt is dispatched until verification passes.
@@ -837,6 +840,7 @@ export class TaskRunner {
         this.store.kernel.recordEvent(card.id,'execution_binding_rejected',{bindingSha256:binding?.sha256??null,code:error.message},flight.coreRunId)
         await this.finishBlocked(flight,error.message,'capability');return
       }
+      flight.disposeModelSelection?.()
       try { await this.disposePreparationHandle(flight) } catch { /* no stop receipt on failure */ }
       this.flights.delete(sessionId)
       this.stopHeartbeat(flight)
@@ -970,7 +974,7 @@ export class TaskRunner {
     }
     const t = f.terminal
     if (t?.kind === 'deferred') {
-      this.flights.delete(f.sessionId); this.disarm(f); this.stopHeartbeat(f); f.disposeFallback?.(); f.disposeTools?.()
+      this.flights.delete(f.sessionId); this.disarm(f); this.stopHeartbeat(f); f.disposeFallback?.(); f.disposeModelSelection?.(); f.disposeTools?.()
       try { await f.handle?.dispose?.() } catch { /* already closed */ }
       await this.tick(); return
     }
@@ -1043,6 +1047,7 @@ export class TaskRunner {
     if (f.timer) clearTimeout(f.timer)
     this.stopHeartbeat(f)
     f.disposeFallback?.()
+    f.disposeModelSelection?.()
     f.disposeTools?.()
     try { await this.disposePreparationHandle(f) } catch { /* no preparation stop receipt on failure */ }
     if(preparationBarrier(this.store.kernel.db,f.cardId)){t='run/cancelled';outcome='cancelled';error='Preparation revision superseded this run';giveUpNow=false;metadata=undefined}
@@ -1108,6 +1113,7 @@ export class TaskRunner {
     if (f.timer) clearTimeout(f.timer)
     this.stopHeartbeat(f)
     f.disposeFallback?.()
+    f.disposeModelSelection?.()
     f.disposeTools?.()
     try { await this.disposePreparationHandle(f) } catch { /* no preparation stop receipt on failure */ }
     const ok = await this.store.transition(
@@ -1129,6 +1135,7 @@ export class TaskRunner {
     if (f.timer) clearTimeout(f.timer)
     this.stopHeartbeat(f)
     f.disposeFallback?.()
+    f.disposeModelSelection?.()
     f.disposeTools?.()
     try { await this.disposePreparationHandle(f) } catch { /* no preparation stop receipt on failure */ }
     const result = await this.store.transition(

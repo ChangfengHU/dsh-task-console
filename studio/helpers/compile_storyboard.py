@@ -1,7 +1,7 @@
 """Compile a local, structured storyboard into seekable HyperFrames HTML.
 No model calls, arbitrary JS/CSS, synthesis, upload or aesthetic approval.
 """
-import argparse, hashlib, html, json, math, pathlib, re, shutil, subprocess, tempfile
+import argparse, hashlib, html, json, math, os, pathlib, re, shutil, subprocess, tempfile
 
 VERSION='studio-board-v1'
 def shape(value,required,optional,label):
@@ -143,7 +143,7 @@ def compile_board(root,board,out):
    absent=[k for k in ('lineId','text') if k not in a]
    if absent: raise ValueError(f'audio[{i}]:voice-missing-fields:'+','.join(absent)+'; copy the exact frozen script line ID and text into the voice track')
   src=source(a['src'],'audio');p=local(root,a['src'])
-  probe=json.loads(subprocess.check_output(['ffprobe','-v','error','-show_format','-show_streams','-of','json',str(p)],timeout=30))
+  probe=json.loads(subprocess.check_output([os.environ.get('FFPROBE_PATH') or 'ffprobe','-v','error','-show_format','-show_streams','-of','json',str(p)],timeout=30))
   if not any(x.get('codec_type')=='audio' for x in probe['streams']): raise ValueError('audio-stream-required')
   actual=float(probe['format']['duration']);start=number(a['start'],0,duration,'audio-start');trim=number(a.get('trimStart',0),0,actual,'trim')
   length=number(a.get('duration',actual-trim),.01,actual,'audio-duration');gain=number(a.get('volume',1),0,2,'volume')

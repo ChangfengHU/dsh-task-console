@@ -52,7 +52,7 @@ export const METHODS = [
   // Plan is read-only; apply's JSON payload contains only expectedPlanSha256.
   ['studioRoleInstallPlan', 0], ['studioRoleInstallApply', 1],
   ['exportConfig', 0], ['exportLocalConfig', 0], ['createConfigBootstrap', 1], ['previewConfigImport', 1], ['previewLocalConfigImport', 1], ['applyConfigImport', 1], ['installConfigRuntime', 1], ['configRuntimeStatus', 1],
-  ['agentActions', 1], ['saveAgentActions', 1], ['prepareAgentAction', 1], ['agentActionOptions', 1],
+  ['agentActions', 1], ['saveAgentActions', 1], ['prepareAgentAction', 1], ['agentActionOptions', 1], ['launchAgentAction', 1],
   ['workflowCatalog', 0], ['launchWorkflow', 1],
   ['taskActions', 1], ['saveTaskActions', 1], ['launchTaskAction', 1],
   ['taskPlans', 1], ['taskPlan', 1], ['reviewTaskPlan', 1],
@@ -144,6 +144,7 @@ export interface McpToolPolicy {
 
 /** One roster row, enriched with our spec when we authored it. */
 export interface AgentRow {
+  app?: { id: string; name: string; version?: string; enabled: boolean; sourceKind?: string; workspace?: string; episodeActions: boolean }
   actionCount?: number
   id: string
   name: string

@@ -4,7 +4,7 @@ import {spawn} from 'node:child_process'
 import {copyFile,mkdir,mkdtemp,open,readFile,realpath,rename,rm,stat} from 'node:fs/promises'
 import {constants} from 'node:fs'
 import {isAbsolute,join,relative,sep,extname,dirname} from 'node:path'
-import {readStudioHostConfiguration} from './studio-config.js'
+import {readStudioHostConfiguration,studioHostExecutables} from './studio-config.js'
 import {fileSha256,studioPath} from './studio-tools.js'
 const HASH=/^[a-f0-9]{64}$/
 const MAX_BYTES=500_000_000
@@ -29,10 +29,10 @@ function receipt(result:any,expected:{sha256:string;bytes:number},origins:string
  if(url.protocol!=='https:'||url.username||url.password||url.search||url.hash||!origins.includes(url.origin)||!url.pathname.endsWith(`/studio-dsh/${expected.sha256}/preview.mp4`))throw Error('studio-upload-receipt-invalid')
  return {url:url.href,sha256:expected.sha256,bytes:expected.bytes,publicHashVerified:true,uploadMode:result.upload_mode}
 }
-async function execute(script:string,args:string[]):Promise<any>{
+async function execute(script:string,args:string[],config:any):Promise<any>{
  return new Promise((resolve,reject)=>{
   const env:Record<string,string>={};for(const k of ['PATH','HOME','LANG','LC_ALL','TMPDIR'])if(process.env[k])env[k]=process.env[k]!
-  const child=spawn('python3',[script,...args],{env,stdio:['ignore','pipe','ignore']});let output='',done=false
+  const child=spawn(config.pythonExecutable??'python3',['-B',script,...args],{env,stdio:['ignore','pipe','ignore']});let output='',done=false
   const finish=(error?:Error,result?:any)=>{if(done)return;done=true;clearTimeout(timer);error?reject(error):resolve(result)}
   const timer=setTimeout(()=>{child.kill('SIGKILL');finish(Error('studio-upload-host-timeout'))},900_000)
   child.on('error',()=>finish(Error('studio-upload-host-unavailable')))
@@ -53,6 +53,8 @@ export async function uploadStudioPreview(task:{id:string;cwd:string},registered
  const c=registered?.candidate,l=registered?.location
  if(!c||!l||c.sha256!==args.candidateSha256||l.sha256!==c.sha256||!HASH.test(c.manifestSha256??'')||!Number.isInteger(c.revision)||c.revision<1||typeof task.id!=='string'||!task.id)throw Error('studio-upload-current-candidate-required')
  const config={...(deps.config??await readStudioHostConfiguration(deps.configPath))}
+ studioHostExecutables(config)
+ const run=deps.execute??((script:string,args:string[])=>execute(script,args,config))
  if(!isAbsolute(config.uploadScript??'')||!HASH.test(config.uploadScriptSha256??'')||!HASH.test(config.uploadLibrarySha256??'')||!isAbsolute(config.vaultTokenFile??'')||!isAbsolute(config.uploadStateRoot??'')||!Array.isArray(config.uploadPublicOrigins)||!config.uploadPublicOrigins.length||config.uploadPublicOrigins.some((s:any)=>{try{return typeof s!=='string'||new URL(s).origin!==s||!s.startsWith('https://')}catch{return true}}))throw Error('studio-upload-host-not-configured')
  const root=await realpath(task.cwd)
  // Configuration and credentials are host inputs, not project files.
@@ -87,7 +89,7 @@ export async function uploadStudioPreview(task:{id:string;cwd:string},registered
   deps.assertActive()
   try{
    // A durable pending request can only GET its fixed public object. Never PUT again.
-   const verified=await(deps.execute??execute)(config.uploadScript,['verify',...commonArgs])
+   const verified=await run(config.uploadScript,['verify',...commonArgs])
    return await saveResult(verified,true)
   }catch{return unknown(intentId)}
  }
@@ -101,7 +103,7 @@ export async function uploadStudioPreview(task:{id:string;cwd:string},registered
   try{await durableJson(requestPath,{schema:'studio-preview-upload-v2',intentId,sha256:c.sha256,bytes:info.size,helperSha256:config.uploadScriptSha256,librarySha256:config.uploadLibrarySha256,key:`studio-dsh/${c.sha256}/preview.mp4`,state:'pending'});reserved=true;await syncDirectory(directory)}catch(error:any){if(error?.code==='EEXIST')return unknown(intentId);throw error}
   deps.assertActive()
   // Never forward helper/provider bodies. Even a failed PUT is ambiguous.
-  const result=await(deps.execute??execute)(config.uploadScript,['upload','--file',frozen,'--project-root',snapshot,...commonArgs])
+  const result=await run(config.uploadScript,['upload','--file',frozen,'--project-root',snapshot,...commonArgs])
   return await saveResult(result,false)
  }catch(error){if(reserved)return unknown(intentId);throw error}
  finally{await rm(snapshot,{recursive:true,force:true}).catch(()=>{})}

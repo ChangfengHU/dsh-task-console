@@ -2,7 +2,9 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
+import type { Context } from '@deepseek-ai/cordis'
 import { applyAgentPermission } from './agent-session.ts'
+import { installTaskModelSelection, taskAgentOptions } from './task-model-selection.ts'
 import { readSpec } from './presets.ts'
 import { validateTaskIntakeDecision, type TaskIntakeContext, type TaskIntakeDecision, type TaskIntakeDecisionResult, type TaskSignal } from './task-intake.ts'
 
@@ -54,6 +56,7 @@ export async function decideTaskSignalWithAgent(
   const sessionId = `task-intake-${digest}-${Date.now().toString(36)}`
   let handle: any
   let disposeTools: (() => void) | undefined
+  let disposeModelSelection: (() => void) | undefined
   let proposed: TaskIntakeDecision | undefined
   let contextRead = false
   let consumed = false
@@ -90,9 +93,12 @@ export async function decideTaskSignalWithAgent(
     const selection = modelSelection(ctx, spec)
     handle = await ctx.agents.create({
       sessionId,
-      ...(selection ? { agentOptions: selection } : {}),
+      ...(selection ? { agentOptions: taskAgentOptions(selection) } : {}),
       meta: { cwd: process.env.DSH_TASK_INTAKE_WORKSPACE || process.cwd(), agentPreset: preset.id },
-      setup: async (agentCtx: object) => { await presets.mount(agentCtx, preset.id) },
+      setup: async (agentCtx: Context) => {
+        if (selection) disposeModelSelection = installTaskModelSelection(agentCtx, selection)
+        await presets.mount(agentCtx, preset.id)
+      },
     })
     applyAgentPermission(ctx, spec, handle.agent.session)
     await options.markInternal?.(sessionId)
@@ -192,6 +198,7 @@ export async function decideTaskSignalWithAgent(
     if (timeoutHandle) clearTimeout(timeoutHandle)
     try { typeof listener === 'function' && listener() } catch { /* already disposed */ }
     try { disposeTools?.() } catch { /* already disposed */ }
+    try { disposeModelSelection?.() } catch { /* already disposed */ }
     try { await handle?.dispose?.() } catch { /* evidence session remains persisted */ }
   }
 }

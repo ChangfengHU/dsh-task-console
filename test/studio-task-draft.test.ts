@@ -72,3 +72,35 @@ test('progress policy is explicit, validated, and absent on legacy definitions',
  const legacy=structuredClone(draft);delete legacy.design!.progressPolicy
  assert.equal(validateTask(legacy,roster).design?.progressPolicy,undefined)
 })
+
+test('quality profile is optional and never retroactively strengthens ordinary composer requests',()=>{
+ assert.ok(contract.optional.includes('qualityProfile'))
+ const ordinary=composeStudioTaskDraft(request(),context)
+ const explicitUndefined=composeStudioTaskDraft({...request(),qualityProfile:undefined},context)
+ assert.deepEqual(explicitUndefined,ordinary)
+ assert.equal(ordinary.draft.design?.studio?.reviewCoverage,undefined)
+ assert.equal(ordinary.draft.design?.studio?.structuredRepairs,undefined)
+ assert.equal(validateTask(ordinary.draft,new Set(context.installedAgentIds)).design?.studio?.reviewCoverage,undefined)
+})
+test('scene-action opt-in adds coverage and repair contracts without relaxing budgets or claiming approval',()=>{
+ const input={...request(),qualityProfile:'scene-action-v1',maxRepairRounds:1,generationLimits:{imageCalls:0,imageBatches:0,voiceSegments:0}}
+ const before=structuredClone(input),result=composeStudioTaskDraft(input,context)
+ assert.deepEqual(input,before)
+ assert.deepEqual(result,composeStudioTaskDraft(input,context))
+ const task=result.draft,validated=validateTask(task,new Set(context.installedAgentIds))
+ assert.equal(validated.design?.studio?.reviewCoverage,'scene-action-v1')
+ assert.equal(validated.design?.studio?.structuredRepairs,true)
+ const ordinary=composeStudioTaskDraft({...input,qualityProfile:undefined},context).draft
+ const strictPolicy={...task.design!.studio};delete strictPolicy.reviewCoverage;delete strictPolicy.structuredRepairs
+ assert.deepEqual(strictPolicy,ordinary.design!.studio)
+ assert.equal(task.design?.failurePolicy.maxAttempts,2)
+ assert.deepEqual(task.participants,ordinary.participants)
+ assert.deepEqual(task.design?.studioStages,ordinary.design?.studioStages)
+ assert.equal(task.saveOnly,true);assert.equal(task.design?.studio?.publish,false)
+ assert.equal(result.createdTask,false);assert.equal(result.startedTask,false);assert.equal(result.qualityApproved,false)
+ assert.equal(result.resolution.verifiedByComposer,false)
+ assert.equal(result.resolution.baselineApproval,'not_established_by_composer')
+})
+test('composer rejects unsupported quality profiles rather than silently weakening or inventing policy',()=>{
+ for(const qualityProfile of ['',null,true,'scene-action-v2','legacy'])assert.throws(()=>composeStudioTaskDraft({...request(),qualityProfile} as any,context),/qualityProfile.*Only scene-action-v1 is supported/)
+})

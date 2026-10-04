@@ -1,12 +1,12 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,rm,realpath} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {studioRenderJob,reconcileStudioRenderIntent} from '../src/studio-render-host.ts'
 import {fileSha256,registerStudioTools} from '../src/studio-tools.ts'
 const jobId='a'.repeat(64),inputSha256='b'.repeat(64)
-async function setup(t:any){const cwd=await mkdtemp(join(tmpdir(),'render-host-'));t.after(()=>rm(cwd,{recursive:true,force:true}));await mkdir(join(cwd,'composition'));await writeFile(join(cwd,'composition/index.html'),'<html/>');const script=join(cwd,'render.py');await writeFile(script,'# pinned');return {cwd,task:{cwd,design:{studio:{width:1080,height:1920,fps:30}}},config:{renderJobScript:script,renderJobSha256:await fileSha256(script),renderRuntime:'/host/runtime'}}}
+async function setup(t:any){const cwd=await realpath(await mkdtemp(join(tmpdir(),'render-host-')));t.after(()=>rm(cwd,{recursive:true,force:true}));await mkdir(join(cwd,'composition'));await writeFile(join(cwd,'composition/index.html'),'<html/>');const script=join(cwd,'render.py');await writeFile(script,'# pinned');return {cwd,task:{cwd,design:{studio:{width:1080,height:1920,fps:30}}},config:{renderJobScript:script,renderJobSha256:await fileSha256(script),renderRuntime:'/host/runtime'}}}
 const running={ok:true,jobId,inputSha256,state:'running',composition:'composition',output:'output.mp4',reused:false}
 test('render submission calls only pinned host helper and preserves original job identity',async t=>{
  const {task,config}=await setup(t);let calls=0
@@ -15,6 +15,19 @@ test('render submission calls only pinned host helper and preserves original job
  for(const output of ['../x.mp4','/tmp/x.mp4','x.txt','.private/x.mp4'])await assert.rejects(studioRenderJob(task,'start',{composition:'composition',output},{config,execute:async()=>{calls++;return running}}),/path-invalid/)
  assert.equal(calls,1)
  await writeFile(config.renderJobScript,'changed');await assert.rejects(studioRenderJob(task,'start',{composition:'composition',output:'output.mp4'},{config}),/helper-changed/)
+})
+test('portable executable flags come only from trusted host configuration, not Task or model arguments',async t=>{
+ const {task,config}=await setup(t)
+ const paths={pythonExecutable:'/host/python3',nodeExecutable:'/host/node 22',chromeExecutable:'/Applications/Browser.app/bin/browser',ffmpegExecutable:'/host/ffmpeg',ffprobeExecutable:'/host/ffprobe'}
+ const flags=['--python-executable','--node-executable','--chrome-executable','--ffmpeg-executable','--ffprobe-executable']
+ const args:any={composition:'composition',output:'output.mp4',...Object.fromEntries(Object.keys(paths).map(k=>[k,'/model/SECRET']))}
+ ;(task.design.studio as any).nodeExecutable='/task/SECRET'
+ const r=await studioRenderJob(task,'start',args,{config:{...config,...paths},execute:async(_script,argv)=>{
+  Object.values(paths).forEach((path,i)=>assert.equal(argv[argv.indexOf(flags[i])+1],path))
+  assert.doesNotMatch(JSON.stringify(argv),/SECRET/);return running
+ }})
+ assert.equal(r.qualityApproved,false)
+ await assert.rejects(studioRenderJob(task,'start',args,{config:{...config,nodeExecutable:'relative SECRET'},execute:async()=>{throw Error('must not dispatch')}}),/executable-invalid/)
 })
 test('status accepts only original job, verifies completed bytes and never equates output with quality',async t=>{
  const {cwd,task,config}=await setup(t);await writeFile(join(cwd,'output.mp4'),'test bytes');const receipt={...running,state:'completed',outputSha256:await fileSha256(join(cwd,'output.mp4')),bytes:10,width:1080,height:1920,fps:30,durationSeconds:100}
@@ -34,7 +47,7 @@ test('render native tools deny non-producer and stale invocations before launchi
  const defs=new Map<string,any>();let count=0,active=true
  const ctx={tools:{register:(tool:any)=>{defs.set(tool.name,tool);return()=>defs.delete(tool.name)}}}
  const make=(role:string)=>registerStudioTools(ctx,{input:{task:{cwd:'/unused'},card:{role},sessionId:'s'},workflow:{},isActive:()=>active,renderJob:async()=>{count++;return running}})
- const exec={agent:{session:{id:'s'}}};let stop=await make('reviewer');await assert.rejects(defs.get('studio_render_start').execute({composition:'composition',output:'out.mp4'},exec),/role-denied/);stop()
+ const exec={agent:{session:{id:'s'}}};let stop=await make('reviewer');assert.equal(defs.has('studio_render_start'),false);assert.equal(defs.has('studio_render_status'),false);assert.equal(count,0);stop()
  stop=await make('executor');await defs.get('studio_render_status').execute({jobId},exec);assert.equal(count,1);active=false;await assert.rejects(defs.get('studio_render_start').execute({composition:'composition',output:'out.mp4'},exec),/stale-run/);assert.equal(count,1);stop()
 })
 

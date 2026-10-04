@@ -1,4 +1,4 @@
-import {readStudioHostConfiguration} from './studio-config.js'
+import {readStudioHostConfiguration,studioHostExecutables,STUDIO_HOST_EXECUTABLES} from './studio-config.js'
 /** Pinned asynchronous render bridge. No caller-supplied commands or credentials. */
 import {realpath,stat} from 'node:fs/promises'
 import {spawn} from 'node:child_process'
@@ -19,11 +19,11 @@ for(const stage of ['check','render','decode'])for(const outcome of ['failed','t
 function failure(code:any){const errorCode=typeof code==='string'&&Object.hasOwn(errorActions,code)?code:'render_host_failed';return {errorCode,nextAction:errorActions[errorCode]}}
 function safeRelative(value:any){return typeof value==='string'&&value.length>0&&value.length<=240&&!isAbsolute(value)&&!value.includes('\0')&&!value.includes('\\')&&!value.split('/').some(p=>!p||p==='..'||p.startsWith('.')||/credential|secret|token|password|private.?key/i.test(p))}
 export const studioRenderConfiguration=readStudioHostConfiguration
-async function execute(script:string,args:string[]):Promise<any>{
+async function execute(script:string,args:string[],config:any):Promise<any>{
  return new Promise((resolve,reject)=>{
   // The render bridge does not need provider credentials. Its detached worker applies its own allowlist too.
   const env:Record<string,string>={};for(const name of ['PATH','HOME','LANG','LC_ALL','TMPDIR'])if(process.env[name])env[name]=process.env[name]!
-  const child=spawn('python3',[script,...args],{env,stdio:['ignore','pipe','ignore']});let output='',finished=false
+  const child=spawn(config.pythonExecutable??'python3',['-B',script,...args],{env,stdio:['ignore','pipe','ignore']});let output='',finished=false
   const finish=(error?:Error,result?:any)=>{if(finished)return;finished=true;clearTimeout(timer);error?reject(error):resolve(result)}
   const timer=setTimeout(()=>{child.kill('SIGKILL');finish(Error('studio-render-bridge-timeout: inspect original job before retry'))},45000)
   child.on('error',()=>finish(Error('studio-render-bridge-unavailable')))
@@ -35,6 +35,7 @@ async function execute(script:string,args:string[]):Promise<any>{
 export async function prepareStudioRenderJob(task:any,action:'start'|'status',args:{composition?:string;output?:string;jobId?:string},deps:Dependencies={},reconcileExistingIntent=false){
  args={...args}
  const config={...(deps.config??await studioRenderConfiguration(deps.configPath))}
+ const executables=studioHostExecutables(config)
  if(!config.renderJobScript||!digest.test(config.renderJobSha256??'')||!config.renderRuntime)throw Error('studio-render-host-not-configured')
  if(await fileSha256(config.renderJobScript)!==config.renderJobSha256)throw Error('studio-render-helper-changed')
  const root=await realpath(task.cwd),policy=task.design?.studio&&{...task.design.studio}
@@ -48,6 +49,7 @@ export async function prepareStudioRenderJob(task:any,action:'start'|'status',ar
    await studioPath(root,`${args.composition}/index.html`,true)
   }
   argv.push('--composition',args.composition!,'--output',args.output!,'--runtime',config.renderRuntime,'--width',String(policy.width),'--height',String(policy.height),'--fps',String(policy.fps))
+  for(const [field,path]of Object.entries(executables))argv.push(STUDIO_HOST_EXECUTABLES[field as keyof typeof STUDIO_HOST_EXECUTABLES].flag,path)
  }else{
   if(!digest.test(args.jobId??''))throw Error('studio-render-job-id-invalid')
   argv.push('--job-id',args.jobId!)
@@ -55,13 +57,14 @@ export async function prepareStudioRenderJob(task:any,action:'start'|'status',ar
  return {dispatch:async(intentId?:string)=>{
  const commandArgs=[...argv]
  if(intentId!==undefined){if(!digest.test(intentId))throw Error('studio-render-intent-invalid');if(action==='start')commandArgs.push('--intent-id',intentId)}
- const r=await(deps.execute??execute)(config.renderJobScript,commandArgs)
+ const r=await(deps.execute??((script,args)=>execute(script,args,config)))(config.renderJobScript,commandArgs)
  // Never return arbitrary subprocess body, log contents, environment or provider errors.
  if(r?.ok!==true)return {ok:false,...failure(r?.errorCode),qualityApproved:false}
  if(!digest.test(r.jobId??'')||action==='status'&&r.jobId!==args.jobId||!['queued','running','completed','failed','unknown'].includes(r.state)||!digest.test(r.inputSha256??'')||!safeRelative(r.composition)||!safeRelative(r.output))throw Error('studio-render-receipt-invalid')
  if(action==='start'&&(r.composition!==args.composition||r.output!==args.output))throw Error('studio-render-receipt-mismatch')
  if(intentId!==undefined&&r.intentId!==intentId)throw Error('studio-render-intent-mismatch')
  const result:any={...(intentId?{intentId,helperSha256:config.renderJobSha256,helperPath:config.renderJobScript,runtimePath:config.renderRuntime}:{}),ok:true,jobId:r.jobId,state:r.state,composition:r.composition,output:r.output,inputSha256:r.inputSha256,reused:r.reused===true,qualityApproved:false}
+ if(r.inputIndexSha256!==undefined){if(!digest.test(r.inputIndexSha256))throw Error('studio-render-input-index-invalid');result.inputIndexSha256=r.inputIndexSha256}
  if(r.state==='completed'){
   const output=await studioPath(root,r.output,true),size=(await stat(output)).size
   if(!digest.test(r.outputSha256??'')||!Number.isInteger(r.bytes)||r.bytes!==size||size<1||await fileSha256(output)!==r.outputSha256||r.width!==policy.width||r.height!==policy.height||Math.abs(r.fps-policy.fps)>.001||!Number.isFinite(r.durationSeconds)||r.durationSeconds<=0)throw Error('studio-render-completed-file-invalid')
@@ -97,7 +100,8 @@ export async function invokeStudioRenderJob(input:any,action:'start'|'status',ar
  args=structuredClone(args)
  assertActive()
  const prior=ledger.lookup(input,action,args)
- const config=prior?.helperPath?{renderJobScript:prior.helperPath,renderJobSha256:prior.helperSha256,renderRuntime:prior.runtimePath}:deps.config??await studioRenderConfiguration(deps.configPath)
+ const hostConfig=deps.config??await studioRenderConfiguration(deps.configPath)
+ const config=prior?.helperPath?{...studioHostExecutables(hostConfig),renderJobScript:prior.helperPath,renderJobSha256:prior.helperSha256,renderRuntime:prior.runtimePath}:hostConfig
  const selectedAction=action==='start'&&prior?.jobId?'status':action
  const selectedArgs=selectedAction==='status'?{jobId:prior?.jobId??args.jobId}:args
  const prepared=await prepareStudioRenderJob(input.task,selectedAction,selectedArgs,{...deps,config})

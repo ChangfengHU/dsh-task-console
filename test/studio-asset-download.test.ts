@@ -43,7 +43,7 @@ test('native download rejects reviewer and stale sessions before callback',async
  const input={task:{cwd:'/unused'},card:{role:'reviewer'},sessionId:'session'}
  const dispose=await registerStudioTools(ctx,{input,workflow:{},isActive:()=>active,downloadAsset:async()=>{calls++;return {ok:true}}})
  const tool=definitions.get('studio_download_asset'),exec={agent:{session:{id:'session'}}}
- await assert.rejects(tool.execute({id:'a',path:'a.wav'},exec),/role-denied/)
+ assert.equal(tool,undefined)
  dispose()
  const stop=await registerStudioTools(ctx,{input:{...input,card:{role:'studio-stage'}},workflow:{},isActive:()=>active,downloadAsset:async()=>{calls++;return {ok:true}}})
  const stageTool=definitions.get('studio_download_asset');await stageTool.execute({id:'a',path:'a.wav'},exec);assert.equal(calls,1)

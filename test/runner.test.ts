@@ -41,8 +41,9 @@ function fakeHost(presetDir: string) {
     agents: {
       create: async (opts: any) => {
         const tools: any[] = []
-        const rec = { agent: { session: { id: opts.sessionId }, ctx: { tools: { register: (d: any) => { tools.push(d); return () => { const i = tools.indexOf(d); if (i >= 0) tools.splice(i, 1) } } } }, followup: (m: any) => { rec.followups.push(m) } }, tools, disposed: false, followups: [] as any[] }
-        await opts.setup?.({})
+        const modelHooks: any[] = []
+        const rec = { agent: { session: { id: opts.sessionId }, ctx: { on: (name: string, fn: any) => { const hook = { name, fn }; modelHooks.push(hook); return () => { const i = modelHooks.indexOf(hook); if (i >= 0) modelHooks.splice(i, 1) } }, tools: { register: (d: any) => { tools.push(d); return () => { const i = tools.indexOf(d); if (i >= 0) tools.splice(i, 1) } } } }, followup: (m: any) => { rec.followups.push(m) } }, tools, modelHooks, disposed: false, followups: [] as any[] }
+        await opts.setup?.(rec.agent.ctx)
         sessions.set(opts.sessionId, rec)
         return { agent: rec.agent, dispose: async () => { rec.disposed = true } }
       },

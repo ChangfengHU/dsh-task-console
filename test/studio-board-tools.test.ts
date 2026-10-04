@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,writeFile,readFile,mkdir,rm,symlink,lstat,readdir} from 'node:fs/promises'
+import {mkdtemp,writeFile,readFile,mkdir,rm,symlink,lstat,readdir,realpath} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {createHash} from 'node:crypto'
@@ -49,7 +49,7 @@ test('diagnostics bound output, omit unknown input strings and accept documented
  assert.equal(d.issues.length,32);assert.ok(d.total>32);assert.equal(d.truncated,true);assert.doesNotMatch(JSON.stringify(d),/secret-value-no-echo/)
 })
 async function setup(t:any,options:any={}){
- const root=await mkdtemp(join(tmpdir(),'studio-board-'));t.after(()=>rm(root,{recursive:true,force:true}));const cwd=join(root,'project');await mkdir(cwd)
+ const root=await realpath(await mkdtemp(join(tmpdir(),'studio-board-')));t.after(()=>rm(root,{recursive:true,force:true}));const cwd=join(root,'project');await mkdir(cwd)
  let active=true,tool:any,calls=0,disposed=false,script={lines:board().script};const policy={width:1080,height:1920,fps:30,durationMin:18,durationMax:25,...options.policy}
  const compile=async(value:any)=>{calls++;assert.equal(value.outputDirectory,options.outputDirectory??'composition-r1');assert.equal(JSON.parse(await readFile(value.boardPath,'utf8')).duration,20);if(options.compile)return options.compile({root,cwd,value,stop:()=>active=false,changeScript:()=>script={lines:[{id:'L1',text:'改变'}]}});const composition=join(cwd,value.outputDirectory);await mkdir(composition);const html='<html>compiled fixture</html>';await writeFile(join(composition,'index.html'),html);return {ok:true,composition,indexSha256:sha(html),qualityApproved:false}}
  const dispose=await registerStudioBoardTools({tools:{register:(v:any)=>{tool=v;return()=>{disposed=true}}}},{input:{task:{cwd,design:{studio:policy}},card:{role:options.role??'executor'},sessionId:'s'},workflow:{script:()=>options.noScript?null:script},isActive:()=>active,compile})
@@ -69,7 +69,7 @@ test('bindingPath is schema-required only for components-v2 Tasks',async t=>{
  await assert.rejects(legacy.tool.execute({board:board(),outputDirectory:'composition-r1',bindingPath:'binding.json'}),/components-contract-required/)
 })
 test('role, session and inactive checks precede all compiler work',async t=>{
- for(const role of ['planner','reviewer','notifier']){const s=await setup(t,{role});await assert.rejects(s.execute(),/role-denied/);assert.equal(s.calls(),0)}
+ for(const role of ['planner','reviewer','notifier']){const s=await setup(t,{role});assert.equal(s.tool,undefined);assert.equal(s.calls(),0)}
  const s=await setup(t);await assert.rejects(s.execute({}, {agent:{session:{id:'other'}}}),/session-mismatch/);s.stop();await assert.rejects(s.execute(),/stale/);assert.equal(s.calls(),0)
 })
 test('strict script, dimensions, duration and 1MiB input gate',async t=>{
@@ -192,4 +192,84 @@ test('exact unexpected ordinary field names aid repair without accepting audio o
  assert.deepEqual(d.issues.find(i=>i.field==='board.scenes[0].layers[0].motion[0]')?.unexpectedFields,['loop'])
  const secret=boardFieldDiagnostics({...board(),audio:[{src:'SECRET_FILE',role:'music',start:0,'secret-token-no-echo':'SECRET_VALUE'}]})
  assert.doesNotMatch(JSON.stringify(secret),/SECRET_FILE|SECRET_VALUE|secret-token-no-echo/);assert.match(JSON.stringify(secret),/non-schema-key/)
+})
+
+/** Actual local bytes and unsigned compiler receipts exercise the host bridge.
+ * The injected compiler does not render, decode media, or approve picture quality. */
+async function strictCoverageSetup(t:any,options:{changeDuringCompile?:'source'|'receipt'}={}){
+ const root=await realpath(await mkdtemp(join(tmpdir(),'studio-board-coverage-')))
+ t.after(()=>rm(root,{recursive:true,force:true}));const cwd=join(root,'project');await mkdir(cwd)
+ const lines=board().script,script={lines,sha256:sha(JSON.stringify(lines))}
+ const storyboard={scriptSha256:script.sha256,script:lines,scenes:[{id:'s1',action:'完整第一动作'},{id:'s2',action:'保留结尾动作'}]}
+ const storyboardBytes=Buffer.from(JSON.stringify(storyboard,null,2)+'\n')
+ const storyPath='stages/r1/storyboard/storyboard.json',manifestPath='stages/r1/storyboard/manifest.json'
+ await mkdir(join(cwd,'stages/r1/storyboard'),{recursive:true})
+ await writeFile(join(cwd,storyPath),storyboardBytes)
+ const manifestBytes=Buffer.from(JSON.stringify({stage:'storyboard',round:1,outputs:[storyPath],summary:'真实文件夹具，不是成片验收'}))
+ await writeFile(join(cwd,manifestPath),manifestBytes)
+ const stages=[{id:'storyboard',agentId:'storyboard-fixture',brief:'fixture'}]
+ const input={task:{cwd,design:{studio:{width:1080,height:1920,fps:30,durationMin:18,durationMax:25,reviewCoverage:'scene-action-v1',structuredRepairs:true},studioStages:stages}},batch:{id:'B'},card:{id:'B#e1',round:1,role:'executor'},sessionId:'s'}
+ const receipt={stage:'storyboard',batchId:'B',round:1,cardId:'B#s1-storyboard',configSha256:sha(JSON.stringify(stages)),manifest:{path:manifestPath,sha256:sha(manifestBytes),bytes:manifestBytes.length},outputs:[{path:storyPath,sha256:sha(storyboardBytes),bytes:storyboardBytes.length}],scriptBinding:{scriptSha256:script.sha256,boards:[storyPath]}}
+ const execution={...board(),scriptSha256:script.sha256,scenes:[
+  {id:'s1',start:0,duration:12,layers:[{type:'image',role:'subject',src:'person.png',width:100,height:100,motion:[{at:2,duration:4,to:{x:20}}]}]},
+  {id:'s2',start:12,duration:8,layers:[{type:'image',role:'subject',src:'person.png',width:100,height:100,motion:[{at:0,duration:3,to:{x:40}}]}]}
+ ],audio:[{src:'voice.wav',role:'voice',start:0,lineId:'L1',text:lines[0].text}]}
+ const sources=[{path:execution.gsap,kind:'script',bytes:Buffer.from('opaque JS fixture')},{path:execution.font,kind:'font',bytes:Buffer.from('opaque font fixture')},{path:'person.png',kind:'image',bytes:Buffer.from('opaque image fixture')},{path:'voice.wav',kind:'audio',bytes:Buffer.from('opaque audio fixture')}]
+ for(const source of sources)await writeFile(join(cwd,source.path),source.bytes)
+ const plans:any[]=[];let tool:any,calls=0
+ const changeSource=async(updateReceipt=false)=>{
+  // Identical parsed content but different authoritative bytes must not reuse a stale plan.
+  const changed=Buffer.from(JSON.stringify(storyboard)+'\n\n');await writeFile(join(cwd,storyPath),changed)
+  if(updateReceipt){receipt.outputs[0].sha256=sha(changed);receipt.outputs[0].bytes=changed.length}
+ }
+ const compile=async(value:any)=>{
+  calls++;const compiled=JSON.parse(await readFile(value.boardPath,'utf8'));assert.deepEqual(compiled,execution)
+  const composition=join(cwd,value.outputDirectory);await mkdir(join(composition,'assets'),{recursive:true})
+  const assets:any={}
+  for(const source of sources){
+   const digest=sha(source.bytes),suffix=source.path.slice(source.path.lastIndexOf('.')),file=`assets/${source.kind==='script'?'gsap-':''}${digest}${suffix}`
+   assets[source.path]={sha256:digest,bytes:source.bytes.length,kind:source.kind,file};await writeFile(join(composition,file),source.bytes)
+  }
+  const html='<html><style>@font-face{src:'+`url('${assets[execution.font].file}')`+'}</style>'+sources.filter(s=>s.kind!=='font').map(s=>`<fixture src="${assets[s.path].file}"></fixture>`).join('')+`<div id="caption-0" class="clip caption" data-start="0" data-duration="1" data-track-index="90">${lines[0].text}</div></html>`
+  const indexSha256=sha(html)
+  await writeFile(join(composition,'index.html'),html)
+  await writeFile(join(composition,'board.json'),JSON.stringify(compiled))
+  await writeFile(join(composition,'speech-plan.json'),JSON.stringify([{id:'L1',text:lines[0].text,start:0,end:1,sourcePath:'voice.wav'}]))
+  await writeFile(join(composition,'compile-receipt.json'),JSON.stringify({schema:'studio-board-v1',duration:20,fps:30,assets,qualityApproved:false,indexSha256}))
+  if(options.changeDuringCompile)await changeSource(options.changeDuringCompile==='receipt')
+  return {ok:true,composition,indexSha256,qualityApproved:false}
+ }
+ const dispose=await registerStudioBoardTools({tools:{register:(v:any)=>{tool=v;return()=>{}}}},{input,workflow:{script:()=>script,stageReceipt:(_:any,stage:string)=>stage==='storyboard'?receipt:null,recordCompiledCoverage:(bound:any,value:any)=>{assert.equal(bound,input);plans.push(structuredClone(value))}},isActive:()=>true,compile})
+ t.after(dispose)
+ return {cwd,execution,storyboardBytes,script,plans,changeSource,calls:()=>calls,execute:()=>tool.execute({board:execution,outputDirectory:'composition-r1'})}
+}
+test('strict compile and fully verified replay record the same host plan bound to actual source and HTML bytes',async t=>{
+ const s=await strictCoverageSetup(t),first=await s.execute()
+ assert.equal(first.ok,true);assert.equal(first.qualityApproved,false);assert.equal(s.calls(),1);assert.equal(s.plans.length,1)
+ const saved=s.plans[0],plan=saved.plan
+ assert.equal(saved.composition,'composition-r1');assert.equal(saved.indexSha256,sha(await readFile(join(s.cwd,'composition-r1/index.html'))))
+ assert.equal(plan.storyboardSha256,sha(s.storyboardBytes));assert.notEqual(plan.storyboardSha256,sha(JSON.stringify(JSON.parse(s.storyboardBytes.toString()))))
+ assert.equal(plan.executionBoardSha256,sha(await readFile(first.boardPath)));assert.equal(plan.scriptSha256,s.script.sha256)
+ assert.deepEqual(plan.originalSceneIds,['s1','s2']);assert.deepEqual(plan.targets.find((target:any)=>target.id==='action:0:0:0').ranges,[[2,4],[4,6]]);assert.ok(plan.targets.some((target:any)=>target.kind==='transition'));assert.deepEqual(plan.targets.find((target:any)=>target.kind==='ending').ranges,[[18,20]])
+ assert.equal(plan.qualityApproved,false);assert.equal(plan.fullFrameCoverage,false)
+ assert.equal(first.reviewCoverage.planSha256,plan.planSha256);assert.equal(first.reviewCoverage.targets,plan.targets.length)
+ const replay=await s.execute()
+ assert.equal(replay.ok,true);assert.equal(replay.outputReused,true);assert.equal(replay.inputReused,true);assert.equal(replay.qualityApproved,false)
+ assert.equal(s.calls(),1);assert.equal(s.plans.length,2);assert.deepEqual(s.plans[1],saved);assert.deepEqual(replay.reviewCoverage,first.reviewCoverage)
+})
+test('strict compile rejects source bytes changed during compilation before recording any host plan',async t=>{
+ const s=await strictCoverageSetup(t,{changeDuringCompile:'source'})
+ await assert.rejects(s.execute(),/studio-stage-file-changed/)
+ assert.equal(s.calls(),1);assert.equal(s.plans.length,0);assert.ok((await readFile(join(s.cwd,'composition-r1/index.html'))).length>0)
+})
+test('strict compile rejects changed source bytes even if an in-flight receipt is updated to equivalent JSON',async t=>{
+ const s=await strictCoverageSetup(t,{changeDuringCompile:'receipt'})
+ await assert.rejects(s.execute(),/studio-review-coverage-input-changed/)
+ assert.equal(s.calls(),1);assert.equal(s.plans.length,0)
+})
+test('strict replay refuses a source hash change without dispatching again or minting a stale host plan',async t=>{
+ const s=await strictCoverageSetup(t);await s.execute();const saved=structuredClone(s.plans[0])
+ await s.changeSource()
+ await assert.rejects(s.execute(),/studio-stage-file-changed/)
+ assert.equal(s.calls(),1);assert.equal(s.plans.length,1);assert.deepEqual(s.plans[0],saved)
 })

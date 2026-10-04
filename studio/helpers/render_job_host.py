@@ -154,26 +154,46 @@ def snapshot(composition):
     return {'files': rows, 'sha256': sha(encoded(rows)), 'audioElements': audio}
 
 
-def runtime_binding(value):
+def runtime_binding(value, executables=None):
+    executables = executables or {}
+    for value_path in executables.values():
+        if not isinstance(value_path, str) or not Path(value_path).is_absolute() or '\0' in value_path:
+            raise RenderError('render_executable_invalid')
     root = plain(value, directory=True)
     package = plain(root / 'node_modules/hyperframes/package.json')
     binary = plain(root / 'node_modules/hyperframes/bin/hyperframes.mjs')
-    ffmpeg = plain(root / 'node_modules/ffmpeg-static/ffmpeg')
-    node = plain(Path('/usr/bin/node').resolve())
+    ffmpeg = plain(Path(executables.get('ffmpeg', root / 'node_modules/ffmpeg-static/ffmpeg')).resolve())
+    node = plain(Path(executables.get('node', '/usr/bin/node')).resolve())
     node_version = subprocess.check_output([str(node), '--version'], timeout=10, text=True).strip()
     if not re.fullmatch(r'v\d+\.\d+\.\d+', node_version) or int(node_version[1:].split('.')[0]) < 22:
         raise RenderError('render_node_version_unsupported')
-    probe = plain(Path(shutil.which('ffprobe') or '/usr/bin/ffprobe').resolve())
-    chrome = plain(Path('/usr/bin/google-chrome').resolve())
+    probe = plain(Path(executables.get('ffprobe', shutil.which('ffprobe') or '/usr/bin/ffprobe')).resolve())
+    chrome = plain(Path(executables.get('chrome', '/usr/bin/google-chrome')).resolve())
+    python = plain(Path(executables.get('python', sys.executable)).resolve())
+    if any(not os.access(path, os.X_OK) for path in [node, probe, ffmpeg, chrome, python]):
+        raise RenderError('render_executable_unavailable')
     # Resolve trusted host executable symlinks; project input symlinks stay denied.
     version = json.loads(package.read_text())['version']
-    files = [package, binary, ffmpeg, node, probe, chrome]
+    files = [package, binary, ffmpeg, node, probe, chrome, python]
     return {'root': str(root), 'version': version, 'nodeVersion': node_version, 'cli': str(binary), 'ffmpeg': str(ffmpeg),
-            'node': str(node), 'ffprobe': str(probe), 'chrome': str(chrome),
+            'node': str(node), 'ffprobe': str(probe), 'chrome': str(chrome), 'python': str(python),
             'hashes': {str(p): sha(p.read_bytes()) for p in files}}
 
 
 def process_identity(pid):
+    if sys.platform == 'darwin':
+        # macOS has no /proc. Do not treat two unavailable identities as proof
+        # of a live worker. A PID alone is unsafe after process reuse.
+        try:
+            result = subprocess.run(['/bin/ps', '-p', str(int(pid)), '-o', 'lstart=', '-o', 'stat='],
+                                    capture_output=True, text=True, timeout=5,
+                                    env={'PATH': '/usr/bin:/bin', 'LC_ALL': 'C'})
+            match = re.fullmatch(r'([A-Za-z]{3}\s+[A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+([A-Za-z+<>-]+)', result.stdout.strip())
+            if result.returncode or not match or match[2].startswith('Z'):
+                return None
+            return 'darwin:' + ' '.join(match[1].split())
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
     try:
         text = Path('/proc/' + str(pid) + '/stat').read_text()
         values = text[text.rfind(')') + 2:].split()
@@ -195,7 +215,7 @@ def read_job(root, job_id):
 
 
 def public(record, reused=False):
-    keys = ['jobId', 'intentId', 'state', 'composition', 'output', 'inputSha256', 'outputSha256', 'bytes', 'width', 'height', 'fps', 'durationSeconds', 'errorCode', 'logs']
+    keys = ['jobId', 'intentId', 'state', 'composition', 'output', 'inputSha256', 'inputIndexSha256', 'outputSha256', 'bytes', 'width', 'height', 'fps', 'durationSeconds', 'errorCode', 'logs']
     return {'ok': True, **{k: record[k] for k in keys if k in record}, 'reused': reused, 'qualityApproved': False}
 
 
@@ -203,7 +223,7 @@ def status(root, job_id):
     with locked(root) as directory:
         record = read_job(root, job_id)
         if record['state'] in ['queued', 'running']:
-            alive = record.get('pid') and process_identity(record['pid']) == record.get('processStart')
+            alive = record.get('pid') and record.get('processStart') is not None and process_identity(record['pid']) == record['processStart']
             if not alive and (record.get('pid') or time.time() - record['createdAt'] > 15):
                 record.update(state='unknown', errorCode='worker_lost_reconcile_required')
                 atomic(directory / (job_id + '.json'), record)
@@ -222,7 +242,7 @@ def worker_env(runtime, home):
             'PUPPETEER_EXECUTABLE_PATH': runtime['chrome'], 'HYPERFRAMES_BROWSER_PATH': runtime['chrome']}
 
 
-def start(root, composition_value, output_value, runtime_value, fps=30, width=1080, height=1920, intent_id=None):
+def start(root, composition_value, output_value, runtime_value, fps=30, width=1080, height=1920, intent_id=None, executables=None):
     if intent_id is not None:
         if not HEX.fullmatch(intent_id):
             raise RenderError('invalid_intent_id')
@@ -240,8 +260,9 @@ def start(root, composition_value, output_value, runtime_value, fps=30, width=10
     if output.suffix != '.mp4' or output.is_relative_to(composition) or not 1 <= fps <= 60 or not 1 <= width <= 4096 or not 1 <= height <= 4096:
         raise RenderError('invalid_render_request')
     inputs = snapshot(composition)
-    runtime = runtime_binding(runtime_value)
+    runtime = runtime_binding(runtime_value, executables)
     spec = {'composition': composition_value, 'output': output_value, 'inputSha256': inputs['sha256'],
+            'inputIndexSha256': next(row['sha256'] for row in inputs['files'] if row['path'] == 'index.html'),
             'runtime': runtime, 'fps': fps, 'width': width, 'height': height}
     if intent_id is not None:
         if not HEX.fullmatch(intent_id):
@@ -275,7 +296,7 @@ def start(root, composition_value, output_value, runtime_value, fps=30, width=10
             with (logs / 'worker.log').open('wb') as stream:
                 record['logs'] = [str((logs / 'worker.log').relative_to(root))]
                 atomic(path, record)
-                subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'worker', '--project-root', str(root), '--job-id', job_id],
+                subprocess.Popen([runtime['python'], '-B', str(Path(__file__).resolve()), 'worker', '--project-root', str(root), '--job-id', job_id],
                                  cwd=root, env=worker_env(runtime, home), stdin=subprocess.DEVNULL,
                                  stdout=stream, stderr=stream, start_new_session=True, close_fds=True)
         except Exception:
@@ -365,6 +386,8 @@ def main():
     begin.add_argument('--composition', required=True)
     begin.add_argument('--output', required=True)
     begin.add_argument('--runtime', required=True, help='Trusted deployment configuration, never model-supplied')
+    for executable in ['python', 'node', 'chrome', 'ffmpeg', 'ffprobe']:
+        begin.add_argument('--' + executable + '-executable', help='Absolute trusted host executable, never model-supplied')
     begin.add_argument('--intent-id', help='Trusted host scope, not model-supplied')
     begin.add_argument('--fps', type=int, default=30)
     begin.add_argument('--width', type=int, default=1080)
@@ -379,7 +402,8 @@ def main():
     try:
         root = plain(args.project_root, directory=True)
         if args.action == 'start':
-            result = start(root, args.composition, args.output, args.runtime, args.fps, args.width, args.height, args.intent_id)
+            executables = {name: getattr(args, name + '_executable') for name in ['python', 'node', 'chrome', 'ffmpeg', 'ffprobe'] if getattr(args, name + '_executable') is not None}
+            result = start(root, args.composition, args.output, args.runtime, args.fps, args.width, args.height, args.intent_id, executables)
         elif args.action == 'status':
             result = status(root, args.job_id)
         else:

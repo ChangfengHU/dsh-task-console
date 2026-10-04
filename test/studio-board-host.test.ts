@@ -1,13 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,writeFile,rm,mkdir} from 'node:fs/promises'
+import {mkdtemp,writeFile,rm,mkdir,realpath} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {createHash} from 'node:crypto'
 import {compileStudioStoryboard} from '../src/studio-host.ts'
 
 async function fixture(t:any){
- const cwd=await mkdtemp(join(tmpdir(),'studio-board-host-'));t.after(()=>rm(cwd,{recursive:true,force:true}))
+ const cwd=await realpath(await mkdtemp(join(tmpdir(),'studio-board-host-')));t.after(()=>rm(cwd,{recursive:true,force:true}))
  const script=join(cwd,'fixed-compiler.py'),body='import json,sys\nprint(json.dumps({"ok":False,"errorType":"ValueError","reason":"fixture-rejection","qualityApproved":False,"args":sys.argv[1:]}))\n'
  await writeFile(script,body)
  await mkdir(join(cwd,'.studio-boards'))

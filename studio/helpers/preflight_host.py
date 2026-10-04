@@ -2,6 +2,7 @@
 import hashlib,json,os,pathlib,re,shutil,subprocess,sys,time,urllib.request,urllib.parse,urllib.error,socket,ssl
 
 from prepare_execution_assets import prepare_execution_assets
+from download_existing_asset import MCP_URL, proxy_token
 
 NETWORK_EVENTS=[]
 def retry_read(label,fn):
@@ -54,6 +55,12 @@ def download(url,path,limit=300_000_000):
         if tmp.exists():tmp.unlink()
 
 def asset_auth():
+    reference=os.environ.get('STUDIO_ASSET_TOKEN_FILE')
+    if reference:
+        if not pathlib.Path(reference).is_absolute():raise ValueError('Host asset credential path invalid')
+        # A bridge credential is accepted only at the fixed assets bootstrap.
+        # Invalid explicit references fail closed; no Vault-token substitution.
+        return MCP_URL,'Bearer '+proxy_token(reference)
     # Read only the installed server stanza; never export full configuration.
     p=pathlib.Path(os.environ.get('STUDIO_DSH_PROFILE','/home/claude/.dsh/profiles/web/cordis.patch.yml'))
     s=p.read_text();m=re.search(r'(?m)^    - id: mcp-vyibc-cartoon-assets\s*\n(.*?)(?=^    - id:|\Z)',s,re.S)
@@ -140,9 +147,11 @@ def render_hyperframes_smoke(root,out,runtime,ffmpeg,assets):
     document.fonts.load('60px StudioProbe','中文字体动作测试').then(fonts=>{if(fonts.length&&fonts.every(f=>f.status==='loaded'))document.getElementById('font-ready').style.background='#00ff00'});
     </script></body></html>''')
     binary=runtime/'node_modules/hyperframes/bin/hyperframes.mjs'
-    env=dict(os.environ);env['FFMPEG_PATH']=ffmpeg;env['PATH']=str(pathlib.Path(ffmpeg).parent)+os.pathsep+env.get('PATH','');env.setdefault('PUPPETEER_EXECUTABLE_PATH','/usr/bin/google-chrome')
+    env=dict(os.environ);env['FFMPEG_PATH']=ffmpeg;env['PATH']=str(pathlib.Path(ffmpeg).parent)+os.pathsep+env.get('PATH','')
+    if env.get('STUDIO_CHROME_EXECUTABLE'):env['PUPPETEER_EXECUTABLE_PATH']=env['STUDIO_CHROME_EXECUTABLE']
+    else:env.setdefault('PUPPETEER_EXECUTABLE_PATH','/usr/bin/google-chrome')
     target=smoke/'smoke.mp4'
-    completed=subprocess.run(['/usr/bin/node',str(binary),'render','--quality','draft','--output',str(target)],cwd=str(smoke),env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180)
+    completed=subprocess.run([os.environ.get('STUDIO_NODE_EXECUTABLE','/usr/bin/node'),str(binary),'render','--quality','draft','--output',str(target)],cwd=str(smoke),env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=180)
     (smoke/'render.log').write_bytes(completed.stdout+completed.stderr)
     if completed.returncode or not target.is_file():raise RuntimeError('HyperFrames render failed')
     run_cmd([ffmpeg,'-v','error','-i',str(target),'-f','null','-'])
@@ -175,7 +184,12 @@ def run(task):
         if asset.get('id') is not None and asset['id']!=p['profile_asset_id']:raise ValueError('Character asset identity mismatch')
         download(source_url,image,20_000_000)
         if digest(image)!=asset['object']['sha256']:raise ValueError('Character image hash mismatch')
-        return {'scope':'actual_character_get','characterId':p['character_id'],'profileVersion':p.get('profile_version'),'profileAssetId':p.get('profile_asset_id'),'profilePath':str(path),'imagePath':str(image),'imageSha256':digest(image),'sourceUrl':source_url,'sourceSha256':digest(image),'sha256':digest(path),'voice':p.get('voice_recommendation',{}).get('voice_id'),'note':'Profile design-only plans are not generated assets.'}
+        recommendation=p.get('voice_recommendation')
+        if recommendation is not None and not isinstance(recommendation,dict):raise ValueError('Invalid character voice recommendation')
+        # A missing recommendation is legitimate catalogue metadata, not an
+        # approved or selected voice. Preserve None rather than invent a default.
+        voice=recommendation.get('voice_id') if recommendation is not None else None
+        return {'scope':'actual_character_get','characterId':p['character_id'],'profileVersion':p.get('profile_version'),'profileAssetId':p.get('profile_asset_id'),'profilePath':str(path),'imagePath':str(image),'imageSha256':digest(image),'sourceUrl':source_url,'sourceSha256':digest(image),'sha256':digest(path),'voice':voice,'note':'Profile design-only plans are not generated assets.'}
     def reference():
         sha=cfg['referenceSha256']
         if not re.fullmatch('[a-f0-9]{64}',sha):raise ValueError('Invalid hash')
@@ -187,7 +201,7 @@ def run(task):
     check('character',character);check('reference',reference)
     runtime=pathlib.Path(os.environ.get('STUDIO_RENDER_RUNTIME','/home/claude/dsh-studio-migration/render-runtime'))
     ffmpeg=os.environ.get('FFMPEG_PATH') or str(runtime/'node_modules/ffmpeg-static/ffmpeg')
-    probe=shutil.which('ffprobe')
+    probe=os.environ.get('FFPROBE_PATH') or shutil.which('ffprobe')
     def frames():
         if not result['capabilities']['reference']['ok']:raise ValueError('Reference unavailable')
         ref=out/'reference.mp4';image=out/'reference-frame.jpg'

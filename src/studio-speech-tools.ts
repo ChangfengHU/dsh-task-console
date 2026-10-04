@@ -1,4 +1,5 @@
 import {STUDIO_SPEECH_MAX_SECONDS} from './studio-speech-limits.js'
+import {studioToolAllowed,assertStudioToolRole} from './studio-tool-policy.js'
 /** Spoken-text evidence is separate from performance/mix approval. All identities and audio paths are host-derived. */
 import {readFile,realpath,mkdir,mkdtemp,stat} from 'node:fs/promises'
 import {join} from 'node:path'
@@ -17,7 +18,7 @@ export async function registerStudioSpeechTools(ctx:any,o:StudioSpeechOptions){
  const command=o.runCommand??((file,args)=>run(file,args,{timeout:60000,maxBuffer:1024*1024}).then(r=>({stdout:String(r.stdout)})))
  const check=(e?:any)=>{if(!o.isActive())throw Error('studio-stale-run');if(e?.agent?.session?.id&&e.agent.session.id!==input.sessionId)throw Error('studio-session-mismatch')}
  const requireRole=(r:string)=>{if(role!==r)throw Error('studio-role-denied')}
- const register=(name:string,description:string,parameters:any,f:(a:any)=>Promise<any>)=>disposers.push(ctx.tools.register(defineTool({name,description,parameters,output:{schema:{type:'object',additionalProperties:true},render:(_:any,v:any)=>[{type:'text',text:JSON.stringify(v)}]},execute:async(a:any,e:any)=>{check(e);const result=await f(a);return JSON.parse(JSON.stringify(role==='reviewer'&&name==='studio_check_speech'?{...result,reviewProgress:workflow.reviewProgress?.(input)??null}:result))}})))
+ const register=(name:string,description:string,parameters:any,f:(a:any)=>Promise<any>)=>{if(!studioToolAllowed(name,role))return;disposers.push(ctx.tools.register(defineTool({name,description,parameters,output:{schema:{type:'object',additionalProperties:true},render:(_:any,v:any)=>[{type:'text',text:JSON.stringify(v)}]},execute:async(a:any,e:any)=>{check(e);assertStudioToolRole(name,input.card?.role);const result=await f(a);check(e);return JSON.parse(JSON.stringify(role==='reviewer'&&name==='studio_check_speech'?{...result,reviewProgress:workflow.reviewProgress?.(input)??null}:result))}})))}
  const candidate=async()=>{const saved=workflow.status(input).candidate,c=saved?.candidate??saved,l=workflow.candidateLocation(input);if(!c||!l)throw Error('studio-candidate-required');const path=await studioPath(input.task.cwd,l.path);if(await fileSha256(path)!==c.sha256)throw Error('studio-candidate-file-changed');check();return {c,path}}
  const lines=(v:any)=>{if(!Array.isArray(v)||!v.length||v.length>300)throw Error('studio-script-invalid');const ids=new Set();return v.map((l:any)=>{if(!l||typeof l.id!=='string'||!l.id||l.id.length>100||ids.has(l.id)||typeof l.text!=='string'||!l.text.trim()||l.text.length>2000)throw Error('studio-script-invalid');ids.add(l.id);return {id:l.id,text:l.text}})}
  // Keep the 80-source bound in audioSources; maxItems is not in the DSH DSL.

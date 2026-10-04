@@ -8,7 +8,8 @@ import {validateStudioPolicy} from './studio-policy.js'
 import {evaluateStudioReview} from './studio-evidence.mjs'
 import {studioStageFor} from './studio-stages.js'
 import {studioReviewProgress} from './studio-review-progress.js'
-import {validateReviewShape} from './studio-review-schema.js'
+import {validateReviewShape,validateStructuredRepairEvidence} from './studio-review-schema.js'
+import {bindStudioReviewCoveragePlan} from './studio-review-coverage.mjs'
 import {requiredStudioSkills} from './studio-skill-gate.js'
 
 const NAMES=['frames','audio','audio_calibration','render','character','reference'] as const
@@ -77,10 +78,30 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     return {ok:true,status:'ready' as const}
   }
   enforceRenderProvenance(input:any){this.write(input,`render_provenance:${input.card.id}`,true)}
+  recordCompiledCoverage(input:any,value:any){
+    if(input.card?.role!=='executor'||this.policy(input.task).reviewCoverage!=='scene-action-v1')throw Error('studio-review-coverage-producer-required')
+    if(typeof value.composition!=='string'||!value.composition||!HASH.test(value.indexSha256??'')||value.plan?.scriptSha256!==this.script(input)?.sha256)throw Error('studio-review-coverage-compile-invalid')
+    // Validate the host-generated plan shape and digest without minting a film.
+    bindStudioReviewCoveragePlan(value.plan,{sha256:value.indexSha256,revision:1,durationSeconds:value.plan.durationSeconds})
+    this.write(input,`compiled_coverage:${input.card.id}:${value.composition}`,{...value,producerCardId:input.card.id,producerRound:input.card.round,policyHash:sha(this.policy(input.task))})
+  }
+  compiledCoverage(input:any,composition:string){
+    const record=this.read(input,`compiled_coverage:${input.card.id}:${composition}`)
+    if(!record||record.producerCardId!==input.card.id||record.producerRound!==input.card.round||record.policyHash!==sha(this.policy(input.task))||record.plan?.scriptSha256!==this.script(input)?.sha256)throw Error('studio-review-coverage-compiled-source-required: compile the current complete execution board before rendering this strict-profile Task')
+    return record
+  }
   recordRenderedCandidate(input:any,candidate:any,location:any){return this.db.transaction(()=>{
-    const proof=this.read(input,`render_provenance:${input.card.id}`)===true?this.renderLedger.requireCandidate(input,candidate,location.path):undefined
+    const strictCoverage=this.policy(input.task).reviewCoverage==='scene-action-v1'
+    const proof=this.read(input,`render_provenance:${input.card.id}`)===true||strictCoverage?this.renderLedger.requireCandidate(input,candidate,location.path):undefined
+    let coverage:any
+    if(strictCoverage){
+      const compiled=this.compiledCoverage(input,proof!.composition)
+      if(proof!.inputIndexSha256!==compiled.indexSha256)throw Error('studio-review-coverage-render-source-mismatch: the host render must freeze the exact compiled HTML used to derive the observation plan')
+      coverage=bindStudioReviewCoveragePlan(compiled.plan,candidate)
+    }
     this.recordCandidate(input,candidate);this.recordCandidateLocation(input,location)
     if(proof)this.write(input,'candidate_render_provenance',{...proof,candidateSha256:candidate.sha256,revision:candidate.revision})
+    if(coverage)this.write(input,'candidate_review_coverage',coverage)
     return proof
   })()}
   recordCandidate(input:any,candidate:any){
@@ -118,11 +139,13 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   recordValidatedReview(input:any,review:any){
     if(input.card?.role!=='reviewer')throw Error('studio-reviewer-required')
     strict(review,['candidateSha256','referenceSha256','revision','checks','issues'],'review')
-    validateReviewShape(review)
+    validateReviewShape(review,{structuredRepairs:this.policy(input.task).structuredRepairs})
     const proposed={...review,reviewerSessionId:input.sessionId}
     // Validate against the live ledger before replacing any previously accepted
     // report. Rejected attempts remain in session logs, never authoritative state.
-    this.completeWithReview(input,proposed)
+    const previous=this.read(input,'review')
+    this.completeWithReview(input,proposed,previous)
+    if(previous)this.write(input,'previous_review',previous)
     this.write(input,'review',proposed)
   }
   recordBudget(input:any,budget:any){strict(budget,['repairRounds','used','limits','exceeded','maxRepairRounds'],'budget');this.write(input,'budget',budget)}
@@ -140,7 +163,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     const [task,batch]=this.key(input),ph=sha(this.policy(input.task)),saved=this.read(input,'candidate')
     if(!saved||saved.policyHash!==ph)return null
     const rows=this.db.prepare('SELECT payload FROM dsh_studio_receipts WHERE task_id=? AND batch_id=? AND policy_hash=? AND session_id=? AND candidate_sha256=?').all(task,batch,ph,input.sessionId,saved.candidate.sha256)
-    const receipts=rows.map((r:any)=>JSON.parse(r.payload)),progress=studioReviewProgress(saved.candidate,input.sessionId,receipts,this.speechPlan(input),this.read(input,'speech_checks')??[])
+    const receipts=rows.map((r:any)=>JSON.parse(r.payload)),progress=studioReviewProgress(saved.candidate,input.sessionId,receipts,this.speechPlan(input),this.read(input,'speech_checks')??[],{policy:this.policy(input.task),reviewCoveragePlan:this.read(input,'candidate_review_coverage')})
     return progress?{...progress,...(includeReceipts?{receiptIndex:receipts.map(({id,kind,ranges}:any)=>({id,kind,ranges}))}:{})}:null
   }
   status(input:any){
@@ -206,7 +229,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   complete(input:any){
     return this.completeWithReview(input,this.read(input,'review'))
   }
-  private completeWithReview(input:any,review:any){
+  private completeWithReview(input:any,review:any,previousReview=this.read(input,'previous_review')){
     this.key(input)
     // A grounded rejection can be handed back during an unrelated dependency
     // outage. Full evidence validation below still applies; no success shortcut.
@@ -231,7 +254,28 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     if(!review)throw Error('studio-version-bound-trusted-review-required')
     if(role==='reviewer'&&review.reviewerSessionId!==input.sessionId)throw Error('studio-review-session-mismatch')
     const receipts=this.db.prepare('SELECT payload FROM dsh_studio_receipts WHERE task_id=? AND batch_id=? AND policy_hash=?').all(input.task.id,input.batch.id,sha(policy)).map((r:any)=>JSON.parse(r.payload))
-    const result=evaluateStudioReview({policy,candidate:saved.candidate,review,producerSessionId:saved.producerSessionId,reviewerSessionId:review.reviewerSessionId,receipts,budget,interventions:this.interventions(input)})
+    const coverage=this.read(input,'candidate_review_coverage')
+    if(policy.structuredRepairs){
+      // Only current host-bound scene targets define verification locations.
+      // Keep split scenes as separate spans; their intervening content is not
+      // evidence for the original scene merely because the stable ID is shared.
+      const sceneRanges:Record<string,number[][]>=Object.create(null),byScene=new Map<number,{id:string;start:number;end:number}>()
+      if(coverage?.candidateSha256===saved.candidate.sha256&&coverage.revision===saved.candidate.revision)for(const target of coverage.targets??[]){
+        if(target.kind!=='scene'||!Number.isInteger(target.sceneIndex)||!coverage.originalSceneIds?.includes(target.originalSceneId))continue
+        for(const range of target.ranges??[]){
+          if(!Array.isArray(range)||range.length!==2||!range.every(Number.isFinite)||range[0]<0||range[1]<=range[0])continue
+          const previous=byScene.get(target.sceneIndex)
+          if(previous&&previous.id!==target.originalSceneId)throw Error('studio-structured-repair-scene-binding-invalid')
+          byScene.set(target.sceneIndex,{id:target.originalSceneId,start:Math.min(previous?.start??range[0],range[0]),end:Math.max(previous?.end??range[1],range[1])})
+        }
+      }
+      const finalSceneIndex=Math.max(...byScene.keys())
+      for(const [index,span] of byScene){const end=index===finalSceneIndex&&Math.abs(span.end-coverage.durationSeconds)<=.001?saved.candidate.durationSeconds:Math.min(span.end,saved.candidate.durationSeconds);if(end>span.start)(sceneRanges[span.id]??=[]).push([span.start,end])}
+      const lineRanges:Record<string,number[][]>=Object.create(null)
+      for(const line of this.speechPlan(input)?.lines??[])if(Number.isFinite(line.start)&&Number.isFinite(line.end)&&line.start>=0&&line.end>line.start&&line.end<=saved.candidate.durationSeconds+.001)lineRanges[line.id]=[[line.start,Math.min(line.end,saved.candidate.durationSeconds)]]
+      validateStructuredRepairEvidence({review,candidate:saved.candidate,reviewerSessionId:review.reviewerSessionId,receipts,previousReview,sceneIds:coverage?.originalSceneIds,lineIds:this.script(input)?.lines.map((line:any)=>line.id),sceneRanges,lineRanges})
+    }
+    const result=evaluateStudioReview({policy,candidate:saved.candidate,review,producerSessionId:saved.producerSessionId,reviewerSessionId:review.reviewerSessionId,receipts,budget,interventions:this.interventions(input),reviewCoveragePlan:coverage})
     if(role==='reviewer'){
       if(!Array.isArray(review.checks)||review.checks.some((c:any)=>!['pass','fail','pending'].includes(c?.status)))throw Error('studio-review-check-status-invalid')
       // A real, complete negative review must reach the planner. Only integrity failures block handoff.
@@ -243,7 +287,8 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
       const pendingOmission=(x:string)=>rejection&&review.checks.some((c:any)=>c.status==='pending'&&Array.isArray(c.evidenceReceiptIds)&&(
         (c.evidenceReceiptIds.length===0&&x===`check.${c.dimension}: missing or duplicate evidence receipts`)||
         ['audio','frames','probe','source'].some(kind=>x===`check.${c.dimension}: requires ${kind} evidence`)))
-      const integrity=result.issues.filter((x:string)=>!pendingOmission(x)&&!/^check\.[^:]+: not passed$/.test(x)&&!/^issue\..+: unresolved (blocker|major|minor|info)$/.test(x)&&!x.startsWith('budget:')&&!x.startsWith('autonomy:')&&!/^candidate: (duration outside policy|width mismatch|height mismatch|fps mismatch)$/.test(x))
+      const incompleteCoverage=(x:string)=>rejection&&/^reviewCoverage: (target .+ lacks (frames|audio) observations|check\.[^:]+ (does not cover target|lacks linked (frames|audio) evidence))/.test(x)
+      const integrity=result.issues.filter((x:string)=>!pendingOmission(x)&&!incompleteCoverage(x)&&!/^check\.[^:]+: not passed$/.test(x)&&!/^issue\..+: unresolved (blocker|major|minor|info)$/.test(x)&&!x.startsWith('budget:')&&!x.startsWith('autonomy:')&&!/^candidate: (duration outside policy|width mismatch|height mismatch|fps mismatch)$/.test(x))
       if(integrity.length){
         const hints:string[]=[]
         if(integrity.some((x:string)=>x.includes('unknown receipt')))hints.push('Use studio_status.state.reviewProgress.receiptIndex for existing current-session CANDIDATE receipts; do not repeat observations just to recover IDs. ReferenceReceipt IDs from studio_reference_* are not candidate receipts, including in the reference comparison dimension. Describe the comparison using candidate frame evidence; reference observations are recorded separately.')

@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,writeFile,readFile,readdir,lstat,rm,cp,symlink} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,readFile,readdir,lstat,rm,cp,symlink,chmod,realpath} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {dirname,join,resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
@@ -8,7 +8,7 @@ import {execFileSync,spawnSync} from 'node:child_process'
 import {composeStudioConfiguration,configureStudio,parseArguments} from '../scripts/configure-studio.mjs'
 const source=resolve(dirname(fileURLToPath(import.meta.url)),'..')
 async function fixture(t){
- const root=await mkdtemp(join(tmpdir(),'studio 安装 home '));t.after(()=>rm(root,{recursive:true,force:true}))
+ const root=await realpath(await mkdtemp(join(tmpdir(),'studio 安装 home ')));t.after(()=>rm(root,{recursive:true,force:true}))
  const pkg=join(root,'package'),renderRuntime=join(root,'render 运行'),observationCacheRoot=join(root,'cache'),dshProfilePath=join(root,'web profile.yml'),vaultTokenFile=join(root,'token reference'),outputPath=join(root,'studio config.json')
  await mkdir(pkg);await cp(join(source,'studio'),join(pkg,'studio'),{recursive:true})
  await mkdir(join(pkg,'scripts'));for(const name of ['configure-studio.mjs','package-studio.mjs'])await cp(join(source,'scripts',name),join(pkg,'scripts',name))
@@ -16,7 +16,8 @@ async function fixture(t){
   const path=join(renderRuntime,name);await mkdir(dirname(path),{recursive:true});await writeFile(path,'fixture')
  }
  await mkdir(observationCacheRoot);await writeFile(dshProfilePath,'PRIVATE_PROFILE_CONTENT');await writeFile(vaultTokenFile,'PRIVATE_TOKEN_CONTENT')
- return {root,pkg,options:{renderRuntime,observationCacheRoot,dshProfilePath,vaultTokenFile,outputPath}}
+ const pythonExecutable=execFileSync('python3',['-c','import sys,pathlib; print(pathlib.Path(sys.executable).resolve())'],{encoding:'utf8'}).trim()
+ return {root,pkg,options:{renderRuntime,observationCacheRoot,dshProfilePath,vaultTokenFile,outputPath,pythonExecutable}}
 }
 test('isolated package composes exact host contract with no original home, credentials, or fabricated proofs',async t=>{
  const s=await fixture(t),result=await configureStudio(s.options,s.pkg)
@@ -63,14 +64,61 @@ test('explicit install atomically creates mode 0600 and never replaces concurren
  assert.equal(await readFile(options.vaultTokenFile,'utf8'),'PRIVATE_TOKEN_CONTENT')
 })
 test('shipped CLI defaults to dry run and rejects conflicting flags with safe diagnostics',async t=>{
- const s=await fixture(t),args=['--output',s.options.outputPath,'--runtime',s.options.renderRuntime,'--profile',s.options.dshProfilePath,'--vault-token-file',s.options.vaultTokenFile,'--cache-root',s.options.observationCacheRoot]
+ const s=await fixture(t),args=['--output',s.options.outputPath,'--runtime',s.options.renderRuntime,'--profile',s.options.dshProfilePath,'--vault-token-file',s.options.vaultTokenFile,'--cache-root',s.options.observationCacheRoot,'--python-executable',s.options.pythonExecutable]
  const script=join(s.pkg,'scripts/configure-studio.mjs')
- const result=JSON.parse(execFileSync(process.execPath,[script,...args],{encoding:'utf8'}))
+ const result=JSON.parse(execFileSync(process.execPath,[script,...args],{encoding:'utf8',env:{...process.env,PATH:'/usr/bin:/bin'}}))
  assert.equal(result.installed,false);assert.deepEqual(result.dshConfig,{studioConfigPath:s.options.outputPath})
  await assert.rejects(lstat(s.options.outputPath),{code:'ENOENT'})
  assert.throws(()=>parseArguments([...args,'--install','--dry-run']),/argument-conflict/)
  const failed=spawnSync(process.execPath,[script,...args,'--unknown','SECRET_VALUE'],{encoding:'utf8'})
  assert.equal(failed.status,1);assert.doesNotMatch(failed.stderr,/SECRET_VALUE|PRIVATE_/)
+})
+
+test('portable configuration canonicalizes only explicit host executables and leaves credential references private',async t=>{
+ const s=await fixture(t),executables={}
+ await rm(join(s.options.renderRuntime,'node_modules/ffmpeg-static/ffmpeg'))
+ for(const field of ['nodeExecutable','chromeExecutable','ffmpegExecutable','ffprobeExecutable']){
+  const actual=join(s.root,field+' actual');await writeFile(actual,'#!/bin/sh\nexit 0\n',{mode:0o700})
+  const link=join(s.root,field+' symlink');await symlink(actual,link);executables[field]=link
+ }
+ const result=await configureStudio({...s.options,...executables},s.pkg)
+ for(const field of Object.keys(executables))assert.equal(result.config[field],join(s.root,field+' actual'))
+ assert.equal(result.runtimeVerified,false);assert.equal(result.profileModified,false);assert.equal(result.installed,false)
+ assert.doesNotMatch(JSON.stringify(result),/PRIVATE_PROFILE_CONTENT|PRIVATE_TOKEN_CONTENT/)
+ for(const flag of ['--node-executable','--chrome-executable','--ffmpeg-executable','--ffprobe-executable'])assert.doesNotThrow(()=>parseArguments([flag,'/host/executable']))
+ await assert.rejects(configureStudio({...s.options,...executables,nodeExecutable:'relative SECRET'},s.pkg),/nodeExecutable-path-invalid/)
+ await chmod(join(s.root,'ffmpegExecutable actual'),0o600)
+ await assert.rejects(configureStudio({...s.options,...executables},s.pkg),/ffmpegExecutable-unavailable/)
+ await assert.rejects(lstat(s.options.outputPath),{code:'ENOENT'})
+})
+
+test('explicit Python selection performs only the static packaged closure check without relying on python3 PATH',async t=>{
+ const s=await fixture(t),pythonExecutable=execFileSync('python3',['-c','import sys,pathlib; print(pathlib.Path(sys.executable).resolve())'],{encoding:'utf8'}).trim()
+ const result=await configureStudio({...s.options,pythonExecutable},s.pkg)
+ assert.equal(result.config.pythonExecutable,pythonExecutable);assert.equal(result.runtimeVerified,false)
+ assert.equal(parseArguments(['--python-executable',pythonExecutable]).pythonExecutable,pythonExecutable)
+ await assert.rejects(configureStudio({...s.options,pythonExecutable:'relative SECRET'},s.pkg),/pythonExecutable-path-invalid/)
+ assert.doesNotMatch(JSON.stringify(result),/PRIVATE_/)
+})
+test('audio observer CLI is a host-only reviewed choice, not a new planner model or calibration pass',async t=>{
+ const s=await fixture(t)
+ const plan=await configureStudio({...s.options,audioObserverModel:'qwen3.8-omni-flash'},s.pkg)
+ assert.equal(plan.config.audioObserverModel,'qwen3.8-omni-flash');assert.equal(plan.calibrationVerified,false);assert.equal(plan.runtimeVerified,false)
+ assert.equal(parseArguments(['--audio-observer-model','qwen3.8-omni-flash']).audioObserverModel,'qwen3.8-omni-flash')
+ assert.equal((await configureStudio(s.options,s.pkg)).config.audioObserverModel,undefined)
+ for(const audioObserverModel of ['',null,'qwen3.8-plus','SECRET'])await assert.rejects(configureStudio({...s.options,audioObserverModel},s.pkg),e=>e.message==='studio-config-audio-observer-model-invalid')
+})
+
+test('optional assets bridge reference is distinct, private, unread by setup and never overwritten',async t=>{
+ const s=await fixture(t),assetTokenFile=join(s.root,'assets bridge token')
+ await writeFile(assetTokenFile,'PRIVATE_ASSET_SENTINEL',{mode:0o600})
+ const plan=await configureStudio({...s.options,assetTokenFile},s.pkg)
+ assert.equal(plan.config.assetTokenFile,assetTokenFile);assert.doesNotMatch(JSON.stringify(plan),/PRIVATE_ASSET_SENTINEL/)
+ assert.deepEqual(parseArguments(['--asset-token-file',assetTokenFile]).assetTokenFile,assetTokenFile)
+ await assert.rejects(configureStudio({...s.options,assetTokenFile,outputPath:assetTokenFile,install:true},s.pkg),/output-reference-conflict/)
+ await assert.rejects(configureStudio({...s.options,assetTokenFile:s.options.vaultTokenFile},s.pkg),/asset-reference-(conflict|not-private)/)
+ await chmod(assetTokenFile,0o644);await assert.rejects(configureStudio({...s.options,assetTokenFile},s.pkg),/asset-reference-not-private/)
+ assert.equal(await readFile(assetTokenFile,'utf8'),'PRIVATE_ASSET_SENTINEL')
 })
 
 test('optional upload group derives both helper pins from packaged manifest and creates no upload state',async t=>{
@@ -104,8 +152,8 @@ test('upload omissions remain disabled; partial group, nonprivate/missing direct
 
 test('shipped CLI accepts only paired host upload options and never accepts a helper path',async t=>{
  const s=await fixture(t),uploadStateRoot=join(s.root,'upload state');await mkdir(uploadStateRoot,{mode:0o700})
- const args=['--output',s.options.outputPath,'--runtime',s.options.renderRuntime,'--profile',s.options.dshProfilePath,'--vault-token-file',s.options.vaultTokenFile,'--cache-root',s.options.observationCacheRoot,'--upload-state-root',uploadStateRoot,'--upload-public-origin','https://preview.example.test']
- const result=JSON.parse(execFileSync(process.execPath,[join(s.pkg,'scripts/configure-studio.mjs'),...args],{encoding:'utf8'}))
+ const args=['--output',s.options.outputPath,'--runtime',s.options.renderRuntime,'--profile',s.options.dshProfilePath,'--vault-token-file',s.options.vaultTokenFile,'--cache-root',s.options.observationCacheRoot,'--python-executable',s.options.pythonExecutable,'--upload-state-root',uploadStateRoot,'--upload-public-origin','https://preview.example.test']
+ const result=JSON.parse(execFileSync(process.execPath,[join(s.pkg,'scripts/configure-studio.mjs'),...args],{encoding:'utf8',env:{...process.env,PATH:'/usr/bin:/bin'}}))
  assert.equal(result.checks.previewUpload,'configured-unverified');assert.equal(result.installed,false)
  assert.deepEqual(parseArguments(args).uploadPublicOrigin,'https://preview.example.test')
  assert.throws(()=>parseArguments([...args,'--upload-script','SECRET.py']),/argument-invalid/)

@@ -1,5 +1,6 @@
 /** Structured board handoff to the pinned host compiler; never rendering or quality approval. */
 import {defineTool} from '@deepseek-ai/dsh-tools'
+import {studioToolAllowed,assertStudioToolRole} from './studio-tool-policy.js'
 import {constants} from 'node:fs'
 import {lstat,mkdir,open,realpath} from 'node:fs/promises'
 import {extname,isAbsolute,join,relative,resolve,sep} from 'node:path'
@@ -9,6 +10,7 @@ import {studioPath,fileSha256} from './studio-tools.js'
 import {studioVisualComponentInputs,verifyStageReceipt} from './studio-stage-files.js'
 import {validateExecutionComponents,type ComponentDocument} from './studio-visual-components.js'
 import {boardFieldDiagnostics,boardTimelineDiagnostics} from './studio-board-diagnostics.js'
+import {buildStudioReviewCoveragePlan} from './studio-review-coverage.mjs'
 
 export const STUDIO_BOARD_TOOL_NAMES=['studio_compile_storyboard'] as const
 export interface StudioBoardOptions {input:any;workflow:any;isActive:()=>boolean;compile:(value:{boardPath:string;outputDirectory:string})=>Promise<any>}
@@ -76,11 +78,12 @@ async function replayReceipt(root:string,output:string,board:any){
 }
 
 export async function registerStudioBoardTools(ctx:any,o:StudioBoardOptions):Promise<()=>void>{
+ if(!studioToolAllowed('studio_compile_storyboard',o.input.card?.role))return ()=>{}
  const {input,workflow}=o
  const bindingPathRequired=input.task.design?.studio?.visualCoverage==='components-v2'
  const check=(exec?:any)=>{if(!o.isActive())throw Error('studio-stale-run');if(exec?.agent?.session?.id&&exec.agent.session.id!==input.sessionId)throw Error('studio-session-mismatch')}
  const tool=defineTool({name:'studio_compile_storyboard',description:'Executor only: pass a structured storyboard object to the fixed local compiler. Saves immutable input, writes a new composition directory and verifies HTML hash. Fix named fields without deleting planned scenes/actions. For studio_render_start use the returned compositionRelative directory, never boardPath JSON. Does not render, synthesize media or approve quality.',parameters:{board:{type:'object',description:'Execution object with required root schema:"studio-board-v1", numeric duration (seconds), gsap, font, script, scenes and audio. Not the planning document or serialized text. Scenes use start/duration/layers. Image layer example: {"type":"image","role":"character","src":"assets/character.png","width":400,"height":800}. role is a direct property; tags is unsupported. Full contract: call studio_read_guide with {id:"execution"}; no project documentation file is assumed.',additionalProperties:true},boardPath:{type:'string',description:'Preferred for an existing execution board: project-relative .json file to read and freeze. Supply exactly one of boardPath or board. No need to copy the whole JSON into tool arguments.'},bindingPath:{type:'string',...(bindingPathRequired?{required:true}:{}),description:'Required only for visualCoverage=components-v2: project-relative path to the actual existing studio-execution-components-v2 sidecar. It binds original storyboard/visual-plan/execution-board hashes and mappings {sceneIndex,layerIndex,originalSceneId,requirementId,componentId}. Use the path of the sidecar you created for this exact execution board; never pass a visual-plan file or invent a path. Declaration checks are not pixel/quality approval.'},outputDirectory:{type:'string',description:'Optional new directory name that does not exist yet. Omit to use a content-derived name. The compiler creates it. Do not mkdir it or write board.json into it first; preserve existing directories.'}},output:{schema:{type:'object',additionalProperties:true},render:(_:any,value:any)=>[{type:'text',text:JSON.stringify(value)}]},execute:async(args:any,exec:any)=>{
-  check(exec);if(input.card?.role!=='executor')throw Error('studio-role-denied')
+  check(exec);assertStudioToolRole('studio_compile_storyboard',input.card?.role)
   if(Object.keys(args).some(key=>!['board','boardPath','bindingPath','outputDirectory'].includes(key)))throw Error('studio-board-unknown-argument')
   const hasBoard=args.board!==undefined,hasPath=args.boardPath!==undefined
   if(hasBoard===hasPath)throw Error('studio-board-input-required: provide exactly one of board or boardPath; prefer boardPath for an existing project JSON file')
@@ -153,6 +156,26 @@ export async function registerStudioBoardTools(ctx:any,o:StudioBoardOptions):Pro
    componentProof=result;check(exec)
   }
   await verifyComponents()
+  const coveragePlan=async()=>{
+   if(policy.reviewCoverage!=='scene-action-v1')return undefined
+   const story=workflow.stageReceipt(input,'storyboard'),paths=story?.scriptBinding?.boards
+   if(story?.stage!=='storyboard'||!Array.isArray(paths)||paths.length!==1)throw Error('studio-review-coverage-storyboard-required')
+   await verifyStageReceipt(input,story,workflow)
+   const file=story.outputs.find((f:any)=>f.path===paths[0])
+   if(!file||file.bytes>8*1024*1024)throw Error('studio-review-coverage-storyboard-invalid')
+   const bytes=await fileBytes(await studioPath(root,file.path,true))
+   return buildStudioReviewCoveragePlan({storyboard:{bytes,sha256:file.sha256},executionBoard:{bytes:Buffer.from(encoded),sha256:sha(encoded)},scriptSha256:script.sha256,...(componentProof?{sceneMappings:[...new Map(componentProof.mappings.map(m=>[m.sceneIndex,{sceneIndex:m.sceneIndex,originalSceneId:m.originalSceneId}])).values()]}:{})})
+  }
+  // Derive before any compiler dispatch, then re-read authoritative inputs at
+  // the successful boundary. A reviewer cannot choose which actions exist.
+  const expectedCoverage=await coveragePlan()
+  const saveCoverage=async(indexSha256:string)=>{
+   if(!expectedCoverage)return {}
+   const current=await coveragePlan()
+   if(!isDeepStrictEqual(current,expectedCoverage))throw Error('studio-review-coverage-input-changed')
+   workflow.recordCompiledCoverage(input,{composition:name,indexSha256,plan:current})
+   return {reviewCoverage:{contract:current.contract,planSha256:current.planSha256,targets:current.targets.length,qualityApproved:false}}
+  }
   const base=join(root,'.studio-boards'),output=join(root,name),digest=sha(encoded),boardPath=join(base,digest+'.json')
   const componentFrozenPath=componentDocument?join(base,componentDocument.sha256+'.components.json'):undefined
   const componentResult=()=>componentProof?{componentBinding:componentProof,bindingPath:componentFrozenPath}:{}
@@ -172,7 +195,7 @@ export async function registerStudioBoardTools(ctx:any,o:StudioBoardOptions):Pro
     if(!isDeepStrictEqual(replay,confirmed))throw Error('studio-board-replay-changed')
     await verifyInput();check(exec)
     if(!isDeepStrictEqual(workflow.script(input)?.lines,board.script))throw Error('studio-board-script-changed')
-    return {ok:true,composition:output,compositionRelative:relative(root,output),...replay,...componentResult(),boardPath,boardSha256:digest,inputReused:true,outputReused:true,qualityApproved:false,scope:'technical-compilation-only; not rendered or quality-approved'}
+    return {ok:true,composition:output,compositionRelative:relative(root,output),...replay,...componentResult(),...await saveCoverage(replay.indexSha256),boardPath,boardSha256:digest,inputReused:true,outputReused:true,qualityApproved:false,scope:'technical-compilation-only; not rendered or quality-approved'}
    }catch(error:any){
     if(/^studio-(stale-run|session-mismatch|board-input-changed|board-script-changed)$/.test(error?.message??''))throw error
     throw Error('studio-board-output-exists: '+JSON.stringify({error_code:'studio-board-output-exists',reason:'existing-output-is-not-a-verified-replay',dispatched:false,action:'Preserve the existing directory. Pass a fresh outputDirectory name without creating it first: the compiler itself creates that directory. Do not write your source board.json there, delete an old directory, or retry this same destination.'}))
@@ -199,7 +222,7 @@ export async function registerStudioBoardTools(ctx:any,o:StudioBoardOptions):Pro
   if(sha(await fileBytes(indexPath))!==indexSha256)throw Error('studio-board-output-hash-mismatch')
   check(exec)
   if(!isDeepStrictEqual(workflow.script(input)?.lines,board.script))throw Error('studio-board-script-changed')
-  return {ok:true,composition:output,compositionRelative:relative(root,output),indexPath,indexSha256,...componentResult(),boardPath,boardSha256:digest,inputReused:existing,qualityApproved:false,scope:'technical-compilation-only; not rendered or quality-approved'}
+  return {ok:true,composition:output,compositionRelative:relative(root,output),indexPath,indexSha256,...componentResult(),...await saveCoverage(indexSha256),boardPath,boardSha256:digest,inputReused:existing,qualityApproved:false,scope:'technical-compilation-only; not rendered or quality-approved'}
  }})
  return ctx.tools.register(tool)
 }

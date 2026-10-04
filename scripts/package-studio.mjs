@@ -63,7 +63,7 @@ for name in names:
 pins=[ast.literal_eval(n.value) for n in ast.walk(ast.parse((root/'prepare_execution_assets.py').read_bytes())) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='MANIFEST_SHA256' for t in n.targets)]
 if pins!=[hashlib.sha256(pathlib.Path(sys.argv[3]).read_bytes()).hexdigest()]:raise ValueError('Runtime asset manifest pin mismatch')
 `
-export async function verifyStudioPayload(packageRoot=root){
+export async function verifyStudioPayload(packageRoot=root,options={}){
  const base=join(packageRoot,'studio'), manifest=JSON.parse(await readFile(join(base,'manifest.json'),'utf8'))
  if(manifest.schema!=='studio-package-v1'||manifest.rolesPackaged!==true||manifest.runtimeAssetsPackaged!==true||manifest.proofsPackaged!==false||manifest.runtimeVerified!==false||!manifest.files||JSON.stringify(Object.keys(manifest.files).sort())!==JSON.stringify([...HELPERS.map(n=>'helpers/'+n),...ROLE_FILES,...RUNTIME_ASSETS.map(n=>'runtime-assets/'+n)].sort()))throw Error('studio-payload-manifest-invalid')
  if(JSON.stringify(manifest.requiredHostProofs)!==JSON.stringify(REQUIRED_PROOFS))throw Error('studio-payload-proofs-invalid')
@@ -75,7 +75,7 @@ export async function verifyStudioPayload(packageRoot=root){
  for(const [name,expected] of Object.entries(manifest.files)){
   const p=join(base,name);if(!(await lstat(p)).isFile()||sha(await readFile(p))!==expected)throw Error('studio-payload-hash-mismatch: '+name)
  }
- execFileSync('python3',['-I','-B','-c',check,join(base,'helpers'),JSON.stringify(HELPERS),join(base,'runtime-assets/manifest.json')],{stdio:'pipe'})
+ execFileSync(options.pythonExecutable??'python3',['-I','-B','-c',check,join(base,'helpers'),JSON.stringify(HELPERS),join(base,'runtime-assets/manifest.json')],{stdio:'pipe'})
  return manifest
 }
 export async function packageStudio(packageRoot=root,sourceRoot=resolve(packageRoot,'../autonomous-studio')){

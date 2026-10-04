@@ -6,6 +6,7 @@
  "model": "codex-local/gpt-5.6-terra",
  "effort": "low",
  "permissionPreset": "read-only",
- "tools": ["ask-user", "plugin-publisher-read"],
+  "tools": ["ask-user", "plugin-publisher-read"],
+  "taskExpertise": ["fleet_plugin_publish", "fleet_plugin_publish_status"],
  "mcpTools": {}, "mcpPolicy": {}, "skills": []
 }

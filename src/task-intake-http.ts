@@ -50,7 +50,7 @@ export async function handleTaskSignalHttp(req: any, res: any, service: any, tok
       reply(res,200,{ok:true,...await service.patrolFollowup()}); return
     }
     if (req.method === 'POST') {
-      const value = JSON.parse(await service.submitTaskSignal(JSON.stringify({ signal: await body(req) })))
+      const value = JSON.parse(await service.submitTaskSignal(JSON.stringify({ signal: await body(req), ...(url.searchParams.get('retry') === '1' ? {retry:true} : {}) })))
       reply(res, 202, { ok: true, ...value }); return
     }
     if (req.method === 'GET') {

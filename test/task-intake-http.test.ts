@@ -34,3 +34,16 @@ test('Task Signal HTTP bridge is fail-closed and returns an async receipt', asyn
   await handleTaskSignalHttp(request('GET'), res, service, '')
   assert.equal(res.status, 503)
 })
+
+test('only explicit authenticated retry query forwards the triage retry request', async () => {
+  const received:any[]=[]
+  const service={submitTaskSignal:async(payload:string)=>{received.push(JSON.parse(payload));return JSON.stringify({status:'received'})}}
+  const denied=request('POST',{id:'retry-1'},'wrong');denied.url+='?retry=1'
+  await handleTaskSignalHttp(denied,response(),service,'test-token')
+  assert.equal(received.length,0)
+  const retry=request('POST',{id:'retry-1'});retry.url+='?retry=1'
+  await handleTaskSignalHttp(retry,response(),service,'test-token')
+  assert.equal(received[0].retry,true)
+  await handleTaskSignalHttp(request('POST',{id:'retry-1'}),response(),service,'test-token')
+  assert.equal(received[1].retry,undefined)
+})

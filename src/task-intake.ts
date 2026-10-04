@@ -409,7 +409,7 @@ export class TaskIntakeCoordinator {
     for (const row of pending) this.kick(row.signal_id)
   }
 
-  async submit(raw: unknown): Promise<TaskSignalView> {
+  async submit(raw: unknown, options: { retry?: boolean } = {}): Promise<TaskSignalView> {
     const signal = validateTaskSignal(raw)
     const db = this.runner.store.kernel.db
     const now = this.now()
@@ -434,7 +434,25 @@ export class TaskIntakeCoordinator {
       const existing = db.prepare('SELECT signal_json FROM dsh_task_signals WHERE signal_id=?').get(signal.id) as { signal_json: string } | undefined
       if (!existing || existing.signal_json !== encoded) throw Object.assign(new Error('Signal id 已存在，但内容不同'), { status: 409 })
     }
-    if (inserted) this.kick(signal.id)
+    let retried = false
+    if (!inserted && options.retry === true && !signal.items) {
+      retried = this.runner.store.kernel.write(() => {
+        const previous = db.prepare('SELECT * FROM dsh_task_signals WHERE signal_id=?').get(signal.id) as SignalRow
+        if (previous.status !== 'needs_triage' || previous.task_id || (previous as any).parent_signal_id) return false
+        const changed = db.prepare(`UPDATE dsh_task_signals SET status='received',intake_session_id=NULL,
+          input_message_id=NULL,delivered_at=NULL,decision_json=NULL,error=NULL,updated_at=?
+          WHERE signal_id=? AND status='needs_triage' AND task_id IS NULL`).run(now, signal.id)
+        if (changed.changes) db.prepare(`INSERT INTO dsh_task_signal_events(signal_id,kind,payload_json,created_at)
+          VALUES (?,'retry_requested',?,?)`).run(signal.id, JSON.stringify({ previousSessionId: previous.intake_session_id,
+            previousDecision: parseJson(previous.decision_json, null), reason: 'explicit_producer_retry_after_triage' }), now)
+        return changed.changes === 1
+      })
+    }
+    if (inserted || retried) {
+      const previous = this.active.get(signal.id)
+      if (previous) void previous.finally(() => this.kick(signal.id)).catch(() => undefined)
+      else this.kick(signal.id)
+    }
     return this.get(signal.id)!
   }
 

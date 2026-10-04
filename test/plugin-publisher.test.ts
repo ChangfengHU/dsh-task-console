@@ -4,7 +4,8 @@ import {createHash} from 'node:crypto'
 import {readFile,stat} from 'node:fs/promises'
 import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource} from '../src/plugin-publisher.ts'
 import {registerPluginPublisher} from '../src/plugin-publisher-tools.ts'
-import {validateSpec} from '../src/presets.ts'
+import {validateSpec,NATIVE_TOOLS} from '../src/presets.ts'
+import {validateTaskIntakeDecision} from '../src/task-intake.ts'
 const id='12345678-1234-1234-1234-123456789abc'
 const appId='asdk_app_6ac1f14048b88191a1aa282f102f65f6'
 function fixture(){
@@ -58,7 +59,17 @@ test('reviewer has no publish tool; model cannot supply URLs or commands',async(
  await assert.rejects(rows[0].execute({releaseId:id,command:'ignored'}),/invalid_release/)
 })
 test('publisher presets match the registered capability contract',async()=>{
+ const agents:any[]=[]
  for(const name of ['plugin-publisher','plugin-publisher-reviewer','plugin-publisher-planner']){
   const spec=JSON.parse(await readFile(new URL('../presets/'+name+'/task-console.json',import.meta.url),'utf8'));assert.equal(validateSpec(spec).id,name)
+  agents.push({...spec,toolSchemas:spec.tools.flatMap((id:string)=>NATIVE_TOOLS.find(t=>t.id===id)?.schemaNames||[])})
  }
+ const requiredExecutorTools=['fleet_plugin_publish','fleet_plugin_publish_status']
+ const context={agents,requiredExecutorTools,candidateTasks:[],policy:[]}
+ const decision={action:'create',title:'Private plugin update',reason:'Use dedicated registered roles and exact live tool contracts.',confidence:1,workflow:'dynamic-rounds',participants:[{agentId:'plugin-publisher-planner',role:'planner'},{agentId:'plugin-publisher',role:'executor'},{agentId:'plugin-publisher-reviewer',role:'reviewer'}]}
+ assert.equal(validateTaskIntakeDecision(decision,context).action,'create')
+ const reviewer=agents.find(a=>a.id==='plugin-publisher-reviewer')
+ assert.ok(!reviewer.toolSchemas.includes('fleet_plugin_publish'))
+ delete reviewer.taskExpertise
+ assert.throws(()=>validateTaskIntakeDecision(decision,context),/taskExpertise/)
 })

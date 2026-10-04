@@ -98,6 +98,34 @@ test('Task Intake is idempotent and reuses one goal Task for later Turns of the 
   f.runner.stop()
 })
 
+test('explicit triage retry retains the original signal and audit without duplicating a Task', async () => {
+  let ready = false
+  const f = await fixture(async () => ready
+    ? { sessionId: 'retry-accepted', decision: { action: 'create', title: 'Recovered routing',
+      reason: 'The registered role contract is now available.', confidence: 1, workflow: 'dynamic-rounds',
+      participants: [{agentId:'a',role:'planner'},{agentId:'b',role:'executor'},{agentId:'c',role:'reviewer'}] } }
+    : { sessionId: 'first-triage', decision: { action:'triage', reason:'No eligible role contract is available.', confidence:1 } })
+  try {
+    const incoming = signal('retry-001','retry-incident')
+    await f.intake.submit(incoming)
+    assert.equal((await f.intake.wait(incoming.id)).status,'needs_triage')
+    await f.intake.submit(incoming)
+    assert.equal(f.decisions,1,'ordinary duplicate does not re-execute')
+    await assert.rejects(()=>f.intake.submit({...incoming,goal:{...incoming.goal,objective:'Conflicting content cannot bypass immutable signal validation.'}},{retry:true}),/内容不同/)
+    ready=true
+    await Promise.all([f.intake.submit(incoming,{retry:true}),f.intake.submit(incoming,{retry:true})])
+    const done=await f.intake.wait(incoming.id)
+    assert.equal(done.status,'materialized')
+    assert.equal(f.decisions,2)
+    assert.equal(f.runner.store.s.tasks.size,1)
+    const retry=f.intake.events(incoming.id).filter(e=>e.kind==='retry_requested')
+    assert.equal(retry.length,1)
+    assert.equal((retry[0].payload.previousDecision as any).action,'triage')
+    await f.intake.submit(incoming,{retry:true})
+    assert.equal(f.decisions,2,'materialized task is never automatically rerun')
+  } finally { f.runner.stop() }
+})
+
 test('one report Session routes multiple independent items and retains accepted requests', async () => {
   const choose: TaskIntakeOptions['decide'] = async (incoming, context, delivery) => {
     delivery.onSessionReady('intake-report-session')

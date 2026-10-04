@@ -1193,8 +1193,8 @@ export class TaskConsoleService extends TypertRemoteService {
   /** Submit one generic, credential-free Signal; the Task Agent routes it asynchronously. */
   async submitTaskSignal(payload: string): Promise<string> {
     await this.ready
-    const input = JSON.parse(payload) as { signal?: unknown; wait?: boolean; timeoutMs?: number }
-    const view = await this.intake.submit(input && Object.hasOwn(input, 'signal') ? input.signal : input)
+    const input = JSON.parse(payload) as { signal?: unknown; wait?: boolean; timeoutMs?: number; retry?: boolean }
+    const view = await this.intake.submit(input && Object.hasOwn(input, 'signal') ? input.signal : input, { retry: input?.retry === true })
     if (input?.wait) return JSON.stringify(await this.intake.wait(view.signal.id, Math.min(Math.max(Number(input.timeoutMs) || 300_000, 1_000), 600_000)))
     return JSON.stringify(view)
   }

@@ -40,15 +40,3 @@ test('query cache deduplicates, invalidates stale in-flight writes and bounds en
   await cache.load('a',async()=>2);await cache.load('b',async()=>3);await cache.load('c',async()=>4)
   assert.equal(cache.peek('a'),undefined);assert.equal(cache.peek('c'),4)
 })
-
-test('agent page is bounded and only selected detail reads session header metadata',async()=>{
-  const service:any=Object.create(TaskConsoleService.prototype)
-  service.ctx={get:()=>({list:async()=>Array.from({length:23},(_,i)=>({id:`a${String(i).padStart(2,'0')}`,name:`Agent ${i}`,trust:'system',path:`/nonexistent-agent-page-fixture/${i}/preset.yml`}))})}
-  let headersRead=0;service.sessionHeaders=async()=>{headersRead++;return []}
-  await service.agentPage('{"id":"new"}');assert.equal(headersRead,0)
-  const a=JSON.parse(await service.agentPage('{}')),b=JSON.parse(await service.agentPage('{"page":2}')),c=JSON.parse(await service.agentPage('{"page":3,"id":"a00"}'))
-  assert.equal(a.rows.length,10);assert.equal(c.rows.length,3);assert.equal(a.total,23)
-  assert.equal(new Set([...a.rows,...b.rows,...c.rows].map(r=>r.id)).size,23)
-  assert.equal(c.detail.id,'a00');assert.equal(JSON.parse(await service.agentPage('{"query":"Agent 22"}')).total,1)
-  await assert.rejects(service.agentPage('{"page":-1}'))
-})

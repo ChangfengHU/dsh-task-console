@@ -249,7 +249,7 @@ export function TaskReplay({ api, agents, id, runId, sessionId, report = false, 
   }
   if (!task) return <div className="dtc-empty">{error || (events.length ? '没有这个任务' : <><span className="dtc-spin" /> 读取事件流…</>)}</div>
   if ((task.graphMode === 'dynamic-rounds' || task.origin?.source === 'task-chat') && selId) return <DynamicTaskReplay key={selId} report={report} api={api} agents={agents} task={task} batches={batches} archivedTotal={detail?.archived} batchId={selId} sessionId={sessionId} toast={toast} onBatchArchive={archiveBatch} />
-  if (!selId && task.origin) return <section className="dtc-workflow">
+  if (!selId && (task.origin || task.design?.studioStages)) return <section className="dtc-workflow">
     <header><div><h2>{task.title}</h2><p>{batches.length ? `没有当前执行 · ${detail?.total ?? batches.length} 条历史已归档` : '已创建 · 尚未执行 · 0 次执行记录'}</p></div><ExecutionPicker batches={batches} archivedTotal={detail?.archived} value="" onChange={bid => go(`tasks/${id}/runs/${bid}`)} onArchive={archiveBatch} /><TaskRunAction task={task} api={api} toast={toast} /></header>
     <p>{task.trigger.kind === 'cron' ? `时间表：${task.trigger.expr} · ${task.trigger.timeZone || '宿主时区'} · ${task.enabled ? '已启用' : '未启用，等待手动验收'}` : '等待首次手动执行。'}运行前没有角色、闸门或依赖行，不展示虚构 DAG。</p>
     <WorkflowPlan task={task} nameOf={agentName} openSession={sid=>void api.openSession(sid).catch(e=>toast(String(e.message||e)))} trace={sid=>void api.openSession(sid).catch(e=>toast(String(e.message||e)))} />

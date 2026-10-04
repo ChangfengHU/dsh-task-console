@@ -1,3 +1,4 @@
+import { recoverStudioFailure, type StudioRecoveryInput } from './studio-recovery.ts'
 /**
  * The dispatcher — the host-resident loop that turns a fired batch into
  * runs. Deterministic: no model decides who goes next.
@@ -61,6 +62,8 @@ export interface RunnerOptions {
   now?: () => number
   onBatchSettled?: (batch: Batch) => void | Promise<void>
   onSessionCreated?: (sessionId: string) => void | Promise<void>
+  registerStudioTools?: (agentCtx: any, input: CompletionCheck, isActive: () => boolean, submitReview: () => Promise<void>) => Promise<() => void>
+  beforeStart?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
   beforeComplete?: (input: CompletionCheck) => CompletionDecision | void | Promise<CompletionDecision | void>
   beforeBlock?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
   afterBlock?: (input: CompletionCheck) => Promise<void>
@@ -82,6 +85,8 @@ export interface FireOptions {
   /** Signal-specific objective and dynamically selected Agent team. */
   turn?: TaskTurn
   scheduleClaim?: ScheduleClaim
+  /** Acknowledge after the batch is durable; preflight and claiming run off-request. */
+  dispatch?: 'await' | 'background'
 }
 
 export class TaskRunner {
@@ -93,11 +98,15 @@ export class TaskRunner {
   schedule!: ScheduleLedger
   private disposeListener?: () => void
   private ticking = false
+  private backgroundTick?: ReturnType<typeof setImmediate>
+  private backgroundBatches = new Set<string>()
   private dispatchSuspended = 0
   readonly maxInProgress: number
   private readonly clock: () => number
   private readonly onBatchSettled?: (batch: Batch) => void | Promise<void>
   private readonly onSessionCreated?: (sessionId: string) => void | Promise<void>
+  private readonly registerStudioTools?: RunnerOptions['registerStudioTools']
+  private readonly beforeStart?: RunnerOptions['beforeStart']
   private readonly beforeComplete?: RunnerOptions['beforeComplete']
   private readonly beforeBlock?: RunnerOptions['beforeBlock']
   private readonly afterBlock?: RunnerOptions['afterBlock']
@@ -114,6 +123,8 @@ export class TaskRunner {
     this.clock = opts.now ?? (() => Date.now())
     this.onBatchSettled = opts.onBatchSettled
     this.onSessionCreated = opts.onSessionCreated
+    this.registerStudioTools = opts.registerStudioTools
+    this.beforeStart = opts.beforeStart
     this.beforeComplete = opts.beforeComplete
     this.beforeBlock = opts.beforeBlock
     this.afterBlock = opts.afterBlock
@@ -141,7 +152,7 @@ export class TaskRunner {
     }
     await this.settleBatches()
     this.disposeListener = (this.ctx as any).on('session/event', (session: any, event: any) => this.onSessionEvent(session, event))
-    this.ticker = setInterval(() => { void this.tick() }, 60_000)
+    this.ticker = setInterval(() => { this.queueDispatch() }, 60_000)
     ;(this.ticker as any).unref?.()
     ;(this.ctx as any).effect?.(() => () => this.stop(), 'task-console: runner')
     await this.tick()
@@ -149,6 +160,9 @@ export class TaskRunner {
 
   stop(): void {
     if (this.ticker) clearInterval(this.ticker)
+    if (this.backgroundTick) clearImmediate(this.backgroundTick)
+    this.backgroundTick = undefined
+    this.backgroundBatches.clear()
     this.disposeListener?.()
     for (const f of this.flights.values()) { this.disarm(f); this.stopHeartbeat(f); f.disposeFallback?.(); f.disposeTools?.() }
   }
@@ -174,6 +188,31 @@ export class TaskRunner {
       await this.fireDueCron()
       await this.dispatch()
     } finally { this.ticking = false }
+  }
+
+  /** The durable ready rows, not this callback, are the recoverable work queue. */
+  private queueDispatch(batchId?: string): void {
+    if (batchId) this.backgroundBatches.add(batchId)
+    if (this.backgroundTick) return
+    this.backgroundTick = setImmediate(() => {
+      this.backgroundTick = undefined
+      const requested = [...this.backgroundBatches]
+      this.backgroundBatches.clear()
+      void this.tick().catch(error => {
+        const message = error instanceof Error ? error.message : String(error)
+        console.warn('[task-console] background dispatch failed:', message)
+        // An infrastructure error is not a successful run or a reason to replay
+        // paid work. Keep durable rows intact and expose the failed dispatch.
+        const batches = requested.length ? requested.map(id => this.store.s.batches.get(id)).filter(Boolean) as Batch[]
+          : [...this.store.s.batches.values()].filter(b => !b.settled && !b.archivedAt)
+        for (const batch of batches) {
+          const cardId = batch.cardIds.find(id => !['done','failed','cancelled'].includes(this.store.s.cards.get(id)?.status ?? '')) ?? batch.cardIds[0]
+          if (!cardId) continue
+          try { this.store.kernel.recordEvent(cardId, 'dispatch_failed', { code: 'task_dispatch_failed', message, batch_id: batch.id, retry: 'next_scheduler_tick' }) }
+          catch { console.warn('[task-console] dispatch failure could not be persisted for', batch.id) }
+        }
+      })
+    })
   }
 
   /** A parked hourly patrol cannot suppress every future occurrence forever. */
@@ -270,6 +309,12 @@ export class TaskRunner {
         )
         await this.settleBatches(); continue
       }
+      // The first preflight is part of dispatch, so acknowledgement does not
+      // wait for it, and restart cannot bypass it on a durable unclaimed batch.
+      if (c.index === 0 && c.runIds.length === 0) {
+        const problem = await this.preflight(task)
+        if (problem) { await this.failInitialPreflight(task, c, problem); continue }
+      }
       await this.startRun(task, batch, c)
       inProgress++
     }
@@ -317,6 +362,7 @@ export class TaskRunner {
     const existing = this.store.s.batches.get(batchId)
     if (existing) {
       if (existing.taskId !== taskId) throw new Error('batchId 已被其他任务使用')
+      if (options.dispatch === 'background' && !existing.settled && !existing.archivedAt) this.queueDispatch(batchId)
       return existing
     }
     if (template.trigger.kind === 'cron' && !options.turn && this.scheduledTurn) options = { ...options, turn: await this.scheduledTurn(template, batchId) }
@@ -329,27 +375,26 @@ export class TaskRunner {
       ? [{ id: `${batchId}#p1`, agentId: task.participants[0].agentId, ...(task.participants[0].brief ? { brief: task.participants[0].brief } : {}), deps: [], kind: 'agent' as const, role: 'planner' as const, round: 1 }]
       : task.participants.map((p, i) => ({ id: `${batchId}#${i}`, agentId: p.agentId, ...(p.brief ? { brief: p.brief } : {}), deps: i ? [`${batchId}#${i - 1}`] : [] }))
     await this.store.createBatch(template, { t: 'batch/fired', at: this.now(), taskId, batch: { id: batchId, by, cards, ...(options.turn ? { turn: options.turn } : {}) } }, options.scheduleClaim)
-    const problem = await this.preflight(task)
-    if (problem) {
-      const first = cards[0]
-      const runId = `${first.id}#1`
-      const failure = `预检不过:${problem}`
-      const claim = await this.store.claimCard(first.id, runId, '', 1)
-      if (claim) {
-        await this.store.transition(
-          () => this.store.kernel.failRun(first.id, { expectedRunId: claim.run.id, outcome: 'failed', error: failure }),
-          result => result.ok ? { t: 'run/failed', at: this.now(), taskId, runId, outcome: 'failed', error: failure } : undefined,
-        )
-        await this.store.transition(
-          () => this.store.kernel.giveUpTask(first.id, failure),
-          ok => ok ? { t: 'card/gave_up', at: this.now(), taskId, cardId: first.id, error: failure } : undefined,
-        )
-      }
-      await this.settleBatches()
-    } else {
-      await this.tick()
-    }
+    if (options.dispatch === 'background') this.queueDispatch(batchId)
+    else await this.tick()
     return this.store.s.batches.get(batchId)!
+  }
+
+  private async failInitialPreflight(task: TaskSpec, first: Card, problem: string): Promise<void> {
+    const runId = `${first.id}#1`
+    const failure = `预检不过:${problem}`
+    const claim = await this.store.claimCard(first.id, runId, '', 1)
+    if (claim) {
+      await this.store.transition(
+        () => this.store.kernel.failRun(first.id, { expectedRunId: claim.run.id, outcome: 'failed', error: failure }),
+        result => result.ok ? { t: 'run/failed', at: this.now(), taskId: task.id, runId, outcome: 'failed', error: failure } : undefined,
+      )
+      await this.store.transition(
+        () => this.store.kernel.giveUpTask(first.id, failure),
+        ok => ok ? { t: 'card/gave_up', at: this.now(), taskId: task.id, cardId: first.id, error: failure } : undefined,
+      )
+    }
+    await this.settleBatches()
   }
 
   private async preflight(task: TaskSpec): Promise<string | null> {
@@ -413,6 +458,9 @@ export class TaskRunner {
     this.flights.set(sessionId, flight)
     this.startHeartbeat(flight)
     try {
+      // Host preflight runs after a durable claim, before any model or paid work.
+      const blocked = await this.beforeStart?.({ task, batch, card, sessionId, profileId })
+      if (blocked) { await this.finishBlocked(flight, blocked.reason, blocked.kind); return }
       // The normalized CAS claim is durable before a DSH session is created.
       flight.handle = await (this.ctx as any).agents.create({
         sessionId,
@@ -425,6 +473,7 @@ export class TaskRunner {
       this.store.kernel.recordEvent(card.id, 'session_created', { session_id: sessionId }, flight.coreRunId)
       await this.append({ t: 'run/session_created', taskId: task.id, runId, sessionId })
       // The terminators live on this agent's scope only.
+      let submitStudioReview: (() => Promise<void>) | undefined
       try {
         const submit = async (kind: 'completed' | 'review', summary: string, paths: string[], metadata?: Record<string, unknown>, reviewer?: string) => {
           if (flight.terminal) throw new Error('这次运行已经提交了终态')
@@ -442,10 +491,15 @@ export class TaskRunner {
             }
             if (observed) { summary = observed.summary; metadata = observed.metadata }
           }
+          if(this.flights.get(sessionId)!==flight||flight.terminal)throw new Error('task-run-no-longer-active')
           const at = this.now()
           const captured = await captureArtifacts({ root: this.store.root, task, batchId: batch.id, cardId: card.id, runId, sessionId, at }, paths)
           for (const artifact of captured) await this.append({ t: 'artifact/registered', at, taskId: task.id, artifact })
           flight.terminal = { kind, summary, metadata, reviewer }
+        }
+        submitStudioReview=async()=>{
+          if(card.role!=='reviewer'||task.design?.evidenceContract!=='studio-video-v1')throw new Error('studio-reviewer-required')
+          await submit('completed','Independent studio review submitted.',[])
         }
         flight.disposeTools = await registerWorkerTools(flight.handle.agent.ctx, {
           ...(task.design?.notifications && (['planner','notifier'].includes(card.role ?? '') || profileId === task.design.notifications.agentId) && this.notify ? { notify: (stage: string, exec: any) => this.notify!({ task, batch, card, sessionId, profileId }, stage, async args => {
@@ -522,8 +576,17 @@ export class TaskRunner {
             }
             flight.terminal = { kind: 'completed', summary, metadata: { ...verified?.metadata, decision: 'approved', round: card.round, ...(finalArtifactId ? { finalArtifactId } : {}) } }
           },
-        }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner', dynamicRounds: task.graphMode === 'dynamic-rounds', nativeEvidence: task.design?.evidenceContract === 'browser-patrol-v2' })
-      } catch (error) { console.warn('[task-console] worker tools not registered:', error) }
+        }, { planner: task.graphMode === 'dynamic-rounds' && card.role === 'planner', dynamicRounds: task.graphMode === 'dynamic-rounds', nativeEvidence: ['browser-patrol-v2','studio-video-v1'].includes(task.design?.evidenceContract ?? '') })
+      } catch (error) {
+        if (task.design?.evidenceContract === 'studio-video-v1') throw error
+        console.warn('[task-console] worker tools not registered:', error)
+      }
+      if (task.design?.evidenceContract === 'studio-video-v1') {
+        if (!this.registerStudioTools) throw Error('studio-runtime-tools-unavailable')
+        const disposeWorker = flight.disposeTools
+        const disposeStudio = await this.registerStudioTools(flight.handle.agent.ctx, {task,batch,card,sessionId,profileId}, () => this.flights.get(sessionId) === flight && !flight.terminal, submitStudioReview!)
+        flight.disposeTools = () => { disposeStudio(); disposeWorker?.() }
+      }
       try { (this.ctx as any).get('sessionTitle')?.rename?.(flight.handle.agent.session, `task: ${task.title} · ${batch.id} · ${agentName}`) } catch { /* cosmetic */ }
       try {
         const registry = (this.ctx as any).get('workspaceRegistry')
@@ -701,11 +764,12 @@ export class TaskRunner {
       f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: `[BACKGROUND OPERATION FINISHED]\n${outcomeNotice}\n读取原始回执并继续本任务尚未完成的检查；不要重复已完成的写操作。全部验收满足后实际调用 task_complete，不能完成则如实调用 task_block。` }], source: { kind: 'user' } })
       return
     }
-    const nativeEvidence = !!base && !!batch && taskForBatch(base,batch).design?.evidenceContract === 'browser-patrol-v2' && card?.role !== 'planner'
-    const maxNudges = nativeEvidence ? 2 : 1
+    const nativeEvidence = !!base && !!batch && ['browser-patrol-v2','studio-video-v1'].includes(taskForBatch(base,batch).design?.evidenceContract??'') && card?.role !== 'planner'
+    const studioPlanner = !!base && !!batch && taskForBatch(base,batch).design?.evidenceContract === 'studio-video-v1' && card?.role === 'planner'
+    const maxNudges = nativeEvidence || studioPlanner ? 2 : 1
     if ((run?.nudges ?? 0) < maxNudges) {
       await this.append({ t: 'run/nudged', taskId: f.taskId, runId: f.runId })
-      const correction = nativeEvidence ? `${(run?.nudges ?? 0) > 0 ? '最后一次协议纠正。' : ''}上次只有普通文本，没有执行交卷工具。现在请实际调用 task_complete，仅传 JSON 对象 {"summary":"简短如实交接"}，省略 metadata 和 artifacts；或实际调用 task_block 说明阻塞。宿主自动读取证据，不接受你口述成功。不要复查或重发业务操作，不要再次只输出“我将调用”的文字。` : NUDGE
+      const correction = studioPlanner ? '上次只有普通文本，没有执行规划交接工具。请依据真实证据，实际调用 task_plan_round 安排继续制作或返修；全部验收通过才实际调用 task_finalize；无法继续则调用 task_block。参数使用工具定义的 JSON 对象，不要在普通文字中写函数调用，也不要重复已完成的外部操作。' : nativeEvidence ? `${(run?.nudges ?? 0) > 0 ? '最后一次协议纠正。' : ''}上次只有普通文本，没有执行交卷工具。现在请实际调用 task_complete，仅传 JSON 对象 {"summary":"简短如实交接"}，省略 metadata 和 artifacts；或实际调用 task_block 说明阻塞。宿主自动读取证据，不接受你口述成功。不要复查或重发业务操作，不要再次只输出“我将调用”的文字。` : NUDGE
       f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: correction }], source: { kind: 'user' } })
       return
     }
@@ -864,6 +928,12 @@ export class TaskRunner {
     await this.tick()
   }
 
+  async recoverStudioCard(input: StudioRecoveryInput) {
+    const result = await recoverStudioFailure(this.store, input)
+    if (!result.replay) void this.tick().catch(error => console.warn('[task-console] studio recovery dispatch failed', String(error)))
+    return { ok: true, ...result }
+  }
+
   /** Hermes unblock semantics: a blocked run stays closed and a new run is claimed. */
   async unblockCard(cardId: string): Promise<void> {
     const card = this.store.s.cards.get(cardId)
@@ -875,6 +945,18 @@ export class TaskRunner {
       changed => changed && this.store.kernel.getTask(cardId)?.status === 'ready' ? { t: 'card/ready', at: this.now(), taskId: card.taskId, cardId } : undefined,
     )
     if (!ok) throw new Error('核心任务状态已经变化，无法解除阻塞')
+    const batch = this.store.s.batches.get(card.batchId)
+    const template = this.store.tasks.get(card.taskId)
+    if (batch && template && taskForBatch(template, batch).design?.evidenceContract === 'studio-video-v1') {
+      // The durable unblock is the HTTP acknowledgement boundary. Media preflight
+      // may take minutes; the ordinary tick guard + kernel CAS still own claiming.
+      void this.tick().catch(error => {
+        console.warn('[task-console] studio background unblock dispatch failed', error instanceof Error ? error.message : String(error))
+        try { this.store.kernel.recordEvent(card.id, 'studio_unblock_dispatch_failed', { message: error instanceof Error ? error.message : String(error) }) }
+        catch { console.warn('[task-console] studio unblock dispatch failure could not be persisted') }
+      })
+      return
+    }
     await this.tick()
   }
 

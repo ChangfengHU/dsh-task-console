@@ -1,4 +1,4 @@
 node_modules/
-.wrangler/
-*.tgz
-pnpm-lock.yaml
+lib/
+SOURCE_REVISION
+studio-host.json

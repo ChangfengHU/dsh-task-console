@@ -24,7 +24,8 @@ function fixture() {
     host:{totalMb:12000,disk:{totalGb:100}},telemetry:{contract:'fleet-host-v1',complete:true,checkedAt:new Date(now).toISOString()},
     network:{status:'fresh',checkedAt:new Date(now).toISOString(),targets:Object.fromEntries(['gemini','claude','chatgpt','youtube','github'].map(k=>[k,{ok:true}]))},
     browsers:[1,2].map(instance=>({browserNo:instance,cdpPort:String(9221+instance),identities:{gemini:'in'},loginVerification:{status:'verified',checkedAt:new Date(now).toISOString(),expiresAt:new Date(now+180000).toISOString()}}))}
-  const reads:any={fleet:{nodes:[node]},exits:{rows:[{id:nodeId,jobId,source:'fleet-probe-runner',exitIp:'203.0.113.10',expectedIp:'203.0.113.10',verifiedAt:new Date(now).toISOString(),expiresAt:new Date(now+3900000).toISOString()}]},
+  // Match the public Fleet route: /exits uses exits, while /lines uses rows.
+  const reads:any={fleet:{nodes:[node]},exits:{ok:true,fetchedAt:now,exits:[{id:nodeId,jobId,source:'fleet-probe-runner',exitIp:'203.0.113.10',expectedIp:'203.0.113.10',verifiedAt:new Date(now).toISOString(),expiresAt:new Date(now+3900000).toISOString()}]},
     lines:{rows:[{id:nodeId,jobId,source:'fleet-probe-runner',checkedAt:new Date(now).toISOString(),error:null,lines:[{id:'line-100',ok:true},{id:'line-92',ok:false}]}]}}
   const input:any={task:{workflowRecipe:{id:'fleet-base-v3',login:'provision-gemini'},participants:fleetRoles.map(agentId=>({agentId}))},
     batch:{firedAt:new Date(started).toISOString(),turn:{targets:[{kind:'fleet-node',id:ip}]}},profileId:'fleet-runner-operator',sessionId:'session-runner',metadata:{stable:true}}
@@ -89,9 +90,10 @@ test('desktop-only, missing Runner observations, old exits and unprobed lines bl
     (f:any)=>f.node.telemetry.complete=false,
     (f:any)=>f.node.network.targets.claude.ok=false,
     (f:any)=>f.node.network.checkedAt=new Date(0).toISOString(),
-    (f:any)=>f.reads.exits.rows[0].jobId='old',
-    (f:any)=>f.reads.exits.rows[0].expiresAt=new Date(0).toISOString(),
-    (f:any)=>f.reads.exits.rows[0].exitIp='192.0.2.99',
+    (f:any)=>f.reads.exits.exits[0].jobId='old',
+    (f:any)=>f.reads.exits.exits[0].expiresAt=new Date(0).toISOString(),
+    (f:any)=>f.reads.exits.exits[0].exitIp='192.0.2.99',
+    (f:any)=>{f.reads.exits.rows=f.reads.exits.exits;delete f.reads.exits.exits},
     (f:any)=>f.reads.lines.rows[0].lines=null,
     (f:any)=>f.reads.lines.rows[0].error='尚未探测',
   ]){const f=fixture();mutate(f);await assert.rejects(validateFleetWorkflowEvidence(f.input,f.deps),/验收未通过/)}
@@ -125,7 +127,7 @@ test('a later failed or malformed native tool result invalidates an earlier succ
 
 test('existing Fleet aliases are resolved by exact target hostname, never guessed from an IP octet',async()=>{
   const f=fixture();f.node.id='host-legacy'
-  f.reads.exits.rows[0].id='host-legacy';f.reads.lines.rows[0].id='host-legacy'
+  f.reads.exits.exits[0].id='host-legacy';f.reads.lines.rows[0].id='host-legacy'
   f.changeResult('fleet-runner-operator','fleet_runner_status',r=>r.targetId='host-legacy')
   assert.equal((await validateFleetWorkflowEvidence(f.input,f.deps))?.scope,'node-and-login')
   f.reads.fleet.nodes.push({...f.node,id:'conflicting-node'})

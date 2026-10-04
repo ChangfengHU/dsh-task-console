@@ -307,86 +307,124 @@ deployed over it. Import the live source.bundle, merge its newer stage/UI logic,
 repeat tests, and recheck zero native/SQLite activity before any live edit.
 No target action, live Task revision or production switch has occurred.
 
-### 2026-09-24: integrated deployment, live Creator failures and reviewed defaults
+### 2026-09-24: current Studio source integrated
 
-Integrated the actual ff7eed Studio baseline, deployed6157899 at a verified zero
-native/SQLite activity boundary, then deployed9ecf721/7e38e84 fixes without
-overwriting main's unrelated dirty lib files. The scoped installer Skill/persona
-now distinguishes base provisioning from full acceptance. Creator's old v2
-persona and invalid object-vs-string design guidance were corrected while
-preserving its custom suffix, grants, model and Actions. Original Task
-T-chat-b4c6fcb369f0c20a9739 remains paused v2. Old unsettled
-b-chat-c80f18f2b92cf417a283 was cancelled through the normal Console API; no
-Task, native Session or failed evidence was deleted.
+Merged the actual deployed ff7eed66461f source bundle into the isolated onboarding
+integration branch, preserving specialized Studio stages, saved collaboration
+plans, frontend role labels and speech verification. Repeated the complete suite:
+565 tests,562 passed,0 failed,3 existing skips. The new Studio board integration
+test accepts an explicit installed compiler bridge path, matching the existing
+calibration-path test override; production code and evidence are unchanged.
+The suite uses compiler-bridge-fb6ee9862c0c and retained7063694a00e2 calibration.
+Fresh native session and SQLite running-claim checks both returned zero. This
+is only a deployment prerequisite, not permission to interrupt later work.
+No production switch or236 business acceptance has occurred at this point.
 
-Actual Creator execution exposed undefined workflowRecipe fields rejected by
-native lossless JSON serialization. Conditional field emission fixes this; a
-paused non-recipe context round-trip regression and actual successful context
-call verify it. Shared Studio DAG labels were also incorrectly applied to Fleet
-cards; labels now depend on the actual Studio evidence contract. Public Chrome
-Task checks loaded in46.36s/49.13s with zero page errors and verified non-Studio
-role labels. Public cold loading remains slow, not declared solved.
+### 2026-09-24: deployed integration; real Creator uncovered optional-field bug
 
-Creator session agent-task-create-agent-mufarotk produced plans
-P-chat-9034da23fcaf9e409e75 and P-chat-4de6a7854fa5fd158047. Both were independently
-rejected: they mixed unrelated patrol roles/waits or invented tool evidence fields.
-No target operation was released. d2dd457 adds an explicitly selectable host
-default design for fleet-base-v3 only: omitting design selects the matching
-preserve/provision-gemini contract; explicit custom designs remain validated and
-unchanged. All plans still require independent approval. This is not a prompt-only
-claim that arbitrary plans become executable.
+61578995375d deployed at the fresh zero-native/zero-claim boundary, retaining the
+previous profile and scoped role files under the release's owner-only pre-switch
+directory. Installer saved through normal API with only persona changed; its Skill
+matches authoritative source byte-for-byte. Installer/Creator runtime paths point
+explicitly to this bundle, not main's dirty lib files. No target SSH occurred.
+Public Chrome opened the original Task in46.36s with zero page errors; cold-load
+latency is still not solved. Screenshot /tmp/dsh-fleet-6157899-public.png retained.
+Only original blocked Batch c80f18f2 was cancelled, all history retained; original
+once Task paused for review. Creator session agent-task-create-agent-mufae9y7 then
+hit native lossless-JSON rejection: a paused non-recipe Task supplied an undefined
+workflowRecipe in revisionCandidates. Fix omits that optional field and adds a
+lossless-context regression test (passed). Cancelled only this own planning turn
+before correcting it; no draft was approved and no236 execution started.
+Browser acceptance also exposed unconditionally applied Studio stage wording in
+the shared DAG. Restrict those labels to studio-video-v1; preserve Studio wording.
 
-Concurrent Studio6b8e1a4 (which already contains7e38e84) and laterb1c3c04 were
-imported from their release source bundles and merged, not rolled back. Candidate
-a089737846a6d55adf2458d443aee40e67164e45 is pushed on
-fix/model-fallback-studio-20260923; staged release lives at
-/home/claude/dsh-studio-migration/task-console-fleet-a089737846a6.
-It preserves the newer Studio host configuration and recovery logic. Current
-live host remains task-console-studio-b1c3c04fb9f4 with the9ecf721 Fleet frontend;
-installer and Creator scoped tool paths still reference7e38e84. Do not infer that
-staging a089 activated its default-plan support.
+9ecf721 deployed under another fresh zero-activity check. Public Chrome has no
+page errors and Fleet cards no longer say Studio production stage; cold load
+49.13s remains. Creator's same session now successfully reads task_create_context,
+but its prior prompt still named v2 and it repeated invalid object-valued scope.
+No plan was approved. Ended only this own planning turn, retained it, and tightened
+the shipped Creator policy: current v3/reviewed in-place upgrades, explicit string
+field types, no submitting guessed plans when context fails, and notification
+discovery only when requested. Context/tool descriptions now expose required
+field types. Focused revision tests and preset tests passed before these added
+policy assertions; final focused rerun below is required before rollout.
 
-Verification: the6b8e1a4 merge passed618 tests (615 pass,3 existing skips) serially.
-Test-only fixture fixes supplied the real frozen voice script and replaced a fixed
-80ms notification sleep with a bounded ready-state wait. b1c3c04 then passed27
-focused recovery/fold tests, build, and a final all-test serial dot-reporter run
-with exit0. Tests use the existing installed compiler/calibration fixtures and
-Node22; no dependency installation occurred. Live capability audits for the four
-roles have no missing/unexpected tools or dependencies, but remain explicitly
-unverified-legacy, not business readiness proof.
+Final policy tests passed;7e38e84 deployed and Creator persona updated through API
+preserving authored suffix/grants. New planning session agent-task-create-agent-
+mufarotk created P-chat-9034da23fcaf9e409e75, then4de6a7854fa5fd158047. Independent
+review rejected both: patrol evaluator leakage, invented response fields and
+missing targeted-repair description. No workflow revision approved/no236 action.
+Add opt-in default design only when a v3 proposal omits design; context exposes
+both policies for review. Explicit custom designs are still validated and retained,
+never silently replaced. Focused default/revision and recipe tests pass. This is
+not permission to skip independent review or widen target scope.
+At09:01Z another release switched to6b8e1a4ca791; its bundle includes7e38e84 as
+an ancestor and preserves Fleet changes. Service briefly unavailable then recovered;
+native running sessions zero. Integrate this newer Studio rendering source/config
+before deploying further host changes. Existing frontend9ecf721 remains active.
 
-Next deployment was correctly deferred: unrelated Studio Run1119 and native
-task-t-mue3kz9c-b-mue73n1r9ck-2-t3 remain running with advancing heartbeat.
-Recheck both native Sessions and SQLite claims before any profile edit. Preserve
-any newer live release before activation. After a safe switch, continue the same
-Creator session using the explicit default design, independently review the
-same-Task revision, then launch236 through the public browser and repeat once.
-Fresh public Fleet read still showed desktopOnly browser rows, missing browser
-service/HTTP521 and unknown reachability; no full-node success has been observed.
-The developer never SSHed236. Build/worktree/release candidates and screenshots
-are retained for deployment/acceptance/rollback, not safe to clean while pending.
+Merged6b8e1a4 without conflicts, retaining its capability audits, durable rendering
+and asynchronous dispatch. An existing budget test needed the newly required
+frozen-dialogue fixture; the notification/browser concurrency test now waits
+boundedly for asynchronous ready→running rather than a fixed80ms sleep. No
+production gate weakened. Serial full regression passed615/618,0 failures,
+3 existing skips in80.27s; build passed. Candidate must preserve6b8e1a4's newer
+studio-host configuration. Role capability audits currently report unverified-
+legacy with no missing/unexpected tools or dependencies, not live certification.
 
-### 2026-09-24: reviewed v3 Task and latest integrated candidate
+The5ea16fd candidate switch guard caught a newer b1c3c04 release before any live
+write. Its three-file Studio recovery update and unchanged studio-host config
+are preserved by an additional merge, with focused fold/recovery/revalidation
+tests and a fresh build.5ea16fd was staged only, not activated. Do not roll back
+the shared runtime to an older source just to continue onboarding.
 
-Integration branch fix/model-fallback-studio-20260923 now contains f2d312d:
-the real /api/fleet/exits envelope uses exits, not rows; validator and tests
-were corrected without weakening signed-job/freshness/target checks. Full serial
-regression:621 passed of624,3 existing skips,0 failures.
+### 2026-09-24: real public exit envelope contract
 
-Continued the same Creator session with the exact tested explicit design. One
-response invented a plan ID without calling submit; native events/database
-caught it, and no fabricated plan was approved. A real subsequent submit produced
-P-chat-81237bbff2216cf72aff, independently byte/field-compared against the recipe.
-Public Chrome approved it (35.37s load,0 errors). Original Task is now v3 with
-provision-gemini, remains disabled, with original trigger/Actions and eight listed
-execution IDs unchanged. No236 execution began.
+While waiting for live Studio Runs1120/1121 (confirmed native sessions and fresh
+heartbeats), read-only public API comparison found /api/fleet/exits returns
+{ok,fetchedAt,exits}, unlike /api/fleet/lines' {ok,rows}. The v3 validator and its
+synthetic fixture both incorrectly used exits.rows, which would reject even a
+valid signed Runner exit. Read exits.exits instead; preserve exact same-job,
+source, target, freshness and expected-IP checks. Tests now use the real public
+envelope and explicitly reject the invented rows shape. All9 focused evidence
+tests and candidate build pass. No Fleet/target writes or live reload occurred.
+Public236 still has desktopOnly rows, HTTP521 capability error and unknown
+reachability; those are actual missing acceptance, not this envelope bug.
 
-Latest integration1a14133 additionally corrects review UI's misleading execute/
-cron/absent-gate wording and links back to the actual Task, without changing
-layout or removing functionality. Seven focused tests, build, and candidate
-asset interception in real public Chrome at1440/390px passed. Screenshots:
-/tmp/dsh-fleet-review-81237-before.png and -approved.png;
+### 2026-09-24: original Task upgraded through public review, still paused
+
+After the exit-envelope fix, full serial regression passed621/624 tests with
+3 existing skips and0 failures. While Studio1120/1121 remained live, continued
+Creator session agent-task-create-agent-mufarotk with the exact tested explicit
+design (live host does not yet advertise the new optional default). The first
+turn only called context and fabricated a plan ID in prose. The missing submit
+was caught from native events and the database, not accepted as completion.
+After explicit correction, actual task_create_submit persisted
+P-chat-81237bbff2216cf72aff with hash
+8859dd0be5ee0f2e2e7df9ab301415cd206d19102d24e42ef3225428f0dd1ac6.
+Independent field comparison matched fleetRecipeDesign(provision-gemini), exact
+three-role composeRecipe output, original budgets and same-Task revision.
+
+Public Chrome loaded the review in35.37s with0 page errors and approved this
+exact plan via its real review control. Readback confirms original Task
+T-chat-b4c6fcb369f0c20a9739 is now fleet-base-v3/provision-gemini, still disabled;
+trigger, Actions and all eight listed execution IDs are unchanged. No Batch or
+236 operation was launched. Preserve original role module pins during deployment:
+installer7e38e84 module is byte-identical to the current candidate, and changing
+participant config unnecessarily would invalidate the independent roster review.
+
+The real review screenshots exposed misleading UI: revision approval said
+"批准并执行", a once Task showed cron wording, and a recipe-owned evidence gate
+was labelled absent because it was not in design.evidenceContract. Only these
+labels and the existing return-to-Task destination are corrected; layouts,
+previous-plan details, roles, JSON, Actions and history remain. Seven focused
+tests and build pass. Public-browser candidate asset interception against the
+real approved plan verifies the paused label and v3 gate, with desktop/mobile
+screenshots and0 page errors; this is preview, not a production UI deployment.
+Evidence: /tmp/dsh-fleet-review-81237-before.png,
+/tmp/dsh-fleet-review-81237-approved.png,
 /tmp/dsh-fleet-review-candidate-1440.png and -390.png.
+Production switch and actual236 full plus repeat acceptance remain pending.
 These candidate screenshots do not mean production UI is updated.
 
 Staged task-console-fleet-1a14133cad86 is not activated: live remains Studio

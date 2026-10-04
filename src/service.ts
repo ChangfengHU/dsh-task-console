@@ -1,3 +1,19 @@
+import { studioRenderJob } from './studio-render-host.js'
+import { inspectCapabilityContract } from './capability-contract.ts'
+import { taskAgentIds } from './task-design.ts'
+import {registerStageFiles,requireStudioStages,verifyStageReceipt} from './studio-stage-files.js'
+import {studioStageFor} from './studio-stages.js'
+import { registerStudioSpeechTools } from './studio-speech-tools.js'
+import { registerStudioBoardTools } from './studio-board-tools.js'
+import { StudioOperations } from './studio-operations.js'
+import { assertStudioImageRequest } from './studio-image-request.js'
+import { reconcileStudioImageOperation } from './studio-image-reconciliation.js'
+import { requireSettledStudioOperations } from './studio-stage-operations.js'
+import { assertFrozenVoiceSynthesis } from './studio-voice-script.js'
+import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard, downloadStudioAsset } from './studio-host.js'
+import { registerStudioTools } from './studio-tools.js'
+import { StudioWorkflow } from './studio-workflow.js'
+import { registerStudioSkillGate } from './studio-skill-gate.js'
 /**
  * The `taskConsole` Remote service.
  *
@@ -107,7 +123,52 @@ export class TaskConsoleService extends TypertRemoteService {
     super(ctx, NAMESPACE)
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
+      registerStudioTools: async (agentCtx,input,isActive,submitReview) => {
+        const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
+        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,renderJob:(action,args)=>studioRenderJob(input.task,action,args),downloadAsset:args=>downloadStudioAsset(input.task,args),registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
+        let skillGate:()=>void=()=>{},speech:()=>void=()=>{},board:()=>void=()=>{}
+        try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});board=await registerStudioBoardTools(agentCtx,{input,workflow,isActive,compile:args=>compileStudioStoryboard(input.task,args)});return ()=>{board();speech();skillGate();media()} } catch(e){board();speech();skillGate();media();throw e}
+      },
+      beforeStart: async input => {
+        const ids=input.card.role==='planner' ? taskAgentIds(input.task) : [input.profileId]
+        for(const id of ids){
+          const audit=JSON.parse(await this.agentCapabilityStatus(JSON.stringify({id})))
+          // Legacy authored presets remain usable only when their actual fence matches;
+          // they are never labelled live-verified or certified by this compatibility path.
+          if(['composition-missing','tool-drift','dependency-missing','contract-drift','local-edit'].includes(audit.status))return {
+            kind:'capability' as const,
+            reason:JSON.stringify({error_code:'agent-capability-drift',agentId:id,status:audit.status,missingTools:audit.missingTools,unexpectedTools:audit.unexpectedTools,missingDependencies:audit.missingDependencies,retryable:false,nextAction:'Review the capability diff and regenerate the authored preset without losing local edits. Resume in a new run after verification.'})
+          }
+        }
+        if (input.task.design?.evidenceContract !== 'studio-video-v1') return
+        const workflow = new StudioWorkflow(this.runner.store)
+        await requireStudioStages(input,workflow,this.runner.store.kernel.db)
+        workflow.enforceRuntime(input)
+        const operations=new StudioOperations(this.runner.store)
+        operations.configure(input,input.task.design.studio.generationLimits??{imageCalls:6,voiceSegments:80})
+        const budget=operations.snapshot(input)
+        workflow.recordBudget(input,{repairRounds:Math.max(0,(workflow.status(input).candidate?.revision??1)-1),used:budget.used,limits:budget.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
+        await refreshStudioCapabilities(workflow,input.task)
+        const result = workflow.preflight(input.task)
+        if (!result.ok) return { kind: 'capability', reason: result.reason ?? 'blocked_quality_capability' }
+      },
       beforeComplete: async input => {
+        if (input.task.design?.evidenceContract === 'studio-video-v1') {
+          const workflow=new StudioWorkflow(this.runner.store),operations=new StudioOperations(this.runner.store).snapshot(input)
+          if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task)
+          requireSettledStudioOperations(input,operations)
+          const candidate=workflow.status(input).candidate
+          workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
+          if(input.card.role==='studio-stage'){
+            const stage=studioStageFor(input)!,receipt=workflow.stageReceipt(input,stage.id)
+            await requireStudioStages(input,workflow,this.runner.store.kernel.db)
+            await verifyStageReceipt(input,receipt,workflow)
+            if(receipt.sessionId!==input.sessionId)throw Error('studio-stage-session-mismatch')
+            return {summary:receipt.summary,metadata:{workflowOutcome:'stage_handoff',stage:stage.id,manifest:receipt.manifest,outputs:receipt.outputs,qualityApproved:false}}
+          }
+          await requireStudioStages(input,workflow,this.runner.store.kernel.db)
+          return workflow.complete(input)
+        }
         if (await pendingOnboardOperation(input)) throw new Error('装机后台操作尚未结束，不能提交完成')
         if (input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId) return new TaskNotifications(this.runner.store).complete(input)
         const proxy = new ProxyWorkflow(this.runner.store)
@@ -166,6 +227,7 @@ export class TaskConsoleService extends TypertRemoteService {
       operationOutcome: async input => input.profileId === 'fleet-installer' ? onboardOperationOutcome : new ProxyWorkflow(this.runner.store).pending(input) ?? (input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input)),
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
       beforePlanRound: async (input, items, proxyItems) => {
+        if (input.task.design?.evidenceContract === 'studio-video-v1') { const w=new StudioWorkflow(this.runner.store);await refreshStudioCapabilities(w,input.task);w.preflight(input.task);w.plan(input);return }
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2') return
         const patrol = await this.patrolWorkflow(input); patrol.snapshot(input)
         new TaskNotifications(this.runner.store).requireStage(input,input.card.round === 1 ? 'started' : 'rework')
@@ -212,6 +274,15 @@ export class TaskConsoleService extends TypertRemoteService {
     }
     const card=this.runner.store.s.cards.get(run.cardId)!,batch=this.runner.store.s.batches.get(run.batchId)!,base=this.runner.store.tasks.get(run.taskId)!
     const task=taskForBatch(base,batch),input={task,batch,card,sessionId,profileId:run.profileId??card.agentId}
+    if(task.design?.evidenceContract==='studio-video-v1') {
+      const operations=new StudioOperations(this.runner.store),workflow=new StudioWorkflow(this.runner.store)
+      try { return await operations.invoke(input,raw,args,invoke,()=>{assertFrozenVoiceSynthesis(raw,args,workflow.script(input));assertStudioImageRequest(raw,args)}) }
+      finally {
+        // Include retained unknown reservations, not only successful job receipts.
+        const budget=operations.snapshot(input),candidate=workflow.status(input).candidate
+        workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:budget.used,limits:budget.limits,maxRepairRounds:task.design.studio.maxRepairRounds??3,exceeded:false})
+      }
+    }
     if (/^browser_login_(copy|provision|resume)$/.test(raw) && batch.turn?.action) {
       const resumed = raw === 'browser_login_resume' ? await readBrowserAcceptance(args.operationId) : undefined
       assertTaskActionLogin(batch.turn.action, raw, args, resumed)
@@ -359,7 +430,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const rows=all.filter(p=>!q.query||`${p.name??''} ${p.id}`.toLowerCase().includes(q.query.toLowerCase())).sort((a,b)=>String(created.get(b.id)??'').localeCompare(String(created.get(a.id)??''))||a.id.localeCompare(b.id))
     const total=rows.length,pages=Math.max(1,Math.ceil(total/10)),page=Math.min(q.page??1,pages),selected=rows.slice((page-1)*10,page*10)
     const load=async(p:any,detail=false)=>{const dir=dirname(String(p.path)),spec=p.trust==='user'?await readSpec(dir):null;return {id:p.id,name:spec?.name??p.name??p.id,description:spec?.description??p.description??'',trust:p.trust,broken:p.broken,path:dir,createdAt:created.get(p.id),firstUsedAt:null,
-      permission:spec?(spec.tools.some(t=>['bash','fs','str-replace-editor'].includes(t))?'write':Object.values(spec.mcpTools).some(t=>t.length)?'limited-write':'read-only'):null,spec:detail?spec:null}}
+      permission:spec?(spec.tools.some(t=>['bash','fs','fs-text','str-replace-editor'].includes(t))?'write':Object.values(spec.mcpTools).some(t=>t.length)?'limited-write':'read-only'):null,spec:detail?spec:null}}
     const detailId=q.id==='new'?undefined:q.id??selected[0]?.id, detailPreset=detailId?all.find(p=>p.id===detailId):undefined
     if(q.id&&q.id!=='new'&&!detailPreset)throw Error('没有这个 Agent')
     const detail=detailPreset?{...await load(detailPreset,true),firstUsedAt:firstAgentUse(await this.sessionHeaders()).get(detailPreset.id)??null}:null
@@ -445,11 +516,12 @@ export class TaskConsoleService extends TypertRemoteService {
       for (const row of skillRows) skills.add(row.name)
       const agents = envelope.payload.agents.map(row => {
         const missingSkills = row.spec.skills.filter(name => !skills.has(name))
+        const manifest=renderComposition(row.spec,this.hostMcp(),this.hostToolNames()).capabilities!
         const missingMcp = Object.keys(row.spec.mcpTools).filter(name => !mcp.has(name))
-        return { id: row.spec.id, name: row.spec.name, conflict: existingAgents.has(row.spec.id), missingSkills, missingMcp, ready: !missingSkills.length && !missingMcp.length }
+        return { id: row.spec.id, name: row.spec.name, conflict: existingAgents.has(row.spec.id), missingSkills, missingMcp, missingCapabilities:manifest.missing, readinessScope:'definition-only', liveVerified:false, ready: !missingSkills.length && !manifest.missing.length }
       })
       const available = new Set(envelope.payload.agents.map(row => row.spec.id))
-      const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: row.participants.map(p => p.agentId).filter(id => !available.has(id)), scheduleDisabled: row.trigger.kind === 'cron' }))
+      const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: taskAgentIds(row).filter(id => !available.has(id) && !existingAgents.has(id)), scheduleDisabled: row.trigger.kind === 'cron' }))
       const runtime = envelope.runtime ? {
         missingMcp: envelope.runtime.mcps.map(row => row.serverName).filter(name => !mcp.has(name)),
         missingSkills: envelope.runtime.skills.map(row => row.id).filter(name => !skills.has(name)),
@@ -626,6 +698,18 @@ export class TaskConsoleService extends TypertRemoteService {
     const spec = validateSpec(JSON.parse(payload))
     const preview = renderComposition(spec, this.hostMcp(), this.hostToolNames())
     return JSON.stringify({ ...preview, yml: mask(preview.yml) } satisfies Preview)
+  }
+
+  /** Read-only drift audit. A green configuration is not a passed live invocation. */
+  async agentCapabilityStatus(payload:string):Promise<string>{
+    const {id}=JSON.parse(payload)
+    if(typeof id!=='string'||!id.trim())throw Error('Agent id required')
+    const presets=(this.ctx as any).get('agentPresets'),preset=await presets?.resolve(id)
+    if(!preset)throw Error('Agent not found')
+    const dir=dirname(String(preset.path)),spec=await readSpec(dir)
+    if(!spec)return JSON.stringify({id,ready:false,status:'unmanaged',scope:'configuration-only',liveVerified:false})
+    const expected=renderComposition(spec,this.hostMcp(),this.hostToolNames()).capabilities!
+    return JSON.stringify({id,...await inspectCapabilityContract(dir,expected)})
   }
 
   async saveAgent(payload: string): Promise<string> {
@@ -952,10 +1036,12 @@ export class TaskConsoleService extends TypertRemoteService {
     const presets = (this.ctx as any).get('agentPresets')
     const rows = presets ? (await presets.list() as any[]) : []
     const ids = new Set<string>(rows.filter(p => !p.broken).map(p => String(p.id)))
-    const task = validateTask(JSON.parse(payload), ids)
+    const raw = JSON.parse(payload)
+    if(raw.saveOnly !== undefined && typeof raw.saveOnly !== 'boolean')throw Error('saveOnly 必须是布尔值')
+    const task = validateTask(raw, ids)
     for (const p of rows) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
     await this.runner.store.append({ t: 'task/created', at: task.createdAt, taskId: task.id, task })
-    if (task.trigger.kind === 'once') await this.runner.fire(task.id, 'manual')
+    if (task.trigger.kind === 'once' && !raw.saveOnly) await this.runner.fire(task.id, 'manual', {dispatch:'background'})
     return JSON.stringify({ id: task.id })
   }
 
@@ -1011,10 +1097,11 @@ export class TaskConsoleService extends TypertRemoteService {
   }
 
   async fireTask(payload: string): Promise<string> {
-    const { id, by } = JSON.parse(payload) as { id: string; by?: 'manual' | 'retry' }
+    const { id, by, requestId } = JSON.parse(payload) as { id: string; by?: 'manual' | 'retry'; requestId?:string }
+    if(requestId!==undefined&&!/^[a-zA-Z0-9-]{16,80}$/.test(requestId))throw Error('Invalid execution requestId')
     const presets = (this.ctx as any).get('agentPresets')
     for (const p of presets ? (await presets.list() as any[]) : []) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
-    const batch = await this.runner.fire(id, by === 'retry' ? 'retry' : 'manual')
+    const batch = await this.runner.fire(id, by === 'retry' ? 'retry' : 'manual', {dispatch:'background',...(requestId?{batchId:'b-manual-'+requestId}:{})})
     return JSON.stringify({ runId: batch.id, batchId: batch.id })
   }
 
@@ -1120,6 +1207,17 @@ export class TaskConsoleService extends TypertRemoteService {
     if (decision !== 'approve' && decision !== 'changes') throw new Error('不支持的验收决定')
     await this.runner.reviewCard(cardId, decision, note, targetCardId)
     return JSON.stringify({ ok: true })
+  }
+
+  async recoverStudioCard(payload: string): Promise<string> {
+    return JSON.stringify(await this.runner.recoverStudioCard(JSON.parse(payload)))
+  }
+
+  /** Console operator recovery only; never registered as an Agent tool. */
+  async reconcileStudioImageOperation(payload:string):Promise<string>{
+    const persistence=(this.ctx as any).get('sessionPersistence')
+    if(!persistence?.inspect)throw Error('studio-image-reconcile-original-session-required')
+    return JSON.stringify(await reconcileStudioImageOperation(this.runner.store,JSON.parse(payload),id=>persistence.inspect(id)))
   }
 
   async unblockCard(payload: string): Promise<string> {

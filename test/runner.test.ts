@@ -320,6 +320,8 @@ test('a failed notification branch does not cancel browser work', async()=>{
   await store.append({t:'card/gave_up',at:new Date().toISOString(),taskId:'T',cardId:id,error:'notification fixture'})
   await host.callTool(plannerSession,'task_plan_round',{summary:'continue browser work'})
   host.endTurn(plannerSession);await tick()
+  const dispatchDeadline=Date.now()+3000
+  while(store.s.cards.get(`${batch.id}#e1`)?.status==='ready' && Date.now()<dispatchDeadline)await tick()
   assert.equal(store.s.cards.get(`${batch.id}#e1`)?.status,'running')
   assert.equal(store.s.cards.get(`${batch.id}#r1`)?.status,'todo')
   assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
@@ -857,6 +859,17 @@ test('Creator revises the same paused Task by review without executing or rewrit
   restored.kernel.db.close()
 })
 
+test('Creator context stays lossless JSON with a paused non-recipe revision candidate', async () => {
+  const {store,runner,host} = await setup({enabled:false,origin:{source:'task-chat',signalId:'paused-custom',decision:'create'}})
+  try {
+    const context=await new TaskCreator(runner,async()=>[]).context()
+    assert.equal(context.revisionCandidates.length,1)
+    assert.equal('workflowRecipe' in context.revisionCandidates[0],false)
+    assert.deepEqual(JSON.parse(JSON.stringify(context)),context)
+    assert.equal(host.sessions.size,0)
+  } finally { runner.stop(); store.kernel.db.close() }
+})
+
 test('review upgrades a paused once-only Fleet Task in place without executing, scheduling or weakening login', async () => {
   const recipe = {id:'fleet-base-v2' as const,login:'provision-gemini' as const}
   const {store,runner,host,task,root} = await setup({...composeRecipe(recipe),workflowRecipe:recipe,enabled:false,
@@ -866,6 +879,10 @@ test('review upgrades a paused once-only Fleet Task in place without executing, 
   const input=(id:string)=>({agent:{session:{id,deriveMessages:()=>[{role:'user',content:'Upgrade this workflow without deleting history; do not start yet'}]}}})
   const revision={decision:'revise' as const,taskId:task.id,reason:'require full node evidence',recipe:{id:'fleet-base-v3' as const,login:'provision-gemini' as const},design}
   assert.ok((await creator.context()).revisionCandidates.some(t=>t.id===task.id))
+  const defaults:any=await creator.prepare({...revision,design:undefined},input('default-design'),root)
+  assert.equal(defaults.definition.design.failurePolicy.maxAttempts,2)
+  assert.match(defaults.definition.design.branches.find((b:any)=>b.id==='repair').action,/Gate→责任角色→Runner/)
+  assert.equal(host.sessions.size,0)
   await assert.rejects(creator.prepare({...revision,recipe:{id:'fleet-base-v3',login:'preserve'}},input('weaken'),root),/不能弱化/)
   const plan:any=await creator.prepare(revision,input('upgrade'),root)
   assert.equal(store.tasks.get(task.id)?.workflowRecipe?.id,'fleet-base-v2')
@@ -1415,4 +1432,191 @@ test('runner: concurrency cap holds across batches; restart marks live runs cras
   await runner2.start()
   assert.equal([...store2.s.runs.values()].filter(r => r.outcome === 'crashed').length, 2, 'the two live runs crashed on restart')
   runner2.stop()
+})
+
+
+test('host preflight blocks a durable run before creating any agent or dispatching prompt', async () => {
+  const { runner, store, host } = await setup({}, {beforeStart: () => ({kind:'capability',reason:'blocked_quality_capability: actual audio unavailable'})})
+  const batch = await runner.fire('T','manual')
+  assert.equal(host.sessions.size, 0)
+  const cards = [...store.s.cards.values()].filter(c => c.batchId === batch.id)
+  assert.ok(cards.some(c => c.status === 'blocked'))
+  assert.ok([...store.s.runs.values()].some(r => r.status === 'blocked'))
+  assert.ok(!store.all().some(e => e.t === 'run/prompt_dispatched'))
+})
+
+test('Studio unblock acknowledges durable ready without waiting for suspended media preflight and claims once', async () => {
+  let calls = 0, release!: () => void, entered!: () => void
+  const suspended = new Promise<void>(resolve => { release = resolve })
+  const preflightEntered = new Promise<void>(resolve => { entered = resolve })
+  const {runner,store,host} = await setup({participants:[{agentId:'a'}],design:{evidenceContract:'studio-video-v1'} as any}, {
+    beforeStart: async () => {calls++;if(calls===1)return {kind:'capability',reason:'fixture preflight unavailable'};entered();await suspended},
+  })
+  const batch = await runner.fire('T','manual'), cardId=batch.cardIds[0]
+  assert.equal(store.s.cards.get(cardId)!.status,'blocked')
+  let acknowledged=false
+  const acknowledgement=runner.unblockCard(cardId).then(()=>{acknowledged=true})
+  await Promise.race([acknowledgement,new Promise((_,reject)=>setTimeout(()=>reject(Error('unblock waited for preflight')),500))])
+  assert.equal(acknowledged,true)
+  assert.ok(store.all().some(e=>e.t==='card/ready'&&e.cardId===cardId))
+  await preflightEntered
+  assert.equal(host.sessions.size,0,'preflight is actually still suspended')
+  await runner.tick();await runner.tick()
+  assert.equal(calls,2,'concurrent ticks do not claim a duplicate run')
+  release();await tick()
+  assert.equal(host.sessions.size,1)
+  assert.equal(store.kernel.listRuns(cardId).length,2,'one prior blocked run and exactly one resumed run')
+  runner.stop()
+})
+
+test('Studio background unblock scheduling failure is durable telemetry, not an unhandled rejection', async () => {
+  const {runner,store}=await setup({participants:[{agentId:'a'}],design:{evidenceContract:'studio-video-v1'} as any},{beforeStart:()=>({kind:'capability',reason:'fixture blocked'})})
+  const batch=await runner.fire('T','manual'),cardId=batch.cardIds[0]
+  runner.tick=async()=>{throw Error('fixture dispatcher failure')}
+  await runner.unblockCard(cardId);await tick()
+  assert.equal(store.s.cards.get(cardId)!.status,'ready')
+  const failure=store.kernel.listEvents(cardId).find(e=>e.kind==='studio_unblock_dispatch_failed')
+  assert.ok(failure)
+  assert.match(failure.payload??'',/fixture dispatcher failure/)
+  runner.stop()
+})
+
+test('Studio structured review hands off through the same guarded completion without a second model tool call',async()=>{
+ let valid=false
+ const {host,store,runner}=await setup({graphMode:'dynamic-rounds',design:{evidenceContract:'studio-video-v1',failurePolicy:{maxAttempts:3}} as any},{
+  registerStudioTools:async(ctx,input,isActive,submitReview)=>ctx.tools.register({name:'studio_submit_review',execute:async()=>{assert.equal(isActive(),true);await submitReview();return {qualityApproved:false}}}),
+  beforeComplete:input=>{if(input.card.role==='reviewer'){if(!valid)throw Error('host-evidence-invalid');return {summary:'Negative review verified',metadata:{workflowOutcome:'review_needs_changes'}}}},
+ })
+ const batch=await runner.fire('T','manual'),latest=()=>[...host.sessions.keys()].at(-1)!
+ let session=latest();host.consumeFirst(session)
+ await assert.rejects(host.callTool(session,'studio_submit_review',{}),/reviewer-required/)
+ await host.callTool(session,'task_plan_round',{summary:'plan'});host.endTurn(session);await tick()
+ session=latest();host.consumeFirst(session);await host.callTool(session,'task_complete',{summary:'candidate'});host.endTurn(session);await tick()
+ session=latest();host.consumeFirst(session)
+ await assert.rejects(host.callTool(session,'studio_submit_review',{}),/host-evidence-invalid/)
+ assert.equal(store.s.cards.get(`${batch.id}#r1`)?.status,'running')
+ valid=true;await host.callTool(session,'studio_submit_review',{});host.endTurn(session);await tick()
+ assert.equal(store.s.cards.get(`${batch.id}#r1`)?.status,'done')
+ assert.equal(store.s.runs.get(`${batch.id}#r1#1`)?.metadata?.workflowOutcome,'review_needs_changes')
+ assert.equal(store.s.cards.get(`${batch.id}#p2`)?.status,'running')
+ assert.equal(store.all().some(e=>e.t==='run/nudged'),false)
+ runner.stop()
+})
+
+test('Studio workers receive real JSON tool-call corrections, not Python-style pseudocode',async()=>{
+ const {host,store,runner}=await setup({participants:[{agentId:'a'}],maxTries:1,onFail:'stop',design:{evidenceContract:'studio-video-v1'} as any},{registerStudioTools:async()=>()=>{}})
+ const batch=await runner.fire('T','manual'),session=[...host.sessions.keys()][0];host.consumeFirst(session)
+ host.endTurn(session);await tick();host.endTurn(session);await tick()
+ assert.equal(store.s.runs.get(`${batch.id}#0#1`)!.nudges,2)
+ assert.match(host.sessions.get(session)!.followups.at(-1).content[0].text,/JSON.*summary/)
+ assert.doesNotMatch(host.sessions.get(session)!.followups.at(-1).content[0].text,/task_complete\(summary/)
+ host.endTurn(session);await tick();assert.equal(store.s.runs.get(`${batch.id}#0#1`)!.outcome,'protocol_violation')
+ runner.stop()
+})
+
+test('Studio planner correction uses planning/finalization tools instead of unavailable worker completion',async()=>{
+ const {host,runner}=await setup({graphMode:'dynamic-rounds',design:{evidenceContract:'studio-video-v1',failurePolicy:{maxAttempts:3}} as any},{registerStudioTools:async()=>()=>{}})
+ await runner.fire('T','manual');const session=[...host.sessions.keys()][0];host.consumeFirst(session);host.endTurn(session);await tick()
+ const correction=host.sessions.get(session)!.followups.at(-1).content[0].text
+ assert.match(correction,/task_plan_round/);assert.match(correction,/task_finalize/);assert.doesNotMatch(correction,/task_complete/)
+ runner.stop()
+})
+
+test('studio preparation Task Links are materialized in the same batch and retained in replay',async()=>{
+ const stages=['storyboard','visual','sound'].map(id=>({id,agentId:'a',brief:`Prepare ${id}`}))
+ const {runner,store,host}=await setup({graphMode:'dynamic-rounds',design:{studioStages:stages,failurePolicy:{maxAttempts:3}} as any})
+ const batch=await runner.fire('T','manual');await tick();const sid=[...host.sessions.keys()][0]
+ await host.callTool(sid,'task_plan_round',{summary:'Prepare staged production'})
+ const rows=store.kernel.db.prepare('SELECT id,role,tenant FROM tasks WHERE tenant=?').all(batch.id) as any[]
+ assert.equal(rows.filter(r=>r.role==='studio-stage').length,3)
+ assert.equal(store.s.cards.get(`${batch.id}#s1-visual`)?.role,'studio-stage')
+ assert.deepEqual(store.kernel.parentIds(`${batch.id}#g1`),[`${batch.id}#s1-sound`,`${batch.id}#s1-visual`])
+ assert.deepEqual(store.kernel.parentIds(`${batch.id}#s1-sound`),[`${batch.id}#s1-storyboard`])
+ assert.ok(rows.every(r=>r.tenant===batch.id));runner.stop()
+})
+
+test('background fire acknowledges durable batch while host preflight is suspended and stable-ID retries claim once', async () => {
+  let release!: () => void, entered!: () => void, calls = 0
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const didEnter = new Promise<void>(resolve => { entered = resolve })
+  const {runner,store,host} = await setup({participants:[{agentId:'a'}]}, {
+    beforeStart: async () => { calls++; entered(); await pending },
+  })
+  const options = {batchId:'b-background-ack',dispatch:'background' as const}
+  const [first,retry] = await Promise.all([runner.fire('T','manual',options),runner.fire('T','manual',options)])
+  assert.equal(first.id,retry.id)
+  assert.equal(store.s.batches.size,1)
+  assert.equal(store.kernel.db.prepare('SELECT COUNT(*) AS n FROM dsh_batches').get().n,1)
+  assert.equal(host.sessions.size,0)
+  await didEnter
+  assert.equal(calls,1)
+  assert.equal(store.kernel.listRuns(first.cardIds[0]).length,1)
+  const again = await runner.fire('T','manual',options)
+  assert.equal(again.id,first.id)
+  await tick()
+  assert.equal(calls,1,'the in-flight claim fences duplicate dispatch')
+  release(); await tick()
+  assert.equal(host.sessions.size,1)
+  assert.equal(store.kernel.listRuns(first.cardIds[0]).length,1)
+})
+
+test('background batch survives stop before callback and restart still performs initial preset preflight', async () => {
+  const {runner,store,root,host} = await setup({participants:[{agentId:'a'}]})
+  const batch = await runner.fire('T','manual',{batchId:'b-background-restart',dispatch:'background'})
+  runner.stop()
+  assert.equal(host.sessions.size,0)
+  store.kernel.db.close()
+  const restartedStore = new EventStore(join(root,'store'))
+  const restartedHost = fakeHost(join(root,'presets'))
+  let checked = 0
+  const get = restartedHost.ctx.get
+  restartedHost.ctx.get = (key: string) => key === 'agentPresets' ? {
+    ...get(key), resolve: async () => { checked++; throw Error('missing after restart') },
+  } : get(key)
+  const restartedRunner = new TaskRunner(restartedHost.ctx,restartedStore)
+  try {
+    await restartedRunner.start()
+    assert.equal(checked,1)
+    assert.equal(restartedHost.sessions.size,0)
+    assert.equal(restartedStore.s.batches.size,1)
+    assert.equal(restartedStore.s.batches.get(batch.id)?.settled?.outcome,'failed')
+    assert.match(restartedStore.s.cards.get(batch.cardIds[0])?.error ?? '',/preset a 不在名册上/)
+  } finally { restartedRunner.stop(); restartedStore.kernel.db.close() }
+})
+
+test('background dispatch rejection is durable, leaves queued work intact, and subsequent dispatch resumes once', async () => {
+  const {runner,store,host} = await setup({participants:[{agentId:'a'}]})
+  const original = runner.tick.bind(runner)
+  runner.tick = async () => { throw Error('fixture dispatch unavailable') }
+  const batch = await runner.fire('T','manual',{batchId:'b-background-failure',dispatch:'background'})
+  await tick()
+  const event = store.kernel.listEvents(batch.cardIds[0]).find(e => e.kind === 'dispatch_failed')
+  assert.ok(event)
+  assert.match(event.payload ?? '',/fixture dispatch unavailable/)
+  assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'ready')
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  assert.equal(host.sessions.size,0)
+  runner.tick = original
+  await runner.fire('T','manual',{batchId:batch.id,dispatch:'background'})
+  await tick()
+  assert.equal(host.sessions.size,1)
+  assert.equal(store.kernel.listRuns(batch.cardIds[0]).length,1)
+})
+
+test('accepted background batch starts exactly once after host restart before dispatch', async () => {
+  const {runner,store,root} = await setup({participants:[{agentId:'a'}]})
+  const batch = await runner.fire('T','manual',{batchId:'b-background-resume',dispatch:'background'})
+  runner.stop(); store.kernel.db.close()
+  const resumedStore = new EventStore(join(root,'store'))
+  const resumedHost = fakeHost(join(root,'presets'))
+  const resumedRunner = new TaskRunner(resumedHost.ctx,resumedStore)
+  try {
+    await resumedRunner.start()
+    await resumedRunner.fire('T','manual',{batchId:batch.id,dispatch:'background'})
+    await tick()
+    assert.equal(resumedStore.s.batches.size,1)
+    assert.equal(resumedHost.sessions.size,1)
+    assert.equal(resumedStore.kernel.listRuns(batch.cardIds[0]).length,1)
+    assert.equal(resumedStore.s.batches.get(batch.id)?.settled,undefined)
+  } finally { resumedRunner.stop(); resumedStore.kernel.db.close() }
 })

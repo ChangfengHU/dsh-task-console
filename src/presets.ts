@@ -1,3 +1,8 @@
+import { capabilityContract, CAPABILITY_LOCK } from './capability-contract.ts'
+import { fileURLToPath } from 'node:url'
+import { STUDIO_SPEECH_TOOL_NAMES } from './studio-speech-tools.js'
+import { STUDIO_BOARD_TOOL_NAMES } from './studio-board-tools.js'
+import { STUDIO_TOOL_NAMES } from './studio-tools.js'
 /**
  * Agent specs ⇄ preset directories.
  *
@@ -30,6 +35,9 @@ export const ID_RE = /^[a-z0-9][a-z0-9-]*$/
 
 /** Native tools the editor offers, each mapping to one composition row. */
 export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: string[] })[] = [
+  { id: 'studio-runtime', label: 'Studio Task evidence', group: '视频工作室', writes: false,
+    description: '仅 studio-video-v1 Task 内注册；执行者/素材专家可按真实素材 ID 经宿主认证下载归档文件，按角色限制阶段/候选登记、取证及审查；来源卡不是媒体，下载不代表质量通过，普通会话不可用。',
+    schemaNames: [...STUDIO_TOOL_NAMES,...STUDIO_SPEECH_TOOL_NAMES,...STUDIO_BOARD_TOOL_NAMES], rows: '# Studio tools are registered by the active Task runner, never by standalone chat.' },
   { id: 'task-create-runtime', label: 'Task creation', group: '任务', writes: true,
     description: '读取真实角色，生成待审查计划并查询审查与执行；不提供放行或业务运维工具，不提升参与者权限。',
     schemaNames: ['task_create_context', 'task_create_submit', 'task_create_plan_status', 'task_create_status'],
@@ -45,6 +53,10 @@ export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: s
   { id: 'fs', label: 'read / write / edit / read_image', group: '本机', writes: true,
     description: '读写改文件并读取本地图片。',
     schemaNames: ['edit', 'read', 'read_image', 'write'],
+    rows: "- id: tool-fs\n  name: '@deepseek-ai/dsh-tool-fs'" },
+  { id: 'fs-text', label: 'read / write / edit (text-only)', group: '本机', writes: true,
+    description: '文字模型文件工具；图片观察走专用视觉工具，不授权原生read_image。',
+    schemaNames: ['edit', 'read', 'write'],
     rows: "- id: tool-fs\n  name: '@deepseek-ai/dsh-tool-fs'" },
   { id: 'fs-search', label: 'glob / grep', group: '本机', writes: false,
     description: '找文件、搜内容,只读。',
@@ -184,7 +196,11 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
   for (const id of spec.tools) {
     const tool = NATIVE_TOOLS.find(t => t.id === id)
     if (tool) {
-      parts.push(tool.rows)
+      // Codex-backed topic searches can exceed the generic 30-second tool budget.
+      // Scope the longer cooperative budget to Studio; fetch and other Agents keep defaults.
+      parts.push(id === 'web' && spec.tools.includes('studio-runtime')
+        ? `${tool.rows}\n  config:\n    searchTimeoutMs: 120000`
+        : tool.rows)
       for (const name of tool.schemaNames) allowedToolNames.add(name)
     }
   }
@@ -204,7 +220,7 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
       ? { sourceEntryId: host.sourceEntryId, serverName: name, allowedTools, ...(Object.keys(toolRules).length ? { toolRules } : {}) }
       : { ...host.config, serverName: name, allowedTools, ...(Object.keys(toolRules).length ? { toolRules } : {}) }
     const body = toYaml(config, { lineWidth: 0 }).trimEnd()
-    parts.push(`${host.live ? `# 宿主层仍有同名 ${serverName},preset 围栏会隐藏宿主副本\n` : ''}- id: mcp-${name}\n  name: 'dsh-task-console/filtered-mcp-client'\n  config:\n${indent(body, 4)}`)
+    parts.push(`${host.live ? `# 宿主层仍有同名 ${serverName},preset 围栏会隐藏宿主副本\n` : ''}- id: mcp-${name}\n  name: '${spec.tools.includes('studio-runtime') ? fileURLToPath(new URL('./filtered-mcp-client.js',import.meta.url)) : 'dsh-task-console/filtered-mcp-client'}'\n  config:\n${indent(body, 4)}`)
   }
 
   if (spec.skills.length) {
@@ -222,7 +238,8 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
   const fence = toYaml({ selected: [...allowedToolNames].sort() }, { lineWidth: 0 }).trimEnd()
   parts.push(`- id: inherited-tool-fence\n  name: 'dsh-task-console/agent-tool-fence'\n  config:\n${indent(fence, 4)}`)
 
-  return { yml: parts.join('\n\n') + '\n', renamed, permission: permissionOf(spec, () => true) }
+  const yml=parts.join('\n\n') + '\n'
+  return { yml, renamed, permission: permissionOf(spec, () => true), capabilities: capabilityContract(spec,yml,NATIVE_TOOLS,hostMcp) }
 }
 
 /** The spec file we keep beside the composition. */
@@ -463,6 +480,7 @@ async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: S
   await mkdir(staged, { recursive: true, mode: 0o700 })
   try {
     await writeFile(join(staged, 'agent.cordis.yml'), preview.yml, { mode: 0o600 })
+    await writeFile(join(staged, CAPABILITY_LOCK), JSON.stringify(preview.capabilities,null,2)+'\n', {mode:0o600})
     await writeFile(join(staged, 'preset.yml'), `name: ${JSON.stringify(spec.name)}\ndescription: ${JSON.stringify(spec.description)}\n`, { mode: 0o600 })
     await writeFile(join(staged, SPEC_FILE), JSON.stringify(spec, null, 2) + '\n', { mode: 0o600 })
     await writeFile(join(staged, 'agent-meta.json'), JSON.stringify({ createdAt }) + '\n', { mode: 0o600 })

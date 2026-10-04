@@ -141,3 +141,29 @@ test('foldTurns classifies task_* terminators as their own kind', () => {
   const l = foldTurns('s', ev)
   assert.deepEqual(l.turns[0].steps[0].tools.map(t => t.kind), ['mcp', 'task']); assert.equal(l.totals.task, 1); assert.equal(l.totals.mcp, 1)
 })
+
+
+test('foldTurns distinguishes running job counters from actual tool errors',()=>{
+ const ledger=(text:string,isError=false)=>foldTurns('s',[
+  {type:'turn/start',time:1000,data:{turn:1}},
+  {type:'step/start',time:1100,data:{step:1}},
+  {type:'tool/call',time:1200,data:{callId:'c',name:'mcp__image__get_task',arguments:'{}'}},
+  {type:'tool/result',time:1300,data:{message:{source:{callId:'c'},content:[{type:'tool-result',isError,content:[{type:'text',text}]}]}}},
+ ]).turns[0].steps[0].tools[0]
+ assert.equal(ledger(JSON.stringify({status:'running',succeeded:2,failed:0,total:4})).ok,true)
+ assert.equal(ledger(JSON.stringify({ok:true,note:'previous attempt failed'})).ok,true)
+ for(const value of [{ok:false},{isError:true},{status:'failed'},{error:'failure'},{exitCode:1}])assert.equal(ledger(JSON.stringify(value)).ok,false)
+ assert.equal(ledger('{"status":"running"}',true).ok,false)
+ assert.equal(ledger('Error: connection failed').ok,false)
+})
+
+test('tool call is pending until an actual result, including empty results and failed turns',()=>{
+ const events=[{type:'turn/start',time:1000,data:{turn:1}},{type:'step/start',time:1100,data:{step:1}},{type:'tool/call',time:1200,data:{callId:'c',name:'studio_character_image',arguments:'{}'}}]
+ const tool=(extra:any[]=[])=>foldTurns('s',[...events,...extra]).turns[0].steps[0].tools[0]
+ assert.equal(tool().state,'running');assert.equal(tool().ok,undefined)
+ const result={type:'tool/result',time:1300,data:{message:{source:{callId:'c'},content:[]}}}
+ assert.equal(tool([result]).state,'returned');assert.equal(tool([result]).ok,true)
+ const end={type:'turn/end',time:1400,data:{reason:{kind:'error'}}}
+ assert.equal(tool([end]).state,'no_result');assert.equal(tool([end]).ok,undefined)
+ assert.equal(tool([result,end]).state,'returned');assert.equal(tool([result,end]).ok,true)
+})

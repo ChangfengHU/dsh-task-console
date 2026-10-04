@@ -86,7 +86,7 @@ test('writePreset lays out the directory, copies chosen skills, and readSpec rou
   const presetRoot = join(root, 'presets')
   const { path } = await writePreset(spec, [], [{ name: 'linux-clash-skill', dir: join(lib, 'linux-clash-skill'), description: '', root: 'x' }], presetRoot)
   assert.equal(path, join(presetRoot, 'inspector'))
-  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'preset.yml', 'skills', 'skills.lock.json', 'task-console.json'])
+  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'capabilities.lock.json', 'preset.yml', 'skills', 'skills.lock.json', 'task-console.json'])
   const createdAt = await readAgentCreatedAt(path)
   assert.ok(createdAt)
   assert.match(await readFile(join(path, 'preset.yml'), 'utf8'), /name: "巡检员"/)
@@ -99,7 +99,7 @@ test('writePreset lays out the directory, copies chosen skills, and readSpec rou
   assert.deepEqual((await verifyPresetSkills(spec, [{ name: 'linux-clash-skill', dir: join(lib, 'linux-clash-skill'), description: '', root: 'x' }], path)).map(row => row.status), ['source-and-copy-drift'])
   // a second save without skills clears the stale copy
   await writePreset({ ...spec, skills: [] }, [], [], presetRoot)
-  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'preset.yml', 'skills.lock.json', 'task-console.json'])
+  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'capabilities.lock.json', 'preset.yml', 'skills.lock.json', 'task-console.json'])
   assert.equal(await readAgentCreatedAt(path), createdAt)
   await removePreset('inspector', presetRoot)
   assert.deepEqual(await readdir(presetRoot), [])
@@ -133,7 +133,7 @@ test('configuration import preserves an unavailable Skill reference without bloc
   const spec = validateSpec({ ...base, id: 'portable', tools: [], mcpTools: {}, skills: ['missing'] })
   const { path } = await writePreset(spec, [], [], root, [], { allowMissingSkills: true })
   assert.deepEqual((await readSpec(path))?.skills, ['missing'])
-  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'preset.yml', 'skills', 'skills.lock.json', 'task-console.json'])
+  assert.deepEqual((await readdir(path)).sort(), ['agent-meta.json', 'agent.cordis.yml', 'capabilities.lock.json', 'preset.yml', 'skills', 'skills.lock.json', 'task-console.json'])
 })
 
 test('managed Skill copies and hashes ignore interpreter cache files', async () => {
@@ -150,3 +150,18 @@ test('managed Skill copies and hashes ignore interpreter cache files', async () 
   await writeFile(join(source, '__pycache__', 'demo.cpython-39.pyc'), 'changed-cache')
   assert.equal((await verifyPresetSkills(spec, [{ name: 'demo', description: '', dir: source, root: 'test' }], preset))[0].status, 'in-sync')
 })
+
+
+test('Studio web search has a bounded 120-second budget while ordinary Agents and fetch retain defaults', async () => {
+  const {parse} = await import('yaml')
+  const spec={...base,tools:['web','studio-runtime'],mcpTools:{},mcpPolicy:{},skills:[]}
+  const studio=parse(renderComposition(spec,[]).yml).find((row:any)=>row.id==='tool-web')
+  assert.equal(studio.name,'@deepseek-ai/dsh-tool-web')
+  assert.deepEqual(studio.config,{searchTimeoutMs:120000})
+  const ordinary=parse(renderComposition({...spec,tools:['web']},[]).yml).find((row:any)=>row.id==='tool-web')
+  assert.equal(ordinary.config,undefined)
+  const absent=parse(renderComposition({...spec,tools:['studio-runtime']},[]).yml)
+  assert.equal(absent.some((row:any)=>row.id==='tool-web'),false)
+})
+
+test('text-only file group excludes read_image from the enforced tool grant',()=>{const spec=validateSpec({...base,tools:['fs-text','studio-runtime'],skills:[],mcpTools:{}}),out=renderComposition(spec,[],['read_image']);assert.deepEqual(spec.tools,['fs-text','studio-runtime']);const selected=out.yml.slice(out.yml.indexOf('    selected:'));assert.match(selected,/studio_preview_image/);assert.match(selected,/studio_preview_frames/);assert.doesNotMatch(selected,/^-?\s+- read_image$/m);assert.match(out.yml,/@deepseek-ai\/dsh-tool-fs/);})

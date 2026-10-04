@@ -5,6 +5,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { gunzipSync } from 'node:zlib'
 
 export const PACKAGE_ID = 'plugins_6ac15b9d3e4c8191b2f6ff943d1e574d'
 const APP_ID = 'asdk_app_6ac1f14048b88191a1aa282f102f65f6'
@@ -14,13 +15,13 @@ const requireValue = (ok: unknown, code: string) => { if (!ok) fail(code) }
 export const publisherToken = (token: string) => createHmac('sha256', token).update('fleet-hub-plugin-publisher-v1').digest('hex')
 
 export interface Platform {
-  read(): Promise<any>
+  read(paths?: string[], binaryPaths?: string[]): Promise<any>
   update(archive: string, expected: string): Promise<void>
   close(): Promise<void>
 }
 
 export function publisherRuntimeConfig(effective: any = {}) {
-  const config: Record<string, unknown> = {'features.shell_tool':false,'features.unified_exec':false,'features.multi_agent':false,'features.skill_mcp_dependency_install':false,web_search:'disabled','apps._default.enabled':false,'apps.connector_openai_plugin_creator.enabled':true,'apps.connector_openai_plugin_creator.default_tools_enabled':false,'apps.connector_openai_plugin_creator.tools.update_plugin.enabled':true,'apps.connector_openai_plugin_creator.tools.get_plugin_files.enabled':true}
+  const config: Record<string, unknown> = {'features.shell_tool':false,'features.unified_exec':false,'features.multi_agent':false,'features.skill_mcp_dependency_install':false,web_search:'disabled','apps._default.enabled':false,'apps.connector_openai_plugin_creator.enabled':true,'apps.connector_openai_plugin_creator.default_tools_enabled':false,'apps.connector_openai_plugin_creator.tools.update_plugin.enabled':true,'apps.connector_openai_plugin_creator.tools.get_plugin_files.enabled':true,'apps.connector_openai_plugin_creator.tools.get_owned_plugin_archive.enabled':true}
   for(const name of Object.keys(effective.mcp_servers||{}))config['mcp_servers.'+name+'.enabled']=false
   for(const name of Object.keys(effective.apps||{}))if(!['_default','connector_openai_plugin_creator'].includes(name))config['apps.'+name+'.enabled']=false
   return config
@@ -98,7 +99,8 @@ export async function openPluginCreator(binary = join(homedir(), '.local/bin/cod
       cursor=inventory.nextCursor;if(!cursor)break
     }
     const readTool='plugin_creator.get_plugin_files',updateTool='plugin_creator.update_plugin'
-    requireValue(found.has(readTool)&&found.has(updateTool),'authorization_required')
+    const archiveTool='plugin_creator.get_owned_plugin_archive'
+    requireValue(found.has(readTool)&&found.has(updateTool)&&found.has(archiveTool),'authorization_required')
     const call=async(tool:string,args:unknown)=>{
       const raw=await rpc('mcpServer/tool/call',{threadId,server:'codex_apps',tool,arguments:args},90000)
       const result=raw.result??raw
@@ -127,7 +129,34 @@ export async function openPluginCreator(binary = join(homedir(), '.local/bin/cod
         verifyUploadInvocation(invocations[0],archive,expected)
       }finally{clearTimeout(timer);observeTurn=undefined;done.catch(()=>{})}
     }
-    return {read:()=>call(readTool,{plugin_id:PACKAGE_ID,read_paths:FILES}),update,close}
+    const read=async(paths=FILES,binaryPaths:string[]=[])=>{
+      const result=await call(readTool,{plugin_id:PACKAGE_ID,read_paths:FILES.slice(0,5)})
+      let offset=result.next_offset
+      for(let page=0;offset!=null&&page<20;page++){
+        const next=await call(readTool,{plugin_id:PACKAGE_ID,offset})
+        requireValue(next.plugin.current_release_id===result.plugin.current_release_id,'platform_conflict')
+        result.files.push(...next.files);offset=next.next_offset
+      }
+      requireValue(offset==null&&result.files.length<=250,'source_changed')
+      const available=new Set<string>(result.files.map((f:any)=>f.path))
+      const texts=paths.filter(p=>available.has(p)&&!binaryPaths.includes(p)&&!Object.hasOwn(result.contents,p))
+      for(let i=0;i<texts.length;i+=20){
+        const next=await call(readTool,{plugin_id:PACKAGE_ID,read_paths:texts.slice(i,i+20)})
+        requireValue(next.plugin.current_release_id===result.plugin.current_release_id,'platform_conflict')
+        Object.assign(result.contents,next.contents)
+      }
+      if(binaryPaths.length){
+        const owned=await call(archiveTool,{plugin_id:PACKAGE_ID,release_id:result.plugin.current_release_id})
+        requireValue(owned.plugin.plugin_id===PACKAGE_ID&&owned.release.release_id===result.plugin.current_release_id,'identity_mismatch')
+        const url=new URL(owned.download_url)
+        requireValue(url.protocol==='https:'&&url.hostname.endsWith('.oaiusercontent.com')&&!url.username&&!url.password&&!url.port,'verification_failed')
+        const response=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(20000)})
+        requireValue(response.ok,'verification_failed')
+        result.binaryContents=ownedTarFiles(await bytes(response,8*1024*1024),binaryPaths.filter(path=>available.has(path)))
+      }
+      return result
+    }
+    return {read,update,close}
   } catch(error) {await close(); throw error}
 }
 
@@ -136,6 +165,27 @@ function sameText(path: string, a: string, b: string) {
   if(path.endsWith('.json')){try{return isDeepStrictEqual(JSON.parse(a),JSON.parse(b))}catch{return false}}
   return a===b
 }
+/** Read owned tar.gz without filesystem extraction or executing bundled files. */
+export function ownedTarFiles(compressed:Buffer,paths:string[]) {
+  const data=gunzipSync(compressed,{maxOutputLength:12*1024*1024}),result:Record<string,string>={}
+  let offset=0
+  while(offset+512<=data.length){
+    const header=data.subarray(offset,offset+512);if(header.every(b=>b===0))break
+    const string=(a:number,b:number)=>header.subarray(a,b).toString('utf8').replace(/\0.*$/s,'')
+    const checksum=parseInt(string(148,156).trim(),8),sum=header.reduce((n,b,i)=>n+(i>=148&&i<156?32:b),0)
+    requireValue(checksum===sum,'verification_failed')
+    const size=parseInt(string(124,136).trim()||'0',8),type=string(156,157),prefix=string(345,500)
+    let path=(prefix?prefix+'/':'')+string(0,100);path=path.replace(/^\.\//,'')
+    requireValue(Number.isSafeInteger(size)&&size>=0&&offset+512+size<=data.length&&!path.split('/').includes('..'),'verification_failed')
+    if(paths.includes(path)){
+      requireValue((type===''||type==='0')&&!Object.hasOwn(result,path),'verification_failed')
+      result[path]=data.subarray(offset+512,offset+512+size).toString('base64')
+    }
+    offset+=512+Math.ceil(size/512)*512
+  }
+  requireValue(paths.every(p=>Object.hasOwn(result,p)),'verification_failed');return result
+}
+const allowedFile=(path:string)=>FILES.includes(path)||path==='assets/icon.png'||/^skills\/[a-z][a-z0-9-]{1,79}\/(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_ -]+\/)*[A-Za-z0-9_ .-]+$/.test(path)&&!path.split('/').some(p=>p==='.'||p==='..'||p==='node_modules')
 export function validateSource(snapshot:any,current:any) {
   requireValue(snapshot.packageId===PACKAGE_ID&&snapshot.appId===APP_ID&&snapshot.packageName==='vyibc-personal-content','identity_mismatch')
   requireValue(current.plugin?.plugin_id===PACKAGE_ID&&current.plugin?.scope==='USER'&&current.plugin?.discoverability==='PRIVATE','identity_mismatch')
@@ -146,12 +196,19 @@ export function validateSource(snapshot:any,current:any) {
   requireValue(app.apps?.['vyibc-personal-content']?.id===APP_ID&&app.apps?.['vyibc-personal-content']?.required===true&&Object.keys(app.apps).length===1,'identity_mismatch')
   for(const path of ['.app.json','mcp.json','.mcp.json'])requireValue(sameText(path,snapshot.files[path],current.contents[path]),'source_changed')
   requireValue(JSON.stringify(next.extensions?.['com.openai']?.interface?.defaultPrompt)===JSON.stringify(before.extensions?.['com.openai']?.interface?.defaultPrompt),'source_changed')
-  requireValue(Object.keys(snapshot.files).every(p=>[...FILES,'assets/icon.png'].includes(p))&&FILES.every(p=>typeof snapshot.files[p]==='string'),'source_changed')
+  const paths=Object.keys(snapshot.files)
+  requireValue(paths.length<=250&&paths.every(allowedFile)&&FILES.slice(0,5).every(p=>typeof snapshot.files[p]==='string'),'source_changed')
+  requireValue((snapshot.binaryPaths||[]).every((p:string)=>paths.includes(p)&&allowedFile(p)),'source_changed')
+  // Official update is an overlay: omission is NOT deletion. Fail before upload.
+  requireValue((current.files||[]).filter((f:any)=>f.path.startsWith('skills/')).every((f:any)=>paths.includes(f.path)),'platform_file_delete_unsupported')
 }
 export function verifyReadback(snapshot:any,current:any) {
   validateSource(snapshot,current)
   requireValue(current.plugin.version===snapshot.version&&/^pluginrel_[a-zA-Z0-9]+$/.test(current.plugin.current_release_id),'verification_failed')
-  for(const path of FILES)requireValue(sameText(path,snapshot.files[path],current.contents[path]),'verification_failed')
+  for(const path of Object.keys(snapshot.files)){
+    if((snapshot.binaryPaths||[]).includes(path))requireValue(current.binaryContents?.[path]===snapshot.files[path],'verification_failed')
+    else if(path!=='assets/icon.png')requireValue(sameText(path,snapshot.files[path],current.contents[path]),'verification_failed')
+  }
   return current.plugin.current_release_id as string
 }
 
@@ -193,20 +250,22 @@ export class PluginPublisher {
       const archive=await this.request(id,'archive')
       requireValue(createHash('sha256').update(archive).digest('hex')===data.archiveSha,'archive_integrity_failed')
       platform=await (this.options.platform||openPluginCreator)()
-      let current=await platform.read();validateSource(s,current)
+      const paths=Object.keys(s.files),binaryPaths=s.binaryPaths||[]
+      let current=await platform.read(paths,binaryPaths);validateSource(s,current)
       if(current.plugin.version!==s.version){
         requireValue(current.plugin.current_release_id===data.job.expectedReleaseId,'platform_conflict')
         directory=await mkdtemp(join(tmpdir(),'fleet-plugin-publish-'))
         const path=join(directory,'release.zip');await writeFile(path,archive,{mode:0o600})
         mutationAttempted=true
         await platform.update(path,data.job.expectedReleaseId)
-        current=await platform.read()
+        current=await platform.read(paths,binaryPaths)
       }
+      if(current.plugin.version===s.version&&binaryPaths.length&&!current.binaryContents)current=await platform.read(paths,binaryPaths)
       const releaseId=verifyReadback(s,current)
       requireValue(releaseId!==data.job.expectedReleaseId,'verification_failed')
       await this.request(id,'finish',{claim,pluginId:PACKAGE_ID,version:s.version,releaseId,archiveSha:data.archiveSha})
     }catch(error){
-      const allowed=['platform_conflict','identity_mismatch','archive_integrity_failed','source_changed','authorization_required','verification_failed']
+      const allowed=['platform_conflict','identity_mismatch','archive_integrity_failed','source_changed','authorization_required','verification_failed','platform_file_delete_unsupported']
       const reason=mutationAttempted?'unknown_outcome':allowed.includes((error as Error).message)?(error as Error).message:'publisher_unavailable'
       await this.request(id,'finish',{claim,error:reason}).catch(()=>{})
     }finally{if(platform)await platform.close();if(directory)await rm(directory,{recursive:true,force:true})}

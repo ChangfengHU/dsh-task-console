@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createHash} from 'node:crypto'
 import {readFile,stat} from 'node:fs/promises'
-import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntimeConfig,verifyUploadInvocation,uploadTurnRequest,verifyReadback} from '../src/plugin-publisher.ts'
+import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntimeConfig,verifyUploadInvocation,uploadTurnRequest,verifyReadback,ownedTarFiles} from '../src/plugin-publisher.ts'
+import {gzipSync} from 'node:zlib'
 import {registerPluginPublisher} from '../src/plugin-publisher-tools.ts'
 import {validateSpec,NATIVE_TOOLS} from '../src/presets.ts'
 import {validateTaskIntakeDecision} from '../src/task-intake.ts'
@@ -92,6 +93,45 @@ test('reviewer has no publish tool; model cannot supply URLs or commands',async(
  assert.deepEqual(rows.map(t=>t.name),['fleet_plugin_publish_status'])
  assert.equal(rows[0].parameters.additionalProperties,false)
  await assert.rejects(rows[0].execute({releaseId:id,command:'ignored'}),/invalid_release/)
+})
+test('associated Skill text resources are published and all are read back, not just SKILL.md',async()=>{
+ const f=fixture();Object.assign(f.snapshot.files,{'skills/second-skill/SKILL.md':'new skill','skills/second-skill/scripts/helper.py':'print(1)','skills/personal-content/references/readme.md':'context'})
+ const p=new PluginPublisher(f.options);await p.start(id);assert.equal((await p.settled(id)).state,'verified');assert.equal(f.updates(),1)
+ delete f.current.contents['skills/second-skill/scripts/helper.py'];assert.throws(()=>verifyReadback(f.snapshot,f.current),/verification_failed/)
+})
+test('missing old Skill files cannot be mistaken for deletion by an overlay update',()=>{
+ const f=fixture();(f.current as any).files=[{path:'skills/old-skill/SKILL.md',size_bytes:10}]
+ assert.throws(()=>validateSource(f.snapshot,f.current),/platform_file_delete_unsupported/)
+ for(const path of ['skills/a/../../credentials','skills/a/.env','skills/a/node_modules/x.js']){const g=fixture();g.snapshot.files[path]='bad';assert.throws(()=>validateSource(g.snapshot,g.current),/source_changed/)}
+})
+test('binary resources need independent owned-archive readback',()=>{
+ const f=fixture();(f.snapshot as any).binaryPaths=['assets/icon.png','skills/personal-content/assets/sound.bin'];f.snapshot.files['skills/personal-content/assets/sound.bin']='AP8=';f.current.plugin.version=f.snapshot.version;f.current.plugin.current_release_id='pluginrel_after';f.current.contents={...f.snapshot.files}
+ assert.throws(()=>verifyReadback(f.snapshot,f.current),/verification_failed/)
+ ;(f.current as any).binaryContents={'assets/icon.png':'aQ==','skills/personal-content/assets/sound.bin':'AP8='}
+ assert.equal(verifyReadback(f.snapshot,f.current),'pluginrel_after');(f.current as any).binaryContents['skills/personal-content/assets/sound.bin']='AAAA';assert.throws(()=>verifyReadback(f.snapshot,f.current),/verification_failed/)
+})
+test('initial full-package read identifies binary paths instead of requesting PNG as text',async()=>{
+ const f=fixture();(f.snapshot as any).binaryPaths=['assets/icon.png','skills/personal-content/assets/new.bin'];
+ f.snapshot.files['skills/personal-content/assets/new.bin']='AP8=';
+ const reads:any[]=[];
+ const original=f.options.platform;
+ f.options.platform=async()=>{
+  const platform=await original();
+  return {...platform,read:async(paths?:string[],binaryPaths?:string[])=>{
+   reads.push({paths,binaryPaths});const data:any=await platform.read();
+   data.binaryContents={'assets/icon.png':'aQ==',...(data.plugin.version===f.snapshot.version?{'skills/personal-content/assets/new.bin':'AP8='}:{})};return data;
+  }};
+ };
+ const p=new PluginPublisher(f.options);await p.start(id);
+ assert.equal((await p.settled(id)).state,'verified');
+ assert.deepEqual(reads[0].binaryPaths,f.snapshot.binaryPaths);
+ assert.ok(reads[0].paths.includes('assets/icon.png'));
+ assert.equal(f.updates(),1);
+})
+test('owned tar binary reader checks checksum and never extracts files',()=>{
+ const header=Buffer.alloc(512),value=Buffer.from([0,255]);header.write('skills/personal-content/assets/sound.bin');header.write('00000000002\0',124);header[156]=48;header.fill(32,148,156);const sum=header.reduce((n,b)=>n+b,0);header.write(sum.toString(8).padStart(6,'0')+'\0 ',148)
+ const tar=Buffer.concat([header,value,Buffer.alloc(510),Buffer.alloc(1024)]),zip=gzipSync(tar),paths=['skills/personal-content/assets/sound.bin']
+ assert.deepEqual(ownedTarFiles(zip,paths),{[paths[0]]:'AP8='});assert.throws(()=>ownedTarFiles(zip,['missing']),/verification_failed/);tar[0]=0;assert.throws(()=>ownedTarFiles(gzipSync(tar),paths),/verification_failed/)
 })
 test('publisher presets match the registered capability contract',async()=>{
  const agents:any[]=[]

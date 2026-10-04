@@ -1,5 +1,23 @@
 # Task Console runtime contracts
 
+## Fleet canonical Skill package readback
+
+The private publisher now validates every imported Skill text/resource and
+independently reads binary bytes from official `get_owned_plugin_archive`,
+alongside `get_plugin_files` / `update_plugin`. It accepts only the same owner's
+approved immutable Personal Trace release, not arbitrary URLs/commands. Official
+updates overlay files; removing a previous Skill file is blocked before upload.
+See docs/plugin-publisher.md and scripts/verify-plugin-publisher-readonly.ts.
+This change activates only lib/plugin-publisher-tools.js, preserving every other
+runtime bundle/preset; fresh native session.list and unfinished task_runs claim
+checks must both be zero before deployment/restart. Backup on95:
+`/tmp/dsh-publisher-runtime-backup-u5eor31a/plugin-publisher-tools.js`.
+Initial package read now passes binary paths explicitly: PNG is never sent to
+the text-only get_plugin_files API. Only existing binary entries are read before
+update, so new binary resources do not fail the baseline read. Fifteen publisher
+tests pass. Latest zero-session/zero-claim activation backup:
+`/tmp/dsh-publisher-binary-backup-ANEZQb/plugin-publisher-tools.js`.
+
 ## Fleet private plugin publication
 
 See `docs/plugin-publisher.md` for the owner-scoped Task Signal to native Codex

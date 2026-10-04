@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,writeFile,rm,chmod} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,rm,chmod,symlink,realpath} from 'node:fs/promises'
 import {join,dirname} from 'node:path'
 import {tmpdir} from 'node:os'
 import {createHash} from 'node:crypto'
@@ -9,7 +9,7 @@ import {inspectStudioInstallation,studioInstallationBlock} from '../src/studio-i
 
 const sha=(s:string)=>createHash('sha256').update(s).digest('hex')
 async function fixture(t:any){
- const root=await mkdtemp(join(tmpdir(),'studio-installation-'))
+ const root=await realpath(await mkdtemp(join(tmpdir(),'studio-installation-')))
  t.after(()=>rm(root,{recursive:true,force:true}))
  const config:any={uploadPublicOrigins:['https://cdn.example.test']}
  await mkdir(join(root,'helpers'))
@@ -67,4 +67,18 @@ test('broken explicit host config produces a sanitized capability block',async t
  const {root}=await fixture(t),configPath=join(root,'broken.json');await writeFile(configPath,'private-sentinel')
  const result=await studioInstallationBlock({configPath})
  assert.equal(result?.kind,'capability');assert.equal(result?.reason,'studio-host-config-unavailable')
+})
+
+test('explicit trusted executables support package-manager symlinks without requiring ffmpeg-static',async t=>{
+ const {config,root}=await fixture(t)
+ await rm(join(config.renderRuntime,'node_modules/ffmpeg-static/ffmpeg'))
+ for(const field of ['nodeExecutable','chromeExecutable','ffmpegExecutable','ffprobeExecutable']){
+  const actual=join(root,field+' real');await writeFile(actual,'#!/bin/sh\nexit 0\n',{mode:0o700})
+  config[field]=join(root,field+' link');await symlink(actual,config[field])
+ }
+ assert.equal((await inspectStudioInstallation(config)).ready,true)
+ const broken=await inspectStudioInstallation({...config,nodeExecutable:'relative SECRET'})
+ assert.ok(broken.issues.includes('nodeExecutable:missing-or-invalid-path'));assert.doesNotMatch(JSON.stringify(broken),/SECRET/)
+ await chmod(join(root,'ffmpegExecutable real'),0o600)
+ assert.ok((await inspectStudioInstallation(config)).issues.includes('ffmpegExecutable:unavailable'))
 })

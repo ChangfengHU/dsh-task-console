@@ -41,7 +41,7 @@ test('packaged full guide snapshots have exact UTF-8 hashes and cannot be change
 test('actual SDK reads both full guides without project documents, command calls or skill receipts',async t=>{
  const f=await fixture(t)
  for(const id of ['execution','handoff'] as const){
-  const r:any=await f.call('studio_read_guide',{id});assert.equal(r.isError,false,JSON.stringify(r));assert.deepEqual(r.value,studioGuide(id))
+  const r:any=await f.call('studio_read_guide',{id});assert.equal(r.isError,false,JSON.stringify(r));assert.deepEqual({...r.value,role:undefined,roleTools:undefined,roleGuidance:undefined},{...studioGuide(id),role:undefined,roleTools:undefined,roleGuidance:undefined});assert.equal(r.value.role,'executor')
   assert.ok(r.content.some((x:any)=>x.type==='text'&&x.text.includes(studioGuide(id).sha256)))
  }
  assert.equal(f.hostCalls(),0);assert.deepEqual(f.records,[]);assert.deepEqual(await readdir(f.cwd),[])
@@ -57,6 +57,6 @@ test('actual SDK rejects arbitrary IDs/paths, missing IDs, cross-session and sta
  f.deactivate();assert.equal((await f.call('studio_read_guide',{id:'handoff'})).isError,true);assert.equal(f.hostCalls(),0)
 })
 
-test('unrelated role cannot read Studio guides even when registered in native fixture',async t=>{
- const f=await fixture(t,'notifier');const r:any=await f.call('studio_read_guide',{id:'execution'});assert.equal(r.isError,true);assert.match(JSON.stringify(r),/studio-role-denied/)
+test('unrelated role does not receive Studio guide registration in native fixture',async t=>{
+ const f=await fixture(t,'notifier');const r:any=await f.call('studio_read_guide',{id:'execution'});assert.equal(r.isError,true);assert.match(JSON.stringify(r),/UNKNOWN_TOOL|unknown tool/i)
 })

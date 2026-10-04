@@ -7,6 +7,11 @@ from observation_cache import observe_cached, source_fingerprint, digest, encode
 VAULT='https://fleet.vyibc.com/mcp/vault'
 ENDPOINT='https://dashscope.aliyuncs.com/compatible-mode/v1'
 
+def audio_observer_model():
+    model=os.environ.get('STUDIO_AUDIO_OBSERVER_MODEL','qwen3-omni-flash')
+    if model not in ('qwen3-omni-flash','qwen3.8-omni-flash'):raise ValueError('Host audio observer model invalid')
+    return model
+
 def _credentials():
     p=pathlib.Path(os.environ['STUDIO_VAULT_TOKEN_FILE']).resolve()
     if not p.is_file() or p.stat().st_mode & 0o077:raise PermissionError('Host token file must be private')
@@ -44,7 +49,8 @@ def run(path,start=None,end=None):
     stat=p.stat();audio=p.read_bytes()
     if p.stat().st_mtime_ns!=stat.st_mtime_ns or len(audio)!=stat.st_size:raise ValueError('Input changed')
     context=None if start is None and end is None else {'start_seconds':start,'end_seconds':end}
-    body,duration=payload(audio,context=context,purpose='media') # Validate before resolving secrets or charging.
+    model=audio_observer_model()
+    body,duration=payload(audio,model=model,context=context,purpose='media') # Validate before resolving secrets or charging.
     key=credentials()
     # Resolve current authorization even on a hit. Never store credentials or raw payload.
     here=pathlib.Path(__file__).parent
@@ -54,7 +60,7 @@ def run(path,start=None,end=None):
             ('audio_observe_host.py','audio_review.py','audio_signals.py','observation_cache.py')])}
     def fresh():
         if not p.resolve().is_relative_to(root) or digest(p.read_bytes())!=digest(audio):raise ValueError('Input changed before observation')
-        try:result=observe(audio,base_url=ENDPOINT,api_key=key,context=context,purpose='media')
+        try:result=observe(audio,base_url=ENDPOINT,api_key=key,model=model,context=context,purpose='media')
         except Exception as e:
             e.stage='provider';raise
         signals=analyze(audio)

@@ -33,7 +33,7 @@ test('registered tool permits only studio roles; legacy lookup is explicit and n
  const s=await setup(t),tools:any={},input:any={task:s.task,card:{role:'planner'},sessionId:'s'},workflow={preflight:()=>({ok:true}),status:()=>({candidate:null,preflight:{ok:true}})};let active=true,providerCalls=0
  const install=(role:string,lock:any=s.lock)=>registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{...input,card:{role}},workflow,characterProfile:lock,isActive:()=>active,runCommand:async()=>{providerCalls++;throw Error('no provider call')}})
  for(const role of ['planner','executor','reviewer','studio-stage']){await install(role);assert.deepEqual((await tools.studio_character_profile.execute({path:'/etc/passwd'})).data,s.data)}
- await install('worker');await assert.rejects(tools.studio_character_profile.execute({}),/role-denied/)
+ delete tools.studio_character_profile;await install('worker');assert.equal(tools.studio_character_profile,undefined)
  await registerStudioTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input,workflow,isActive:()=>active})
  const status=await tools.studio_status.execute({});assert.equal(status.characterProfile.frozen,false);assert.deepEqual(status.characterProfile.lookup,{tool:'character_get',arguments:{character_id:'original'}})
  await assert.rejects(tools.studio_character_profile.execute({}),/lock-missing.*character_get/);assert.equal(providerCalls,0)

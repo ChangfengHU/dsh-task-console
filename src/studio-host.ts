@@ -1,5 +1,5 @@
 import {validateSourcePolicy,verifiedSourceReceipt,type SourcePolicy} from './studio-source-acquisition.js'
-import {readStudioHostConfiguration} from './studio-config.js'
+import {readStudioHostConfiguration,studioHostExecutables,STUDIO_HOST_EXECUTABLES,studioAudioObserverModel} from './studio-config.js'
 import {readStudioCharacterProfile,type StudioCharacterProfileLock} from './studio-character-profile.js'
 import {publicCharacterReference} from './studio-character-source.js'
 import { readFile, realpath, stat } from 'node:fs/promises'
@@ -32,7 +32,9 @@ export async function downloadStudioAsset(task:any,args:{id:string;path:string;s
  return {ok:true,assetId:args.id,path:relative(root,path),sha256:result.sha256,bytes:size,kind:result.kind,reused:result.reused,newGeneration:0,...source,qualityApproved:false}
 }
 async function execute(script:string,args:string[],task:any,config:any,stdin?:string):Promise<any>{
- return new Promise((resolve,reject)=>{const child=spawn('python3',[script,...args],{env:{...process.env,...(config.dshProfilePath?{STUDIO_DSH_PROFILE:config.dshProfilePath}:{}),...(config.renderRuntime?{STUDIO_RENDER_RUNTIME:config.renderRuntime}:{}),STUDIO_PROJECT_ROOT:task.cwd,STUDIO_TASK_ID:String(task.id??''),STUDIO_VAULT_TOKEN_FILE:config.vaultTokenFile??'',STUDIO_OBSERVATION_CACHE_ROOT:config.observationCacheRoot??'',STUDIO_OBSERVATION_CACHE_EPOCH:config.observationCacheEpoch??''},stdio:['pipe','pipe','ignore']});let output='',overflow=false,done=false
+ const executableEnvironment=Object.fromEntries(Object.entries(studioHostExecutables(config)).map(([field,path])=>[STUDIO_HOST_EXECUTABLES[field as keyof typeof STUDIO_HOST_EXECUTABLES].environment,path]))
+ const audioObserverModel=studioAudioObserverModel(config)
+ return new Promise((resolve,reject)=>{const child=spawn(config.pythonExecutable??'python3',['-B',script,...args],{env:{...process.env,...executableEnvironment,...(config.dshProfilePath?{STUDIO_DSH_PROFILE:config.dshProfilePath}:{}),...(config.renderRuntime?{STUDIO_RENDER_RUNTIME:config.renderRuntime}:{}),STUDIO_PROJECT_ROOT:task.cwd,STUDIO_TASK_ID:String(task.id??''),STUDIO_VAULT_TOKEN_FILE:config.vaultTokenFile??'',STUDIO_ASSET_TOKEN_FILE:config.assetTokenFile??'',STUDIO_AUDIO_OBSERVER_MODEL:audioObserverModel,STUDIO_OBSERVATION_CACHE_ROOT:config.observationCacheRoot??'',STUDIO_OBSERVATION_CACHE_EPOCH:config.observationCacheEpoch??''},stdio:['pipe','pipe','ignore']});let output='',overflow=false,done=false
  const finish=(err?:Error,result?:any)=>{if(done)return;done=true;clearTimeout(timer);if(err)reject(err);else resolve(result)}
  const timer=setTimeout(()=>{child.kill('SIGKILL');finish(Error('studio-host-subprocess-timeout'))},420000)
  child.stdout.on('data',b=>{output+=b.toString();if(output.length>2_000_000){overflow=true;child.kill('SIGKILL')}});child.on('error',()=>finish(Error('studio-host-subprocess-unavailable')));child.stdin.on('error',()=>{});child.stdin.end(stdin??'')
@@ -55,8 +57,8 @@ async function preflightIdentity(config:any){
  const runtime=config.renderRuntime??process.env.STUDIO_RENDER_RUNTIME??'/home/claude/dsh-studio-migration/render-runtime'
  const paths=[config.preflightScript,...[runtime,config.renderRuntime].filter((v,i,a)=>v&&a.indexOf(v)===i).flatMap(root=>[
   join(root,'node_modules/hyperframes/package.json'),join(root,'node_modules/hyperframes/bin/hyperframes.mjs'),join(root,'node_modules/ffmpeg-static/ffmpeg')]),
-  process.env.FFMPEG_PATH??'', '/usr/bin/node','/usr/bin/google-chrome','/usr/bin/ffprobe',
-  config.dshProfilePath??process.env.STUDIO_DSH_PROFILE??'/home/claude/.dsh/profiles/web/cordis.patch.yml',config.vaultTokenFile].filter(Boolean)
+  config.ffmpegExecutable??process.env.FFMPEG_PATH??'',config.nodeExecutable??'/usr/bin/node',config.chromeExecutable??'/usr/bin/google-chrome',config.ffprobeExecutable??process.env.FFPROBE_PATH??'/usr/bin/ffprobe',config.pythonExecutable,
+  config.dshProfilePath??process.env.STUDIO_DSH_PROFILE??'/home/claude/.dsh/profiles/web/cordis.patch.yml',config.vaultTokenFile,config.assetTokenFile].filter(Boolean)
  // Metadata detects replacement of large host binaries without rereading them
  // on every handoff; helper/package bytes also bind same-path code updates.
  const files=await Promise.all(paths.map(async path=>{try{const [info,actual]=await Promise.all([stat(path),realpath(path)]);return [path,actual,info.dev,info.ino,info.size,info.mtimeMs,info.ctimeMs,
@@ -109,7 +111,7 @@ async function sharedPreflight(key:string,task:any,run:()=>Promise<any>){
  try{return await request}finally{if(preflights.get(key)===request)preflights.delete(key)}
 }
 export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any,deps:HostDeps={}){
- const config=deps.config??await readStudioHostConfiguration(deps.configPath),exec=deps.execute??execute,now=Date.now(),checkedAt=new Date(now).toISOString(),expiresAt=new Date(now+15*60_000).toISOString()
+ const config=deps.config??await readStudioHostConfiguration(deps.configPath),audioObserverModel=studioAudioObserverModel(config),exec=deps.execute??execute,now=Date.now(),checkedAt=new Date(now).toISOString(),expiresAt=new Date(now+15*60_000).toISOString()
  const record=(name:string,status:string,proofSha256?:string,reason?:string,method?:string,timing?:PreflightSnapshot)=>(workflow as any).recordCapability(task,{name,status,checkedAt:timing?new Date(timing.checkedAt).toISOString():checkedAt,expiresAt:timing?new Date(timing.expiresAt).toISOString():expiresAt,...(proofSha256?{proofSha256}:{}),...(reason?{reason}:{}),...(method?{method}:{})})
  let result:any,reference:any,characterReferences:any[]=[],characterProfile:StudioCharacterProfileLock|undefined
  if(config.preflightScript){const scope=JSON.stringify({id:task.id,cwd:task.cwd,studio:task.design?.studio,config,environment:preflightEnvironment()}),key=hash(JSON.stringify({scope,host:await sharedIdentity(scope,config)}))
@@ -128,7 +130,7 @@ export async function refreshStudioCapabilities(workflow:StudioWorkflow,task:any
  // Calibration evidence is separate from an endpoint listing or a successful observation.
  let calibration:any;try{if(config.calibrationPath)calibration=JSON.parse(await readFile(config.calibrationPath,'utf8'))}catch{}
  let regression:any;const regressionPath=config.calibrationRegressionPath??(config.calibrationPath?join(dirname(config.calibrationPath),'speech-differential-regression.json'):undefined);try{if(regressionPath)regression=JSON.parse(await readFile(regressionPath,'utf8'))}catch{}
- const valid=(v:any)=>v?.ok===true&&v.observation?.input_modality==='input_audio'&&v.observation?.finish_reason==='stop'&&/^[a-f0-9]{64}$/.test(v.audio_sha256??'')&&v.observation.audio_sha256===v.audio_sha256
+ const valid=(v:any)=>v?.ok===true&&v.observation?.input_modality==='input_audio'&&v.observation?.finish_reason==='stop'&&v.observation?.requested_model===audioObserverModel&&/^[a-f0-9]{64}$/.test(v.audio_sha256??'')&&v.observation.audio_sha256===v.audio_sha256
  const rows=Array.isArray(calibration?.results)?calibration.results:[],regRows=Array.isArray(regression?.results)?regression.results:[]
  const audioOk=rows.some(valid)
  let calibrationHash:string|undefined;try{if(config.calibrationPath)calibrationHash=hash(JSON.stringify({calibration:await fileSha256(config.calibrationPath),regression:regressionPath?await fileSha256(regressionPath):null}))}catch{}

@@ -1,4 +1,5 @@
 /** Deterministic evidence integrity gate. Passing is NOT human aesthetic approval. */
+import {evaluateStudioReviewCoverage} from './studio-review-coverage.mjs';
 export const DEFAULT_DIMENSIONS = Object.freeze(['technical', 'editorial', 'identity', 'composition', 'motion', 'intelligibility', 'performance', 'mix', 'captions', 'ending', 'reference', 'source_records']);
 const HASH = /^[a-f0-9]{64}$/i;
 const finite = n => typeof n === 'number' && Number.isFinite(n);
@@ -16,6 +17,7 @@ export function validateStudioPolicy(value) {
   if (!nonempty(policy.characterId)) issues.push('policy.characterId: required');
   if (policy.dialogueLanguage !== undefined && policy.dialogueLanguage !== 'zh-CN') issues.push('policy.dialogueLanguage: supported explicit contract is zh-CN; omit for legacy unrestricted tasks');
   if (policy.visualCoverage !== undefined && !['requirements-v1','components-v2'].includes(policy.visualCoverage)) issues.push('policy.visualCoverage: supported contracts are requirements-v1 and components-v2');
+  if (policy.reviewCoverage !== undefined && policy.reviewCoverage !== 'scene-action-v1') issues.push('policy.reviewCoverage: supported explicit contract is scene-action-v1; omit for legacy tasks');
   if (!hash(policy.referenceSha256)) issues.push('policy.referenceSha256: expected SHA-256');
   for (const key of ['width','height','fps']) if (!finite(policy[key]) || policy[key] <= 0) issues.push(`policy.${key}: expected positive number`);
   if (!Number.isInteger(policy.width) || !Number.isInteger(policy.height)) issues.push('policy: dimensions must be integers');
@@ -56,7 +58,7 @@ function covered(range, receipts) {
 const kinds = {technical:['probe'], motion:['frames'], performance:['audio'], mix:['audio'], intelligibility:['audio'],
   identity:['frames'], composition:['frames'], captions:['frames'], ending:['frames','audio'], editorial:['frames'], reference:['frames'], source_records:['source']};
 
-export function evaluateStudioReview({policy:input, candidate, review, producerSessionId, reviewerSessionId, receipts, budget, interventions=[]} = {}) {
+export function evaluateStudioReview({policy:input, candidate, review, producerSessionId, reviewerSessionId, receipts, budget, interventions=[], reviewCoveragePlan} = {}) {
   const parsed = validateStudioPolicy(input);
   const {policy} = parsed;
   const issues = [...parsed.issues];
@@ -126,6 +128,7 @@ export function evaluateStudioReview({policy:input, candidate, review, producerS
     issueIds.add(issue.id);
     if (issue.status === 'pending' || (['blocker','major'].includes(issue.severity) && !['resolved','verified'].includes(issue.status))) fail(`issue.${issue.id}: unresolved ${issue.severity}`);
   }
+  issues.push(...evaluateStudioReviewCoverage({policy,candidate,review,receipts,reviewerSessionId,reviewCoveragePlan}).issues);
   const qualityIssues=issues.filter(issue=>!issue.startsWith('autonomy:'));
   const autonomy={status:!Array.isArray(interventions)?'unknown':interventions.length?'assisted':'no_recorded_intervention',autonomousVerified:false};
   return {ok:issues.length === 0, qualityOk:qualityIssues.length===0, qualityIssues, autonomy, issues, label:qualityIssues.length ? 'candidate' : autonomy.status==='assisted' ? 'assisted_machine_assessed_candidate' : 'machine_assessed_candidate'};

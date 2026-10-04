@@ -22,6 +22,17 @@ export function requiredStudioSkills(input:any):readonly string[]{
  if(!stage)throw Error('studio-skill-stage-identity-required')
  return REQUIRED_STAGE_SKILLS[stage.id]
 }
+/** Presentation only. Host-recorded current-session loads are not new receipts or
+ * authorization; the run-scoped guard below remains the enforcement boundary. */
+export function studioSkillReadiness(input:any,receipts:readonly any[]=[]){
+ const required=[...requiredStudioSkills(input)]
+ if(!required.length)return undefined
+ const sessionId=typeof input.sessionId==='string'&&input.sessionId?input.sessionId:null
+ const recorded=new Set((Array.isArray(receipts)?receipts:[]).filter(r=>sessionId&&r?.sessionId===sessionId&&required.includes(r.name)&&/^[a-f0-9]{64}$/.test(r.sha256??'')&&Number.isInteger(r.bytes)&&r.bytes>0&&typeof r.callId==='string'&&r.callId).map(r=>r.name))
+ const loaded=required.filter(name=>recorded.has(name)),missing=required.filter(name=>!recorded.has(name))
+ return {schema:'studio-skill-readiness-v1',sessionId,required,loaded,missing,nextCalls:missing.map(name=>({tool:'skill',arguments:{name}})),
+  notice:'Current-session host skill-load index only, not authorization or quality approval. Before writing, production or submission, actually call skill for every missing name and receive successful full instructions in this session. Installation, catalog entries, guides and prior-session loads do not count. The run-scoped skill guard remains authoritative.'}
+}
 const READ_ONLY=new Set(['skill','read','glob','grep','studio_status','studio_read_guide','studio_read_text','studio_character_image','studio_character_profile','studio_reference_overview','studio_reference_frames','studio_reference_audio','studio_preview_image','studio_preview_frames','studio_preview_audio','session_capabilities','environment_capabilities','job_list','job_output','job_kill','task_block','task_notify'])
 const READ_MCP=/(?:^|__|_)(?:character_get|character_assets|character_search|asset_get|asset_search|library_info|project_get|get_task|list_results)$/
 

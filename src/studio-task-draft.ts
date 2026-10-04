@@ -8,6 +8,7 @@ export interface StudioTaskRequest {
  characterId:string;referenceUrl:string;referenceSha256:string;
  roles:Record<typeof STUDIO_TASK_ROLE_KEYS[number],string>;topic?:string;
  durationMin?:number;durationMax?:number;maxRepairRounds?:number;
+ qualityProfile?:'scene-action-v1';
  generationLimits:{imageCalls:number;imageBatches:number;voiceSegments:number}
 }
 export interface StudioDraftContext {
@@ -17,7 +18,7 @@ export interface StudioDraftContext {
 const object=(value:any)=>value!==null&&typeof value==='object'&&!Array.isArray(value)
 function fail(field:string,reason:string):never{throw Error('studio-task-draft-invalid: '+JSON.stringify({field,reason,createdTask:false,startedTask:false}))}
 export const STUDIO_TASK_REQUEST_CONTRACT={
- id:'studio-task-request-v1',required:['characterId','referenceUrl','referenceSha256','roles','generationLimits'],optional:['topic','durationMin','durationMax','maxRepairRounds'],additionalProperties:false,
+ id:'studio-task-request-v1',required:['characterId','referenceUrl','referenceSha256','roles','generationLimits'],optional:['topic','durationMin','durationMax','maxRepairRounds','qualityProfile'],additionalProperties:false,
  roles:[...STUDIO_TASK_ROLE_KEYS],defaults:{durationMin:90,durationMax:110,maxRepairRounds:2},
  maxRepairRounds:{type:'integer',minimum:0,maximum:2,meaning:'At most three production rounds including the initial candidate; requests for more repairs are rejected, never reduced silently.'},
  fixed:{width:1080,height:1920,fps:30,dialogueLanguage:'zh-CN',visualCoverage:'components-v2',publish:false,executionBinding:'agent-runtime-v1',workspaceMode:'studio-batch-v1',progressPolicy:'studio-bounded-v1'},
@@ -35,6 +36,7 @@ export function composeStudioTaskDraft(raw:unknown,context:StudioDraftContext){
  if(typeof request.referenceUrl!=='string'||typeof request.referenceSha256!=='string')fail('reference','Resolve a reference candidate URL and its source-declared expected SHA-256 before composing; metadata may enter pending review unverified. Host preflight must verify actual bytes before production; this function cannot discover or download them.')
  if(!object(request.roles)||Object.keys(request.roles).length!==STUDIO_TASK_ROLE_KEYS.length||STUDIO_TASK_ROLE_KEYS.some(k=>typeof request.roles[k]!=='string'||!/^[a-z0-9][a-z0-9-]*$/.test(request.roles[k])))fail('roles','Supply all six exact installed Agent IDs: director, storyboard, visual, sound, editor, quality.')
  const ids=STUDIO_TASK_ROLE_KEYS.map(k=>request.roles[k]);if(new Set(ids).size!==6)fail('roles','All six roles must use different Agent IDs.')
+ if(request.qualityProfile!==undefined&&request.qualityProfile!=='scene-action-v1')fail('qualityProfile','Only scene-action-v1 is supported; legacy requests retain their existing quality contract.')
  if(!object(context)||!Array.isArray(context.installedAgentIds)||context.installedAgentIds.some(id=>typeof id!=='string'))fail('host.installedAgentIds','Current installed-role discovery is required, not a fabricated roster.')
  if(ids.some(id=>!context.installedAgentIds.includes(id)))fail('roles','At least one selected Agent ID is not in the supplied installed roster. Install/resolve the missing role before composing.')
  if(context.executionBindingSupported!==true)fail('host.executionBinding','This composer requires a host that implements agent-runtime-v1; do not silently omit the execution binding.')
@@ -42,7 +44,7 @@ export function composeStudioTaskDraft(raw:unknown,context:StudioDraftContext){
  if(request.topic!==undefined&&(typeof request.topic!=='string'||request.topic.length>STUDIO_TASK_REQUEST_CONTRACT.topic.maxCharacters||/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(request.topic)))fail('topic','Topic must be text up to 2000 characters or omitted; blank requests authorized topic discovery.')
  if(!object(request.generationLimits)||!Object.hasOwn(request.generationLimits,'imageBatches')||typeof request.generationLimits.imageBatches!=='number')fail('generationLimits','Explicit imageCalls (image items), imageBatches (submissions) and voiceSegments are required. Missing budgets are not permission to generate.')
  if(request.maxRepairRounds!==undefined&&(!Number.isInteger(request.maxRepairRounds)||request.maxRepairRounds<STUDIO_TASK_REQUEST_CONTRACT.maxRepairRounds.minimum||request.maxRepairRounds>STUDIO_TASK_REQUEST_CONTRACT.maxRepairRounds.maximum))fail('maxRepairRounds','This composer supports 0 to 2 repair rounds (at most 3 production rounds including the initial candidate). A larger request needs an extended execution contract; it is not silently reduced.')
- const policy=validateStudioPolicy({characterId:request.characterId,referenceUrl:request.referenceUrl,referenceSha256:request.referenceSha256,width:STUDIO_TASK_REQUEST_CONTRACT.fixed.width,height:STUDIO_TASK_REQUEST_CONTRACT.fixed.height,fps:STUDIO_TASK_REQUEST_CONTRACT.fixed.fps,dialogueLanguage:STUDIO_TASK_REQUEST_CONTRACT.fixed.dialogueLanguage,visualCoverage:STUDIO_TASK_REQUEST_CONTRACT.fixed.visualCoverage,durationMin:request.durationMin??STUDIO_TASK_REQUEST_CONTRACT.defaults.durationMin,durationMax:request.durationMax??STUDIO_TASK_REQUEST_CONTRACT.defaults.durationMax,maxRepairRounds:request.maxRepairRounds??STUDIO_TASK_REQUEST_CONTRACT.defaults.maxRepairRounds,generationLimits:request.generationLimits,publish:false})
+ const policy=validateStudioPolicy({characterId:request.characterId,referenceUrl:request.referenceUrl,referenceSha256:request.referenceSha256,width:STUDIO_TASK_REQUEST_CONTRACT.fixed.width,height:STUDIO_TASK_REQUEST_CONTRACT.fixed.height,fps:STUDIO_TASK_REQUEST_CONTRACT.fixed.fps,dialogueLanguage:STUDIO_TASK_REQUEST_CONTRACT.fixed.dialogueLanguage,visualCoverage:STUDIO_TASK_REQUEST_CONTRACT.fixed.visualCoverage,durationMin:request.durationMin??STUDIO_TASK_REQUEST_CONTRACT.defaults.durationMin,durationMax:request.durationMax??STUDIO_TASK_REQUEST_CONTRACT.defaults.durationMax,maxRepairRounds:request.maxRepairRounds??STUDIO_TASK_REQUEST_CONTRACT.defaults.maxRepairRounds,generationLimits:request.generationLimits,...(request.qualityProfile?{reviewCoverage:request.qualityProfile,structuredRepairs:true}:{}),publish:false})
  // Null is an invalid supplied value, not a request to silently use defaults.
  for(const field of ['durationMin','durationMax','maxRepairRounds'] as const)if(Object.hasOwn(request,field)&&typeof request[field]!=='number')fail(field,'Supply a number or omit the field.')
  const topic=request.topic?.trim()??'',roles={...request.roles},limits=policy.generationLimits!
@@ -55,6 +57,7 @@ export function composeStudioTaskDraft(raw:unknown,context:StudioDraftContext){
   `授权上限：${limits.imageCalls}个生成图片项、${limits.imageBatches}次图片提交、${limits.voiceSegments}个配音片段。每prompt计图片项，每generate_image提交计一批；同设置多项可用prompts组织，但不扩大额度。失败/未知请求仍占预算，对账原作业，不换编号盲重试；额度为0即不得新增对应生成。`,
   '按角色真实授权音色及情境选择语气，不默认收藏声线，只记录实际支持且已传入的参数。为本故事获取有许可配乐和现成音效；来源卡不是音频，短音效不能冒充全片音乐。真实配音时长决定排镜，不能漏词、机械加速、无理由断乐或配乐遮蔽对白。',
   '剪辑汇聚同轮已登记素材，先检查困难动作样片，再完成真实MP4。检查步态接触、轴线、重影、闪屏、转场、字幕与混音。先上传实际候选到R2并保存公开访问的字节/哈希验证，不伪造URL或空MP4。',
+  ...(policy.reviewCoverage?['本片启用 scene-action-v1：保留原分镜 sceneId 和组件映射，使用 studio_compile_storyboard 冻结实际完整执行板。宿主按真实场景、动作、转场及成片最后2秒生成验收窗口；质检先读 studio_status.state.reviewProgress，完成未检查窗口，不用片头证据代替全片。窗口取样仍不是逐帧或审美通过。返修问题必须关联 sceneId/lineId、dimension、ranges、responsibleStage、cause、repair.action/target/fromCandidateSha256、verification.method/finding/evidenceReceiptIds；已解决问题需要当前片的新独立证据，不得静默删除旧问题。']:[]),
   `独立质检实际成片、完整声音及连续动作并对照已核验参考片，单独记录基准认可状态，问题记录时间点、证据、严重程度、责任阶段和改法。最多${policy.maxRepairRounds}轮成片返修，保留原版与未改素材；当前每轮仍有准备节点，不声称能自动裁剪返修子图。未检查填pending，major/blocker未解决不得通过；技术成功不等于质量通过。`,
   '交付候选R2地址、工程、剧本、分镜、素材/音频清单、PUBLICATION.md、QA及实际截图和连续动作采样。必要署名放随片说明；仅交用户审核，不发布社交平台。只写宿主分配的本Task目录，按阶段/轮次保存版本；不改安装Skill、系统服务、浏览器登录，不启用新收费服务、下载TTS模型或读取输出凭据。',
  ].join('\n')

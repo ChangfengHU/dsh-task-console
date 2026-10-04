@@ -10,6 +10,7 @@ import { closeConsole, go, readRouteQuery, type Api } from './Console.tsx'
 import { AgentHistory, agentTab, agentPage } from './AgentHistory.tsx'
 import { executionTime } from '../execution-label.ts'
 import { ActionEditor } from './AgentActions.tsx'
+import { AppEpisodeActions } from './AppEpisodeActions.tsx'
 import { QueryCache } from './query-cache.ts'
 const agentPages=new WeakMap<Api,QueryCache<Awaited<ReturnType<Api['agentPage']>>>>()
 
@@ -159,6 +160,15 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
         </div>
       </div>
       {err ? <div className="dtc-err">{err}</div> : null}
+      {row?.app ? <section className="dtc-panel" aria-label="已绑定能力">
+        <h3>所属 App：{row.app.name} <span className="dtc-pill">{row.app.enabled ? '已启用' : '未启用'}</span></h3>
+        <p>{row.app.id} · {row.app.version} · {row.app.sourceKind === 'local-development' ? '本地开发安装' : row.app.sourceKind}</p>
+        <p>实际绑定：{spec.skills.length} 个 Skills · {Object.values(spec.mcpTools).flat().length} 个 MCP 工具 · 模型 {spec.model} / {spec.effort}</p>
+        <details open><summary>已绑定 Skills（预设独立副本）</summary><div className="dtc-list">{spec.skills.map(s => <span className="dtc-pill dtc-mono" key={s}>{s}</span>)}</div></details>
+        <details open><summary>已授权 MCP 工具</summary>{Object.entries(spec.mcpTools).map(([name, tools]) => <div key={name}><b>{name}</b><div className="dtc-list">{tools.map(t => <span className="dtc-pill dtc-mono" key={t}>{t}</span>)}</div></div>)}</details>
+        <p className="dtc-note">配音与 R2 上传由已配置宿主 helper 执行，不是额外 MCP。绑定清单不代表每项已完成实际生产验证。</p>
+      </section> : null}
+      {row?.app?.enabled && row.app.episodeActions && (tab === 'config' || tab === 'actions') ? <AppEpisodeActions api={api} agentId={row.id} /> : null}
       {row ? <>
         <div className="dtc-agent-tabs" role="tablist" aria-label="Agent 详情">{(['config', 'actions', 'sessions', 'tasks'] as const).map(t => <button key={t} role="tab" aria-selected={tab === t} className={tab === t ? 'on' : ''} onClick={() => go(`agents/${encodeURIComponent(row.id)}?tab=${t}&page=1`)}>{t === 'config' ? '配置' : t === 'actions' ? 'Actions' : `${t === 'sessions' ? '会话' : '任务'}${counts ? `（${counts[t]}）` : ''}`}</button>)}</div>
         <AgentHistory api={api} id={row.id} tab={tab} page={page} onCounts={setCounts} />

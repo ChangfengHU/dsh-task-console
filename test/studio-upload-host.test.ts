@@ -1,12 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,mkdir,writeFile,readFile,rm,readdir,symlink} from 'node:fs/promises'
+import {mkdtemp,mkdir,writeFile,readFile,rm,readdir,symlink,realpath} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {uploadStudioPreview} from '../src/studio-upload-host.ts'
+import {execFileSync} from 'node:child_process'
 import {fileSha256} from '../src/studio-tools.ts'
 async function setup(t:any){
- const base=await mkdtemp(join(tmpdir(),'preview-upload-'));t.after(()=>rm(base,{recursive:true,force:true}));const cwd=join(base,'task');await mkdir(cwd)
+ const base=await realpath(await mkdtemp(join(tmpdir(),'preview-upload-')));t.after(()=>rm(base,{recursive:true,force:true}));const cwd=join(base,'task');await mkdir(cwd)
  const path=join(cwd,'candidate.mp4'),manifestPath=join(cwd,'manifest.json');await writeFile(path,'registered MP4 fixture bytes');await writeFile(manifestPath,'{}')
  const script=join(base,'upload.py'),token=join(base,'token');await writeFile(script,'# pinned');await writeFile(token,'HOST_ONLY_SECRET');const library=join(base,'studio_upload.py');await writeFile(library,'# pinned library')
  const digest=await fileSha256(path),candidate={sha256:digest,manifestSha256:await fileSha256(manifestPath),revision:1}
@@ -67,6 +68,7 @@ test('stale producer and changed pinned helper cannot dispatch',async t=>{
 })
 test('real subprocess bridge invokes Python with host-only credentials path and filters extra output fields',async t=>{
  const f=await setup(t)
+ ;(f.config as any).pythonExecutable=execFileSync('python3',['-c','import sys; print(sys.executable)'],{encoding:'utf8'}).trim()
  await writeFile(f.config.uploadScript,`import argparse,hashlib,json,pathlib\np=argparse.ArgumentParser()\np.add_argument('action');p.add_argument('--library-sha256');p.add_argument('--expected-sha256');p.add_argument('--expected-bytes');p.add_argument('--allowed-public-origin',action='append');p.add_argument('--file');p.add_argument('--project-root');p.add_argument('--vault-token-file')\na=p.parse_args();b=pathlib.Path(a.file).read_bytes();s=hashlib.sha256(b).hexdigest()\nprint(json.dumps({'url':'https://cdn.example.test/studio-dsh/'+s+'/preview.mp4','sha256':s,'bytes':len(b),'public_hash_verified':True,'upload_mode':'single_put','extra':pathlib.Path(a.vault_token_file).read_text()}))\n`)
  f.config.uploadScriptSha256=await fileSha256(f.config.uploadScript)
  const result=await uploadStudioPreview(f.task,f.registered,f.args,f);assert.equal(result.ok,true);assert.doesNotMatch(JSON.stringify(result),/HOST_ONLY_SECRET/)

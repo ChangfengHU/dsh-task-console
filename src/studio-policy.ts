@@ -5,6 +5,8 @@ export interface StudioPolicy {
   characterId: string
   dialogueLanguage?: 'zh-CN'
   visualCoverage?: 'requirements-v1' | 'components-v2'
+  reviewCoverage?: 'scene-action-v1'
+  structuredRepairs?: boolean
   width: number
   height: number
   fps: number
@@ -20,8 +22,10 @@ export interface StudioPolicy {
 export function validateStudioPolicy(value: unknown): StudioPolicy {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw Error('studio 必须是明确的视频策略对象')
   const v = value as Record<string, unknown>
-  const allowed = ['visualCoverage','dialogueLanguage','generationLimits','characterId','width','height','fps','durationMin','durationMax','maxRepairRounds','referenceSha256','referenceUrl','requiredDimensions','publish']
+  const allowed = ['reviewCoverage','structuredRepairs','visualCoverage','dialogueLanguage','generationLimits','characterId','width','height','fps','durationMin','durationMax','maxRepairRounds','referenceSha256','referenceUrl','requiredDimensions','publish']
   if (Object.keys(v).some(key => !allowed.includes(key))) throw Error('studio 包含未知字段')
+  if (v.reviewCoverage !== undefined && v.reviewCoverage !== 'scene-action-v1') throw Error('studio reviewCoverage 仅支持 scene-action-v1')
+  if (v.structuredRepairs !== undefined && typeof v.structuredRepairs !== 'boolean') throw Error('studio structuredRepairs 必须为布尔值')
   if (v.publish !== undefined && v.publish !== false) throw Error('studio-video-v1 不授权发布；publish 只能为 false')
   let referenceUrl: URL
   try { referenceUrl = new URL(String(v.referenceUrl)) } catch { throw Error('studio referenceUrl 必须是有效 HTTPS URL') }

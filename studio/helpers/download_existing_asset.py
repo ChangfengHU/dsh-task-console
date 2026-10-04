@@ -45,6 +45,13 @@ def digest(data):
 
 
 def asset_auth(profile):
+    reference = os.environ.get('STUDIO_ASSET_TOKEN_FILE')
+    if reference:
+        if not Path(reference).is_absolute():
+            raise DownloadError('host_asset_token_file_invalid')
+        # Explicit host reference authorizes only this fixed bootstrap endpoint.
+        # A bad bridge token never falls back to the distinct Vault credential.
+        return MCP_URL, 'Bearer ' + proxy_token(reference)
     # Same installed-stanza boundary as preflight_host.asset_auth; never export
     # the profile or try other credentials when this transport is unavailable.
     text = Path(profile).read_text()

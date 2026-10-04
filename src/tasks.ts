@@ -1,4 +1,5 @@
 import {studioStageRows,studioStageCardId} from './studio-stages.js'
+import {requiredStudioSkills} from './studio-skill-gate.js'
 import {preparationBarrier} from './studio-preparation.js'
 import { validateDesign } from './task-design.js'
 /**
@@ -596,6 +597,10 @@ export function cardMessage(task: TaskSpec, card: Card, batchId: string, upstrea
   if (task.targets?.length) lines.push('', '[TARGETS — RESOURCE METADATA ONLY]', task.targets.map(target => `${target.kind}:${target.id}${target.label ? ` (${target.label})` : ''}`).join('\n'))
   if (task.origin?.reviewPlanId) lines.push('', '[HOST REVIEW RELEASE]',
     `本 Run 已由独立审查放行，审批计划 ${task.origin.reviewPlanId}。原始消息中“先生成计划、等待审查、不执行”描述的创建阶段已完成；现在执行下方已审查的业务范围。其他禁止事项、宿主权限及验收要求仍有效，不因批准而扩大。`)
+  const studioSkills=requiredStudioSkills({task,card,batch:{id:batchId}})
+  if(studioSkills.length)lines.push('', '[STUDIO REQUIRED SKILLS]',
+    `本卡片在写入、制作或提交前必须在当前会话逐项实际调用：${studioSkills.map(name=>`skill(${JSON.stringify({name})})`).join('；')}。`,
+    '全部返回成功的完整技能指令后才能行动。安装清单、技能目录、studio_read_guide或其他会话的加载回执不算本会话已读；每次新会话须重新加载。先调用studio_status查看skillReadiness.required/loaded/missing/nextCalls；只读预检允许先进行。读取技能不代表产物质量通过，原宿主门禁仍生效。')
   if(task.design?.studio)lines.push('', '[STUDIO GUIDES]', '调用 studio_read_guide({id:"handoff"}) 读取本包的制作交接示范；studio_status.guides列出固定指南及SHA。示例不是本Task的实际素材、冻结台词或质量证据。')
   if(task.design?.studioStages)lines.push('', '[STUDIO STAGES]', `当前轮次 ${card.round}。studio_status.state.stages列出本轮实际登记清单。读取stages/r${card.round}/中上游文件再行动；合成阶段必须汇聚分镜、视觉、声音三个交接，不能凭Gate完成就猜素材存在。阶段完成不等于整片通过。`)
   if(task.design?.evidenceContract==='studio-video-v1'&&['executor','studio-stage'].includes(card.role??''))lines.push('', '[STUDIO MEDIA ACQUISITION]',

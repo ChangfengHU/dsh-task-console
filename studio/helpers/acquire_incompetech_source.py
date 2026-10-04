@@ -67,7 +67,9 @@ def _resolve(info, project_use, fetch, deadline):
     except (ValueError,UnicodeError,TypeError): fail('source_evidence_invalid')
     if len(matches)!=1: fail('source_catalog_identity_ambiguous')
     row=matches[0];title=row.get('title');filename=row.get('filename')
-    if not isinstance(title,str) or title!=asset.get('title') or row.get('uuid')!=isrc: fail('source_identity_mismatch')
+    # The official catalog identifies tracks by isrc; uuid is not a required field.
+    # Keep the unique exact ISRC match above and the exact source-card title below.
+    if not isinstance(title,str) or title!=asset.get('title'): fail('source_identity_mismatch')
     if not isinstance(filename,str) or not re.fullmatch(r'[A-Za-z0-9 ()_.,&\-]{1,180}\.mp3',filename) or '..' in filename: fail('source_filename_invalid')
     # Fail closed if the official attribution/download template changes. Candidate CC URLs alone do not pass.
     track_markers=["fetch('pieces.json')","track.isrc === isrcToFind",'${encodeURIComponent(p.filename)}','Attribution Code','"${escapeHtml(p.title || \'\')}" Kevin MacLeod (incompetech.com)','Licensed under Creative Commons: By Attribution 4.0 License','http://creativecommons.org/licenses/by/4.0/']
@@ -82,10 +84,10 @@ def resolve_source_card(info, project_use, *, fetch=public_fetch):
 def verify_mp3(data):
     if not (data.startswith(b'ID3') or len(data)>1 and data[0]==255 and data[1]&224==224): fail('source_not_mp3')
     try:
-        p=subprocess.run(['ffprobe','-v','error','-f','mp3','-i','pipe:0','-show_entries','stream=codec_name,codec_type','-of','json'],input=data,capture_output=True,timeout=20)
+        p=subprocess.run([os.environ.get('FFPROBE_PATH') or 'ffprobe','-v','error','-f','mp3','-i','pipe:0','-show_entries','stream=codec_name,codec_type','-of','json'],input=data,capture_output=True,timeout=20)
         streams=json.loads(p.stdout).get('streams',[])
         if p.returncode or len(streams)!=1 or streams[0].get('codec_name')!='mp3' or streams[0].get('codec_type')!='audio': fail('source_not_mp3')
-        p=subprocess.run(['ffmpeg','-nostdin','-v','error','-xerror','-f','mp3','-i','pipe:0','-progress','pipe:1','-nostats','-f','null','-'],input=data,capture_output=True,timeout=30)
+        p=subprocess.run([os.environ.get('FFMPEG_PATH') or 'ffmpeg','-nostdin','-v','error','-xerror','-f','mp3','-i','pipe:0','-progress','pipe:1','-nostats','-f','null','-'],input=data,capture_output=True,timeout=30)
         if p.returncode: fail('source_audio_decode_failed')
         durations=re.findall(rb'(?m)^out_time_us=(\d+)$',p.stdout)
         if not durations or int(durations[-1])<=0: fail('source_audio_duration_unverified')

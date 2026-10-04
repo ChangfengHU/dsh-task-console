@@ -12,6 +12,7 @@ import { ActionEditor } from './AgentActions.tsx'
 import { TaskStageWorkspace } from './TaskStageWorkspace.tsx'
 
 export interface Api extends TasksApi {
+  launchAgentAction: (query: { agentId: string; actionId: string; revision: string; values: Record<string, unknown>; requestId: string }) => Promise<{ sessionId: string; workspace: string }>
   agentPage: (query:{page:number;query:string;id?:string})=>Promise<{page:number;pages:number;total:number;rows:AgentRow[];detail:AgentRow|null}>
   taskActions: (taskId: string) => Promise<import('../agent-actions.ts').ActionCatalog>
   saveTaskActions: (taskId: string, actions: import('../agent-actions.ts').AgentAction[], revision: string) => Promise<import('../agent-actions.ts').ActionCatalog>
@@ -149,7 +150,7 @@ export function Console({ api }: { api: Api }) {
   const loading = <div className="dtc-empty" style={{ padding: 60 }}><span className="dtc-spin" /> 读取…</div>
 
   let page: JSX.Element
-  if (section === 'agents') page = !catalog ? loading : <AgentsPage api={api} catalog={catalog} agents={[]} id={route[1] === 'new' ? 'new' : (route[1] ?? null)} onSaved={loadCatalog} toast={showToast} />
+  if (section === 'agents') page = <AgentsPage api={api} catalog={catalog ?? { tools: [], mcp: [], skills: [], models: [], defaultModel: '', userRoot: null, workspaces: [] }} agents={[]} id={route[1] === 'new' ? 'new' : (route[1] ?? null)} onSaved={loadCatalog} toast={showToast} />
   else if (route[1] === 'new') page = !agents || !catalog ? loading : <div className="dtc-body"><NewTask api={api} agents={agents} toast={showToast} workspaces={catalog.workspaces} /></div>
   else if (route[1] === 'plans') page = <div className="dtc-body"><TaskPlanReview api={api} id={route[2]} /></div>
   else if (route[1] === 'executions') page = <div className="dtc-body"><TaskExecutions api={api} query={query} /></div>

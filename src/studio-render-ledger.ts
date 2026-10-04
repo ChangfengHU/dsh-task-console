@@ -66,6 +66,6 @@ export class StudioRenderLedger {
   if(rows.some((r:any)=>Object.keys(scope).every(k=>scope[k]===r[k])&&!['completed','failed','rejected'].includes(r.state)))throw Error('studio-candidate-render-still-pending: reconcile the original render before handing off any candidate')
   const proof=rows.find((r:any)=>Object.keys(scope).every(k=>scope[k]===r[k])&&r.state==='completed'&&resolve(i.task.cwd,r.output)===actualPath&&r.outputSha256===candidate.sha256&&r.width===candidate.width&&r.height===candidate.height&&Math.abs(r.fps-candidate.fps)<.001&&Math.abs(r.durationSeconds-candidate.durationSeconds)<.05)
   if(!proof)throw Error('studio-candidate-current-render-required: actual MP4 path/SHA/spec must match a completed HOST render owned by this production card and round. Query studio_status renderJobs, reconcile the original job, and register its output. Another round or an Agent-provided jobId is not proof.')
-  return {intentId:proof.intentId,jobId:proof.jobId,inputSha256:proof.inputSha256,outputSha256:proof.outputSha256,helperSha256:proof.helperSha256,originRunId:proof.originRunId,originSessionId:proof.originSessionId}
+  return {intentId:proof.intentId,jobId:proof.jobId,inputSha256:proof.inputSha256,...(proof.inputIndexSha256?{inputIndexSha256:proof.inputIndexSha256}:{}),composition:proof.composition,outputSha256:proof.outputSha256,helperSha256:proof.helperSha256,originRunId:proof.originRunId,originSessionId:proof.originSessionId}
  }
 }

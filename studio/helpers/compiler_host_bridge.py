@@ -10,7 +10,7 @@ import pathlib
 import runpy
 import sys
 
-COMPILER_SHA256 = '8edebdb0d8a352b3a87e0240c9534fa2432a1a506f7c7d93112ed8ecd7ee5f98'
+COMPILER_SHA256 = 'c3316610961d7d4a1a559248b7a4b05776691c49157a856f7b2fb3f30ca72776'
 
 
 def relative_board(project_root, board):

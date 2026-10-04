@@ -4,7 +4,7 @@ Use complete utterance windows <=10 seconds; an uncertain crop must be checked a
 with adjacent context rather than silently waiving an unmatched boundary word.
 """
 import argparse,difflib,hashlib,json,os,pathlib,sys,unicodedata
-from audio_observe_host import credentials,ENDPOINT
+from audio_observe_host import credentials,ENDPOINT,audio_observer_model
 from audio_review import payload,observe
 from audio_signals import analyze
 
@@ -49,10 +49,11 @@ def run(path,expected_text,stage='final',start=None,end=None):
     stat=p.stat();audio=p.read_bytes()
     if p.stat().st_mtime_ns!=stat.st_mtime_ns or len(audio)!=stat.st_size:raise ValueError('Input changed')
     context=None if start is None and end is None else {'start_seconds':start,'end_seconds':end}
-    _,duration=payload(audio,context=context)
+    model=audio_observer_model()
+    _,duration=payload(audio,model=model,context=context)
     if duration>SPEECH_MAX_SECONDS or not normalize(expected_text) or len(normalize(expected_text))>400 or stage not in ('source','final'):raise ValueError('Invalid coverage input')
     key=credentials()
-    try:result=observe(audio,base_url=ENDPOINT,api_key=key,context=context)
+    try:result=observe(audio,base_url=ENDPOINT,api_key=key,model=model,context=context)
     except Exception as e:
         e.stage='provider';raise
     result['credential_reference']='service:qwen'

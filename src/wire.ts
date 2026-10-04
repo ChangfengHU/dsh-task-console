@@ -98,6 +98,7 @@ export interface SkillEntry {
 
 export interface Catalog {
   workflowExtensions?:{id:string;version:string;hostApi:number;implementationSha256:string;toolAccess?:string;scope:string}[]
+  nativeImageBuiltin?: { registered: boolean; defaultBackend: string; allowedBackends: string[] }
   tools: NativeTool[]
   mcp: McpServer[]
   skills: SkillEntry[]
@@ -111,6 +112,8 @@ export interface Catalog {
 
 /** What the editor authors; persisted beside the composition as task-console.json. */
 export interface AgentSpec {
+  /** Optional overrides for the host built-in tool, never a separate image Agent. */
+  imageGeneration?: import('./image-policy.ts').ImagePolicy
   id: string
   name: string
   description: string

@@ -28,6 +28,7 @@ import { publicToolName } from './filtered-mcp-client.ts'
 import { WORKER_TOOL_NAMES } from './worker-tools.ts'
 import { withPresetLock } from './preset-lock.ts'
 import { ACTION_FILE } from './agent-action-store.ts'
+import { imagePolicy } from './image-policy.ts'
 import type { AgentSpec, NativeTool, Preview, SkillEntry } from './wire.ts'
 
 /** Preset ids become directory names, so containment is a property of the id. */
@@ -39,6 +40,10 @@ export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: s
   { id: 'studio-runtime', label: 'Studio Task evidence', group: '视频工作室', writes: false,
     description: '仅 studio-video-v1 Task 内注册；执行者/素材专家可按真实素材 ID 经宿主认证下载归档文件，按角色限制阶段/候选登记、取证及审查；来源卡不是媒体，下载不代表质量通过；剪辑执行者可用studio_upload_preview上传已登记候选至宿主配置R2预览，不发布社交平台，普通会话不可用。',
     schemaNames: [...STUDIO_TOOL_NAMES,...STUDIO_SPEECH_TOOL_NAMES,...STUDIO_BOARD_TOOL_NAMES], rows: '# Studio tools are registered by the active Task runner, never by standalone chat.' },
+  { id:'image-generation',label:'image_generate · Codex / Gemini',group:'本机',writes:true,
+    description:'宿主内置生图/编辑工具，标准会话默认优先使用；无需创建生图 Agent。仅本地不可用或明确指定时使用已授权 MCP。',
+    schemaNames:['image_generate','image_generate_status','image_generate_cancel'],
+    rows:"- id: native-image-tools\n  name: 'dsh-task-console/image-generation-tools'" },
   { id: 'task-create-runtime', label: 'Task creation', group: '任务', writes: true,
     description: '读取真实角色，生成待审查计划并查询审查与执行；不提供放行或业务运维工具，不提升参与者权限。',
     schemaNames: ['task_create_context', 'task_create_studio_sources', 'task_create_submit', 'task_create_plan_status', 'task_create_status'],
@@ -207,7 +212,9 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
     if (tool) {
       // Codex-backed topic searches can exceed the generic 30-second tool budget.
       // Scope the longer cooperative budget to Studio; fetch and other Agents keep defaults.
-      parts.push(id === 'task-create-runtime'
+      parts.push(id === 'image-generation'
+        ? `${tool.rows}\n  config:\n${indent(toYaml(imagePolicy(spec.imageGeneration),{lineWidth:0}).trimEnd(),4)}`
+        : id === 'task-create-runtime'
         ? `- id: task-create-runtime\n  name: '${fileURLToPath(new URL('./task-create-tools.js',import.meta.url))}'`
         : id === 'web' && spec.tools.includes('studio-runtime')
         ? `${tool.rows}\n  config:\n    searchTimeoutMs: 120000`
@@ -462,6 +469,7 @@ export function validateSpec(raw: unknown): AgentSpec {
     effort,
     permissionPreset,
     tools: list(s.tools).filter(t => NATIVE_TOOLS.some(n => n.id === t)),
+    ...(s.imageGeneration !== undefined || list(s.tools).includes('image-generation') ? { imageGeneration:imagePolicy(s.imageGeneration) } : {}),
     ...(Array.isArray(s.taskExpertise) ? { taskExpertise: list(s.taskExpertise).filter(t => /^[A-Za-z][A-Za-z0-9_:-]{0,159}$/.test(t)).slice(0, 32) } : {}),
     mcpTools,
     mcpPolicy,

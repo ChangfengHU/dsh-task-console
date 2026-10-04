@@ -43,6 +43,8 @@ await build({
     join(root, 'src/fleet-runner-tools.ts'),
     join(root, 'src/plugin-publisher-tools.ts'),
     join(root, 'src/task-create-tools.ts'),
+    join(root, 'src/image-generation-tools.ts'),
+    join(root, 'src/native-image-host.ts'),
     join(root, 'src/proxy-mcp.ts'),
     join(root, 'src/task-intake.ts'),
     join(root, 'src/task-intake-http.ts'),

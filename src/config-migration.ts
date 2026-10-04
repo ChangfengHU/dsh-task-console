@@ -116,7 +116,7 @@ function text(value: unknown, name: string, max = 8000): string {
 /** Migration must never silently remove unknown authored permissions or fields. */
 export function portableAgentSpec(raw: any): AgentSpec {
   const spec = validateSpec(raw)
-  const allowed = new Set(['id','name','description','persona','model','effort','permissionPreset','tools','mcp','mcpTools','mcpPolicy','skills','taskExpertise'])
+  const allowed = new Set(['id','name','description','persona','model','effort','permissionPreset','tools','mcp','mcpTools','mcpPolicy','skills','taskExpertise','imageGeneration'])
   const unsupported = Object.keys(raw ?? {}).filter(key => !allowed.has(key))
   const tools = Array.isArray(raw?.tools) ? raw.tools.filter((t: any) => !spec.tools.includes(t)) : []
   if (unsupported.length || tools.length) throw Error(`Agent ${spec.id} 包含当前插件不支持的配置：${[...unsupported, ...tools].join('、')}；请同步支持该能力的插件，不能静默丢失资产`)

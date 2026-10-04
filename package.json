@@ -10,6 +10,8 @@
     "./workflow-extensions": {
       "default": "./lib/workflow-extensions.js"
     },
+    "./native-image-host": { "default": "./lib/native-image-host.js" },
+    "./image-generation-tools": { "default": "./lib/image-generation-tools.js" },
     ".": {
       "default": "./lib/index.js"
     },

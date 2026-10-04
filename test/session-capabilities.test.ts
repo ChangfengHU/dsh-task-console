@@ -62,6 +62,9 @@ test('capability API shares facts, never probes tools or exposes schema/config s
   const dispose = await cap.install()
   assert.deepEqual([...registered.keys()], CAPABILITY_TOOLS)
   const snapshot = await registered.get('session_capabilities').execute({}, { agent })
+  assert.equal(snapshot.definition.name, null)
+  const strictJson = (value: any): void => { assert.notEqual(value,undefined); if(value && typeof value==='object') for(const child of Object.values(value))strictJson(child) }
+  strictJson(snapshot)
   assert.equal(snapshot.current.tools[0].source, 'environment-inherited')
   assert.equal(snapshot.current.tools[2].state, 'registered')
   assert.equal(snapshot.current.skills[0].state, 'available-on-demand')

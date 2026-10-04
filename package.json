@@ -6,6 +6,7 @@
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
+    "./plugin-publisher-tools": {"default": "./lib/plugin-publisher-tools.js"},
     "./workflow-extensions": {
       "default": "./lib/workflow-extensions.js"
     },
@@ -50,6 +51,7 @@
     "scripts/preset-skills.mjs",
     "scripts/install-task-intake.mjs",
     "scripts/install-task-create.mjs",
+    "scripts/install-plugin-publisher.mjs",
     "scripts/patch-dsh-host.mjs",
     "scripts/patch-task-mentions.mjs",
     "scripts/patch-input-menu.mjs",

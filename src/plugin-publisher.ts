@@ -32,6 +32,15 @@ export function verifyUploadInvocation(item:any, archive:string, expected:string
   requireValue(item.status==='completed'&&!item.error&&!item.result?.isError,'publisher_unavailable')
 }
 
+export function uploadTurnRequest(archive:string,expected:string) {
+  const args={plugin_id:PACKAGE_ID,archive,expected_release_id:expected}
+  return 'Use functions.exec to run exactly this JavaScript. Resolve the executable name from ALL_TOOLS; do not guess a namespace. '+
+    'const matches = ALL_TOOLS.filter(t => /plugin_creator.*update_plugin$/.test(t.name)); '+
+    'if (matches.length !== 1) throw new Error("publisher_tool_not_found"); '+
+    'text(await tools[matches[0].name]('+JSON.stringify(args)+')); '+
+    'The archive is owner-approved and immutable. Call that external tool exactly once. Do not call any other external tool, change arguments, create files, or retry. Report its result and stop.'
+}
+
 /** Direct source reads; one native turn performs the host's required file upload. */
 export async function openPluginCreator(binary = join(homedir(), '.local/bin/codex')): Promise<Platform> {
   const env: NodeJS.ProcessEnv = {}
@@ -110,9 +119,9 @@ export async function openPluginCreator(binary = join(homedir(), '.local/bin/cod
         if(m.method==='turn/completed')m.params.turn?.status==='completed'?resolveTurn():rejectTurn(new Error('publisher_unavailable'))
       }
       try{
-        const args={plugin_id:PACKAGE_ID,archive,expected_release_id:expected}
-        await rpc('turn/start',{threadId,effort:'low',input:[{type:'text',text:'Perform the owner-authorized update_plugin exactly once with these arguments: '+JSON.stringify(args)+'. The archive has already been approved and validated. Do not call other tools, change arguments, or retry. Report the result and stop.'},{type:'mention',name:'Plugin Creator',path:'app://connector_openai_plugin_creator'}]})
+        await rpc('turn/start',{threadId,effort:'low',input:[{type:'text',text:uploadTurnRequest(archive,expected)},{type:'mention',name:'Plugin Creator',path:'app://connector_openai_plugin_creator'}]})
         await done
+        console.info('[plugin-publisher] native upload receipt',JSON.stringify({calls:invocations.map(item=>({server:item.server,tool:item.tool,status:item.status,error:Boolean(item.error||item.result?.isError)}))}))
         requireValue(invocations.length===1,'verification_failed')
         verifyUploadInvocation(invocations[0],archive,expected)
       }finally{clearTimeout(timer);observeTurn=undefined;done.catch(()=>{})}

@@ -2,13 +2,20 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createHash} from 'node:crypto'
 import {readFile,stat} from 'node:fs/promises'
-import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntimeConfig,verifyUploadInvocation} from '../src/plugin-publisher.ts'
+import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntimeConfig,verifyUploadInvocation,uploadTurnRequest} from '../src/plugin-publisher.ts'
 import {registerPluginPublisher} from '../src/plugin-publisher-tools.ts'
 import {validateSpec,NATIVE_TOOLS} from '../src/presets.ts'
 import {validateTaskIntakeDecision} from '../src/task-intake.ts'
 import {intakeContextForModel} from '../src/task-intake-agent.ts'
 const id='12345678-1234-1234-1234-123456789abc'
 const appId='asdk_app_6ac1f14048b88191a1aa282f102f65f6'
+test('native upload discovers the callable name and carries only approved arguments',()=>{
+ const text=uploadTurnRequest('/tmp/approved/release.zip','pluginrel_before')
+ assert.match(text,/ALL_TOOLS\.filter/)
+ assert.match(text,/matches\.length !== 1/)
+ assert.ok(text.includes('tools[matches[0].name]('+JSON.stringify({plugin_id:PACKAGE_ID,archive:'/tmp/approved/release.zip',expected_release_id:'pluginrel_before'})+')'))
+ assert.ok(!text.includes('tools.mcp__plugin_creator__'))
+})
 test('native upload turn excludes ambient Apps, MCP, shell and browsing',()=>{
  const config=publisherRuntimeConfig({apps:{other:{enabled:true}},mcp_servers:{vault:{url:'unused'},browser:{url:'unused'}}})
  assert.equal(config['apps.other.enabled'],false)

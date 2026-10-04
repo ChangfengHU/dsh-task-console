@@ -4,6 +4,7 @@ import { createHash, createHmac } from 'node:crypto'
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir, homedir } from 'node:os'
 import { join } from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 
 export const PACKAGE_ID = 'plugins_6ac15b9d3e4c8191b2f6ff943d1e574d'
 const APP_ID = 'asdk_app_6ac1f14048b88191a1aa282f102f65f6'
@@ -132,7 +133,7 @@ export async function openPluginCreator(binary = join(homedir(), '.local/bin/cod
 
 function sameText(path: string, a: string, b: string) {
   if (typeof a!=='string'||typeof b!=='string')return false
-  if(path.endsWith('.json')){try{return JSON.stringify(JSON.parse(a))===JSON.stringify(JSON.parse(b))}catch{return false}}
+  if(path.endsWith('.json')){try{return isDeepStrictEqual(JSON.parse(a),JSON.parse(b))}catch{return false}}
   return a===b
 }
 export function validateSource(snapshot:any,current:any) {

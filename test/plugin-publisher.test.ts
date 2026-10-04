@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createHash} from 'node:crypto'
 import {readFile,stat} from 'node:fs/promises'
-import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntimeConfig,verifyUploadInvocation,uploadTurnRequest} from '../src/plugin-publisher.ts'
+import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntimeConfig,verifyUploadInvocation,uploadTurnRequest,verifyReadback} from '../src/plugin-publisher.ts'
 import {registerPluginPublisher} from '../src/plugin-publisher-tools.ts'
 import {validateSpec,NATIVE_TOOLS} from '../src/presets.ts'
 import {validateTaskIntakeDecision} from '../src/task-intake.ts'
@@ -59,6 +59,17 @@ test('bounded publisher uploads once and verifies before recording success',asyn
  assert.equal((await p.settled(id)).state,'verified');assert.equal(f.updates(),1);assert.equal(f.closes(),1)
  assert.equal(f.state.proof.releaseId,'pluginrel_after');await assert.rejects(stat(f.path()))
  await p.start(id);assert.equal(f.updates(),1)
+})
+test('official JSON object reordering is equivalent but changed values and arrays fail',()=>{
+ const f=fixture();f.current.plugin.version='0.1.3';f.current.plugin.current_release_id='pluginrel_after';f.current.contents={...f.snapshot.files}
+ const value=JSON.parse(f.current.contents['.codex-plugin/plugin.json'])
+ f.current.contents['.codex-plugin/plugin.json']=JSON.stringify({extensions:value.extensions,version:value.version,name:value.name},null,2)
+ assert.equal(verifyReadback(f.snapshot,f.current),'pluginrel_after')
+ f.current.contents['.codex-plugin/plugin.json']=JSON.stringify({...value,version:'0.1.4'})
+ assert.throws(()=>verifyReadback(f.snapshot,f.current),/verification_failed/)
+ f.snapshot.files['.codex-plugin/plugin.json']='{"ordered":["first","second"]}'
+ f.current.contents['.codex-plugin/plugin.json']='{"ordered":["second","first"]}'
+ assert.throws(()=>verifyReadback(f.snapshot,f.current),/verification_failed/)
 })
 test('unknown write outcome is reconciled without a second upload',async()=>{
  const f=fixture();f.lose();const p=new PluginPublisher(f.options)

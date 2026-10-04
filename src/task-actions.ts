@@ -4,6 +4,7 @@ import { isIPv4 } from 'node:net'
 import { parameterVisible, renderAction, validateActions, type ActionCatalog, type AgentAction } from './agent-actions.ts'
 import type { TaskSpec } from './tasks.ts'
 import type { TaskRunner } from './runner.ts'
+import { isChatWorkflow } from './task-kind.ts'
 
 export interface TaskActionInput { taskId: string; actionId: string; revision: string; values: Record<string, unknown>; requestId: string; cwd?: string }
 export interface TaskActionSnapshot { id: string; name: string; revision: string; template: string; parameters: AgentAction['parameters']; values: Record<string, string | number | boolean> }
@@ -42,12 +43,23 @@ export class TaskActions {
   }
   task(id: string): TaskSpec {
     const task = this.runner.store.tasks.get(id)
-    if (!task || task.archivedAt || task.origin?.source !== 'task-chat') throw Error('仅聊天工作流支持 Task Actions；任务不存在或已归档')
+    if (!task || task.archivedAt || !isChatWorkflow(task)) throw Error('仅聊天工作流支持 Task Actions；任务不存在或已归档')
     return task
   }
   read(id: string): ActionCatalog {
     const task = this.task(id), row = this.db().prepare('SELECT * FROM dsh_task_action_catalog WHERE task_id=?').get(id) as any
     return { taskId: id, agentId: null, name: task.title, writable: true, revision: row?.revision ?? '0', actions: row ? JSON.parse(row.actions_json) : [] }
+  }
+  /** Definitions are portable even for manual Tasks; never manufacture chat authority. */
+  exportDefinition(id: string): AgentAction[] {
+    if (!this.runner.store.tasks.has(id)) throw Error('任务不存在')
+    const row = this.db().prepare('SELECT actions_json FROM dsh_task_action_catalog WHERE task_id=?').get(id) as any
+    return row ? validateTaskActions(JSON.parse(row.actions_json)) : []
+  }
+  restoreDefinition(id: string, raw: unknown): void {
+    if (!this.runner.store.tasks.has(id)) throw Error('任务不存在')
+    const actions = validateTaskActions(raw)
+    this.db().prepare('INSERT INTO dsh_task_action_catalog VALUES (?,?,?) ON CONFLICT(task_id) DO NOTHING').run(id, hash(['config-import', actions]), JSON.stringify(actions))
   }
   save(id: string, raw: unknown, revision: string): ActionCatalog {
     const actions = validateTaskActions(raw), db = this.db()

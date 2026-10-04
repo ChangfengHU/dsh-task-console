@@ -14,6 +14,8 @@ export function validateStudioPolicy(value) {
     requiredDimensions: input.requiredDimensions ?? [...DEFAULT_DIMENSIONS]};
   if (!object(value)) issues.push('policy: expected object');
   if (!nonempty(policy.characterId)) issues.push('policy.characterId: required');
+  if (policy.dialogueLanguage !== undefined && policy.dialogueLanguage !== 'zh-CN') issues.push('policy.dialogueLanguage: supported explicit contract is zh-CN; omit for legacy unrestricted tasks');
+  if (policy.visualCoverage !== undefined && !['requirements-v1','components-v2'].includes(policy.visualCoverage)) issues.push('policy.visualCoverage: supported contracts are requirements-v1 and components-v2');
   if (!hash(policy.referenceSha256)) issues.push('policy.referenceSha256: expected SHA-256');
   for (const key of ['width','height','fps']) if (!finite(policy[key]) || policy[key] <= 0) issues.push(`policy.${key}: expected positive number`);
   if (!Number.isInteger(policy.width) || !Number.isInteger(policy.height)) issues.push('policy: dimensions must be integers');
@@ -124,5 +126,7 @@ export function evaluateStudioReview({policy:input, candidate, review, producerS
     issueIds.add(issue.id);
     if (issue.status === 'pending' || (['blocker','major'].includes(issue.severity) && !['resolved','verified'].includes(issue.status))) fail(`issue.${issue.id}: unresolved ${issue.severity}`);
   }
-  return {ok:issues.length === 0, issues, label:issues.length === 0 ? 'machine_assessed_candidate' : 'candidate'};
+  const qualityIssues=issues.filter(issue=>!issue.startsWith('autonomy:'));
+  const autonomy={status:!Array.isArray(interventions)?'unknown':interventions.length?'assisted':'no_recorded_intervention',autonomousVerified:false};
+  return {ok:issues.length === 0, qualityOk:qualityIssues.length===0, qualityIssues, autonomy, issues, label:qualityIssues.length ? 'candidate' : autonomy.status==='assisted' ? 'assisted_machine_assessed_candidate' : 'machine_assessed_candidate'};
 }

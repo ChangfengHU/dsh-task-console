@@ -17,7 +17,7 @@ import { executionLabel } from '../execution-label.ts'
 import { workflowView } from '../workflow-plan.ts'
 import { WorkflowPlan } from './WorkflowPlan.tsx'
 import { ExecutionReport } from './ExecutionReport.tsx'
-import { executionProgress } from '../execution-progress.ts'
+import { ExecutionMigrationReview } from './ExecutionMigrationReview.tsx'
 
 const epoch = (value?: number | null) => value ? new Date(value * 1000).toLocaleTimeString('zh-CN', { hour12: false }) : '—'
 const STATUS: Record<string, string> = { todo: '等依赖', ready: '就绪', scheduled: '定时等待', running: '运行中', blocked: '阻塞', review: '待验收', done: '完成', archived: '归档', triage: '需处理' }
@@ -54,7 +54,6 @@ const eventEffect = (event: GraphEventRow, frame: GraphFrame) => {
     case 'prompt_dispatched': return { icon: '✉', title: '任务书已发送给 Agent', copy: '没有新增 Task/Link；同一节点亮起“发令”阶段，消息 ID 成为运行证据。', facts: [`Run #${event.run_id}`, `message_id = ${short(p.message_id ?? run?.message_id)}`] }
     case 'model_fallback': return { icon: '↪', title: '主模型启动失败，切换备用模型', copy: '尚未调用工具；保留同一任务、会话和权限，仅切换模型一次。', facts: [`${p.from} → ${p.to}`, `原因：${p.code}`] }
     case 'model_fallback_unavailable': return { icon: '!', title: '备用模型不可用', copy: '未绕过失败或执行权限，保留原始错误。', facts: [`${p.provider}/${p.model}`] }
-    case 'model_wait_interrupted': return { icon: '◷', title: '模型等待超时，后台操作继续', copy: '宿主确认本会话后台操作仍在运行；保留执行与租约，结束后自动唤醒读取结果。不重复操作，也不代表验收通过。', facts: [`原因：${p.code}`, '原执行截止时间不变'] }
     case 'heartbeat': return { icon: '♥', title: 'Agent 心跳续租', copy: '没有新增 Task/Link；运行节点产生脉冲，更新最后心跳与 CAS 租约证据。', facts: [`last_heartbeat_at = ${epoch(Number(p.last_heartbeat_at) || run?.last_heartbeat_at)}`, `claim_expires = ${typeof p.claim_expires === 'number' ? epoch(p.claim_expires) : '旧事件未记录精确值'}`] }
     case 'gate_opened': return { icon: '◇', title: '系统闸门放行', copy: '闸门节点变为完成；它不会创建 Agent Run，下游随后才能进入 ready。', facts: ['tasks.status = done', event.task_id] }
     case 'completed': return { icon: '✓', title: '当前角色执行完成', copy: '运行节点变为完成，task_runs 写入结果；依赖它的下游随后才会推进。', facts: [`Run #${event.run_id}`, `summary = ${short(p.summary)}`] }
@@ -156,6 +155,9 @@ export function DynamicTaskReplay({ api, agents, task, batches, archivedTotal, b
   const [artifacts, setArtifacts] = useState<ArtifactView[]>([])
   const [error, setError] = useState('')
   const [eventsReady, setEventsReady] = useState(false)
+  const [refreshNonce, setRefreshNonce] = useState(0)
+  const [refreshing, setRefreshing] = useState(false)
+  const [syncedAt, setSyncedAt] = useState<number | null>(null)
   const [cursor, setCursor] = useState<number | null>(null)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
@@ -164,15 +166,22 @@ export function DynamicTaskReplay({ api, agents, task, batches, archivedTotal, b
   const [sessionsOpen, setSessionsOpen] = useState(Boolean(sessionId))
   const [expanded, setExpanded] = useState<'plan' | 'events' | 'brief' | null>(null)
   const [inspectorOpen, setInspectorOpen] = useState(false)
+  const [resuming, setResuming] = useState(false)
+  const [migrationReview, setMigrationReview] = useState(false)
+  const displayedGraph = useRef<{ api: TasksApi; key: string } | null>(null)
   const closeSessions = () => { setSessionsOpen(false); if (sessionId) go(`tasks/${task.id}/runs/${batchId}`) }
   const timer = useRef<number | undefined>(undefined)
   useEffect(() => {
     let stop = false
+    let focusLive = refreshNonce > 0
     const cache = graphCaches.get(api) ?? new QueryCache<GraphSnapshot>(15000, 10)
     graphCaches.set(api, cache)
     const cacheKey = JSON.stringify([task.id, batchId])
     let accumulated: GraphSnapshot | null = cache.peek(cacheKey) ?? null
-    setData(null); setArtifacts([]); setError(''); setCursor(null); setPlaying(false); setEventsReady(false)
+    const sameGraph = displayedGraph.current?.api === api && displayedGraph.current.key === cacheKey
+    displayedGraph.current = { api, key: cacheKey }
+    if (!sameGraph) { setData(null); setArtifacts([]); setSyncedAt(null) }
+    setError(''); setCursor(null); setPlaying(false); setEventsReady(false)
     if (accumulated) { setData(accumulated); setEventsReady(true) }
     const load = async () => {
       try {
@@ -191,13 +200,18 @@ export function DynamicTaskReplay({ api, agents, task, batches, archivedTotal, b
         const nextArtifacts = await api.taskArtifacts(task.id, batchId)
         if (stop) return
         setArtifacts(nextArtifacts)
-        setSelected(cur => cur && next.live.tasks.some(row => row.id === cur) ? cur : next.live.tasks.find(row => ['running', 'blocked', 'ready'].includes(row.status))?.id ?? next.live.tasks.at(-1)?.id ?? null)
+        const focus = focusLive
+        focusLive = false
+        const active = next.live.tasks.find(row => row.status === 'running') ?? next.live.tasks.find(row => row.status === 'blocked') ?? next.live.tasks.find(row => row.status === 'ready') ?? next.live.tasks.at(-1)
+        setSelected(cur => !focus && cur && next.live.tasks.some(row => row.id === cur) ? cur : active?.id ?? null)
+        setSyncedAt(Date.now())
         return !next.batch.outcome && !archivedAt
       } catch (e) { if (!stop) setError(String((e as Error).message ?? e)) }
+      finally { if (!stop) setRefreshing(false) }
     }
     const cancel = serialPoll(load, 4000)
     return () => { stop = true; cancel() }
-  }, [api, task.id, batchId, archivedAt])
+  }, [api, task.id, batchId, archivedAt, refreshNonce])
   useEffect(() => {
     if (!sessionId || !data) return
     const taskNode = data.live.runs.find(row => row.session_id === sessionId)?.task_id
@@ -223,6 +237,20 @@ export function DynamicTaskReplay({ api, agents, task, batches, archivedTotal, b
   const parents = node ? frame.links.filter(link => link.child_id === node.id).map(link => frame.tasks.find(row => row.id === link.parent_id)).filter(Boolean) as GraphTaskRow[] : []
   const children = node ? frame.links.filter(link => link.parent_id === node.id).map(link => frame.tasks.find(row => row.id === link.child_id)).filter(Boolean) as GraphTaskRow[] : []
   const runs = node ? frame.runs.filter(run => run.task_id === node.id) : []
+  const resumeLatest = async () => {
+    const latest = runs.at(-1)
+    if (!latest || !node) return
+    setResuming(true)
+    try {
+      const result = await api.resumeStudioCard({ taskId: task.id, batchId, cardId: node.id, expectedCoreRunId: latest.id })
+      setMigrationReview(false)
+      toast(result.newRun ? (result.reconciledAbsent ? `已确认原渲染未创建（${result.errorCode ?? '宿主无作业记录'}），旧 Run 已保留并新建 Run。` : '旧 Run 已保留，已创建新 Run。') : `原渲染仍未结束（${result.renderState ?? '状态未知'}），Run 保持阻塞；稍后可再次对账。`)
+    } catch (e) {
+      const message = String((e as Error).message ?? e)
+      if (message.includes('task-recovery-binding-migration-required')) setMigrationReview(true)
+      toast(`恢复未执行：${message}`)
+    } finally { setResuming(false) }
+  }
   const effect = current ? eventEffect(current, frame) : undefined
   const artifactActors: ArtifactActor[] = data.live.tasks.map(row => {
     const reviewSummary = [...data.live.runs].reverse().find(run => run.task_id === row.id)?.summary ?? ''
@@ -246,9 +274,7 @@ export function DynamicTaskReplay({ api, agents, task, batches, archivedTotal, b
   const workflowDone = task.graphMode !== 'dynamic-rounds' && data.batch.outcome === 'done' && frame.tasks.length === data.live.tasks.length && frame.tasks.every(row => row.status === 'done')
   const finalSummary = workflowDone
     ? frame.tasks.map(row => `${nameOf(row.assignee)}\n${frame.runs.filter(run => run.task_id === row.id).at(-1)?.summary ?? '没有提交文字结果'}`).join('\n\n────────\n\n')
-    : task.graphMode !== 'dynamic-rounds'
-      ? executionProgress(frame, cursor === null || (data.batch.settledAt ?? Infinity) <= (current?.created_at ?? 0) ? data.batch.outcome : null, nameOf)
-      : [...frame.tasks].filter(row => row.role === 'planner').flatMap(row => frame.runs.filter(run => run.task_id === row.id)).filter(run => run.summary).at(-1)?.summary ?? undefined
+    : [...frame.tasks].filter(row => row.role === 'planner').flatMap(row => frame.runs.filter(run => run.task_id === row.id)).filter(run => run.summary).at(-1)?.summary ?? undefined
   const done = frame.tasks.filter(row => row.status === 'done').length
   const rounds = frame.tasks.filter(row => row.node_kind === 'gate').length
   const authoring = workflowView(task, batches.find(batch => batch.id === batchId)).sessions
@@ -258,20 +284,28 @@ export function DynamicTaskReplay({ api, agents, task, batches, archivedTotal, b
   const origin = turn?.origin ?? task.origin
   const objective = turn?.objective ?? task.brief
   const seek = (next: number) => { if (!eventsReady) return; setPlaying(false); setCursor(Math.max(0, Math.min(next, events.length))) }
+  const refreshLive = () => {
+    window.clearTimeout(timer.current)
+    setPlaying(false)
+    setCursor(null)
+    setRefreshing(true)
+    setRefreshNonce(value => value + 1)
+  }
   const execution = executionLabel({ id: batchId, firedAt: selectedBatch?.firedAt ?? new Date(data.batch.firedAt * 1000).toISOString() })
   const openReport = () => { setPlaying(false); go(`tasks/${task.id}/runs/${batchId}/report`) }
   return <div className="dtc-execution-view"><div className="dtc-cartoon dtc-dbtruth dtc-compact" hidden={report}>
-    <header className="dtc-cartoon-head"><button className="dtc-cartoon-back" onClick={() => go('tasks')}>←</button><div className="dtc-cartoon-title"><span>任务执行</span><h1>{task.title}</h1><small title={`完整执行 ID：${batchId}`}>{executionLabel({ id: batchId, firedAt: selectedBatch?.firedAt ?? new Date(data.batch.firedAt * 1000).toISOString() })} · 北京时间</small></div><div className="dtc-cartoon-live"><i />{cursor === null ? 'SQLite 实时态' : `历史事件 #${step}`}</div><button className="dtc-btn dtc-session-trigger" onClick={() => setSessionsOpen(true)}><i>{sessionCount}</i> Sessions</button><button className="dtc-btn sm" onClick={openReport}>查看执行报告</button>{!(workflowDone && !final) ? <FinalArtifactActions compact api={api} taskId={task.id} batchId={batchId} group={final} toast={toast} refresh={refreshArtifacts} /> : null}<div className="dtc-cartoon-actions"><ExecutionPicker batches={batches} archivedTotal={archivedTotal} value={batchId} onChange={id => go(`tasks/${task.id}/runs/${id}`)} onArchive={onBatchArchive} /><TaskRunAction task={task} api={api} toast={toast} />{!data.batch.outcome && !selectedBatch?.archivedAt ? <button className="dtc-btn" onClick={async () => { await api.cancelRun(batchId); toast('已取消运行') }}>取消</button> : null}<button className="dtc-btn danger" onClick={async () => { if (!window.confirm('删除任务和它的运行记录?会话本身不删。')) return; await api.deleteTask(task.id); go('tasks') }}>删除</button></div></header>
+    <header className="dtc-cartoon-head"><button className="dtc-cartoon-back" onClick={() => go('tasks')}>←</button><div className="dtc-cartoon-title"><span>任务执行</span><h1>{task.title}</h1><small title={`完整执行 ID：${batchId}`}>{executionLabel({ id: batchId, firedAt: selectedBatch?.firedAt ?? new Date(data.batch.firedAt * 1000).toISOString() })} · 北京时间</small></div><div className="dtc-cartoon-live"><i />{cursor === null ? 'SQLite 实时态' : `历史事件 #${step}`}</div><button className="dtc-btn dtc-session-trigger" onClick={() => setSessionsOpen(true)}><i>{sessionCount}</i> Sessions</button>{task.design?.evidenceContract === 'studio-video-v1' && Array.isArray(task.design.studioStages) ? <button className="dtc-btn sm pri" onClick={() => go(`tasks/${task.id}/stages/${batchId}`)}>阶段产物与继续</button> : null}<button className="dtc-btn sm" onClick={openReport}>查看执行报告</button>{!(workflowDone && !final) ? <FinalArtifactActions compact api={api} taskId={task.id} batchId={batchId} group={final} toast={toast} refresh={refreshArtifacts} /> : null}<div className="dtc-cartoon-actions"><ExecutionPicker batches={batches} archivedTotal={archivedTotal} value={batchId} onChange={id => go(`tasks/${task.id}/runs/${id}`)} onArchive={onBatchArchive} /><TaskRunAction task={task} api={api} toast={toast} />{!data.batch.outcome && !selectedBatch?.archivedAt ? <button className="dtc-btn" onClick={async () => { await api.cancelRun(batchId); toast('已取消运行') }}>取消</button> : null}<button className="dtc-btn danger" onClick={async () => { if (!window.confirm('删除任务和它的运行记录?会话本身不删。')) return; await api.deleteTask(task.id); go('tasks') }}>删除</button></div></header>
     {archivedAt ? <p role="status">已归档执行 · 原始状态、证据和会话保留，不参与当前调度。</p> : null}
     {error ? <div className="dtc-err">{error}</div> : null}
     <WorkflowPlan key={batchId} expanded={expanded === 'plan'} onExpandedChange={open => setExpanded(open ? 'plan' : null)} task={task} batch={selectedBatch} nameOf={nameOf} openSession={id => void api.openSession(id).catch(e => toast(String(e.message ?? e)))} trace={id => go(`tasks/${task.id}/runs/${batchId}?session=${encodeURIComponent(id)}`)} />
+    {error ? <div className="dtc-err" role="alert">实时状态同步失败：{error}。可点击“刷新实时”重试。</div> : null}
     <section className={`dtc-dag-cockpit ${dagFullscreen ? 'dtc-dag-fullscreen' : ''} ${inspectorOpen ? 'inspector-open' : ''}`}>
       <main className="dtc-cpanel dtc-dag-panel">
         <div className="dtc-cpanel-head"><div><b>协作流程 · {frame.tasks.length}</b><small title="数据库有向无环图：节点=tasks 行；箭头=task_links 行；页面不补角色、不补边">{done} 完成 · {frame.tasks.length - done} 未完成 · {frame.links.length} Links · {frame.runs.length} Runs{task.graphMode === 'dynamic-rounds' ? ` · ${rounds} 轮（真实 Gate）` : ' · 顺序交接'}</small></div><div className="dtc-dag-head-actions">{dagFullscreen ? <button className="dtc-btn sm" onClick={() => setSessionsOpen(true)}>Sessions ({sessionCount})</button> : null}<button className="dtc-btn sm dtc-inspector-toggle" aria-expanded={inspectorOpen} onClick={() => setInspectorOpen(value => !value)}>行检查器</button><button className="dtc-btn sm" data-dtc-exit-fullscreen={dagFullscreen || undefined} onClick={() => setDagFullscreen(value => !value)}>{dagFullscreen ? '退出全屏' : '全屏 DAG'}</button></div></div>
         <details key={current?.id ?? 'start'} className={`dtc-compact-event kind-${current?.kind ?? 'idle'}`}><summary><span>{effect?.icon ?? '○'}</span><small>{current ? `STEP ${step}` : '回放起点'}</small><b>{effect?.title ?? '尚未写入数据库事件'}</b><em>详情</em></summary><div><p>{effect?.copy ?? '点击下一步后，第一个真实 Task 才会出现在 DAG。'}</p>{effect ? <dl>{effect.facts.map((fact, index) => <div key={index}><dt>{index ? '证据' : '变更'}</dt><dd>{fact}</dd></div>)}</dl> : null}</div></details>
         {frame.tasks.length ? <DbDag frame={frame} studio={task.design?.evidenceContract==='studio-video-v1'} selected={node?.id ?? null} current={cursor === null ? undefined : current} onSelect={id => { setSelected(id); if (window.matchMedia('(max-width:800px), (max-height:500px)').matches) setInspectorOpen(true) }} nameOf={nameOf} /> : <div className="dtc-empty">事件 #0：数据库还没有 Task 行。</div>}
-      <div className={`dtc-replaybar ${playing ? 'playing' : ''}`}><div className="dtc-replay-now"><span>{!eventsReady ? '读取回放事件…' : cursor === null ? '实时数据库' : playing ? '自动回放中' : '历史快照'}</span><b>{String(step).padStart(2, '0')} / {String(events.length).padStart(2, '0')}</b><small>{current ? `${epoch(current.created_at)} · ${graphEventLabel(current)}` : '尚未发生事件'}</small></div><div className="dtc-replay-actions"><button onClick={() => seek(0)} disabled={!eventsReady || !step}>从头</button><button onClick={() => seek(step - 1)} disabled={!eventsReady || !step}>←</button><button className="play" disabled={!eventsReady} onClick={() => { if (step >= events.length) setCursor(0); setPlaying(value => !value) }}>{playing ? 'Ⅱ 暂停' : '▶ 播放'}</button><button onClick={() => seek(step + 1)} disabled={!eventsReady || step >= events.length}>→</button></div><label className="dtc-replay-range"><span>task_events.id</span><input type="range" disabled={!eventsReady} min="0" max={events.length} value={step} onChange={e => seek(Number(e.target.value))} /><output>{step}</output></label><div className="dtc-replay-tail"><label>速度<select value={speed} onChange={e => setSpeed(Number(e.target.value))}><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option></select></label><button className="live" disabled={cursor === null} onClick={() => { setPlaying(false); setCursor(null) }}>● 回到实时</button></div></div>
-    </main><aside className="dtc-cpanel dtc-dag-inspector" aria-label="数据库行检查器"><button className="dtc-close dtc-inspector-close" aria-label="收起行检查器" onClick={() => setInspectorOpen(false)}>×</button><div className="dtc-cpanel-head"><div><b>数据库行检查器</b><small>当前回放时刻可见的真实证据</small></div>{node ? <span>{node.node_kind.toUpperCase()}</span> : null}</div>{node ? <div className="dtc-dbinspect"><h2>{(ROLE[node.role ?? node.node_kind] ?? { icon: '◎', label: nameOf(node.assignee) }).icon} {(node.node_kind==='gate'?'交接检查':nameOf(node.assignee))} {node.round}</h2><p className="dtc-mono">{node.id}</p><dl><dt>tasks.status</dt><dd>{node.status}</dd><dt>assignee</dt><dd>{nameOf(node.assignee)}</dd><dt>created_at</dt><dd>{epoch(node.created_at)}</dd><dt>completed_at</dt><dd>{epoch(node.completed_at)}</dd><dt>父依赖</dt><dd>{parents.map(row => row.role ? `${row.role}${row.round ?? ''}` : nameOf(row.assignee)).join('、') || '无'}</dd><dt>子节点</dt><dd>{children.map(row => row.role ? `${row.role}${row.round ?? ''}` : nameOf(row.assignee)).join('、') || '尚未写入'}</dd></dl><h3>task_runs ({runs.length})</h3>{runs.length ? runs.map(run => <button key={run.id} className="dtc-dbrun" onClick={() => run.session_id && api.openSession(run.session_id)}><b>Run #{run.id} · {run.status}</b><span className="dtc-dbrun-phase">{PHASES.map(phase => <i key={phase.id} className={run.evidence.includes(phase.id) ? 'on' : ''}>{phase.label}</i>)}</span><small>{nameOf(run.profile)} · {epoch(run.started_at)}{run.session_id ? ' · 打开会话 ↗' : ''}</small>{run.external_run_id ? <code>external: {run.external_run_id}</code> : null}{run.session_id ? <code>session: {run.session_id}</code> : null}{run.message_id ? <code>message: {run.message_id}</code> : null}{run.last_heartbeat_at ? <code>heartbeat: {epoch(run.last_heartbeat_at)} · lease: {epoch(run.claim_expires)}</code> : null}{run.summary ? <p>{run.summary}</p> : null}</button>) : <div className="dtc-clegend">Gate 和尚未领取的 Task 没有 Run 行。</div>}</div> : <div className="dtc-empty">这个时刻没有节点。</div>}</aside></section>
+      <div className={`dtc-replaybar ${playing ? 'playing' : ''}`}><div className="dtc-replay-now"><span>{!eventsReady ? '读取回放事件…' : cursor === null ? '实时数据库' : playing ? '自动回放中' : '历史快照'}</span><b>{String(step).padStart(2, '0')} / {String(events.length).padStart(2, '0')}</b><small>{current ? `${epoch(current.created_at)} · ${graphEventLabel(current)}` : '尚未发生事件'}</small></div><div className="dtc-replay-actions"><button onClick={() => seek(0)} disabled={!eventsReady || !step}>从头</button><button onClick={() => seek(step - 1)} disabled={!eventsReady || !step}>←</button><button className="play" disabled={!eventsReady} onClick={() => { if (step >= events.length) setCursor(0); setPlaying(value => !value) }}>{playing ? 'Ⅱ 暂停' : '▶ 播放'}</button><button onClick={() => seek(step + 1)} disabled={!eventsReady || step >= events.length}>→</button></div><label className="dtc-replay-range"><span>task_events.id</span><input type="range" disabled={!eventsReady} min="0" max={events.length} value={step} onChange={e => seek(Number(e.target.value))} /><output>{step}</output></label><div className="dtc-replay-tail"><label>速度<select value={speed} onChange={e => setSpeed(Number(e.target.value))}><option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option></select></label><button className="live" disabled={refreshing} onClick={refreshLive} title="刷新状态并定位当前执行节点">{refreshing ? '同步中…' : cursor === null ? '↻ 刷新实时' : '● 回到实时'}</button>{syncedAt ? <small role="status">{error ? '同步失败' : refreshing ? '正在获取最新状态' : `已同步 ${new Date(syncedAt).toLocaleTimeString('zh-CN', { hour12: false })}`}</small> : null}</div></div>
+    </main><aside className="dtc-cpanel dtc-dag-inspector" aria-label="数据库行检查器"><button className="dtc-close dtc-inspector-close" aria-label="收起行检查器" onClick={() => setInspectorOpen(false)}>×</button><div className="dtc-cpanel-head"><div><b>数据库行检查器</b><small>当前回放时刻可见的真实证据</small></div>{node ? <span>{node.node_kind.toUpperCase()}</span> : null}</div>{node ? <div className="dtc-dbinspect"><h2>{(ROLE[node.role ?? node.node_kind] ?? { icon: '◎', label: nameOf(node.assignee) }).icon} {(node.node_kind==='gate'?'交接检查':nameOf(node.assignee))} {node.round}</h2><p className="dtc-mono">{node.id}</p><dl><dt>tasks.status</dt><dd>{node.status}</dd><dt>assignee</dt><dd>{nameOf(node.assignee)}</dd><dt>created_at</dt><dd>{epoch(node.created_at)}</dd><dt>completed_at</dt><dd>{epoch(node.completed_at)}</dd><dt>父依赖</dt><dd>{parents.map(row => row.role ? `${row.role}${row.round ?? ''}` : nameOf(row.assignee)).join('、') || '无'}</dd><dt>子节点</dt><dd>{children.map(row => row.role ? `${row.role}${row.round ?? ''}` : nameOf(row.assignee)).join('、') || '尚未写入'}</dd></dl>{!report&&task.design?.evidenceContract==='studio-video-v1'&&node.role==='executor'&&node.status==='blocked'&&runs.at(-1)?.terminal_block===true ? <div className="dtc-studio-resume"><p>这是已结束的阻塞 Run。恢复前先核对原渲染 intent；若冻结执行身份已变化，会停止在这里并要求审阅迁移。</p><button className="dtc-btn pri" disabled={resuming} onClick={()=>void resumeLatest()}>{resuming?'正在对账原渲染…':'对账并恢复此节点'}</button>{migrationReview?<ExecutionMigrationReview api={api} taskId={task.id} batchId={batchId} onApplied={resumeLatest}/>:null}</div>:null}<h3>task_runs ({runs.length})</h3>{runs.length ? runs.map(run => <button key={run.id} className="dtc-dbrun" onClick={() => run.session_id && api.openSession(run.session_id)}><b>Run #{run.id} · {run.status}</b><span className="dtc-dbrun-phase">{PHASES.map(phase => <i key={phase.id} className={run.evidence.includes(phase.id) ? 'on' : ''}>{phase.label}</i>)}</span><small>{nameOf(run.profile)} · {epoch(run.started_at)}{run.session_id ? ' · 打开会话 ↗' : ''}</small>{run.external_run_id ? <code>external: {run.external_run_id}</code> : null}{run.session_id ? <code>session: {run.session_id}</code> : null}{run.message_id ? <code>message: {run.message_id}</code> : null}{run.last_heartbeat_at ? <code>heartbeat: {epoch(run.last_heartbeat_at)} · lease: {epoch(run.claim_expires)}</code> : null}{run.summary ? <p>{run.summary}</p> : null}</button>) : <div className="dtc-clegend">Gate 和尚未领取的 Task 没有 Run 行。</div>}</div> : <div className="dtc-empty">这个时刻没有节点。</div>}</aside></section>
     <section className="dtc-execution-evidence" aria-label="执行证据">
       <nav aria-label="执行资料">{([['events', 'Canonical task_events'], ['brief', '任务书与运行边界']] as const).map(([key, label]) => <button key={key} aria-expanded={expanded === key} aria-controls={`dtc-evidence-${key}`} onClick={() => setExpanded(expanded === key ? null : key)}>{label}{key === 'events' ? <small>{events.length}</small> : null}<span>{expanded === key ? '▾' : '▸'}</span></button>)}</nav>
       <div className="dtc-evidence-content dtc-timeline" id="dtc-evidence-events" hidden={expanded !== 'events'}><p className="dtc-muted">点击任一事件，把协作图还原到该事务之后；未来记录不会提前出现在图中。</p><div className="dtc-activity-list">{[...events].reverse().map((event, index) => { const eventStep = events.length - index; return <button key={event.id} className={`dtc-activity-row ${eventStep > step ? 'off' : ''} ${eventStep === step ? 'cur' : ''}`} onClick={() => seek(eventStep)}><span className="dot" /><span className="copy"><b>{graphEventLabel(event)}</b><span>{event.kind}</span><small>{epoch(event.created_at)} · task_events.id={event.id}</small></span><span className="dtc-pill dtc-p-grey">DB</span></button> })}</div></div>

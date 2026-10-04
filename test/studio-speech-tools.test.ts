@@ -1,23 +1,36 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {mkdtemp,writeFile,rm} from 'node:fs/promises'
+import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {registerStudioSpeechTools} from '../src/studio-speech-tools.ts'
 import {createHash} from 'node:crypto'
 import {fileSha256} from '../src/studio-tools.ts'
-async function setup(t:any,real=false){
+async function setup(t:any,real=false,duration=1){
  const cwd=await mkdtemp(join(tmpdir(),'speech-tools-'));t.after(()=>rm(cwd,{recursive:true,force:true}));const film=join(cwd,'film.mp4'),source=join(cwd,'line.wav');await writeFile(film,'film');await writeFile(source,'audio')
- if(real){const {execFile}=await import('node:child_process'),{promisify}=await import('node:util'),run=promisify(execFile);await run('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=400:sample_rate=16000','-t','1','-y',source]);await run('ffmpeg',['-v','error','-f','lavfi','-i','color=c=red:s=108x192:r=30','-i',source,'-t','1','-c:a','aac','-pix_fmt','yuv420p','-y',film])}
- let c:any={sha256:await fileSha256(film),durationSeconds:1},script:any,plan:any,active=true,bad=false;const checks:any[]=[],workflow={status:()=>({candidate:c}),candidateLocation:()=>({path:film}),script:()=>script,recordScript:(_:any,v:any)=>{if(script&&script.sha256!==v.sha256)throw Error('studio-script-review-required');script=v},speechPlan:()=>plan,recordSpeechPlan:(_:any,v:any)=>plan=v,recordSpeechCheck:(_:any,v:any)=>{checks.push(v);return {id:'host'}}}
- const toolsFor=async(role:string)=>{const tools:any={};await registerStudioSpeechTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd},card:{role},sessionId:role},workflow,isActive:()=>active,...(real?{}:{runCommand:async(file:string,args:string[])=>{if(file.includes('ffprobe'))return {stdout:JSON.stringify({format:{duration:'1'},streams:[{codec_type:'audio'}]})};await writeFile(args.at(-1)!,'wav');return {stdout:''}}}),speechCheck:async({wavPath,expectedText})=>({ok:true,observation:{input_modality:'input_audio',finish_reason:'stop',audio_sha256:await fileSha256(wavPath)},audio_sha256:bad?'wrong':await fileSha256(wavPath),expected_text_sha256:createHash('sha256').update(expectedText).digest('hex'),content_gate:'pass',signals:{},expected:expectedText})});return tools}
- const register=async()=>{const planner=await toolsFor('planner');await planner.studio_freeze_script.execute({lines:[{id:'1',text:'你好'}]});await writeFile(join(cwd,'plan.json'),JSON.stringify([{id:'1',text:'你好',start:0,end:1,sourcePath:'line.wav'}]));const producer=await toolsFor('executor');await producer.studio_register_speech_plan.execute({path:'plan.json'})}
+ if(real){const {execFile}=await import('node:child_process'),{promisify}=await import('node:util'),run=promisify(execFile);await run('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=400:sample_rate=16000','-t',String(duration),'-y',source]);await run('ffmpeg',['-v','error','-f','lavfi','-i','color=c=red:s=108x192:r=30','-i',source,'-t',String(duration),'-c:a','aac','-pix_fmt','yuv420p','-y',film])}
+ let c:any={sha256:await fileSha256(film),durationSeconds:duration},script:any,plan:any,active=true,bad=false;const checks:any[]=[],workflow={status:()=>({candidate:c}),candidateLocation:()=>({path:film}),script:()=>script,recordScript:(_:any,v:any)=>{if(script&&script.sha256!==v.sha256)throw Error('studio-script-review-required');script=v},speechPlan:()=>plan,recordSpeechPlan:(_:any,v:any)=>plan=v,recordSpeechCheck:(_:any,v:any)=>{checks.push(v);return {id:'host'}}}
+ const toolsFor=async(role:string)=>{const tools:any={};await registerStudioSpeechTools({tools:{register:(v:any)=>{tools[v.name]=v;return()=>{}}}},{input:{task:{cwd},card:{role},sessionId:role},workflow,isActive:()=>active,...(real?{}:{runCommand:async(file:string,args:string[])=>{if(file.includes('ffprobe'))return {stdout:JSON.stringify({format:{duration:String(duration)},streams:[{codec_type:'audio'}]})};await writeFile(args.at(-1)!,'wav');return {stdout:''}}}),speechCheck:async({wavPath,expectedText})=>({ok:true,observation:{input_modality:'input_audio',finish_reason:'stop',audio_sha256:await fileSha256(wavPath)},audio_sha256:bad?'wrong':await fileSha256(wavPath),expected_text_sha256:createHash('sha256').update(expectedText).digest('hex'),content_gate:'pass',signals:{},expected:expectedText})});return tools}
+ const register=async()=>{const planner=await toolsFor('planner');await planner.studio_freeze_script.execute({lines:[{id:'1',text:'你好'}]});await writeFile(join(cwd,'plan.json'),JSON.stringify([{id:'1',text:'你好',start:0,end:duration,sourcePath:'line.wav'}]));const producer=await toolsFor('executor');await producer.studio_register_speech_plan.execute({path:'plan.json'})}
  return {cwd,source,film,toolsFor,register,checks,getPlan:()=>plan,changeCandidate:()=>c={...c,sha256:'x'},bad:()=>bad=true,stop:()=>active=false}
 }
 test('script is planner-owned frozen; plan must preserve all exact dialogue',async t=>{const s=await setup(t);await s.register();const p=await s.toolsFor('planner');await assert.rejects(p.studio_freeze_script.execute({lines:[{id:'1',text:'改了'}]}),/review-required/);const r=await s.toolsFor('reviewer');await assert.rejects(r.studio_register_speech_plan.execute({path:'plan.json'}),/role/);await writeFile(join(s.cwd,'plan.json'),JSON.stringify([{id:'1',text:'改了',start:0,end:1,sourcePath:'line.wav'}]));const e=await s.toolsFor('executor');await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/script-mismatch/)})
+test('planning wrappers and missing timing fields give actionable errors without replacing an existing registered plan',async t=>{
+ const s=await setup(t);await s.register();const previous=s.getPlan(),e=await s.toolsFor('executor')
+ for(const input of [{version:'sound-plan-v1',dialogue:[{id:'1',text:'你好'}]},[{id:'1',text:'你好'}]]){
+  const raw=JSON.stringify(input);await writeFile(join(s.cwd,'wrong.json'),raw)
+  await assert.rejects(e.studio_register_speech_plan.execute({path:'wrong.json'}),(error:any)=>{
+   const info=JSON.parse(error.message.slice(error.message.indexOf(': ')+2));assert.equal(info.registered,false)
+   if(Array.isArray(input)){assert.deepEqual(info.missing,['start','end','sourcePath']);assert.equal(info.field,'lines[0]')}
+   else {assert.match(info.error_code,/array-required/);assert.match(info.action,/already bound/)}
+   return true
+  })
+  assert.equal(s.getPlan(),previous);assert.equal(await readFile(join(s.cwd,'wrong.json'),'utf8'),raw)
+ }
+})
 test('speech result binds current candidate, plan, line, stage and actual audio hash',async t=>{const s=await setup(t);await s.register();const r=await s.toolsFor('reviewer');for(const stage of ['source','final']){const result=await r.studio_check_speech.execute({lineId:'1',stage,expectedText:'caller lie'});assert.equal(result.result.expected,'你好');assert.equal(result.planSha256,s.getPlan().planSha256);assert.equal(result.qualityApproved,false)}assert.equal(s.checks.length,2);s.bad();await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'final'}),/observation-invalid/);assert.equal(s.checks.length,2)})
 test('reject changed source, stale session and caller-selected unknown line',async t=>{const s=await setup(t);await s.register();const r=await s.toolsFor('reviewer');await assert.rejects(r.studio_check_speech.execute({lineId:'other',stage:'final'}),/line-required/);await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'final'},{agent:{session:{id:'executor'}}}),/session/);await writeFile(s.source,'changed');await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'source'}),/file-changed/);s.stop();await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'final'}),/stale/)})
-test('real FFmpeg source and final dialogue extraction',async t=>{const {execFile}=await import('node:child_process'),{promisify}=await import('node:util');try{await promisify(execFile)('ffmpeg',['-version'])}catch{t.skip('FFmpeg unavailable');return}const s=await setup(t,true);await s.register();const r=await s.toolsFor('reviewer');await r.studio_check_speech.execute({lineId:'1',stage:'source'});await r.studio_check_speech.execute({lineId:'1',stage:'final'});assert.equal(s.checks.length,2);assert.match(s.checks[0].audioSha256,/^[a-f0-9]{64}$/)})
+test('real FFmpeg 8.605s source and final dialogue extraction',async t=>{const {execFile}=await import('node:child_process'),{promisify}=await import('node:util');try{await promisify(execFile)('ffmpeg',['-version'])}catch{t.skip('FFmpeg unavailable');return}const s=await setup(t,true,8.605);await s.register();const r=await s.toolsFor('reviewer');await r.studio_check_speech.execute({lineId:'1',stage:'source'});await r.studio_check_speech.execute({lineId:'1',stage:'final'});assert.equal(s.checks.length,2);assert.match(s.checks[0].audioSha256,/^[a-f0-9]{64}$/)})
 test('speech plan refuses out-of-film intervals and source path escape',async t=>{const s=await setup(t);await s.register();const e=await s.toolsFor('executor');await writeFile(join(s.cwd,'plan.json'),JSON.stringify([{id:'1',text:'你好',start:0,end:9,sourcePath:'line.wav'}]));await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/range-invalid/);await writeFile(join(s.cwd,'plan.json'),JSON.stringify([{id:'1',text:'你好',start:0,end:1,sourcePath:'/etc/hosts'}]));await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/outside-project/)})
 
 test('speech ranges tolerate floating-point roundoff but reject real overlap and negative starts',async t=>{
@@ -29,4 +42,19 @@ test('speech ranges tolerate floating-point roundoff but reject real overlap and
  plan[1].start=0.299;await save();await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/range-invalid/)
  plan[1].start=0.3;plan[1].end=1.001;await save();await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/range-invalid/)
  plan[1].end=1;plan[0].start=-1e-12;await save();await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/range-invalid/)
+})
+
+for(const duration of [8.605,10])test(`complete source/final speech preserves ${duration}s input`,async t=>{
+ const s=await setup(t,false,duration),p=await s.toolsFor('planner'),e=await s.toolsFor('executor')
+ await p.studio_freeze_script.execute({lines:[{id:'1',text:'你好'}]})
+ await writeFile(join(s.cwd,'plan.json'),JSON.stringify([{id:'1',text:'你好',start:0,end:duration,sourcePath:'line.wav'}]))
+ await e.studio_register_speech_plan.execute({path:'plan.json'})
+ const r=await s.toolsFor('reviewer');for(const stage of ['source','final']){const result=await r.studio_check_speech.execute({lineId:'1',stage});assert.equal(result.end-result.start,duration);assert.equal(result.result.expected,'你好')}
+ assert.equal(s.checks.length,2)
+ await writeFile(s.source,'changed after long-utterance registration');await assert.rejects(r.studio_check_speech.execute({lineId:'1',stage:'source'}),/file-changed/)
+})
+test('speech plan refuses source or final duration above the shared maximum',async t=>{
+ const s=await setup(t,false,10.001),p=await s.toolsFor('planner'),e=await s.toolsFor('executor');await p.studio_freeze_script.execute({lines:[{id:'1',text:'你好'}]})
+ await writeFile(join(s.cwd,'plan.json'),JSON.stringify([{id:'1',text:'你好',start:0,end:10,sourcePath:'line.wav'}]));await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/source-audio-invalid/)
+ await writeFile(join(s.cwd,'plan.json'),JSON.stringify([{id:'1',text:'你好',start:0,end:10.001,sourcePath:'line.wav'}]));await assert.rejects(e.studio_register_speech_plan.execute({path:'plan.json'}),/range-invalid/)
 })

@@ -1,7 +1,15 @@
+import {StudioInterventions} from './studio-interventions.js'
+import {readStudioOperationStatus,readStudioGenerationAllowance} from './studio-operations.js'
+import {StudioPreparation,assertPreparationWritable} from './studio-preparation.js'
+import {StudioRenderLedger} from './studio-render-ledger.js'
+import {assertScriptLanguage} from './studio-script-language.js'
 import {createHash,randomUUID} from 'node:crypto'
 import {validateStudioPolicy} from './studio-policy.js'
 import {evaluateStudioReview} from './studio-evidence.mjs'
 import {studioStageFor} from './studio-stages.js'
+import {studioReviewProgress} from './studio-review-progress.js'
+import {validateReviewShape} from './studio-review-schema.js'
+import {requiredStudioSkills} from './studio-skill-gate.js'
 
 const NAMES=['frames','audio','audio_calibration','render','character','reference'] as const
 const HASH=/^[a-f0-9]{64}$/i
@@ -12,8 +20,10 @@ export interface StudioCapability {name:typeof NAMES[number];status:'passed'|'fa
 /** Host-only ledger, not an OS security boundary: same-UID unrestricted shell can tamper with SQLite. */
 export class StudioWorkflow {
   private db:any
+  readonly renderLedger:StudioRenderLedger
   constructor(private store:any){
     this.db=store.kernel.db
+    this.renderLedger=new StudioRenderLedger(store)
     this.db.exec(`CREATE TABLE IF NOT EXISTS dsh_studio_capabilities(task_id TEXT,name TEXT,policy_hash TEXT,payload TEXT,PRIMARY KEY(task_id,name));
 CREATE TABLE IF NOT EXISTS dsh_studio_preflight(task_id TEXT PRIMARY KEY,policy_hash TEXT,payload TEXT);
 CREATE TABLE IF NOT EXISTS dsh_studio_state(task_id TEXT,batch_id TEXT,kind TEXT,payload TEXT,PRIMARY KEY(task_id,batch_id,kind));
@@ -24,7 +34,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   private write(input:any,kind:string,value:any){const [task,batch]=this.key(input);this.db.prepare('INSERT INTO dsh_studio_state VALUES(?,?,?,?) ON CONFLICT(task_id,batch_id,kind) DO UPDATE SET payload=excluded.payload').run(task,batch,kind,JSON.stringify(value))}
   private read(input:any,kind:string){const [task,batch]=this.key(input);const r=this.db.prepare('SELECT payload FROM dsh_studio_state WHERE task_id=? AND batch_id=? AND kind=?').get(task,batch,kind);return r?JSON.parse(r.payload):undefined}
   stageReceipt(input:any,id:string){return this.read(input,`stage:${input.card.round}:${id}`)}
-  recordStageReceipt(input:any,value:any){this.write(input,`stage:${input.card.round}:${value.stage}`,value)}
+  recordStageReceipt(input:any,value:any){assertPreparationWritable(this.db,input);this.write(input,`stage:${input.card.round}:${value.stage}`,value)}
   recordCapability(task:any,value:StudioCapability){
     const policy=this.policy(task);strict(value,['name','status','proofSha256','checkedAt','expiresAt','reason','method'],'capability')
     if(!NAMES.includes(value.name)||!['passed','failed','access_denied','unknown'].includes(value.status))throw Error('studio-capability-status')
@@ -54,15 +64,27 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     ]
     return {prerequisitesReady:checks.every(c=>c.ok),checks,missing:checks.filter(c=>!c.ok).map(({id,tool,action})=>({id,tool,action})),instruction:'Repair only missing prerequisites, then query studio_status and resubmit the plan. Hashes, metadata, textual summaries and another session’s receipts cannot substitute for direct reference observations.'}
   }
-  plan(input:any){
-    this.key(input);if(input.card?.role!=='planner')throw Error('studio-planner-required');this.requirePreflight(input.task)
+  assertPlanningPrerequisites(input:any){
+    this.key(input);if(input.card?.role!=='planner')throw Error('studio-planner-required')
     if(this.read(input,'runtime_enforcement')===true){
       const readiness=this.planningPrerequisites(input)
       if(!readiness.prerequisitesReady)throw Error('studio-plan-requires-script-and-direct-reference: '+JSON.stringify({error_code:'studio-plan-requires-script-and-direct-reference',retryable:false,retryAfterRepair:true,requiresHuman:false,...readiness}))
     }
+  }
+  plan(input:any){
+    this.key(input);if(input.card?.role!=='planner')throw Error('studio-planner-required');this.requirePreflight(input.task)
+    this.assertPlanningPrerequisites(input)
     return {ok:true,status:'ready' as const}
   }
+  enforceRenderProvenance(input:any){this.write(input,`render_provenance:${input.card.id}`,true)}
+  recordRenderedCandidate(input:any,candidate:any,location:any){return this.db.transaction(()=>{
+    const proof=this.read(input,`render_provenance:${input.card.id}`)===true?this.renderLedger.requireCandidate(input,candidate,location.path):undefined
+    this.recordCandidate(input,candidate);this.recordCandidateLocation(input,location)
+    if(proof)this.write(input,'candidate_render_provenance',{...proof,candidateSha256:candidate.sha256,revision:candidate.revision})
+    return proof
+  })()}
   recordCandidate(input:any,candidate:any){
+    assertPreparationWritable(this.db,input)
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
     strict(candidate,['sha256','manifestSha256','referenceSha256','revision','durationSeconds','width','height','fps'],'candidate')
     if(!HASH.test(candidate.sha256??'')||!HASH.test(candidate.manifestSha256??'')||!Number.isInteger(candidate.revision)||candidate.revision<1)throw Error('studio-candidate-invalid')
@@ -73,6 +95,10 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
       if(samePayload&&previous.producerSessionId===input.sessionId&&previous.policyHash===policyHash&&(previous.producerRound??null)===producerRound&&(previous.producerCardId??null)===producerCardId)return previous
       throw Error('studio-candidate-revision-must-increase')
     }
+    // A new production round must not relabel the prior MP4 as a repaired film.
+    // Same-run acknowledgement replay above is still idempotent; metadata-only
+    // updates in the same round remain possible with a higher revision.
+    if(previous&&candidate.sha256===previous.candidate.sha256&&Number.isInteger(producerRound)&&Number.isInteger(previous.producerRound)&&producerRound!==previous.producerRound)throw Error('studio-candidate-prior-round-video-reused: this MP4 is byte-identical to the prior production round. Query the existing render job until terminal and register its actual output path/SHA. Do not upload or relabel the old candidate as a repair; if production failed, report that failure.')
     const stored={candidate,producerSessionId:input.sessionId,producerRound,producerCardId,policyHash}
     this.write(input,'candidate',stored);return stored
   }
@@ -89,19 +115,45 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     strict(review,['candidateSha256','referenceSha256','revision','checks','issues'],'review')
     this.write(input,'review',{...review,reviewerSessionId:input.sessionId})
   }
+  recordValidatedReview(input:any,review:any){
+    if(input.card?.role!=='reviewer')throw Error('studio-reviewer-required')
+    strict(review,['candidateSha256','referenceSha256','revision','checks','issues'],'review')
+    validateReviewShape(review)
+    const proposed={...review,reviewerSessionId:input.sessionId}
+    // Validate against the live ledger before replacing any previously accepted
+    // report. Rejected attempts remain in session logs, never authoritative state.
+    this.completeWithReview(input,proposed)
+    this.write(input,'review',proposed)
+  }
   recordBudget(input:any,budget:any){strict(budget,['repairRounds','used','limits','exceeded','maxRepairRounds'],'budget');this.write(input,'budget',budget)}
   recordSkillLoad(input:any,receipt:any){
-    const productionRole=input.card?.role==='executor'||(input.card?.role==='studio-stage'&&!!studioStageFor(input))
-    if(!productionRole||!HASH.test(receipt.sha256??'')||typeof receipt.name!=='string'||typeof receipt.callId!=='string'||!Number.isInteger(receipt.bytes)||receipt.bytes<1)throw Error('studio-skill-load-invalid')
+    const required=requiredStudioSkills(input)
+    if(!required.includes(receipt.name)||!HASH.test(receipt.sha256??'')||typeof receipt.name!=='string'||typeof receipt.callId!=='string'||!Number.isInteger(receipt.bytes)||receipt.bytes<1)throw Error('studio-skill-load-invalid')
     const rows=(this.read(input,'skill_loads')??[]).filter((r:any)=>r.sessionId!==input.sessionId||r.name!==receipt.name)
     this.write(input,'skill_loads',[...rows,{...receipt,sessionId:input.sessionId,policyHash:sha(this.policy(input.task)),at:new Date().toISOString()}])
   }
-  recordIntervention(input:any,reason:string){if(typeof reason!=='string'||!reason.trim())throw Error('studio-intervention-reason');this.write(input,'interventions',[...(this.read(input,'interventions')??[]),{reason,at:new Date().toISOString()}])}
+  recordIntervention(input:any,reason:string){this.key(input);return new StudioInterventions(this.store).record({id:randomUUID(),taskId:input.task.id,batchId:input.batch.id,...(input.card?.id?{cardId:input.card.id}:{}),kind:'operator_assistance',reason})}
+  autonomy(input:any){this.key(input);return new StudioInterventions(this.store).assessment({taskId:input.task.id,batchId:input.batch.id})}
+  interventions(input:any){this.key(input);return new StudioInterventions(this.store).list({taskId:input.task.id,batchId:input.batch.id})}
+  reviewProgress(input:any,includeReceipts=false){
+    if(input.card?.role!=='reviewer')return null
+    const [task,batch]=this.key(input),ph=sha(this.policy(input.task)),saved=this.read(input,'candidate')
+    if(!saved||saved.policyHash!==ph)return null
+    const rows=this.db.prepare('SELECT payload FROM dsh_studio_receipts WHERE task_id=? AND batch_id=? AND policy_hash=? AND session_id=? AND candidate_sha256=?').all(task,batch,ph,input.sessionId,saved.candidate.sha256)
+    const receipts=rows.map((r:any)=>JSON.parse(r.payload)),progress=studioReviewProgress(saved.candidate,input.sessionId,receipts,this.speechPlan(input),this.read(input,'speech_checks')??[])
+    return progress?{...progress,...(includeReceipts?{receiptIndex:receipts.map(({id,kind,ranges}:any)=>({id,kind,ranges}))}:{})}:null
+  }
   status(input:any){
     this.key(input)
     const current=this.read(input,'candidate'),ph=sha(this.policy(input.task)),preflight=this.preflight(input.task)
+    const savedReview=current?.policyHash===ph?(this.read(input,'review')??null):null
+    // A fresh independent reviewer must not inherit another session's receipt
+    // IDs as its own report. Keep history in the ledger for repair planning.
+    const review=input.card?.role==='reviewer'&&savedReview&&(
+      savedReview.reviewerSessionId!==input.sessionId||savedReview.candidateSha256!==current?.candidate.sha256||savedReview.revision!==current?.candidate.revision
+    )?null:savedReview
     const planning=input.card?.role==='planner'&&this.read(input,'runtime_enforcement')===true?this.planningPrerequisites(input):undefined
-    return {...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),candidate:current?.policyHash===ph?current.candidate:null,review:current?.policyHash===ph?(this.read(input,'review')??null):null,budget:this.read(input,'budget')??null,interventions:this.read(input,'interventions')??[],preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
+    return {...(input.card?.role==='reviewer'?{reviewProgress:this.reviewProgress(input,true)}:{}),...(planning?{planning:{...planning,preflightReady:preflight.ok,ready:preflight.ok&&planning.prerequisitesReady}}:{}),...(input.task.design?.studioStages?{stages:input.task.design.studioStages.map((s:any)=>({id:s.id,agentId:s.agentId,receipt:this.stageReceipt(input,s.id)??null}))}:{}),preparationRevisions:new StudioPreparation({kernel:{db:this.db}}).publicRows(input.batch.id),renderJobs:this.renderLedger.publicRows(input),generationAllowance:readStudioGenerationAllowance(this.db,input),mediaOperations:readStudioOperationStatus(this.db,input),candidate:current?.policyHash===ph?current.candidate:null,review,budget:this.read(input,'budget')??null,autonomy:this.autonomy(input),interventions:this.interventions(input),preflight,script:this.script(input),speechPlan:this.speechPlan(input),speechChecks:this.read(input,'speech_checks')??[],referenceReceipts:this.read(input,'reference_receipts')??[],skillLoads:this.read(input,'skill_loads')??[]}
   }
   recordCandidateLocation(input:any,location:{path:string;manifestPath:string;sha256:string}){
     if(input.card?.role!=='executor')throw Error('studio-producer-required')
@@ -127,8 +179,9 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
   recordScript(input:any,value:any){
     if(input.card?.role!=='planner'||!HASH.test(value.sha256??'')||!Array.isArray(value.lines)||!value.lines.length||value.lines.length>80)throw Error('studio-script-invalid')
     const ids=new Set();for(const line of value.lines){if(typeof line.id!=='string'||!line.id||ids.has(line.id)||typeof line.text!=='string'||!line.text.trim()||line.text.length>300)throw Error('studio-script-lines-invalid');ids.add(line.id)}
+    assertScriptLanguage(this.policy(input.task),value.lines)
     const previous=this.script(input),review=this.read(input,'review'),candidate=this.read(input,'candidate')?.candidate
-    if(previous&&previous.sha256!==value.sha256&&(!review||review.candidateSha256!==candidate?.sha256||!review.issues?.some((i:any)=>['major','blocker'].includes(i.severity))))throw Error('studio-script-change-requires-independent-review')
+    if(previous&&previous.sha256!==value.sha256&&!new StudioPreparation({kernel:{db:this.db}}).allowsScript(input,previous.sha256)&&(!review||review.candidateSha256!==candidate?.sha256||!review.issues?.some((i:any)=>['major','blocker'].includes(i.severity))))throw Error('studio-script-change-requires-independent-review')
     this.write(input,'script',value)
   }
   speechPlan(input:any){const plan=this.read(input,'speech_plan'),current=this.read(input,'candidate');return plan&&plan.candidateSha256===current?.candidate.sha256&&plan.scriptSha256===this.script(input)?.sha256?plan:null}
@@ -145,19 +198,26 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     if(!plan||!line||value.candidateSha256!==plan.candidateSha256||value.planSha256!==plan.planSha256||!['source','final'].includes(value.stage)||!HASH.test(value.audioSha256??'')||value.result?.audio_sha256!==value.audioSha256)throw Error('studio-speech-check-invalid')
     const stored={...value,sessionId:input.sessionId};const checks=(this.read(input,'speech_checks')??[]).filter((x:any)=>!(x.lineId===value.lineId&&x.stage===value.stage&&x.sessionId===input.sessionId));this.write(input,'speech_checks',[...checks,stored])
   }
-  hasRejection(input:any){
+  hasRejection(input:any,review=this.read(input,'review')){
     if(input.card?.role!=='reviewer')return false
-    const review=this.read(input,'review'),candidate=this.read(input,'candidate')?.candidate
+    const candidate=this.read(input,'candidate')?.candidate
     return !!review&&review.reviewerSessionId===input.sessionId&&review.candidateSha256===candidate?.sha256&&review.checks?.some((c:any)=>c.status==='fail')&&review.issues?.some((i:any)=>['major','blocker'].includes(i.severity)&&['open','pending'].includes(i.status))
   }
   complete(input:any){
+    return this.completeWithReview(input,this.read(input,'review'))
+  }
+  private completeWithReview(input:any,review:any){
     this.key(input)
     // A grounded rejection can be handed back during an unrelated dependency
     // outage. Full evidence validation below still applies; no success shortcut.
-    if(!this.hasRejection(input))this.requirePreflight(input.task)
-    const saved=this.read(input,'candidate'),review=this.read(input,'review'),budget=this.read(input,'budget')
+    if(!this.hasRejection(input,review))this.requirePreflight(input.task)
+    const saved=this.read(input,'candidate'),budget=this.read(input,'budget')
     const policy=this.policy(input.task),role=input.card?.role
     if(!saved||!budget||saved.policyHash!==sha(policy))throw Error('studio-version-bound-trusted-review-required')
+    if(this.read(input,`render_provenance:${saved.producerCardId}`)===true){
+      const location=this.candidateLocation(input)
+      this.renderLedger.requireCandidate({...input,card:{id:saved.producerCardId,role:'executor',round:saved.producerRound}},saved.candidate,location.path)
+    }
     const base={candidateSha256:saved.candidate.sha256,revision:saved.candidate.revision}
     if(role==='executor'){
       if(this.read(input,'runtime_enforcement')===true&&!this.speechPlan(input))throw Error('studio-speech-plan-required')
@@ -171,7 +231,7 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
     if(!review)throw Error('studio-version-bound-trusted-review-required')
     if(role==='reviewer'&&review.reviewerSessionId!==input.sessionId)throw Error('studio-review-session-mismatch')
     const receipts=this.db.prepare('SELECT payload FROM dsh_studio_receipts WHERE task_id=? AND batch_id=? AND policy_hash=?').all(input.task.id,input.batch.id,sha(policy)).map((r:any)=>JSON.parse(r.payload))
-    const result=evaluateStudioReview({policy,candidate:saved.candidate,review,producerSessionId:saved.producerSessionId,reviewerSessionId:review.reviewerSessionId,receipts,budget,interventions:this.read(input,'interventions')??[]})
+    const result=evaluateStudioReview({policy,candidate:saved.candidate,review,producerSessionId:saved.producerSessionId,reviewerSessionId:review.reviewerSessionId,receipts,budget,interventions:this.interventions(input)})
     if(role==='reviewer'){
       if(!Array.isArray(review.checks)||review.checks.some((c:any)=>!['pass','fail','pending'].includes(c?.status)))throw Error('studio-review-check-status-invalid')
       // A real, complete negative review must reach the planner. Only integrity failures block handoff.
@@ -184,8 +244,14 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
         (c.evidenceReceiptIds.length===0&&x===`check.${c.dimension}: missing or duplicate evidence receipts`)||
         ['audio','frames','probe','source'].some(kind=>x===`check.${c.dimension}: requires ${kind} evidence`)))
       const integrity=result.issues.filter((x:string)=>!pendingOmission(x)&&!/^check\.[^:]+: not passed$/.test(x)&&!/^issue\..+: unresolved (blocker|major|minor|info)$/.test(x)&&!x.startsWith('budget:')&&!x.startsWith('autonomy:')&&!/^candidate: (duration outside policy|width mismatch|height mismatch|fps mismatch)$/.test(x))
-      if(integrity.length)throw Error(`studio-review-integrity-failed: ${integrity.join('; ')}`)
-      return {summary:result.ok?'Independent review completed; planner must verify final acceptance.':'Independent review found issues; return to planner for repairs.',metadata:{workflowOutcome:result.ok?'review_complete':'review_needs_changes',...base,reviewerSessionId:review.reviewerSessionId,issues:result.issues}}
+      if(integrity.length){
+        const hints:string[]=[]
+        if(integrity.some((x:string)=>x.includes('unknown receipt')))hints.push('Use studio_status.state.reviewProgress.receiptIndex for existing current-session CANDIDATE receipts; do not repeat observations just to recover IDs. ReferenceReceipt IDs from studio_reference_* are not candidate receipts, including in the reference comparison dimension. Describe the comparison using candidate frame evidence; reference observations are recorded separately.')
+        if(integrity.some((x:string)=>x.startsWith('check.ending:')))hints.push('Ending requires candidate frames AND candidate audio covering the SAME stated ranges. If either is unchecked on a grounded rejection, mark ending pending with evidenceReceiptIds:[]; do not claim it passed.')
+        if(integrity.some((x:string)=>x.startsWith('check.source_records:')))hints.push('Source evidence comes only from a complete unchanged read of studio_status.artifacts.manifestPath. Stage manifests and file SHA strings are not receipt IDs. If unavailable on a grounded rejection, mark source_records pending with evidenceReceiptIds:[] and state the limitation.')
+        throw Error(`studio-review-integrity-failed: ${integrity.join('; ')}${hints.length?' Correction guidance (report not stored): '+hints.join(' '):''}`)
+      }
+      return {summary:result.qualityOk?'Independent review completed; planner must verify final acceptance.':'Independent review found issues; return to planner for repairs.',metadata:{workflowOutcome:result.qualityOk?'review_complete':'review_needs_changes',...base,reviewerSessionId:review.reviewerSessionId,qualityPassed:result.qualityOk,autonomy:this.autonomy(input),issues:result.qualityIssues}}
     }
     if(this.read(input,'runtime_enforcement')===true){
       const audioRanges=receipts.filter((r:any)=>r.sessionId===review.reviewerSessionId&&r.candidateSha256===saved.candidate.sha256&&r.kind==='audio').flatMap((r:any)=>r.ranges).sort((a:any,b:any)=>a[0]-b[0]);let covered=0
@@ -196,7 +262,8 @@ CREATE TABLE IF NOT EXISTS dsh_studio_receipts(id TEXT PRIMARY KEY,task_id TEXT,
       const plan=this.speechPlan(input),checks=this.read(input,'speech_checks')??[]
       if(!plan||plan.lines.some((line:any)=>['source','final'].some(stage=>!checks.some((c:any)=>c.lineId===line.id&&c.stage===stage&&c.sessionId===review.reviewerSessionId&&c.candidateSha256===saved.candidate.sha256&&c.result?.content_gate==='pass'))))throw Error('studio-speech-coverage-not-passed')
     }
-    if(!result.ok)throw Error(`studio-quality-gate-failed: ${result.issues.join('; ')}`)
-    return {summary:'Machine-assessed candidate; not human aesthetic approval.',metadata:{workflowOutcome:'machine_assessed_candidate',...base,reviewerSessionId:review.reviewerSessionId}}
+    if(!result.qualityOk)throw Error(`studio-quality-gate-failed: ${result.qualityIssues.join('; ')}`)
+    const autonomy=this.autonomy(input),assisted=autonomy.status==='assisted'
+    return {summary:assisted?'机器质检候选片（有人工协助）；不计为自主成功，也非用户审美认可。':'机器质检候选片；未记录人工协助不等于自主成功，也非用户审美认可。',metadata:{workflowOutcome:assisted?'assisted_machine_assessed_candidate':'machine_assessed_candidate',qualityPassed:true,autonomy,...base,reviewerSessionId:review.reviewerSessionId}}
   }
 }

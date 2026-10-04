@@ -1,4 +1,5 @@
 import { EventStore, taskForBatch, type Event } from './tasks.ts'
+import {StudioInterventions} from './studio-interventions.js'
 
 export interface StudioRecoveryInput { taskId: string; batchId: string; cardId: string; expectedRunId: string; recoveryId: string; reason: string; revalidateFrom?: 'storyboard' | 'visual' | 'sound' }
 /** Operator-only recovery, never a model tool. All mutations share one kernel transaction. */
@@ -6,10 +7,13 @@ export async function recoverStudioFailure(store: EventStore, input: StudioRecov
   for (const key of ['taskId','batchId','cardId','expectedRunId','recoveryId','reason'] as const)
     if (typeof input[key] !== 'string' || !input[key].trim() || input[key].length > 2000) throw Error('studio-recovery-invalid-input')
   if(input.revalidateFrom)return revalidatePreparation(store,input)
+  const interventions=new StudioInterventions(store),at=new Date().toISOString()
+  const audit=(occurredAt:string)=>interventions.record({id:`recovery:${input.recoveryId}`,taskId:input.taskId,batchId:input.batchId,cardId:input.cardId,sourceRunId:input.expectedRunId,kind:'operator-studio-recovery',reason:input.reason,occurredAt})
   return store.transition(() => {
     const previous = store.all().find(e => e.t === 'batch/studio_recovered' && e.recoveryId === input.recoveryId) as Extract<Event,{t:'batch/studio_recovered'}> | undefined
     if (previous) {
       if (['taskId','batchId','cardId','expectedRunId','reason'].some(k => (previous as any)[k] !== (input as any)[k])) throw Error('studio-recovery-id-conflict')
+      audit(previous.at)
       return { replay: true, restored: previous.restored }
     }
     const {taskId,batchId,cardId,expectedRunId} = input
@@ -28,19 +32,29 @@ export async function recoverStudioFailure(store: EventStore, input: StudioRecov
     const descendants = new Set([cardId])
     let changed = true
     while (changed) { changed = false; for (const id of batch.cardIds) { const c = store.s.cards.get(id)!; if (!descendants.has(id) && c.deps.some(d => descendants.has(d))) { descendants.add(id); changed = true } } }
-    const cancelled = batch.cardIds.filter(id => store.s.cards.get(id)?.status === 'cancelled')
-    if (batch.cardIds.some(id => id !== cardId && store.s.cards.get(id)?.status === 'failed') || cancelled.some(id => !descendants.has(id))) throw Error('studio-recovery-unrelated-terminal-node')
+    // A preparation revision can leave canceled cards from an older round in
+    // this same batch. They are historical, superseded work, not descendants
+    // of the current failed editor, and must stay untouched. Only enforce the
+    // terminal-node closure on this round and later rounds.
+    const round = card.round ?? 0
+    const currentOrLater = (id: string) => (store.s.cards.get(id)?.round ?? 0) >= round
+    const unrelatedFailed = batch.cardIds.some(id => id !== cardId && currentOrLater(id) && store.s.cards.get(id)?.status === 'failed')
+    const cancelled = batch.cardIds.filter(id => currentOrLater(id) && store.s.cards.get(id)?.status === 'cancelled')
+    if (unrelatedFailed || cancelled.some(id => !descendants.has(id))) throw Error('studio-recovery-unrelated-terminal-node')
     // Reopen root before descendants so dependency checks remain authoritative.
     const restored = [cardId,...cancelled].map(id => ({id,status:store.kernel.recoverStudioNode(id,id === cardId ? 'triage' : 'archived',input.recoveryId)}))
+    audit(at)
     return { replay: false, restored }
-  }, result => result.replay ? undefined : {t:'batch/studio_recovered',at:new Date().toISOString(),...input,restored:result.restored})
+  }, result => result.replay ? undefined : {t:'batch/studio_recovered',at,...input,restored:result.restored})
 }
 
 /** Reopen a quiescent preparation branch under the same paid ledger. No receipt is upgraded here. */
 async function revalidatePreparation(store:EventStore,input:StudioRecoveryInput){
+ const interventions=new StudioInterventions(store),at=new Date().toISOString()
+ const audit=(occurredAt:string)=>interventions.record({id:`recovery:${input.recoveryId}`,taskId:input.taskId,batchId:input.batchId,cardId:input.cardId,sourceRunId:input.expectedRunId,kind:`operator-studio-revalidation:${input.revalidateFrom}`,reason:input.reason,occurredAt})
  return store.transition(()=>{
   const previous=store.all().find(e=>e.t==='batch/studio_revalidation'&&e.recoveryId===input.recoveryId) as Extract<Event,{t:'batch/studio_revalidation'}>|undefined
-  if(previous){if(['taskId','batchId','cardId','expectedRunId','reason','revalidateFrom'].some(k=>(previous as any)[k]!==(input as any)[k]))throw Error('studio-recovery-id-conflict');return {replay:true,restored:previous.restored}}
+  if(previous){if(['taskId','batchId','cardId','expectedRunId','reason','revalidateFrom'].some(k=>(previous as any)[k]!==(input as any)[k]))throw Error('studio-recovery-id-conflict');audit(previous.at);return {replay:true,restored:previous.restored}}
   const {taskId,batchId,cardId,expectedRunId}=input,task=store.tasks.get(taskId),batch=store.s.batches.get(batchId),card=store.s.cards.get(cardId)
   if(!task||task.archivedAt||!batch||batch.taskId!==taskId||batch.archivedAt||batch.settled||taskForBatch(task,batch).design?.evidenceContract!=='studio-video-v1')throw Error('studio-revalidation-ineligible-batch')
   if(!card||card.batchId!==batchId||card.status!=='blocked'||card.role!=='executor'||card.runIds.at(-1)!==expectedRunId||store.s.runs.get(expectedRunId)?.status!=='blocked')throw Error('studio-revalidation-blocked-run-changed')
@@ -63,6 +77,7 @@ async function revalidatePreparation(store:EventStore,input:StudioRecoveryInput)
    store.kernel.addComment(id,'studio-platform-recovery',input.reason)
    return {id,status:store.kernel.getTask(id)!.status as 'ready'|'todo'}
   })
+  audit(at)
   return {replay:false,restored}
- },result=>result.replay?undefined:{t:'batch/studio_revalidation',at:new Date().toISOString(),...input,revalidateFrom:input.revalidateFrom!,restored:result.restored})
+ },result=>result.replay?undefined:{t:'batch/studio_revalidation',at,...input,revalidateFrom:input.revalidateFrom!,restored:result.restored})
 }

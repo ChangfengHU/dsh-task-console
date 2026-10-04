@@ -12,12 +12,15 @@ import { closeConsole, go } from './Console.tsx'
 import { ArtifactResultAction, canPreviewArtifact } from './ArtifactDelivery.tsx'
 import { TaskRunAction } from './TaskRunAction.tsx'
 import { useTaskPage } from './use-task-page.ts'
+import { isChatWorkflow } from '../task-kind.ts'
 
 export interface TasksApi {
   taskPage: (query: import('../task-list.ts').TaskListQuery) => Promise<TaskPage>
   exportConfig: () => Promise<ConfigExportResult>
+  exportLocalConfig: () => Promise<{ filename: string; json: string; bytes: number; sha256: string; counts: { agents: number; tasks: number; skills: number; hostConfigs: number } }>
   createConfigBootstrap: (url: string) => Promise<ConfigBootstrapResult>
-  previewConfigImport: (url: string) => Promise<ConfigImportPreview>
+  previewConfigImport: (url: string, options?: ConfigImportOptions) => Promise<ConfigImportPreview>
+  previewLocalConfigImport: (json: string, options?: ConfigImportOptions) => Promise<ConfigImportPreview>
   applyConfigImport: (importId: string) => Promise<ConfigImportResult>
   installConfigRuntime: (url: string) => Promise<ConfigRuntimeJob>
   configRuntimeStatus: (jobId: string) => Promise<ConfigRuntimeJob>
@@ -39,17 +42,24 @@ export interface TasksApi {
   taskEvents: (id: string) => Promise<TaskEvent[]>
   taskArtifacts: (id: string, batchId?: string) => Promise<ArtifactView[]>
   artifactContent: (id: string, artifactId: string, batchId?: string) => Promise<{ artifact: ArtifactView; base64: string }>
+  studioTaskWorkspace: (taskId: string, batchId: string) => Promise<import('./TaskStageWorkspace.tsx').StudioTaskWorkspace>
+  studioStageArtifactContent: (query: { taskId: string; batchId: string; stage: string; round: number; path: string; sha256: string }) => Promise<{ file: { path: string; sha256: string; bytes: number; mime: string }; base64: string }>
   publishArtifact: (id: string, artifactId: string) => Promise<{ publicUrl: string }>
   reviewCard: (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => Promise<void>
   unblockCard: (cardId: string) => Promise<void>
+  recoverStudioCard: (input: { taskId: string; batchId: string; cardId: string; expectedRunId: string; recoveryId: string; reason: string; revalidateFrom?: 'storyboard' | 'visual' | 'sound' }) => Promise<{ ok: boolean; restored: { id: string; status: string }[] }>
+  resumeStudioCard: (input: { taskId: string; batchId: string; cardId: string; expectedCoreRunId: number }) => Promise<{ ok: boolean; pending?: string; renderState?: string; newRun?: boolean }>
+  previewExecutionMigration: (input:{taskId:string;batchId:string})=>Promise<any>
+  applyExecutionMigration: (input:{taskId:string;batchId:string;expectedPreviewSha256:string;reason:string})=>Promise<any>
   openSession: (sessionId: string) => Promise<void>
   sessionTurns: (sessionId: string) => Promise<import('../wire.ts').TurnLedger>
 }
 
 export interface ConfigExportResult { publicUrl: string; bytes: number; sha256: string; digest: string; exportedAt: string; counts: { agents: number; tasks: number }; omitted: string[] }
 export interface ConfigBootstrapResult { command: string; expiresInSeconds: number }
-export interface ConfigImportPreview { importId: string; expiresAt: string; bytes: number; fileSha256: string; exportedAt: string; sourceVersion: string; digest: string; runtime?: { missingMcp: string[]; missingSkills: string[]; bootstrapAvailable: boolean }; counts: { agents: number; tasks: number }; agents: { id: string; name: string; conflict: boolean; missingSkills: string[]; missingMcp: string[]; ready: boolean }[]; tasks: { id: string; title: string; conflict: boolean; missingAgents: string[]; scheduleDisabled: boolean }[] }
-export interface ConfigImportResult { importedAgents: string[]; skippedAgents: { id: string; reason: string }[]; importedTasks: string[]; skippedTasks: { id: string; reason: string }[]; schedulesEnabled: false }
+export interface ConfigImportOptions { pathMappings?: Record<string, string>; overwriteAgents?: boolean; installAssets?: boolean }
+export interface ConfigImportPreview { importId: string; expiresAt: string; bytes: number; fileSha256: string; exportedAt: string; sourceVersion: string; digest: string; runtime?: { missingMcp: string[]; missingSkills: string[]; bootstrapAvailable: boolean }; options?: ConfigImportOptions; assets?: { skills: { name: string; agentId: string | null; files: number; conflict: boolean }[]; hostConfigs: { id: string; module: string; kind: string; secretRefs: string[] }[]; missingModules: { module: string; version: string }[]; missingProviders: string[]; defaultSelection: { provider: string; model: string } | null } | null; counts: { agents: number; tasks: number }; agents: { id: string; name: string; conflict: boolean; missingSkills: string[]; missingMcp: string[]; ready: boolean }[]; tasks: { id: string; title: string; conflict: boolean; missingAgents: string[]; scheduleDisabled: boolean; cwd?: string; actionCount?: number }[] }
+export interface ConfigImportResult { importedAgents: string[]; skippedAgents: { id: string; reason: string }[]; importedTasks: string[]; skippedTasks: { id: string; reason: string }[]; schedulesEnabled: false; importedSkills?: string[]; skippedSkills?: string[]; stagedHostConfigs?: string[]; backupRoot?: string; runtimeActivationRequired?: boolean }
 export interface ConfigRuntimeJob { jobId: string; state: 'running' | 'complete' | 'failed'; message?: string }
 
 type TaskRow = TaskSpec & { nextFire: string | null }
@@ -215,7 +225,7 @@ function TaskGroupCard({ task, latest, history, state, selected, onSelect, agent
           <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); go(`tasks/executions?task=${encodeURIComponent(task.id)}`) }}>执行记录（{history}）</button>
           {task.trigger.kind === 'cron' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void toggleSchedule().catch(e => toast(String(e.message ?? e))) }}>{task.enabled ? '关闭定时' : '启用定时'}</button> : null}
           {task.trigger.kind === 'cron' ? <button className="dtc-btn sm" aria-expanded={scheduleOpen} onClick={event => { event.stopPropagation(); setScheduleOpen(!scheduleOpen) }}>触发记录</button> : null}
-          {task.origin?.source === 'task-chat' ? <TaskRunAction task={task} api={api} toast={toast} /> : task.origin?.signalId ? <span title="从来源系统重新提交 Signal，由 Task Agent 核对目标与角色">从来源重试</span> : <>
+          {isChatWorkflow(task) ? <TaskRunAction task={task} api={api} toast={toast} /> : task.origin?.signalId || task.configMigration?.workflowKind === 'external' ? <span title="从来源系统重新提交 Signal，由 Task Agent 核对目标与角色">从来源重试</span> : <>
           {state === 'bad' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void retry() }}>重试</button> : null}
           {state === 'done' ? <button className="dtc-btn sm" onClick={event => { event.stopPropagation(); void rerun() }}>再次执行</button> : null}</>}
           {state === 'park' && current?.sessionId && !waiting ? <button className="dtc-btn sm pri" onClick={event => { event.stopPropagation(); closeConsole(); void api.openSession(current.sessionId!) }}>查看阻塞</button> : null}

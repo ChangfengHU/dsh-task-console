@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
-import {studioRenderJob} from '../src/studio-render-host.ts'
+import {studioRenderJob,reconcileStudioRenderIntent} from '../src/studio-render-host.ts'
 import {fileSha256,registerStudioTools} from '../src/studio-tools.ts'
 const jobId='a'.repeat(64),inputSha256='b'.repeat(64)
 async function setup(t:any){const cwd=await mkdtemp(join(tmpdir(),'render-host-'));t.after(()=>rm(cwd,{recursive:true,force:true}));await mkdir(join(cwd,'composition'));await writeFile(join(cwd,'composition/index.html'),'<html/>');const script=join(cwd,'render.py');await writeFile(script,'# pinned');return {cwd,task:{cwd,design:{studio:{width:1080,height:1920,fps:30}}},config:{renderJobScript:script,renderJobSha256:await fileSha256(script),renderRuntime:'/host/runtime'}}}
@@ -36,4 +36,24 @@ test('render native tools deny non-producer and stale invocations before launchi
  const make=(role:string)=>registerStudioTools(ctx,{input:{task:{cwd:'/unused'},card:{role},sessionId:'s'},workflow:{},isActive:()=>active,renderJob:async()=>{count++;return running}})
  const exec={agent:{session:{id:'s'}}};let stop=await make('reviewer');await assert.rejects(defs.get('studio_render_start').execute({composition:'composition',output:'out.mp4'},exec),/role-denied/);stop()
  stop=await make('executor');await defs.get('studio_render_status').execute({jobId},exec);assert.equal(count,1);active=false;await assert.rejects(defs.get('studio_render_start').execute({composition:'composition',output:'out.mp4'},exec),/stale-run/);assert.equal(count,1);stop()
+})
+
+test('host-only intent is passed to helper and old unscoped jobs cannot satisfy it',async t=>{
+ const {task,config}=await setup(t),intent='e'.repeat(64)
+ const execute=async(_:string,argv:string[])=>{assert.deepEqual(argv.slice(-2),['--intent-id',intent]);return {...running,intentId:intent}}
+ const got=await studioRenderJob(task,'start',{composition:'composition',output:'output.mp4'},{config,execute},intent)
+ assert.equal(got.intentId,intent);assert.equal(got.helperSha256,config.renderJobSha256)
+ await assert.rejects(studioRenderJob(task,'status',{jobId},{config,execute:async()=>running},intent),/intent-mismatch/)
+ await assert.rejects(studioRenderJob(task,'status',{jobId},{config,execute:async()=>({...running,intentId:'f'.repeat(64)})},intent),/intent-mismatch/)
+})
+
+test('operator reconciliation reaches the pinned host before current composition validation',async t=>{
+ const {cwd,task,config}=await setup(t),storyboard=join(cwd,'storyboard.json'),intent='f'.repeat(64)
+ await writeFile(storyboard,'{}')
+ let calls=0
+ const found=await reconcileStudioRenderIntent(task,{composition:'storyboard.json',output:'out.mp4'},{config,execute:async(_script,args)=>{calls++;assert.equal(args.at(-2),'--intent-id');assert.equal(args.at(-1),intent);return {...running,composition:'storyboard.json',output:'out.mp4',intentId:intent,reused:true}}},intent)
+ assert.equal(found.ok,true);assert.equal(found.reused,true);assert.equal(calls,1)
+ const absent=await reconcileStudioRenderIntent(task,{composition:'storyboard.json',output:'out.mp4'},{config,execute:async()=>({ok:false,errorCode:'plain_directory_required'})},intent)
+ assert.equal(absent.reconciledAbsent,true);assert.equal(absent.errorCode,'plain_directory_required')
+ await assert.rejects(reconcileStudioRenderIntent(task,{composition:'../outside',output:'out.mp4'},{config,execute:async()=>{throw Error('must not run')}},intent),/path-invalid/)
 })

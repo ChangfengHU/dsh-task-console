@@ -1,0 +1,19 @@
+{
+  "schema": "studio-installation-contract-v1",
+  "helpers": {
+    "preflightScript": {"file": "preflight_host.py"},
+    "audioScript": {"file": "audio_observe_host.py"},
+    "speechScript": {"file": "speech_check_host.py"},
+    "visionScript": {"file": "vision_observe_host.py"},
+    "storyboardCompilerScript": {"file": "compiler_host_bridge.py", "hashField": "storyboardCompilerSha256"},
+    "assetDownloadScript": {"file": "download_existing_asset.py", "hashField": "assetDownloadSha256"},
+    "renderJobScript": {"file": "render_job_host.py", "hashField": "renderJobSha256"},
+    "uploadScript": {"file": "studio_preview_upload_host.py", "hashField": "uploadScriptSha256"}
+  },
+  "libraries": {
+    "uploadLibrarySha256": {"parentField": "uploadScript", "file": "studio_upload.py"}
+  },
+  "hostFiles": ["dshProfilePath", "vaultTokenFile", "calibrationPath", "calibrationRegressionPath"],
+  "hostDirectories": ["renderRuntime", "observationCacheRoot", "uploadStateRoot"],
+  "rendererFiles": ["node_modules/hyperframes/package.json", "node_modules/hyperframes/bin/hyperframes.mjs", "node_modules/ffmpeg-static/ffmpeg"]
+}

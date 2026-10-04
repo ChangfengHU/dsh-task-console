@@ -17,11 +17,65 @@ test('passing trusted host records permit only machine-assessed candidate',t=>{c
 test('receipts bind generated ID and actual reviewer, caller cannot supply identity',t=>{const {workflow,input}=setup(t);proof(workflow,input);assert.throws(()=>workflow.recordReceipt({...input,card:{role:'reviewer'}},{id:'fake',sessionId:'reviewer'}),/schema/);assert.throws(()=>workflow.recordReceipt({...input,card:{role:'executor'}},{}),/reviewer-required/)})
 test('old batch and changed policy cannot pass',t=>{const {workflow,input}=setup(t);proof(workflow,input);assert.throws(()=>workflow.complete({...input,batch:{id:'batch2'}}),/trusted-review-required/);input.task.design.studio.characterId='changed';assert.throws(()=>workflow.complete(input),/preflight-required/)})
 test('new candidate invalidates prior version review',t=>{const {workflow,input}=setup(t);const {candidate}=proof(workflow,input);workflow.recordCandidate({...input,card:{role:'executor'},sessionId:'producer'}, {...candidate,revision:2,sha256:h('e')});assert.throws(()=>workflow.complete(input),/quality-gate-failed/)})
-test('manual rescue blocks autonomous success',t=>{const {workflow,input}=setup(t);proof(workflow,input);workflow.recordIntervention(input,'Human repaired scene');assert.throws(()=>workflow.complete(input),/manual interventions/)})
+test('manual rescue is assisted delivery, never autonomous success or unfixable creative rework',t=>{
+ const {workflow,input}=setup(t),{reviewer}=proof(workflow,input);workflow.recordIntervention(input,'Human repaired scene')
+ assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_complete')
+ const result=workflow.complete(input);assert.equal(result.metadata.workflowOutcome,'assisted_machine_assessed_candidate');assert.equal(result.metadata.qualityPassed,true);assert.equal(result.metadata.autonomy.status,'assisted');assert.equal(result.metadata.autonomy.autonomousVerified,false)
+ const review=workflow.status(input).review;delete review.reviewerSessionId;review.checks[0].status='fail';workflow.recordReview(reviewer,review)
+ assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_needs_changes');assert.throws(()=>workflow.complete(input),/quality-gate-failed/)
+})
+test('empty intervention ledger never asserts autonomous verification',t=>{const {workflow,input}=setup(t);proof(workflow,input);assert.equal(workflow.complete(input).metadata.autonomy.status,'no_recorded_intervention');assert.equal(workflow.complete(input).metadata.autonomy.autonomousVerified,false)})
 test('new access denial invalidates prior capability result',t=>{const {workflow,input}=setup(t);proof(workflow,input);workflow.recordCapability(input.task,{name:'audio',status:'access_denied',checkedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString()});assert.throws(()=>workflow.complete(input),/preflight-required/)})
 test('missing budget does not default to zero',t=>{const {workflow,input}=setup(t);capabilities(workflow,input.task);workflow.preflight(input.task);assert.throws(()=>workflow.complete(input),/trusted-review-required/)})
 test('executor hands off candidate without pretending review passed',t=>{const {workflow,input}=setup(t);const {candidate}=proof(workflow,input);const producer={...input,card:{role:'executor'},sessionId:'producer'};(workflow as any).db.prepare("DELETE FROM dsh_studio_state WHERE kind='review'").run();assert.equal(workflow.complete(producer).metadata.workflowOutcome,'candidate_handoff');assert.throws(()=>workflow.complete({...producer,sessionId:'other'}),/producer-session-mismatch/)})
 test('negative real review completes handoff but planner acceptance stays blocked',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);const db=(workflow as any).db;const row=db.prepare("SELECT payload FROM dsh_studio_state WHERE kind='review'").get();const review=JSON.parse(row.payload);delete review.reviewerSessionId;review.checks.find((c:any)=>c.dimension==='motion').status='fail';review.issues=[{id:'motion-poor',severity:'major',status:'open'}];workflow.recordReview(reviewer,review);assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_needs_changes');assert.throws(()=>workflow.complete(input),/quality-gate-failed/)})
+test('invalid submission cannot replace prior review or authorize script changes',t=>{
+ const {workflow,input}=setup(t),{reviewer}=proof(workflow,input),before=workflow.status(input).review
+ workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'原台词。'}]})
+ for(const defect of ['unknown-receipt','wrong-session','range-overrun','stale-candidate','bad-shape']){
+  const r=structuredClone(before);delete r.reviewerSessionId
+  r.checks.find((c:any)=>c.dimension==='motion').status='fail';r.issues=[{id:'motion',severity:'major',status:'open'}]
+  let context=reviewer
+  if(defect==='unknown-receipt')r.checks[0].evidenceReceiptIds=['invented']
+  if(defect==='wrong-session')context={...reviewer,sessionId:'other-reviewer'}
+  if(defect==='range-overrun')r.checks[0].ranges=[[0,101]]
+  if(defect==='stale-candidate')r.candidateSha256=h('e')
+  if(defect==='bad-shape')r.checks[0].status='partial'
+  assert.throws(()=>workflow.recordValidatedReview(context,r),/studio-review-(integrity-failed|shape-invalid)/,defect)
+  assert.deepEqual(workflow.status(input).review,before,defect)
+  assert.throws(()=>workflow.recordScript(input,{sha256:h('e'),lines:[{id:'1',text:'另一台词。'}]}),/independent-review/)
+ }
+})
+test('first invalid submission leaves review absent; genuine rejection commits without full audio coverage',t=>{
+ const {workflow,input}=setup(t),{reviewer}=proof(workflow,input),r=workflow.status(input).review,db=(workflow as any).db
+ delete r.reviewerSessionId;db.prepare("DELETE FROM dsh_studio_state WHERE kind='review'").run()
+ const invalid=structuredClone(r);invalid.checks[0].evidenceReceiptIds=['invented']
+ assert.throws(()=>workflow.recordValidatedReview(reviewer,invalid),/unknown receipt/)
+ assert.equal(workflow.status(input).review,null)
+ for(const c of r.checks){c.status='pending';c.evidenceReceiptIds=[];c.finding='Not checked; pending revision.'}
+ const receipt=workflow.recordReceipt(reviewer,{candidateSha256:h('a'),kind:'frames',ranges:[[0,2]],sha256:h('d')})
+ Object.assign(r.checks.find((c:any)=>c.dimension==='motion'),{status:'fail',finding:'Observed motion defect at the opening.',ranges:[[0,2]],evidenceReceiptIds:[receipt.id]})
+ r.issues=[{id:'motion',severity:'major',status:'open'}]
+ db.prepare("DELETE FROM dsh_studio_receipts WHERE json_extract(payload,'$.kind')='audio'").run()
+ workflow.recordCapability(input.task,{name:'character',status:'failed',checkedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString()})
+ workflow.recordValidatedReview(reviewer,r)
+ assert.equal(workflow.status(input).review.reviewerSessionId,reviewer.sessionId)
+ assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_needs_changes')
+ assert.throws(()=>workflow.complete(input),/blocked_quality_capability/)
+ workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'原台词。'}]})
+ workflow.recordScript(input,{sha256:h('e'),lines:[{id:'1',text:'返修台词。'}]})
+})
+test('fresh reviewer cannot inherit historical report IDs while planner keeps repair history',t=>{
+ const {workflow,input}=setup(t),{reviewer,candidate}=proof(workflow,input),historical=workflow.status(input).review
+ assert.deepEqual(workflow.status(reviewer).review,historical)
+ const restored={...reviewer,sessionId:'reviewer-restored'}
+ assert.equal(workflow.status(restored).review,null)
+ assert.deepEqual(workflow.status(restored).reviewProgress?.receiptIndex,[])
+ assert.deepEqual(workflow.status(input).review,historical)
+ workflow.recordCandidate({...input,card:{role:'executor'},sessionId:'producer'},{...candidate,revision:2,sha256:h('e')})
+ assert.equal(workflow.status(reviewer).review,null)
+ assert.deepEqual(workflow.status(input).review,historical)
+})
 test('negative review still requires genuine audio evidence',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);const db=(workflow as any).db;db.prepare("DELETE FROM dsh_studio_receipts WHERE json_extract(payload,'$.kind')='audio'").run();assert.throws(()=>workflow.complete(reviewer),/review-integrity-failed/)})
 
 test('grounded rejection survives dependency outage but production and approval remain blocked',t=>{
@@ -55,7 +109,7 @@ test('missing audio can be pending on grounded technical rejection, never final 
 test('passing reviewer cannot directly declare final film acceptance',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_complete');assert.equal(workflow.complete(input).metadata.workflowOutcome,'machine_assessed_candidate')})
 test('preflight denial shows sanitized details and actual status',t=>{const {workflow,task}=setup(t);workflow.recordCapability(task,{name:'audio',status:'access_denied',checkedAt:new Date().toISOString(),expiresAt:new Date(Date.now()+60000).toISOString(),reason:'HTTP 403 token=private123 https://service.example/?key=secret'});const r=workflow.preflight(task);assert.match(r.reason??'',/blocked_quality_capability.*audio=access_denied/);assert.ok(!r.reason?.includes('private123'));assert.ok(!r.reason?.includes('service.example'))})
 test('negative issue ID may contain a colon',t=>{const {workflow,input}=setup(t);const {reviewer}=proof(workflow,input);const r=workflow.status(input).review;delete r.reviewerSessionId;r.issues=[{id:'audio:quiet',severity:'major',status:'open'}];workflow.recordReview(reviewer,r);assert.equal(workflow.complete(reviewer).metadata.workflowOutcome,'review_needs_changes')})
-test('public status exposes only specified task data without location or raw capabilities',t=>{const {workflow,input}=setup(t);proof(workflow,input);assert.deepEqual(Object.keys(workflow.status(input)).sort(),['budget','candidate','interventions','preflight','referenceReceipts','review','script','skillLoads','speechChecks','speechPlan']);assert.equal(workflow.status({...input,batch:{id:'other'}}).candidate,null)})
+test('public status exposes only specified task data without location or raw capabilities',t=>{const {workflow,input}=setup(t);proof(workflow,input);assert.deepEqual(Object.keys(workflow.status(input)).sort(),['autonomy','budget','candidate','interventions','mediaOperations','preflight','preparationRevisions','referenceReceipts','renderJobs','review','script','skillLoads','speechChecks','speechPlan']);assert.equal(workflow.status({...input,batch:{id:'other'}}).candidate,null)})
 test('candidate location binds batch, policy and current candidate hash',t=>{const {workflow,input}=setup(t);const {candidate}=proof(workflow,input);const producer={...input,card:{role:'executor'},sessionId:'producer'};const location={path:'/project/final.mp4',manifestPath:'/project/manifest.json',sha256:candidate.sha256};workflow.recordCandidateLocation(producer,location);assert.deepEqual(workflow.candidateLocation(input),location);assert.throws(()=>workflow.candidateLocation({...input,batch:{id:'other'}}),/location-mismatch/);workflow.recordCandidate(producer,{...candidate,revision:2,sha256:h('e')});assert.throws(()=>workflow.candidateLocation(input),/location-mismatch/)})
 test('location rejects model identity fields, mismatch, reviewer write and relative paths',t=>{const {workflow,input}=setup(t);const {candidate}=proof(workflow,input);const producer={...input,card:{role:'executor'},sessionId:'producer'},location={path:'/project/final.mp4',manifestPath:'/project/manifest.json',sha256:candidate.sha256};assert.throws(()=>workflow.recordCandidateLocation(input,location),/producer-required/);assert.throws(()=>workflow.recordCandidateLocation(producer,{...location,sha256:h('e')}),/location-mismatch/);assert.throws(()=>workflow.recordCandidateLocation(producer,{...location,path:'relative.mp4'}),/location-path/);assert.throws(()=>workflow.recordCandidateLocation(producer,{...location,sessionId:'fake'} as any),/schema/)})
 
@@ -126,4 +180,79 @@ test('candidate retry cannot transfer to a restored session or another round, ca
  for(const changed of [{...producer,sessionId:'restored-producer'},{...producer,card:{...producer.card,round:2}},{...producer,card:{...producer.card,id:'different-card'}}])assert.throws(()=>workflow.recordCandidate(changed,{...candidate}),/revision-must-increase/)
  assert.equal(workflow.status({...producer,batch:{id:'other-batch'}}).candidate,null)
  input.task.design.studio.characterId='different-character';assert.throws(()=>workflow.recordCandidate(producer,{...candidate}),/revision-must-increase/)
+})
+
+
+test('review progress is rebuilt from current host ledger and isolated by session, batch and policy',t=>{
+ const {workflow,input}=setup(t),{reviewer,candidate}=proof(workflow,input),db=(workflow as any).db
+ db.prepare('DELETE FROM dsh_studio_receipts').run()
+ workflow.recordReceipt(reviewer,{candidateSha256:candidate.sha256,sha256:h('d'),kind:'audio',ranges:[[0,8]]})
+ workflow.recordReceipt({...reviewer,sessionId:'other'},{candidateSha256:candidate.sha256,sha256:h('d'),kind:'audio',ranges:[[8,100]]})
+ const rebuilt=new StudioWorkflow({kernel:{db}})
+ assert.deepEqual(rebuilt.status(reviewer).reviewProgress.audio.remainingRanges,[[8,100]])
+ assert.equal(rebuilt.status(reviewer).reviewProgress.receiptIndex.length,1)
+ assert.equal(rebuilt.status(reviewer).reviewProgress.receiptIndex[0].kind,'audio')
+ assert.equal(rebuilt.reviewProgress(reviewer)?.receiptIndex,undefined)
+ assert.equal(rebuilt.status(input).reviewProgress,undefined)
+ assert.equal(rebuilt.reviewProgress({...reviewer,batch:{id:'other'}}),null)
+ input.task.design.studio.characterId='changed'
+ assert.equal(rebuilt.reviewProgress(reviewer),null)
+})
+
+test('review integrity errors guide receipt repair without repeating observations or changing evidence',t=>{
+ const {workflow,input}=setup(t),{reviewer}=proof(workflow,input),before=workflow.status(input).review
+ const ref=workflow.recordReferenceReceipt(reviewer,{referenceSha256:h('b'),sha256:h('d'),kind:'frames',ranges:[[0,2]]})
+ const review=structuredClone(before);delete review.reviewerSessionId
+ review.checks.find((c:any)=>c.dimension==='reference').evidenceReceiptIds=[ref.id]
+ review.checks.find((c:any)=>c.dimension==='ending').evidenceReceiptIds=[]
+ review.checks.find((c:any)=>c.dimension==='source_records').evidenceReceiptIds=['file-sha-is-not-a-receipt']
+ assert.throws(()=>workflow.recordValidatedReview(reviewer,review),(error:any)=>{
+  assert.match(error.message,/unknown receipt/)
+  assert.match(error.message,/ReferenceReceipt IDs.*are not candidate receipts/)
+  assert.match(error.message,/do not repeat observations just to recover IDs/)
+  assert.match(error.message,/SAME stated ranges/)
+  assert.match(error.message,/artifacts.manifestPath/)
+  return true
+ })
+ assert.deepEqual(workflow.status(input).review,before)
+})
+
+ test('later production round cannot relabel the prior video while same-round retry remains safe',t=>{
+  const {workflow,input}=setup(t)
+  const producer={...input,card:{id:'e1',role:'executor',round:1},sessionId:'first-editor'}
+  const candidate={sha256:h('a'),manifestSha256:h('c'),referenceSha256:h('b'),revision:1,durationSeconds:100,width:1080,height:1920,fps:30}
+  workflow.recordCandidate(producer,candidate)
+  const unchanged=workflow.status(input).candidate
+  const next={...producer,card:{id:'e2',role:'executor',round:2},sessionId:'next-editor'}
+  assert.throws(()=>workflow.recordCandidate(next,{...candidate,manifestSha256:h('d'),revision:2}),/prior-round-video-reused/)
+  assert.deepEqual(workflow.status(input).candidate,unchanged)
+  assert.doesNotThrow(()=>workflow.recordCandidate(producer,candidate))
+  assert.doesNotThrow(()=>workflow.recordCandidate(next,{...candidate,sha256:h('e'),revision:2}))
+ })
+
+test('rendered candidate and location commit atomically and incomplete later render blocks handoff',t=>{
+ const {workflow,input}=setup(t),{candidate}=proof(workflow,input)
+ input.task.cwd='/project';const i={...input,card:{id:'e1',role:'executor',round:1},sessionId:'new-producer'}
+ ;(workflow as any).store.s={runs:new Map([['run-1',{id:'run-1',cardId:'e1',sessionId:i.sessionId,status:'running'}]])}
+ workflow.enforceRenderProvenance(i)
+ const next={...candidate,sha256:h('e'),revision:2},location={path:'/project/film.mp4',manifestPath:'/project/manifest.json',sha256:next.sha256}
+ assert.throws(()=>workflow.recordRenderedCandidate(i,next,location),/current-render-required/)
+ const job=workflow.renderLedger.prepare(i,'start',{composition:'composition',output:'film.mp4'},{renderJobScript:'/trusted/render.py',renderJobSha256:h('d'),renderRuntime:'/trusted/runtime'})
+ workflow.renderLedger.record(i,job,{ok:true,intentId:job.intentId,jobId:h('f'),inputSha256:h('a'),composition:'composition',output:'film.mp4',state:'completed',outputSha256:next.sha256,width:1080,height:1920,fps:30,durationSeconds:100,helperSha256:h('d'),helperPath:'/trusted/render.py',runtimePath:'/trusted/runtime'})
+ assert.throws(()=>workflow.recordRenderedCandidate(i,next,{...location,sha256:h('f')}),/location-mismatch/)
+ assert.equal(workflow.status(i).candidate.revision,1)
+ assert.equal(workflow.recordRenderedCandidate(i,next,location)?.jobId,h('f'))
+ assert.equal(workflow.complete(i).metadata.workflowOutcome,'candidate_handoff')
+ workflow.renderLedger.prepare(i,'start',{composition:'composition',output:'another.mp4'},{renderJobScript:'/trusted/render.py',renderJobSha256:h('d'),renderRuntime:'/trusted/runtime'})
+ assert.throws(()=>workflow.complete(i),/render-still-pending/)
+ assert.doesNotMatch(JSON.stringify(workflow.status(i).renderJobs),/trusted\/render/)
+})
+test('missing planning evidence fails before expensive host refresh; plan still requires actual fresh preflight',t=>{
+ const {workflow,input}=setup(t);workflow.enforceRuntime(input)
+ assert.throws(()=>workflow.assertPlanningPrerequisites(input),/studio-plan-requires-script-and-direct-reference/)
+ workflow.recordScript(input,{sha256:h('c'),lines:[{id:'1',text:'完整台词。'}]})
+ workflow.recordReferenceReceipt(input,{referenceSha256:h('b'),sha256:h('d'),kind:'frames',ranges:[[0,2]]})
+ workflow.recordReferenceReceipt(input,{referenceSha256:h('b'),sha256:h('d'),kind:'audio',ranges:[[0,8]]})
+ assert.doesNotThrow(()=>workflow.assertPlanningPrerequisites(input));assert.throws(()=>workflow.plan(input),/preflight-required/)
+ capabilities(workflow,input.task);workflow.preflight(input.task);assert.equal(workflow.plan(input).ok,true)
 })

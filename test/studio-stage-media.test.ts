@@ -15,7 +15,8 @@ async function setup(t:any){
  const workflow={script:()=>script,stageReceipt:(_:any,id:string)=>receipts.get(id),recordStageReceipt:(_:any,r:any)=>receipts.set(r.stage,r)},db={prepare:()=>({get:()=>({status:'done',tenant:'B',assignee:'video-storyboard'})})}
  const manifest=async(id:string,files:string[])=>{const base=`stages/r1/${id}`,path=`${base}/manifest.json`;await mkdir(join(cwd,base),{recursive:true});await writeFile(join(cwd,path),JSON.stringify({stage:id,round:1,outputs:files.map(f=>`${base}/${f}`),summary:'media test'}));return path}
  const story=await manifest('storyboard',['board.json']);await writeFile(join(cwd,'stages/r1/storyboard/board.json'),JSON.stringify({scriptSha256:script.sha256,script:script.lines,scenes:[]}));await registerStageFiles(input('storyboard'),story,workflow,db)
- return {cwd,input,workflow,db,receipts,manifest}
+ const soundPlan=async(extra:any={})=>writeFile(join(cwd,'stages/r1/sound/plan.json'),JSON.stringify({schema:'sound-plan-v1',scriptSha256:script.sha256,lines:[{id:'a',text:'你好',sourcePath:'stages/r1/sound/voice.wav',start:0,end:0.3}],bgm:[],sfx:[],...extra}))
+ return {cwd,input,workflow,db,receipts,manifest,soundPlan,script}
 }
 test('JSON/HTML named audio and bad PNG fail before stage receipt; errors omit server response secrets',async t=>{
  const s=await setup(t)
@@ -26,7 +27,8 @@ test('JSON/HTML named audio and bad PNG fail before stage receipt; errors omit s
  }
 })
 test('real WAV and PNG metadata bind to host file receipts and recheck without ffprobe',async t=>{
- const s=await setup(t),audio=await s.manifest('sound',['voice.wav']),image=await s.manifest('visual',['frame.png'])
+ const s=await setup(t),audio=await s.manifest('sound',['voice.wav','plan.json']),image=await s.manifest('visual',['frame.png'])
+ await s.soundPlan()
  await run('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','0.3','-y',join(s.cwd,'stages/r1/sound/voice.wav')])
  await run('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=32x48','-frames:v','1','-threads','1','-y',join(s.cwd,'stages/r1/visual/frame.png')])
  const ar=await registerStageFiles(s.input('sound'),audio,s.workflow,s.db),ir=await registerStageFiles(s.input('visual'),image,s.workflow,s.db)
@@ -34,7 +36,39 @@ test('real WAV and PNG metadata bind to host file receipts and recheck without f
  assert.deepEqual(ir.outputs[0].media,{kind:'image',codecName:'png',width:32,height:48,frames:1});assert.equal(ir.qualityApproved,false)
  const original=process.env.FFPROBE_PATH;try{process.env.FFPROBE_PATH='/nonexistent-probe';await verifyStageReceipt(s.input('sound'),ar,s.workflow);await verifyStageReceipt(s.input('visual'),ir,s.workflow);await assert.rejects(registerStageFiles(s.input('sound'),audio,s.workflow,s.db),/ffprobe_unavailable/);assert.deepEqual(s.receipts.get('sound'),ar)}finally{if(original===undefined)delete process.env.FFPROBE_PATH;else process.env.FFPROBE_PATH=original}
  const legacy=structuredClone(ar);delete legacy.outputs[0].media;await assert.rejects(verifyStageReceipt(s.input('sound'),legacy,s.workflow),/media_probe_receipt_missing/)
+ const v2=structuredClone(ar);v2.stageContractVersion=2;delete v2.soundBinding.audioRequirements;await verifyStageReceipt(s.input('sound'),v2,s.workflow)
+ const old=structuredClone(ar);delete old.stageContractVersion;delete old.soundBinding;await verifyStageReceipt(s.input('sound'),old,s.workflow)
+ const stripped=structuredClone(ar);delete stripped.soundBinding;await assert.rejects(verifyStageReceipt(s.input('sound'),stripped,s.workflow),/missing sound binding/)
+ const changed=structuredClone(ar);changed.soundBinding.tracks[0].sha256='b'.repeat(64);await assert.rejects(verifyStageReceipt(s.input('sound'),changed,s.workflow),/Sound binding changed/)
  await writeFile(join(s.cwd,ar.outputs[0].path),'changed');await assert.rejects(verifyStageReceipt(s.input('sound'),ar,s.workflow),/file-changed/)
+})
+test('sound registration rejects the real missing music/effects pattern without replacing a valid receipt',async t=>{
+ const s=await setup(t),path=await s.manifest('sound',['voice.wav','plan.json'])
+ await run('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440','-t','0.3','-y',join(s.cwd,'stages/r1/sound/voice.wav')])
+ await s.soundPlan();const previous=await registerStageFiles(s.input('sound'),path,s.workflow,s.db)
+ for(const kind of ['bgm','sfx']){
+  await s.soundPlan({[kind]:[{id:'missing',path:`assets/${kind}/absent.mp3`,start:0,end:1}]})
+  await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),/registered, host-probed audio/)
+  assert.equal(s.receipts.get('sound'),previous)
+ }
+ for(const loop of [undefined,true]){
+  await s.soundPlan({bgm:[{id:'short-as-bed',path:'stages/r1/sound/voice.wav',start:0,end:100,...(loop===undefined?{}:{loop})}]})
+  await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),loop===true?/Implicit looping is not supported/:/exceeds the actual source duration/)
+  assert.equal(s.receipts.get('sound'),previous,'invalid music coverage cannot replace the valid receipt')
+ }
+ await s.soundPlan({bgm:[{id:'music',sourcePath:'stages/r1/sound/voice.wav',path:'assets/music/future.wav',start:0,end:0.3}],sfx:[{id:'cue',path:'stages/r1/sound/voice.wav',start:2,end:3}]})
+ const r=await registerStageFiles(s.input('sound'),path,s.workflow,s.db)
+ assert.equal(r.stageContractVersion,3);assert.equal(r.soundBinding!.tracks.length,3);assert.equal(r.qualityApproved,false)
+ s.script.sha256='b'.repeat(64);await assert.rejects(verifyStageReceipt(s.input('sound'),r,s.workflow),/Frozen script differs/)
+})
+test('new sound registration needs one plan and cannot alias one output twice',async t=>{
+ const s=await setup(t),path=await s.manifest('sound',['voice.wav'])
+ await run('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440','-t','0.3','-y',join(s.cwd,'stages/r1/sound/voice.wav')])
+ await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),/Exactly one registered/)
+ await s.soundPlan();await copyFile(join(s.cwd,'stages/r1/sound/plan.json'),join(s.cwd,'stages/r1/sound/plan2.json'))
+ await s.manifest('sound',['voice.wav','plan.json','plan2.json']);await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),/Exactly one registered/)
+ await s.manifest('sound',['voice.wav','./voice.wav','plan.json']);await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),/studio-stage-output-invalid/)
+ assert.equal(s.receipts.has('sound'),false)
 })
 test('every listed media file is probed and renamed video cannot masquerade as an image',async t=>{
  const s=await setup(t),manifest=await s.manifest('sound',['good.wav','bad.wav'])
@@ -42,4 +76,59 @@ test('every listed media file is probed and renamed video cannot masquerade as a
  await assert.rejects(registerStageFiles(s.input('sound'),manifest,s.workflow,s.db),/outputIndex":1/);assert.equal(s.receipts.has('sound'),false)
  const visual=await s.manifest('visual',['bad.png']),movie=join(s.cwd,'movie.mp4');await run('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=s=32x32:r=10','-t','0.2','-y',movie]);await copyFile(movie,join(s.cwd,'stages/r1/visual/bad.png'))
  await assert.rejects(registerStageFiles(s.input('visual'),visual,s.workflow,s.db),/static_image_codec/);assert.equal(s.receipts.has('visual'),false)
+})
+
+test('new sound handoff rejects silent required BGM, SFX and dialogue without replacing accepted receipt',async t=>{
+ const s=await setup(t),base='stages/r1/sound/',path=await s.manifest('sound',['voice.wav','plan.json'])
+ await run('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=440:sample_rate=16000','-t','0.3','-y',join(s.cwd,base+'voice.wav')])
+ await s.soundPlan();const accepted=await registerStageFiles(s.input('sound'),path,s.workflow,s.db)
+ assert.equal(accepted.outputs[0].media.signalEvidence.allSilent,false)
+ for(const [kind,duration] of [['bgm','100'],['sfx','10'],['lines','0.5']]){
+  const name=kind+'-silent.wav'
+  await run('ffmpeg',['-v','error','-f','lavfi','-i','anullsrc=r=16000:cl=stereo','-t',duration,'-y',join(s.cwd,base+name)])
+  await s.manifest('sound',['voice.wav',name,'plan.json'])
+  await s.soundPlan({[kind]:[{id:kind==='lines'?'a':'required-cue',...(kind==='lines'?{text:'你好'}:{}),sourcePath:base+name,start:0,end:Number(duration)}]})
+  await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),(e:any)=>{assert.match(e.message,/entire required source decodes to exact zero/);assert.ok(e.message.includes(kind+'[0].sourcePath'));assert.match(e.message,/Do not remove cues/);return true})
+  assert.equal(s.receipts.get('sound'),accepted)
+ }
+ await s.manifest('sound',['voice.wav','sfx-silent.wav','plan.json']);await s.soundPlan()
+ const unused=await registerStageFiles(s.input('sound'),path,s.workflow,s.db)
+ assert.equal(unused.soundBinding.tracks.length,1,'unused silent helper file is not a required cue')
+})
+
+test('signal receipt is bound to real source hash and replay does not re-run FFmpeg',async t=>{
+ const s=await setup(t),path=await s.manifest('sound',['voice.wav','plan.json'])
+ await run('ffmpeg',['-v','error','-f','lavfi','-i','sine=frequency=550:sample_rate=16000','-t','0.3','-y',join(s.cwd,'stages/r1/sound/voice.wav')]);await s.soundPlan()
+ const receipt=await registerStageFiles(s.input('sound'),path,s.workflow,s.db),previous=process.env.FFMPEG_PATH
+ try{process.env.FFMPEG_PATH='/nonexistent-ffmpeg';await verifyStageReceipt(s.input('sound'),receipt,s.workflow)}finally{if(previous===undefined)delete process.env.FFMPEG_PATH;else process.env.FFMPEG_PATH=previous}
+ const corrupt=structuredClone(receipt);corrupt.outputs[0].media.signalEvidence.sha256='b'.repeat(64)
+ await assert.rejects(verifyStageReceipt(s.input('sound'),corrupt,s.workflow),/signal receipt is invalid/)
+})
+
+test('confirmed JSON and HTML downloads give exact native recovery schema without body or credential exposure',async t=>{
+ const s=await setup(t)
+ for(const [body,responseKind] of [[JSON.stringify({error:'Authentication required',url:'https://private.test/?token=DO_NOT_LEAK',token:'SECRET_VALUE'}),'json_response'],['<!DOCTYPE html><html><body>private account SECRET_VALUE</body></html>','html_response']]){
+  const path=await s.manifest('sound',['download.wav']);await writeFile(join(s.cwd,'stages/r1/sound/download.wav'),body)
+  await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),(error:any)=>{
+   const detail=JSON.parse(error.message.slice(error.message.indexOf(': ')+2))
+   assert.equal(detail.error_code,'studio-stage-media-invalid');assert.equal(detail.reason,'probe_failed_or_invalid_media');assert.equal(detail.outputIndex,0);assert.equal(detail.responseKind,responseKind)
+   assert.equal(detail.retryable,false);assert.equal(detail.retryAfterRepair,true)
+   assert.equal(detail.recoveryTool.name,'studio_download_asset');assert.deepEqual(Object.keys(detail.recoveryTool.requiredArguments),['id','path'])
+   assert.equal(detail.recoveryTool.sourceOnly.optionalArgument,'sourcePolicy');assert.equal(detail.recoveryTool.sourceOnly.fields.purpose,'video_soundtrack')
+   assert.match(detail.action,/Do not repeat anonymous/);assert.match(detail.action,/do not silently remove required BGM\/SFX/)
+   assert.doesNotMatch(error.message,/Authentication required|SECRET_VALUE|DO_NOT_LEAK|private\.test/);assert.ok(!error.message.includes(s.cwd));return true
+  })
+  assert.equal(s.receipts.has('sound'),false)
+ }
+})
+test('unconfirmed corrupt binary is not mislabeled an auth response; missing ffprobe points only to dependency repair',async t=>{
+ const s=await setup(t),path=await s.manifest('sound',['broken.wav']);await writeFile(join(s.cwd,'stages/r1/sound/broken.wav'),Buffer.from([0xff,0,0x10,0x99]))
+ await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),(error:any)=>{const d=JSON.parse(error.message.split(': ').slice(1).join(': '));assert.equal(d.responseKind,undefined);assert.equal(d.recoveryTool,undefined);assert.equal(d.reason,'probe_failed_or_invalid_media');return true})
+ await writeFile(join(s.cwd,'stages/r1/sound/broken.wav'),'{"error":"Authentication required"}')
+ const original=process.env.FFPROBE_PATH
+ try{
+  process.env.FFPROBE_PATH=join(s.cwd,'missing-ffprobe')
+  await assert.rejects(registerStageFiles(s.input('sound'),path,s.workflow,s.db),(error:any)=>{const d=JSON.parse(error.message.split(': ').slice(1).join(': '));assert.equal(d.reason,'ffprobe_unavailable');assert.equal(d.responseKind,undefined);assert.equal(d.recoveryTool,undefined);assert.match(d.action,/FFPROBE_PATH/);assert.match(d.action,/do not re-download/);return true})
+ }finally{if(original===undefined)delete process.env.FFPROBE_PATH;else process.env.FFPROBE_PATH=original}
+ assert.equal(s.receipts.has('sound'),false)
 })

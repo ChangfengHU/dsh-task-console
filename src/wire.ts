@@ -49,7 +49,9 @@ export const METHODS = [
   ['startAgentSession', 1], ['sessionTurns', 1], ['agentHistory', 1],
   ['sessionShortcuts', 0], ['setSessionShortcut', 1],
   ['sessionCapabilities', 1], ['agentCapabilityStatus', 1],
-  ['exportConfig', 0], ['createConfigBootstrap', 1], ['previewConfigImport', 1], ['applyConfigImport', 1], ['installConfigRuntime', 1], ['configRuntimeStatus', 1],
+  // Plan is read-only; apply's JSON payload contains only expectedPlanSha256.
+  ['studioRoleInstallPlan', 0], ['studioRoleInstallApply', 1],
+  ['exportConfig', 0], ['exportLocalConfig', 0], ['createConfigBootstrap', 1], ['previewConfigImport', 1], ['previewLocalConfigImport', 1], ['applyConfigImport', 1], ['installConfigRuntime', 1], ['configRuntimeStatus', 1],
   ['agentActions', 1], ['saveAgentActions', 1], ['prepareAgentAction', 1], ['agentActionOptions', 1],
   ['workflowCatalog', 0], ['launchWorkflow', 1],
   ['taskActions', 1], ['saveTaskActions', 1], ['launchTaskAction', 1],
@@ -58,7 +60,7 @@ export const METHODS = [
   ['setTasksArchived', 1], ['setBatchArchived', 1],
   ['submitTaskSignal', 1], ['taskSignal', 1], ['taskSignals', 1],
   ['board', 0], ['tasks', 0], ['createTask', 1], ['setTaskEnabled', 1], ['deleteTask', 1], ['deleteTasks', 1], ['fireTask', 1], ['cancelRun', 1], ['taskEvents', 1],
-  ['taskSnapshot', 1], ['taskGraph', 1], ['taskArtifacts', 1], ['artifactContent', 1], ['publishArtifact', 1], ['reviewCard', 1], ['unblockCard', 1], ['recoverStudioCard', 1], ['reconcileStudioImageOperation', 1], ['agentActivity', 1],
+  ['taskSnapshot', 1], ['taskGraph', 1], ['taskArtifacts', 1], ['artifactContent', 1], ['studioTaskWorkspace', 1], ['studioStageArtifactContent', 1], ['publishArtifact', 1], ['reviewCard', 1], ['unblockCard', 1], ['recoverStudioCard', 1], ['resumeStudioCard', 1], ['reconcileStudioImageOperation', 1], ['reconcileStudioKnownOperation', 1], ['previewExecutionMigration', 1], ['applyExecutionMigration', 1], ['agentActivity', 1],
 ] as const
 
 export const CONSOLE_INVOCATIONS = Object.freeze(METHODS.map(([method, argc]) => descriptor(method, argc)))
@@ -95,6 +97,7 @@ export interface SkillEntry {
 }
 
 export interface Catalog {
+  workflowExtensions?:{id:string;version:string;hostApi:number;implementationSha256:string;toolAccess?:string;scope:string}[]
   tools: NativeTool[]
   mcp: McpServer[]
   skills: SkillEntry[]

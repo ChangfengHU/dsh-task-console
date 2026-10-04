@@ -9,6 +9,7 @@ import { TaskPlanReview } from './TaskPlanReview.tsx'
 import { TaskExecutions } from './TaskExecutions.tsx'
 import { ConfigMigration } from './ConfigMigration.tsx'
 import { ActionEditor } from './AgentActions.tsx'
+import { TaskStageWorkspace } from './TaskStageWorkspace.tsx'
 
 export interface Api extends TasksApi {
   agentPage: (query:{page:number;query:string;id?:string})=>Promise<{page:number;pages:number;total:number;rows:AgentRow[];detail:AgentRow|null}>
@@ -153,7 +154,7 @@ export function Console({ api }: { api: Api }) {
   else if (route[1] === 'plans') page = <div className="dtc-body"><TaskPlanReview api={api} id={route[2]} /></div>
   else if (route[1] === 'executions') page = <div className="dtc-body"><TaskExecutions api={api} query={query} /></div>
   else if (route[1] === 'migration') page = <div className="dtc-body"><ConfigMigration api={api} toast={showToast} /></div>
-  else if (route[1]) page = <div className="dtc-body">{!executionPage && <TaskTabs api={api} id={route[1]} actions={true} />}{route[2] === 'actions' ? <ActionEditor key={route[1]} api={api} taskId={route[1]} /> : <TaskReplay api={api} agents={agents ?? []} id={route[1]} report={report} runId={route[2] === 'runs' ? route[3] : undefined} sessionId={query.get('session') ?? undefined} toast={showToast} />}</div>
+  else if (route[1]) page = <div className="dtc-body">{!executionPage && <TaskTabs api={api} id={route[1]} actions={true} />}{route[2] === 'actions' ? <ActionEditor key={route[1]} api={api} taskId={route[1]} /> : route[2] === 'stages' && route[3] ? <TaskStageWorkspace key={`${route[1]}:${route[3]}`} api={api} taskId={route[1]} batchId={route[3]} toast={showToast} /> : <TaskReplay api={api} agents={agents ?? []} id={route[1]} report={report} runId={route[2] === 'runs' ? route[3] : undefined} sessionId={query.get('session') ?? undefined} toast={showToast} />}</div>
   else page = <div className="dtc-body"><TaskBoard api={api} agents={agents ?? []} toast={showToast} /></div>
 
   return (

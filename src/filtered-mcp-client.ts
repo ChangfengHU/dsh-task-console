@@ -123,9 +123,9 @@ export function bindBrowserSessionDefinition<T extends { description?: string; p
 
 /** Host source identity survives renderComposition's `${serverName}-${spec.id}` rename. */
 export function taskMediaServer(serverName: string, sourceEntryId?: string, sourceServerName?: string): boolean {
-  return /^mcp-vyibc-(image|voice)$/.test(sourceEntryId ?? '')
-    || /^vyibc-(image|voice)$/.test(sourceServerName ?? '')
-    || /^vyibc-(image|voice)(?:-|$)/.test(serverName)
+  return /^mcp-vyibc-(image|voice|cartoon-assets)$/.test(sourceEntryId ?? '')
+    || /^vyibc-(image|voice|cartoon-assets)$/.test(sourceServerName ?? '')
+    || /^vyibc-(image|voice|cartoon-assets)(?:-|$)/.test(serverName)
 }
 
 /** Route using trusted run identity; absence of the Task guard must fail before dispatch. */

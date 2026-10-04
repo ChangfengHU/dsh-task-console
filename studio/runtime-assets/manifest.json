@@ -1,0 +1,37 @@
+{
+  "schema": "studio-runtime-assets-v1",
+  "gsapVersion": "3.13.0",
+  "files": {
+    "gsap.min.js": {
+      "target": "assets/vendor/gsap.min.js",
+      "bytes": 72435,
+      "sha256": "96c01b81f44a3290e2b4532f55e2c9534b2adc43273a19f3756b2cb41f0fd0b6"
+    },
+    "Chinese.ttf": {
+      "target": "assets/Chinese.ttf",
+      "bytes": 4033576,
+      "sha256": "2392015530438bafc48edfc4aee6d9de2387f627a6134d8ab3dfcc99d21c8240"
+    },
+    "GSAP-LICENSE.txt": {
+      "target": "assets/licenses/GSAP-LICENSE.txt",
+      "bytes": 4556,
+      "sha256": "52473a7c78dce3a0a37980a2a80a7e55f0035c2e195c32df0fdad20b9a609dd1"
+    },
+    "DROID-NOTICE.txt": {
+      "target": "assets/licenses/DROID-NOTICE.txt",
+      "bytes": 10695,
+      "sha256": "38751245389e1e23f73e6f5384b5cbe7fa972cc4410c5adc9c04b082a0b9561a"
+    },
+    "GSAP-STANDARD-LICENSE.html": {
+      "target": "assets/licenses/GSAP-STANDARD-LICENSE.html",
+      "bytes": 76456,
+      "sha256": "75820122aa6ca50c7c43631694d186376406cf6931c4877f10e3ac764698a369"
+    },
+    "SOURCES.json": {
+      "target": "assets/licenses/SOURCES.json",
+      "bytes": 1109,
+      "sha256": "c2f97b813c2fe6bf894a8c7d4f2c221b29e79a406df8d5a74360cec6b71242f5"
+    }
+  },
+  "qualityApproved": false
+}

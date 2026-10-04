@@ -1,17 +1,34 @@
-import { studioRenderJob } from './studio-render-host.js'
+import {previewExecutionMigration,applyExecutionMigration} from './batch-execution-migration.ts'
+import {uploadStudioPreview} from './studio-upload-host.js'
+import {assertStudioProgressWritable} from './studio-progress.js'
+import type {StudioConfigBinding} from './studio-config.js'
+import {readStudioHostConfiguration} from './studio-config.js'
+import {planStudioRoleInstall,applyStudioRoleInstall,type StudioRoleInstallOptions} from './studio-role-install.js'
+import {discoverStudioSourcesFromHost} from './studio-source-host.js'
+import {StudioPreparation,assertPreparationWritable} from './studio-preparation.js'
+import {pollStudioOperation} from './studio-operation-poll.js'
+import {WorkflowEvidence} from './workflow-evidence.js'
+import {WorkflowExtensions,type WorkflowExtension} from './workflow-extensions.js'
+import { invokeStudioRenderJob, reconcileStudioRenderIntent, studioRenderJob } from './studio-render-host.js'
+import { StudioRenderLedger } from './studio-render-ledger.js'
+import { studioProgressPending } from './studio-progress.js'
 import { inspectCapabilityContract } from './capability-contract.ts'
+import { awaitAgentCapabilities } from './agent-capability-readiness.ts'
 import { taskAgentIds } from './task-design.ts'
 import {registerStageFiles,requireStudioStages,verifyStageReceipt} from './studio-stage-files.js'
 import {studioStageFor} from './studio-stages.js'
-import { registerStudioSpeechTools } from './studio-speech-tools.js'
-import { registerStudioBoardTools } from './studio-board-tools.js'
+import { registerStudioSpeechTools,STUDIO_SPEECH_TOOL_NAMES } from './studio-speech-tools.js'
+import { registerStudioBoardTools,STUDIO_BOARD_TOOL_NAMES } from './studio-board-tools.js'
 import { StudioOperations } from './studio-operations.js'
-import { assertStudioImageRequest } from './studio-image-request.js'
+import { searchStudioAssets } from './studio-asset-search.js'
+import { assertStudioImageRequest, prepareStudioImageRequest } from './studio-image-request.js'
 import { reconcileStudioImageOperation } from './studio-image-reconciliation.js'
+import { reconcileStudioKnownOperation } from './studio-known-operation-reconciliation.js'
 import { requireSettledStudioOperations } from './studio-stage-operations.js'
 import { assertFrozenVoiceSynthesis } from './studio-voice-script.js'
 import { refreshStudioCapabilities, observeStudioAudio, observeStudioVision, checkStudioSpeech, compileStudioStoryboard, downloadStudioAsset } from './studio-host.js'
-import { registerStudioTools } from './studio-tools.js'
+import {studioInstallationBlock} from './studio-installation.js'
+import { registerStudioTools,STUDIO_TOOL_NAMES,studioPath,fileSha256 } from './studio-tools.js'
 import { StudioWorkflow } from './studio-workflow.js'
 import { registerStudioSkillGate } from './studio-skill-gate.js'
 /**
@@ -28,8 +45,10 @@ import { registerStudioSkillGate } from './studio-skill-gate.js'
 
 import type { Context } from '@deepseek-ai/cordis'
 import { randomUUID, createHash } from 'node:crypto'
+import { access, lstat, readFile, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, resolve } from 'node:path'
+import { basename, dirname, join, resolve, extname } from 'node:path'
+import { createRequire } from 'node:module'
 import { readActions, saveActions } from './agent-action-store.ts'
 import { renderAction, parameterVisible, type ActionCatalog } from './agent-actions.ts'
 import { optionPage, sourceTool, type ActionOptionQuery } from './action-options.ts'
@@ -47,7 +66,6 @@ import {
   type HostMcp,
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
-import { pendingOnboardOperation, onboardOperationOutcome } from './onboard-background.ts'
 import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask, taskForBatch } from './tasks.ts'
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
@@ -68,10 +86,13 @@ import type { ArtifactView, BoardView } from './wire.ts'
 import { NAMESPACE } from './wire.ts'
 import { SessionShortcuts, shortcutChange } from './session-shortcuts.ts'
 import type { AgentRow, AgentSpec, Catalog, McpServer, Preview, TryRunResult } from './wire.ts'
-import { createBootstrapCommand, createEnvelope, downloadConfig, taskConfig, uploadConfig, type ConfigEnvelope } from './config-migration.ts'
+import { createBootstrapCommand, createEnvelope, downloadConfig, encodeEnvelope, MAX_CONFIG_BYTES, parseEnvelope, portableAgentSpec, taskConfig, uploadConfig, type ConfigEnvelope } from './config-migration.ts'
 import { runtimeBootstrapStatus, startRuntimeBootstrap } from './config-runtime-bootstrap.ts'
+import { backupPreset, collectSkillAsset, deduplicateSkills, materializeSkills, portableHostConfig, profilePatchPath, remapPath, safeDirectory, stageHostConfigs, writeSkillAsset, type ConfigAssets } from './config-assets.ts'
+import { isExternalWorkflow } from './task-kind.ts'
 
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
+const portableModule = (name: string) => /\/(?:task-console-studio-[^/]+|dsh-task-console)\/lib\/index\.js$/.test(name) ? 'dsh-task-console' : name
 const TOOL_PREFIX = /^mcp__(.+?)__(.+)$/
 
 /** Models the picker offers besides the deployment default. */
@@ -82,8 +103,46 @@ const KNOWN_MODELS = [
   'llm-deepseek/qwen-plus-latest', 'llm-deepseek/deepseek-v3',
 ]
 
+/** Current registered candidate and write lease are host inputs, never tool paths. */
+export function studioPreviewUploadBinding(input:any,workflow:any,store:any,isActive:()=>boolean,configPath?:string,upload=uploadStudioPreview){
+ return async(args:{candidateSha256:string})=>{
+  if(input.card?.role!=='executor')throw Error('studio-role-denied')
+  const candidate=workflow.status(input).candidate,location=workflow.candidateLocation(input)
+  const assertActive=()=>{
+   const c=store.kernel.getTask(input.card.id),r=[...store.s.runs.values()].find((r:any)=>r.cardId===input.card.id&&r.sessionId===input.sessionId&&r.status==='running') as any
+   if(!isActive()||!r||c?.status!=='running'||c.current_run_id!==store.coreRunId(r.id)||!c.claim_expires||c.claim_expires<=Math.floor(Date.now()/1000))throw Error('studio-upload-stale-run')
+   assertStudioProgressWritable(store.kernel.db,input,store.coreRunId(r.id));assertPreparationWritable(store.kernel.db,input)
+   const current=workflow.status(input).candidate,now=workflow.candidateLocation(input)
+   if(!candidate||current?.sha256!==candidate.sha256||current?.manifestSha256!==candidate.manifestSha256||current?.revision!==candidate.revision||now.path!==location.path||now.manifestPath!==location.manifestPath||now.sha256!==location.sha256)throw Error('studio-upload-current-candidate-changed')
+  }
+  assertActive()
+  const result=await upload(input.task,{candidate,location},args,{configPath,assertActive})
+  assertActive()
+  return result
+ }
+}
+
 export class TaskConsoleService extends TypertRemoteService {
   static inject = ['loader', 'tools', 'agents', 'workspaceRegistry', 'permissionPresets']
+
+  private readonly workflowExtensions=new WorkflowExtensions((id,version)=>{
+    for(const batch of this.runner.store.s.batches.values()){
+      if(batch.settled||batch.archivedAt)continue
+      const task=this.runner.store.s.tasks.get(batch.taskId)
+      if(!task)return true
+      const binding=taskForBatch(task,batch).design?.extension
+      if(binding?.id===id&&binding.version===version)return true
+    }
+    return false
+  },(input,isActive)=>new WorkflowEvidence(this.runner.store).port(input,isActive))
+
+  /** Trusted host integration only: deliberately absent from the RPC method table. */
+  async registerWorkflowExtension(extension:WorkflowExtension):Promise<()=>void>{
+    await this.ready
+    const db=this.runner.store.kernel.db
+    if(db.prepare("SELECT 1 FROM task_runs WHERE status='running' LIMIT 1").get()||db.prepare("SELECT 1 FROM tasks t JOIN dsh_card_bindings c ON c.card_id=t.id JOIN dsh_batches b ON b.id=c.batch_id WHERE b.settled_at IS NULL AND b.archived_at IS NULL AND t.status IN ('ready','running','review') LIMIT 1").get())throw Error('workflow-extension-registration-requires-quiescence')
+    return this.workflowExtensions.register(extension)
+  }
 
   readonly runner: TaskRunner
   readonly intake: TaskIntakeCoordinator
@@ -92,7 +151,8 @@ export class TaskConsoleService extends TypertRemoteService {
   private readonly ready: Promise<void>
   private headerCache?: { at: number; value: AgentSessionHeader[] }
   private headerRead?: Promise<AgentSessionHeader[]>
-  private readonly pendingConfigImports = new Map<string, { envelope: ConfigEnvelope; expiresAt: number }>()
+  private readonly pendingConfigImports = new Map<string, { envelope: ConfigEnvelope; expiresAt: number; options: { pathMappings: Record<string, string>; overwriteAgents: boolean; installAssets: boolean } }>()
+  private configImportBusy = false
 
   private shortcutHidden(): Set<string> {
     const registry = (this.ctx as any).get('workspaceRegistry')
@@ -119,20 +179,48 @@ export class TaskConsoleService extends TypertRemoteService {
     return patrolFollowup(this.runner.store.kernel.db)
   }
 
-  constructor(ctx: Context) {
+  constructor(ctx: Context, config: StudioConfigBinding & {workflowExtensions?:WorkflowExtension[]} = {}) {
     super(ctx, NAMESPACE)
+    const studioHostDeps={configPath:config.studioConfigPath}
     this.runner = new TaskRunner(ctx, new EventStore(), {
       onSessionCreated: sessionId => this.markTaskSessionInternal(sessionId),
+      pollProgressOperation:async operation=>{
+        const server=operation.kind==='imageCalls'?'vyibc-image':operation.kind==='voiceSegments'?'vyibc-voice':undefined
+        const host=server&&this.hostMcp().find(h=>h.serverName===server&&h.live)
+        if(!host)throw Error('studio-operation-poll-host-unavailable')
+        return pollStudioOperation(host.config,operation)
+      },
+      reconcilePreparationOperations:async request=>{
+        const prep=new StudioPreparation(this.runner.store),ops=new StudioOperations(this.runner.store)
+        for(const operation of prep.pending(request)){
+          if(!operation.job_id)continue // Unknown submission: never invent a job or resubmit.
+          const server=/vyibc-image_generate_image$/.test(operation.tool)?'vyibc-image':/vyibc-voice_(synthesize|retry_segments)$/.test(operation.tool)?'vyibc-voice':undefined
+          const host=this.hostMcp().find(h=>h.serverName===server&&h.live)
+          if(!host)continue
+          try{const p=await pollStudioOperation(host.config,operation);await ops.invoke({task:{id:request.taskId},batch:{id:request.batchId}},p.name,p.args,async()=>p.result)}catch{/* Original reservation and request remain pending. */}
+        }
+      },
+      registerWorkflowTools:(ctx,input,isActive)=>this.workflowExtensions.registerTools(ctx,input,isActive),
       registerStudioTools: async (agentCtx,input,isActive,submitReview) => {
-        const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task)
-        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,renderJob:(action,args)=>studioRenderJob(input.task,action,args),downloadAsset:args=>downloadStudioAsset(input.task,args),registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task),audioObserve:args=>observeStudioAudio(input.task,args),visionObserve:args=>observeStudioVision(input.task,args),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
+        const workflow=new StudioWorkflow(this.runner.store),locks=await refreshStudioCapabilities(workflow,input.task,studioHostDeps)
+        if(input.card.role==='executor')workflow.enforceRenderProvenance(input)
+        const renderJob=async(action:'start'|'status',args:any)=>{
+          const assertActive=()=>{const c=this.runner.store.kernel.getTask(input.card.id),r=[...this.runner.store.s.runs.values()].find(r=>r.cardId===input.card.id&&r.sessionId===input.sessionId&&r.status==='running');if(!isActive()||!r||c?.status!=='running'||c.current_run_id!==this.runner.store.coreRunId(r.id)||!c.claim_expires||c.claim_expires<=Math.floor(Date.now()/1000))throw Error('studio-render-stale-run');assertStudioProgressWritable(this.runner.store.kernel.db,input,this.runner.store.coreRunId(r.id))}
+          return invokeStudioRenderJob(input,action,args,workflow.renderLedger,()=>{assertActive();if(action==='start')assertPreparationWritable(this.runner.store.kernel.db,input)},studioHostDeps)
+        }
+        const media=await registerStudioTools(agentCtx,{input,workflow,isActive,renderJob,uploadPreview:studioPreviewUploadBinding(input,workflow,this.runner.store,isActive,config.studioConfigPath),requestPreparationRevision:value=>new StudioPreparation(this.runner.store).request(input,value),downloadAsset:args=>downloadStudioAsset(input.task,args,studioHostDeps),registerStage:path=>registerStageFiles(input,path,workflow,this.runner.store.kernel.db),...locks,submitReview,refreshPreflight:()=>refreshStudioCapabilities(workflow,input.task,studioHostDeps),audioObserve:args=>observeStudioAudio(input.task,args,studioHostDeps),visionObserve:args=>observeStudioVision(input.task,args,studioHostDeps),referenceReceipt:r=>workflow.recordReferenceReceipt(input,r)})
         let skillGate:()=>void=()=>{},speech:()=>void=()=>{},board:()=>void=()=>{}
-        try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args)});board=await registerStudioBoardTools(agentCtx,{input,workflow,isActive,compile:args=>compileStudioStoryboard(input.task,args)});return ()=>{board();speech();skillGate();media()} } catch(e){board();speech();skillGate();media();throw e}
+        try { skillGate=registerStudioSkillGate(agentCtx,{input,isActive,record:r=>workflow.recordSkillLoad(input,r)});speech=await registerStudioSpeechTools(agentCtx,{input,workflow,isActive,speechCheck:args=>checkStudioSpeech(input.task,args,studioHostDeps)});board=await registerStudioBoardTools(agentCtx,{input,workflow,isActive,compile:args=>compileStudioStoryboard(input.task,args,studioHostDeps)});return ()=>{board();speech();skillGate();media()} } catch(e){board();speech();skillGate();media();throw e}
       },
       beforeStart: async input => {
         const ids=input.card.role==='planner' ? taskAgentIds(input.task) : [input.profileId]
         for(const id of ids){
-          const audit=JSON.parse(await this.agentCapabilityStatus(JSON.stringify({id})))
+          const readiness=await awaitAgentCapabilities({
+            inspect:()=>this.inspectAgentCapabilities(id),isActive:input.isActive,
+            onEvent:event=>{const card=this.runner.store.kernel.getTask(input.card.id);if(card?.current_run_id)this.runner.store.kernel.recordEvent(input.card.id,'agent_capability_readiness',{agentId:id,...event},card.current_run_id)},
+          })
+          const audit=readiness.audit
+          if(readiness.timedOut)return {kind:'capability' as const,reason:JSON.stringify({error_code:'agent-mcp-readiness-timeout',agentId:id,missingDependencies:audit.missingDependencies,attempts:readiness.attempts,elapsedMs:readiness.elapsedMs,retryable:true,nextAction:'Configured MCP tools did not register within 60 seconds. Inspect MCP connection health, then retry this node; do not regenerate the Agent preset for a connection delay.'})}
           // Legacy authored presets remain usable only when their actual fence matches;
           // they are never labelled live-verified or certified by this compatibility path.
           if(['composition-missing','tool-drift','dependency-missing','contract-drift','local-edit'].includes(audit.status))return {
@@ -140,7 +228,25 @@ export class TaskConsoleService extends TypertRemoteService {
             reason:JSON.stringify({error_code:'agent-capability-drift',agentId:id,status:audit.status,missingTools:audit.missingTools,unexpectedTools:audit.unexpectedTools,missingDependencies:audit.missingDependencies,retryable:false,nextAction:'Review the capability diff and regenerate the authored preset without losing local edits. Resume in a new run after verification.'})
           }
         }
+        if(input.task.design?.extension){
+          try{
+            if(this.workflowExtensions.requiresScopedTools(input)){
+              const roster=await this.intakeAgents()
+              for(const id of taskAgentIds(input.task)){
+                const role=roster.find(r=>r.id===id)
+                const audit=JSON.parse(await this.agentCapabilityStatus(JSON.stringify({id})))
+                if(audit.ready!==true||audit.status!=='in-sync')return {kind:'capability',reason:'workflow-scoped-tools-require-verified-preset: '+id}
+                if(!role||role.tools.length!==1||role.tools[0]!=='workflow-runtime'||role.skills.length||Object.values(role.mcpTools).some(v=>v.length))return {kind:'capability',reason:'workflow-scoped-tools-only: remove ambient shell, filesystem, skills and MCP grants from '+id}
+              }
+            }
+            return await this.workflowExtensions.beforeStart(input)
+          }
+          catch(error){return {kind:'capability',reason:error instanceof Error?error.message:String(error)}}
+        }
         if (input.task.design?.evidenceContract !== 'studio-video-v1') return
+        const installationBlock=await studioInstallationBlock(studioHostDeps)
+        if(installationBlock)return installationBlock
+        assertPreparationWritable(this.runner.store.kernel.db,input)
         const workflow = new StudioWorkflow(this.runner.store)
         await requireStudioStages(input,workflow,this.runner.store.kernel.db)
         workflow.enforceRuntime(input)
@@ -148,14 +254,16 @@ export class TaskConsoleService extends TypertRemoteService {
         operations.configure(input,input.task.design.studio.generationLimits??{imageCalls:6,voiceSegments:80})
         const budget=operations.snapshot(input)
         workflow.recordBudget(input,{repairRounds:Math.max(0,(workflow.status(input).candidate?.revision??1)-1),used:budget.used,limits:budget.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
-        await refreshStudioCapabilities(workflow,input.task)
+        await refreshStudioCapabilities(workflow,input.task,studioHostDeps)
         const result = workflow.preflight(input.task)
         if (!result.ok) return { kind: 'capability', reason: result.reason ?? 'blocked_quality_capability' }
       },
       beforeComplete: async input => {
+        if(input.task.design?.extension)return this.workflowExtensions.beforeComplete(input)
         if (input.task.design?.evidenceContract === 'studio-video-v1') {
+          assertPreparationWritable(this.runner.store.kernel.db,input)
           const workflow=new StudioWorkflow(this.runner.store),operations=new StudioOperations(this.runner.store).snapshot(input)
-          if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task)
+          if(!workflow.hasRejection(input))await refreshStudioCapabilities(workflow,input.task,studioHostDeps)
           requireSettledStudioOperations(input,operations)
           const candidate=workflow.status(input).candidate
           workflow.recordBudget(input,{repairRounds:Math.max(0,(candidate?.revision??1)-1),used:operations.used,limits:operations.limits,maxRepairRounds:input.task.design.studio.maxRepairRounds??3,exceeded:false})
@@ -169,7 +277,6 @@ export class TaskConsoleService extends TypertRemoteService {
           await requireStudioStages(input,workflow,this.runner.store.kernel.db)
           return workflow.complete(input)
         }
-        if (await pendingOnboardOperation(input)) throw new Error('装机后台操作尚未结束，不能提交完成')
         if (input.card.role === 'notifier' || input.profileId === input.task.design?.notifications?.agentId) return new TaskNotifications(this.runner.store).complete(input)
         const proxy = new ProxyWorkflow(this.runner.store)
         if (proxy.pending(input)) throw new Error('代理后台操作仍在运行，继续查询原操作回执')
@@ -211,23 +318,23 @@ export class TaskConsoleService extends TypertRemoteService {
         if (report?.summary && report.metadata) return { summary: report.summary, metadata: report.metadata }
       },
       beforeBlock: async input => {
-        if (await pendingOnboardOperation(input)) throw new Error('装机后台操作仍运行，不能提前阻塞；结束当前模型回合，由宿主等待原回执')
         if(new ProxyWorkflow(this.runner.store).pending(input))throw new Error('代理操作仍运行，请查询原回执；不能提前阻塞并遗弃操作')
         const operation = await validateWorkflowBlock(input)
         if (operation) return operation
         const report = await this.patrolEvidence(input)
         if (report?.failure) return { reason: report.failure, kind: 'capability' }
       },
-      pendingOperation: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? await pendingOnboardOperation(input) ?? await pendingBrowserOperation(input),
+      pendingOperation: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? await pendingBrowserOperation(input),
       afterBlock: async input => {
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2' || !input.task.design.notifications?.agentId || input.card.role === 'notifier') return
         const report=(await this.patrolWorkflow(input)).snapshot(input)
         await this.runner.store.createNotification(input.task,input.batch,input.card,'blocked',report)
       },
-      operationOutcome: async input => input.profileId === 'fleet-installer' ? onboardOperationOutcome : new ProxyWorkflow(this.runner.store).pending(input) ?? (input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input)),
+      operationOutcome: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? (input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input)),
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
       beforePlanRound: async (input, items, proxyItems) => {
-        if (input.task.design?.evidenceContract === 'studio-video-v1') { const w=new StudioWorkflow(this.runner.store);await refreshStudioCapabilities(w,input.task);w.preflight(input.task);w.plan(input);return }
+        if(input.task.design?.extension)return this.workflowExtensions.beforePlanRound(input,items,proxyItems)
+        if (input.task.design?.evidenceContract === 'studio-video-v1') { const w=new StudioWorkflow(this.runner.store);w.assertPlanningPrerequisites(input);await refreshStudioCapabilities(w,input.task,studioHostDeps);w.preflight(input.task);w.plan(input);return }
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2') return
         const patrol = await this.patrolWorkflow(input); patrol.snapshot(input)
         new TaskNotifications(this.runner.store).requireStage(input,input.card.round === 1 ? 'started' : 'rework')
@@ -250,7 +357,9 @@ export class TaskConsoleService extends TypertRemoteService {
       agents: () => this.intakeAgents(),
       decide: (signal, context, delivery) => decideTaskSignalWithAgent(this.ctx as any, signal, context, { ...delivery, markInternal: sessionId => this.markTaskSessionInternal(sessionId) }),
     })
-    this.creator = new TaskCreator(this.runner, () => this.intakeAgents())
+    // Startup registrations precede store recovery and the first dispatch.
+    for(const extension of config.workflowExtensions??[])this.workflowExtensions.register(extension)
+    this.creator = new TaskCreator(this.runner, () => this.intakeAgents(), design => design.extension ? {...design,extension:this.workflowExtensions.bind(design.extension)} : design,()=>this.workflowExtensions.list())
     this.ready = this.runner.start()
       .then(() => { this.capabilities = new SessionCapabilities(ctx, async () => ({
       checkedAt: new Date().toISOString(), scope: 'environment-directory-not-execution-grant',
@@ -276,7 +385,17 @@ export class TaskConsoleService extends TypertRemoteService {
     const task=taskForBatch(base,batch),input={task,batch,card,sessionId,profileId:run.profileId??card.agentId}
     if(task.design?.evidenceContract==='studio-video-v1') {
       const operations=new StudioOperations(this.runner.store),workflow=new StudioWorkflow(this.runner.store)
-      try { return await operations.invoke(input,raw,args,invoke,()=>{assertFrozenVoiceSynthesis(raw,args,workflow.script(input));assertStudioImageRequest(raw,args)}) }
+      const dispatch=raw==='asset_search'?(value:any)=>searchStudioAssets(value,invoke):invoke
+      // Copy caller arguments before an asynchronous reference probe; reserve only
+      // after checking the same live claim and frozen input again.
+      args=structuredClone(args)
+      const validate=()=>{
+        const current=this.runner.store.kernel.getTask(card.id),latestBatch=this.runner.store.s.batches.get(batch.id)
+        if((this.runner as any).stopped||current?.status!=='running'||current.current_run_id!==this.runner.store.coreRunId(run.id)||!current.claim_expires||current.claim_expires<=Math.floor(Date.now()/1000)||!latestBatch||latestBatch.settled||latestBatch.archivedAt)throw Error('studio-generation-stale-run')
+        assertStudioProgressWritable(this.runner.store.kernel.db,input,this.runner.store.coreRunId(run.id))
+        assertPreparationWritable(this.runner.store.kernel.db,input);assertFrozenVoiceSynthesis(raw,args,workflow.script(input));assertStudioImageRequest(raw,args)
+      }
+      try { return await operations.invoke(input,raw,args,dispatch,validate,/generate_image$/.test(raw)?()=>prepareStudioImageRequest(raw,args):undefined) }
       finally {
         // Include retained unknown reservations, not only successful job receipts.
         const budget=operations.snapshot(input),candidate=workflow.status(input).candidate
@@ -411,6 +530,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const defaultModel = def ? `${def.provider}/${def.model}` : ''
     const models = [...new Set([defaultModel, ...KNOWN_MODELS].filter(Boolean))]
     const out: Catalog = {
+      workflowExtensions:this.workflowExtensions.list(),
       tools: NATIVE_TOOLS.map(({ rows: _rows, schemaNames: _schemaNames, ...t }) => t),
       mcp: this.hostMcp().map(({ config: _c, live: _l, ...m }) => m),
       skills: await scanSkills(),
@@ -476,26 +596,81 @@ export class TaskConsoleService extends TypertRemoteService {
   }
 
   private taskActionsForExport(taskId: string) {
-    return this.creator.actions.read(taskId).actions
+    return this.creator.actions.exportDefinition(taskId)
   }
 
   /** Export definitions only. Sessions, runs, events, artifacts and secret values never enter the envelope. */
-  async exportConfig(): Promise<string> {
+  private async configurationEnvelope(): Promise<ConfigEnvelope> {
     await this.ready
     const presets = (this.ctx as any).get('agentPresets')
     const agents = [] as { spec: AgentSpec; actions: import('./agent-actions.ts').AgentAction[] }[]
+    const sources = new Map<string, string>()
     for (const preset of (presets ? await presets.list() : []) as any[]) {
-      if (preset.trust !== 'user') continue
-      const dir = dirname(String(preset.path)), spec = await readSpec(dir)
-      if (!spec) continue
+      const dir = dirname(String(preset.path))
+      const raw = await readFile(join(dir, 'task-console.json'), 'utf8').catch((e: any) => { if (e.code === 'ENOENT') return null; throw e })
+      const spec = raw ? portableAgentSpec(JSON.parse(raw)) : null
+      if (!spec) {
+        if (preset.trust === 'user') throw Error(`Agent ${preset.id} 没有可迁移的 task-console.json；请先在 Agent 编辑器保存，避免漏导资产`)
+        continue
+      }
+      if (sources.has(spec.id)) throw Error(`Agent ID 重复:${spec.id}`)
+      sources.set(spec.id, dir)
       agents.push({ spec, actions: (await readActions(dir)).actions })
     }
     const tasks = [...this.runner.store.tasks.values()].filter(task => !task.archivedAt).map(task => taskConfig(task, this.taskActionsForExport(task.id)))
     let version = 'unknown'
     try { version = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../package.json', import.meta.url), 'utf8')).version ?? version } catch { /* package metadata is optional */ }
-    const envelope = createEnvelope({ agents, tasks }, version)
+    const library = await scanSkills(), skills: ConfigAssets['skills'] = []
+    const requiredSkills = new Set(agents.flatMap(a => a.spec.skills))
+    for (const skill of library.filter(s => requiredSkills.has(s.name))) {
+      if (skills.some(s => !s.agentId && s.name === skill.name)) throw Error(`Skill ${skill.name} 在多个来源重复，请先消除歧义`)
+      skills.push(await collectSkillAsset(skill.name, skill.dir))
+    }
+    for (const agent of agents) for (const skillName of agent.spec.skills) {
+      const source = library.find(s => s.name === skillName || basename(s.dir) === skillName)
+      const copied = join(sources.get(agent.spec.id)!, 'skills', source ? basename(source.dir) : skillName)
+      const dir = await access(join(copied, 'SKILL.md')).then(() => copied).catch(() => source?.dir)
+      if (!dir) throw Error(`Agent ${agent.spec.id} 的 Skill ${skillName} 缺失，拒绝生成不完整资产包`)
+      skills.push(await collectSkillAsset(skillName, dir, agent.spec.id))
+    }
+    const entries = [...(this.ctx as any).loader.entries()] as any[]
+    const hostConfigs: ConfigAssets['hostConfigs'] = []
+    for (const entry of entries) {
+      const rawModule = entry.options?.name, id = entry.options?.id
+      const module = typeof rawModule === 'string' ? portableModule(rawModule) : rawModule
+      if (typeof module !== 'string' || typeof id !== 'string') continue
+      const kind = module === MCP_CLIENT ? 'mcp' : /dsh-llm|dsh-codex-claude-cli|dsh-model-console|dsh-agent-default-model/.test(module) ? 'model' : module === 'dsh-task-console' && !entry.disabled ? 'plugin' : null
+      if (kind) hostConfigs.push(portableHostConfig(id, module, kind, entry.options.config ?? {}, !!entry.disabled, kind === 'mcp' ? this.hostMcp().find(m => m.entryId === id)?.tools ?? [] : []))
+      if (kind === 'plugin') {
+        const studio = await readStudioHostConfiguration(entry.options.config?.studioConfigPath)
+        if (Object.keys(studio).length) hostConfigs.push(portableHostConfig(`${id}-studio-runtime`, 'dsh-task-console/studio-runtime', 'plugin', studio))
+      }
+    }
+    const require = createRequire(import.meta.url)
+    const modules = [...new Set(['dsh-task-console', ...hostConfigs.filter(h => h.module !== 'dsh-task-console/studio-runtime').map(h => h.module)])]
+    const requirements = await Promise.all(modules.map(async module => {
+      const pkg = module.startsWith('@') ? module.split('/').slice(0, 2).join('/') : module.split('/')[0]
+      let version = 'unknown'
+      try { version = module === 'dsh-task-console' ? JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version : JSON.parse(await readFile(require.resolve(`${pkg}/package.json`), 'utf8')).version ?? version } catch { /* retained as an explicit unverified requirement */ }
+      return { module, version }
+    }))
+    const llm = (this.ctx as any).get('llm')
+    const providers = await Promise.all((llm?.listProviders() ?? []).map(async (p: any) => ({ id: String(p.id), models: (await llm.listModels(p.id).catch(() => [])).map((m: any) => String(m.id)) })))
+    const selection = (this.ctx as any).get('agentDefaultModel')?.currentSelection()
+    const assets: ConfigAssets = { schema: 'dsh-task-console/assets-v1', skills: deduplicateSkills(skills), hostConfigs, requirements, models: { providers, defaultSelection: selection ? { provider: String(selection.provider), model: String(selection.model) } : null } }
+    return parseEnvelope(createEnvelope({ agents, tasks, assets }, version))
+  }
+
+  async exportConfig(): Promise<string> {
+    const envelope = await this.configurationEnvelope()
     const result = await uploadConfig(envelope, this.configR2())
-    return JSON.stringify({ ...result, exportedAt: envelope.exportedAt, digest: envelope.digest.value, counts: { agents: agents.length, tasks: tasks.length }, omitted: ['sessions', 'runs', 'events', 'artifacts', 'attachments', 'logs', 'credentials'] })
+    return JSON.stringify({ ...result, exportedAt: envelope.exportedAt, digest: envelope.digest.value, counts: { agents: envelope.payload.agents.length, tasks: envelope.payload.tasks.length }, omitted: ['sessions', 'runs', 'events', 'artifacts', 'attachments', 'logs', 'credential-values'], secretRefs: envelope.payload.assets?.hostConfigs.flatMap(h => h.secrets) ?? [] })
+  }
+
+  /** Private downloadable JSON, no R2 credentials or network upload required. */
+  async exportLocalConfig(): Promise<string> {
+    const envelope = await this.configurationEnvelope(), data = encodeEnvelope(envelope)
+    return JSON.stringify({ filename: `dsh-assets-${Date.now()}.json`, json: data.toString('utf8'), bytes: data.length, sha256: createHash('sha256').update(data).digest('hex'), counts: { agents: envelope.payload.agents.length, tasks: envelope.payload.tasks.length, skills: envelope.payload.assets?.skills.length ?? 0, hostConfigs: envelope.payload.assets?.hostConfigs.length ?? 0 } })
   }
 
   /** Available only to the server process; the browser receives a scoped command. */
@@ -507,7 +682,7 @@ export class TaskConsoleService extends TypertRemoteService {
     return JSON.stringify({ command, expiresInSeconds })
   }
 
-  private configImportView(envelope: ConfigEnvelope) {
+  private configImportView(envelope: ConfigEnvelope, pathMappings: Record<string, string> = {}, installAssets = true) {
     const existingAgents = new Set<string>(), existingTasks = new Set(this.runner.store.tasks.keys())
     const presets = (this.ctx as any).get('agentPresets')
     const skills = new Set<string>(), mcp = new Set(this.hostMcp().map(row => row.serverName))
@@ -515,64 +690,122 @@ export class TaskConsoleService extends TypertRemoteService {
       for (const row of rows as any[]) existingAgents.add(String(row.id))
       for (const row of skillRows) skills.add(row.name)
       const agents = envelope.payload.agents.map(row => {
-        const missingSkills = row.spec.skills.filter(name => !skills.has(name))
+        const missingSkills = row.spec.skills.filter(name => !skills.has(name) && !(installAssets && envelope.payload.assets?.skills.some(s => s.name === name && (!s.agentId || s.agentId === row.spec.id))))
         const manifest=renderComposition(row.spec,this.hostMcp(),this.hostToolNames()).capabilities!
         const missingMcp = Object.keys(row.spec.mcpTools).filter(name => !mcp.has(name))
         return { id: row.spec.id, name: row.spec.name, conflict: existingAgents.has(row.spec.id), missingSkills, missingMcp, missingCapabilities:manifest.missing, readinessScope:'definition-only', liveVerified:false, ready: !missingSkills.length && !manifest.missing.length }
       })
       const available = new Set(envelope.payload.agents.map(row => row.spec.id))
-      const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: taskAgentIds(row).filter(id => !available.has(id) && !existingAgents.has(id)), scheduleDisabled: row.trigger.kind === 'cron' }))
+      const tasks = envelope.payload.tasks.map(row => ({ id: row.id, title: row.title, conflict: existingTasks.has(row.id), missingAgents: taskAgentIds(row).filter(id => !available.has(id) && !existingAgents.has(id)), scheduleDisabled: row.trigger.kind === 'cron', cwd: remapPath(row.cwd, pathMappings), workflowKind: row.workflowKind ?? 'manual', actionCount: row.actions.length }))
       const runtime = envelope.runtime ? {
         missingMcp: envelope.runtime.mcps.map(row => row.serverName).filter(name => !mcp.has(name)),
         missingSkills: envelope.runtime.skills.map(row => row.id).filter(name => !skills.has(name)),
         bootstrapAvailable: Boolean(envelope.runtime.bootstrap && Date.parse(envelope.runtime.bootstrap.expiresAt) > Date.now()),
       } : undefined
-      return { agents, tasks, runtime, counts: { agents: agents.length, tasks: tasks.length }, exportedAt: envelope.exportedAt, sourceVersion: envelope.source.version, digest: envelope.digest.value }
+      const a = envelope.payload.assets
+      const installedModules = new Set([...((this.ctx as any).loader.entries())].map((e: any) => typeof e.options?.name === 'string' ? portableModule(e.options.name) : ''))
+      installedModules.add('dsh-task-console')
+      const providers = new Set(((this.ctx as any).get('llm')?.listProviders() ?? []).map((p: any) => p.id))
+      const assets = a ? { skills: materializeSkills(a.skills).map(s => ({ name: s.name, agentId: s.agentId ?? null, files: s.files.length, conflict: !s.agentId && skills.has(s.name) })), hostConfigs: a.hostConfigs.map(h => ({ id: h.id, kind: h.kind, module: h.module, secretRefs: h.secrets.map(s => s.ref), disabledOnImport: true })), missingModules: a.requirements.filter(r => !installedModules.has(r.module)), missingProviders: a.models.providers.filter(p => !providers.has(p.id)).map(p => p.id), defaultSelection: a.models.defaultSelection } : null
+      return { agents, tasks, runtime, assets, counts: { agents: agents.length, tasks: tasks.length }, exportedAt: envelope.exportedAt, sourceVersion: envelope.source.version, digest: envelope.digest.value }
     })
   }
 
   async previewConfigImport(payload: string): Promise<string> {
     await this.ready
-    const { url } = JSON.parse(payload) as { url?: string }
+    const { url, ...options } = JSON.parse(payload) as { url?: string; pathMappings?: Record<string, string>; overwriteAgents?: boolean; installAssets?: boolean }
     if (!url) throw Error('请输入 R2 配置地址')
     const downloaded = await downloadConfig(url, this.configR2().domain)
+    return this.cacheConfigImport(downloaded.envelope, downloaded.bytes, downloaded.fileSha256, options)
+  }
+
+  async previewLocalConfigImport(payload: string): Promise<string> {
+    const { json, ...options } = JSON.parse(payload)
+    if (typeof json !== 'string' || Buffer.byteLength(json) > MAX_CONFIG_BYTES) throw Error('本地配置包无效或超过 40 MiB')
+    let raw: unknown
+    try { raw = JSON.parse(json) } catch { throw Error('配置包不是有效 JSON') }
+    return this.cacheConfigImport(parseEnvelope(raw), Buffer.byteLength(json), createHash('sha256').update(json).digest('hex'), options)
+  }
+
+  private async cacheConfigImport(envelope: ConfigEnvelope, bytes: number, fileSha256: string, raw: any): Promise<string> {
+    await this.ready
+    const options = { pathMappings: raw.pathMappings ?? {}, overwriteAgents: raw.overwriteAgents === true, installAssets: raw.installAssets !== false }
+    if (!options.pathMappings || typeof options.pathMappings !== 'object' || Array.isArray(options.pathMappings) || Object.keys(options.pathMappings).length > 50 || Object.values(options.pathMappings).some(v => typeof v !== 'string')) throw Error('路径映射无效')
+    remapPath('/', options.pathMappings)
+    const view = await this.configImportView(envelope, options.pathMappings, options.installAssets)
     const importId = randomUUID()
     const now = Date.now()
     for (const [id, row] of this.pendingConfigImports) if (row.expiresAt <= now) this.pendingConfigImports.delete(id)
-    this.pendingConfigImports.set(importId, { envelope: downloaded.envelope, expiresAt: now + 10 * 60_000 })
-    return JSON.stringify({ importId, expiresAt: new Date(now + 10 * 60_000).toISOString(), bytes: downloaded.bytes, fileSha256: downloaded.fileSha256, ...(await this.configImportView(downloaded.envelope)) })
+    while (this.pendingConfigImports.size >= 3) this.pendingConfigImports.delete(this.pendingConfigImports.keys().next().value!)
+    this.pendingConfigImports.set(importId, { envelope, expiresAt: now + 10 * 60_000, options })
+    return JSON.stringify({ importId, expiresAt: new Date(now + 10 * 60_000).toISOString(), bytes, fileSha256, ...view, options })
   }
 
   async applyConfigImport(payload: string): Promise<string> {
     await this.ready
+    if (this.configImportBusy) throw Error('另一个配置导入正在进行，请稍后重试')
     const { importId } = JSON.parse(payload) as { importId?: string }
     const pending = importId ? this.pendingConfigImports.get(importId) : undefined
     if (!pending || pending.expiresAt <= Date.now()) throw Error('导入预览已过期，请重新校验 R2 地址')
+    this.configImportBusy = true
     this.pendingConfigImports.delete(importId!)
-    const view = await this.configImportView(pending.envelope)
+    const backupRoot = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'config-migrations', importId!)
+    try {
+    await safeDirectory(backupRoot)
+    await writeFile(join(backupRoot, 'package.json'), encodeEnvelope(pending.envelope), { mode: 0o600, flag: 'wx' })
+    const view = await this.configImportView(pending.envelope, pending.options.pathMappings, pending.options.installAssets)
     const importedAgents: string[] = [], skippedAgents: { id: string; reason: string }[] = []
     const importedTasks: string[] = [], skippedTasks: { id: string; reason: string }[] = []
     const library = await scanSkills(), hostMcp = this.hostMcp(), hostTools = this.hostToolNames()
+    const importedSkills: string[] = [], skippedSkills: string[] = [], stagedHostConfigs: string[] = []
+    const importedLibrary: (typeof library)[number][] = []
+    const assets = pending.envelope.payload.assets
+    if (assets && pending.options.installAssets) {
+      for (const skill of materializeSkills(assets.skills)) {
+        if (!skill.agentId && library.some(s => s.name === skill.name)) { skippedSkills.push(skill.name); continue }
+        const root = skill.agentId ? join(backupRoot, 'agent-skills', skill.agentId) : join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'skills')
+        const dir = await writeSkillAsset(skill, root)
+        importedLibrary.push({ name: skill.name, dir, description: '', root: skill.agentId ? `migration-agent:${skill.agentId}` : 'user-dsh' })
+        importedSkills.push(`${skill.agentId ?? 'library'}/${skill.name}`)
+      }
+      // New MCP/model configs are dormant. Never replace a live transport or reuse a secret from another service.
+      stagedHostConfigs.push(...await stageHostConfigs(profilePatchPath(), assets.hostConfigs, backupRoot, new Set([...((this.ctx as any).loader.entries())].map((e: any) => String(e.options?.id)))))
+      for (const config of assets.hostConfigs.filter(h => h.kind === 'mcp' && stagedHostConfigs.includes(h.id))) {
+        const serverName = String(config.config.serverName ?? config.id)
+        if (!hostMcp.some(h => h.serverName === serverName)) hostMcp.push({ entryId: config.id, sourceEntryId: config.id, serverName, tools: config.tools, target: '', disabled: true, config: config.config, live: false })
+      }
+      await writeFile(join(backupRoot, 'runtime-manifest.json'), JSON.stringify(assets, null, 2), { mode: 0o600 })
+    }
     for (const row of pending.envelope.payload.agents) {
-      const saved = await writePreset(row.spec, hostMcp, library, userPresetRoot(), hostTools, { allowMissingSkills: true })
+      const conflict = view.agents.find(a => a.id === row.spec.id)?.conflict
+      if (conflict && !pending.options.overwriteAgents) { skippedAgents.push({ id: row.spec.id, reason: '同 ID Agent 已存在；默认保留，覆盖需预览时明确选择' }); continue }
+      const dir = join(userPresetRoot(), row.spec.id)
+      await backupPreset(dir, join(backupRoot, 'agents-before'), row.spec.id)
+      const selectedLibrary = [...importedLibrary.filter(s => s.root === `migration-agent:${row.spec.id}`), ...importedLibrary.filter(s => s.root === 'user-dsh'), ...library]
+      const saved = await writePreset(row.spec, hostMcp, selectedLibrary, userPresetRoot(), hostTools, { allowMissingSkills: true })
       const current = await readActions(saved.path)
       await saveActions(saved.path, row.actions, current.revision)
       importedAgents.push(row.spec.id)
     }
-    const availableAgents = new Set<string>(importedAgents)
+    const availableAgents = new Set<string>([...importedAgents, ...view.agents.filter(a => a.conflict).map(a => a.id)])
     for (const row of pending.envelope.payload.tasks) {
       if (this.runner.store.tasks.has(row.id)) { skippedTasks.push({ id: row.id, reason: '同 ID Task 已存在' }); continue }
-      const missing = row.participants.map(p => p.agentId).filter(id => !availableAgents.has(id))
+      const missing = taskAgentIds(row).filter(id => !availableAgents.has(id))
       if (missing.length) { skippedTasks.push({ id: row.id, reason: `缺少 Agent:${missing.join('、')}` }); continue }
-      const task = { ...row, actions: undefined, enabled: false, createdAt: new Date().toISOString() } as any
+      const task = { ...row, actions: undefined, cwd: remapPath(row.cwd, pending.options.pathMappings), enabled: false, createdAt: new Date().toISOString(), configMigration: { digest: pending.envelope.digest.value, workflowKind: row.workflowKind ?? 'manual' } } as any
       delete task.actions
+      delete task.workflowKind
       await this.runner.store.append({ t: 'task/created', at: task.createdAt, taskId: task.id, task })
-      // Task Actions are intentionally restricted to task-chat origins. A
-      // definition export has no authenticated chat-origin receipt, so never
-      // fabricate one just to restore a shortcut on another machine.
+      this.creator.actions.restoreDefinition(task.id, row.actions)
       importedTasks.push(row.id)
     }
-    return JSON.stringify({ importedAgents, skippedAgents, importedTasks, skippedTasks, schedulesEnabled: false })
+    const result = { importedAgents, skippedAgents, importedTasks, skippedTasks, importedSkills, skippedSkills, stagedHostConfigs, backupRoot, schedulesEnabled: false, credentialsImported: false, runtimeActivationRequired: Boolean(stagedHostConfigs.length || assets?.hostConfigs.some(h => h.secrets.length)), missingModules: view.assets?.missingModules ?? [] }
+    await writeFile(join(backupRoot, 'result.json'), JSON.stringify(result, null, 2), { mode: 0o600 })
+    return JSON.stringify(result)
+    } catch (error) {
+      await writeFile(join(backupRoot, 'failed.json'), JSON.stringify({ state: 'failed', backupRoot, note: '部分资产可能已写入；不会派发任务。检查备份和目标后重新预览，冲突默认跳过。' }), { mode: 0o600 }).catch(() => undefined)
+      throw Error(`配置导入失败；恢复资料:${backupRoot}。${error instanceof Error ? error.message : String(error)}`)
+    } finally { this.configImportBusy = false }
   }
 
   async installConfigRuntime(payload: string): Promise<string> {
@@ -703,13 +936,18 @@ export class TaskConsoleService extends TypertRemoteService {
   /** Read-only drift audit. A green configuration is not a passed live invocation. */
   async agentCapabilityStatus(payload:string):Promise<string>{
     const {id}=JSON.parse(payload)
+    return JSON.stringify((await this.inspectAgentCapabilities(id)).audit)
+  }
+
+  private async inspectAgentCapabilities(id:string){
     if(typeof id!=='string'||!id.trim())throw Error('Agent id required')
     const presets=(this.ctx as any).get('agentPresets'),preset=await presets?.resolve(id)
     if(!preset)throw Error('Agent not found')
     const dir=dirname(String(preset.path)),spec=await readSpec(dir)
-    if(!spec)return JSON.stringify({id,ready:false,status:'unmanaged',scope:'configuration-only',liveVerified:false})
-    const expected=renderComposition(spec,this.hostMcp(),this.hostToolNames()).capabilities!
-    return JSON.stringify({id,...await inspectCapabilityContract(dir,expected)})
+    if(!spec)return {audit:{id,ready:false,status:'unmanaged',scope:'configuration-only',liveVerified:false},sources:[]}
+    // Audit and connection classification must use the same inventory snapshot.
+    const sources=this.hostMcp(),expected=renderComposition(spec,sources,this.hostToolNames()).capabilities!
+    return {audit:{id,...await inspectCapabilityContract(dir,expected)},sources}
   }
 
   async saveAgent(payload: string): Promise<string> {
@@ -720,6 +958,42 @@ export class TaskConsoleService extends TypertRemoteService {
     if (shipped) throw new Error(`"${spec.id}" 是出厂 preset,不能覆盖;换个 id`)
     const { path, preview } = await writePreset(spec, this.hostMcp(), await scanSkills(), userPresetRoot(), this.hostToolNames())
     return JSON.stringify({ path, preview: { ...preview, yml: mask(preview.yml) } })
+  }
+
+  /** Only the selected Creator native tool calls this; not an arbitrary-transport RPC. */
+  async studioSourceDiscovery(args:{query?:string;characterId?:string},exec:any){
+    const sessionId=exec?.agent?.session?.id??exec?.agent?.session?.header?.id
+    if(typeof sessionId!=='string'||!sessionId)throw Error('studio-source-live-session-required')
+    await this.ready
+    return discoverStudioSourcesFromHost(args,this.hostMcp())
+  }
+
+  /** Installation authority comes only from the host registry and local inventory. */
+  private async studioRoleInstallOptions():Promise<StudioRoleInstallOptions>{
+    const presets=(this.ctx as any).get('agentPresets')
+    let rows:any,hostMcp:HostMcp[]|undefined
+    try{rows=await presets?.list?.()}catch{/* Preserve unverified registry diagnostics. */}
+    try{hostMcp=this.hostMcp()}catch{/* Missing discovery is not an empty verified inventory. */}
+    return {presetRoot:userPresetRoot(),library:await scanSkills(),hostMcp,
+      // This is the bundled Task tool repertoire, not a live/provider readiness claim.
+      hostTools:[...STUDIO_TOOL_NAMES,...STUDIO_SPEECH_TOOL_NAMES,...STUDIO_BOARD_TOOL_NAMES],
+      defaultModelAvailable:!!this.defaultModel(),authorable:presets?presets.authorable!==false:undefined,
+      systemAgentIds:Array.isArray(rows)?rows.filter(r=>r?.trust==='system').map(r=>r.id):undefined}
+  }
+
+  /** Read-only plan for the bundled six roles; never installs, grants or starts a Task. */
+  async studioRoleInstallPlan():Promise<string>{
+    await this.ready
+    return JSON.stringify(await planStudioRoleInstall(await this.studioRoleInstallOptions()))
+  }
+
+  /** Explicit apply of one reviewed plan hash. Browser-selected paths/grants are forbidden. */
+  async studioRoleInstallApply(payload:string):Promise<string>{
+    let request:any
+    try{request=JSON.parse(payload)}catch{throw Error('studio-role-install-request-invalid')}
+    if(!request||typeof request!=='object'||Array.isArray(request)||Object.keys(request).length!==1||Object.keys(request)[0]!=='expectedPlanSha256'||typeof request.expectedPlanSha256!=='string'||!/^[a-f0-9]{64}$/.test(request.expectedPlanSha256))throw Error('studio-role-install-request-invalid')
+    await this.ready
+    return JSON.stringify(await applyStudioRoleInstall(await this.studioRoleInstallOptions(),request.expectedPlanSha256))
   }
 
   async deleteAgent(payload: string): Promise<string> {
@@ -1039,6 +1313,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const raw = JSON.parse(payload)
     if(raw.saveOnly !== undefined && typeof raw.saveOnly !== 'boolean')throw Error('saveOnly 必须是布尔值')
     const task = validateTask(raw, ids)
+    if(task.design?.extension)task.design.extension=this.workflowExtensions.bind(task.design.extension)
     for (const p of rows) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
     await this.runner.store.append({ t: 'task/created', at: task.createdAt, taskId: task.id, task })
     if (task.trigger.kind === 'once' && !raw.saveOnly) await this.runner.fire(task.id, 'manual', {dispatch:'background'})
@@ -1048,6 +1323,8 @@ export class TaskConsoleService extends TypertRemoteService {
   async setTaskEnabled(payload: string): Promise<string> {
     const { id, enabled } = JSON.parse(payload) as { id: string; enabled: boolean }
     if (!this.runner.store.tasks.has(id)) throw new Error('没有这个任务')
+    if (enabled && isExternalWorkflow(this.runner.store.tasks.get(id)!)) throw Error('外部来源任务必须由来源系统重新授权提交，配置迁移不迁移执行授权')
+    if (enabled && this.runner.store.tasks.get(id)?.configMigration) await lstat(this.runner.store.tasks.get(id)!.cwd).then(s => { if (!s.isDirectory()) throw Error('工作目录不是目录') }).catch(() => { throw Error('导入任务的工作目录不可用，请重新映射或建立对应目录后再启用') })
     if (enabled) await this.creator.assertScheduleActivation(this.runner.store.tasks.get(id)!)
     await this.runner.store.append({ t: 'task/enabled', at: new Date().toISOString(), taskId: id, enabled: !!enabled })
     this.runner.schedule.sync(this.runner.store.tasks.get(id)!, Date.now(), true)
@@ -1099,6 +1376,7 @@ export class TaskConsoleService extends TypertRemoteService {
   async fireTask(payload: string): Promise<string> {
     const { id, by, requestId } = JSON.parse(payload) as { id: string; by?: 'manual' | 'retry'; requestId?:string }
     if(requestId!==undefined&&!/^[a-zA-Z0-9-]{16,80}$/.test(requestId))throw Error('Invalid execution requestId')
+    if (this.runner.store.tasks.get(id)?.configMigration?.workflowKind === 'external') throw Error('迁移不授予外部来源任务的执行权限，请从来源系统重新提交')
     const presets = (this.ctx as any).get('agentPresets')
     for (const p of presets ? (await presets.list() as any[]) : []) { const spec = p.trust === 'user' ? await readSpec(dirname(String(p.path))) : null; this.runner.rememberName(p.id, spec?.name ?? p.name ?? p.id) }
     const batch = await this.runner.fire(id, by === 'retry' ? 'retry' : 'manual', {dispatch:'background',...(requestId?{batchId:'b-manual-'+requestId}:{})})
@@ -1185,6 +1463,53 @@ export class TaskConsoleService extends TypertRemoteService {
     return JSON.stringify({ artifact: this.artifactView(artifact), base64: data.toString('base64') })
   }
 
+  /** User-facing projection of immutable Studio stage receipts for one exact Batch. */
+  async studioTaskWorkspace(payload: string): Promise<string> {
+    const { taskId, batchId } = JSON.parse(payload) as { taskId: string; batchId: string }
+    const store = this.runner.store, task = store.s.tasks.get(taskId), batch = store.s.batches.get(batchId)
+    if (!task || !batch || batch.taskId !== taskId) throw new Error('没有这个任务执行记录')
+    const execution = taskForBatch(task, batch), stages = execution.design?.studioStages
+    if (execution.design?.evidenceContract !== 'studio-video-v1' || !Array.isArray(stages)) throw new Error('此 Task 没有配置 Studio 阶段工作流')
+    const allowed = new Set(stages.map((stage: any) => stage.id).filter((id: string) => ['storyboard', 'visual', 'sound'].includes(id)))
+    const hasStageLedger = store.kernel.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_studio_state'").get()
+    const rows = hasStageLedger ? store.kernel.db.prepare("SELECT kind,payload FROM dsh_studio_state WHERE task_id=? AND batch_id=? AND kind GLOB 'stage:[0-9]*:*'").all(taskId, batchId) as { kind: string; payload: string }[] : []
+    const receipts = rows.flatMap(row => {
+      try {
+        const receipt = JSON.parse(row.payload), round = Number(/^stage:(\d+):/.exec(row.kind)?.[1])
+        if (!allowed.has(receipt.stage) || !Number.isInteger(round) || round < 1 || receipt.round !== round || receipt.batchId !== batchId || !Array.isArray(receipt.outputs)) return []
+        return [{ stage: receipt.stage, round, cardId: receipt.cardId, sessionId: receipt.sessionId, summary: receipt.summary, manifest: receipt.manifest, qualityApproved: false, outputs: receipt.outputs.map((file: any) => ({ path: file.path, sha256: file.sha256, bytes: file.bytes, media: file.media })) }]
+      } catch { return [] }
+    }).sort((a, b) => a.round - b.round || ['storyboard', 'visual', 'sound'].indexOf(a.stage) - ['storyboard', 'visual', 'sound'].indexOf(b.stage))
+    const cards = batch.cardIds.map((id: string) => store.s.cards.get(id)).filter(Boolean).map((card: any) => {
+      const runs = card.runIds.map((id: string) => store.s.runs.get(id)).filter(Boolean).map((run: any) => ({ id: run.id, status: run.status, sessionId: run.sessionId ?? null, startedAt: run.startedAt ?? null, endedAt: run.endedAt ?? null, question: run.question ?? null, error: run.error ?? null, terminalBlock: run.terminalBlock === true, blockKind: run.blockKind ?? null, summary: run.summary ?? null }))
+      return { id: card.id, role: card.role ?? null, round: card.round ?? null, title: card.title, status: card.status, error: card.error ?? null, deps: card.deps, currentRunId: card.currentRunId ?? null, wakeAt: card.wakeAt ?? null, runs }
+    })
+    return JSON.stringify({ task: { id: task.id, title: task.title }, batch: { id: batch.id, firedAt: batch.firedAt, outcome: batch.settled?.outcome ?? null, archivedAt: batch.archivedAt ?? null }, stages: stages.map((stage: any) => ({ id: stage.id, agentId: stage.agentId })), cards, receipts })
+  }
+
+  /** Reads only a byte-for-byte current output named by a registered stage receipt. */
+  async studioStageArtifactContent(payload: string): Promise<string> {
+    const { taskId, batchId, stage, round, path, sha256 } = JSON.parse(payload) as { taskId: string; batchId: string; stage: string; round: number; path: string; sha256: string }
+    if (!['storyboard', 'visual', 'sound'].includes(stage) || !Number.isInteger(round) || round < 1 || typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256)) throw new Error('阶段文件参数无效')
+    const store = this.runner.store, task = store.s.tasks.get(taskId), batch = store.s.batches.get(batchId)
+    if (!task || !batch || batch.taskId !== taskId) throw new Error('没有这个 Studio 执行记录')
+    const execution = taskForBatch(task, batch)
+    if (execution.design?.evidenceContract !== 'studio-video-v1') throw new Error('没有这个 Studio 执行记录')
+    if (!store.kernel.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='dsh_studio_state'").get()) throw new Error('这个阶段尚未登记交付')
+    const row = store.kernel.db.prepare('SELECT payload FROM dsh_studio_state WHERE task_id=? AND batch_id=? AND kind=?').get(taskId, batchId, `stage:${round}:${stage}`) as { payload: string } | undefined
+    if (!row) throw new Error('这个阶段尚未登记交付')
+    const receipt = JSON.parse(row.payload), file = receipt.outputs?.find((item: any) => item.path === path && item.sha256 === sha256)
+    const prefix = `stages/r${round}/${stage}/`
+    if (receipt.stage !== stage || receipt.round !== round || receipt.batchId !== batchId || !file || typeof path !== 'string' || !path.startsWith(prefix) || !Number.isInteger(file.bytes) || file.bytes < 1 || file.bytes > 8 * 1024 * 1024) throw new Error('文件不在已登记的阶段交付中或超过 8 MiB 预览上限')
+    const local = await studioPath(execution.cwd, path, true), actualSha = await fileSha256(local)
+    if (actualSha !== sha256) throw new Error('阶段文件已变化，当前回执不能作为预览依据')
+    const info = await stat(local)
+    if (info.size !== file.bytes) throw new Error('阶段文件大小与登记回执不一致')
+    const data = await readFile(local), ext = extname(path).toLowerCase()
+    const mime = ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.wav': 'audio/wav', '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.json': 'application/json', '.txt': 'text/plain' } as Record<string, string>)[ext] ?? 'application/octet-stream'
+    return JSON.stringify({ file: { path, sha256, bytes: data.length, mime }, base64: data.toString('base64') })
+  }
+
   async publishArtifact(payload: string): Promise<string> {
     const { id, artifactId } = JSON.parse(payload) as { id: string; artifactId: string }
     const task = this.runner.store.s.tasks.get(id)
@@ -1213,11 +1538,63 @@ export class TaskConsoleService extends TypertRemoteService {
     return JSON.stringify(await this.runner.recoverStudioCard(JSON.parse(payload)))
   }
 
+  /** Reconcile the original Studio render intent, then create a fresh Run while preserving the blocked Run. */
+  async resumeStudioCard(payload: string): Promise<string> {
+    const {taskId,batchId,cardId,expectedCoreRunId}=JSON.parse(payload) as {taskId:string;batchId:string;cardId:string;expectedCoreRunId:number}
+    const store=this.runner.store,template=store.tasks.get(taskId),batch=store.s.batches.get(batchId),card=store.s.cards.get(cardId)
+    if(!template||template.archivedAt||!batch||batch.taskId!==taskId||batch.archivedAt||batch.settled||!card||card.taskId!==taskId||card.batchId!==batchId||card.role!=='executor'||card.status!=='blocked'||card.runIds.at(-1)===undefined||store.coreRunId(card.runIds.at(-1)!)!==expectedCoreRunId||store.s.runs.get(card.runIds.at(-1)!)?.status!=='blocked')throw Error('studio-resume-blocked-run-changed')
+    const execution=taskForBatch(template,batch)
+    if(execution.design?.evidenceContract!=='studio-video-v1'||execution.design?.progressPolicy!=='studio-bounded-v1')throw Error('studio-resume-contract-required')
+    await this.runner.assertRecoveryExecutionIdentity(card.id)
+    const workflow=new StudioWorkflow(store),source=store.s.runs.get(card.runIds.at(-1)!) as any,input={task:execution,batch,card,sessionId:source?.sessionId??''},allRows=workflow.renderLedger.rows(input).filter((row:any)=>row.cardId===card.id&&row.round===card.round),rows=allRows.filter((row:any)=>!['completed','failed','rejected'].includes(row.state))
+    // A prior reconciliation can prove that the original host render never
+    // existed. If the follow-up Run was then rejected before dispatch because
+    // the frozen executor identity had drifted, an audited identity migration
+    // makes it safe to create a fresh Run without reopening that absent intent.
+    const latestEvents=store.kernel.listEvents(card.id).filter((event:any)=>event.run_id===store.coreRunId(card.runIds.at(-1)!)),bindingRejected=latestEvents.some((event:any)=>event.kind==='execution_binding_rejected'&&typeof event.payload?.code==='string'&&event.payload.code.includes('batch-execution-binding-'))
+    const reconciledAbsent=allRows.some((row:any)=>row.state==='failed'&&row.reconciledAbsentAt&&row.errorCode==='plain_directory_required')
+    if(rows.length===0&&reconciledAbsent&&bindingRejected){
+      await this.runner.unblockCard(card.id)
+      return JSON.stringify({ok:true,newRun:true,renderState:'absent',reconciledAbsent:true,errorCode:'plain_directory_required',oldRunPreserved:true})
+    }
+    if(rows.length!==1)throw Error('studio-resume-requires-one-original-pending-render')
+    const row=rows[0]
+    if(typeof row.intentId!=='string'||!row.originSessionId||!row.composition||!row.output||!row.helperPath||!row.runtimePath||!row.helperSha256)throw Error('studio-resume-original-render-provenance-incomplete')
+    input.sessionId=row.originSessionId
+    const action=row.jobId?'status':'start',args=action==='status'?{jobId:row.jobId}:{composition:row.composition,output:row.output},config={renderJobScript:row.helperPath,renderJobSha256:row.helperSha256,renderRuntime:row.runtimePath}
+    const result=action==='status'?await studioRenderJob(execution,'status',args,{config},row.intentId):await reconcileStudioRenderIntent(execution,{composition:row.composition,output:row.output},{config},row.intentId)
+    workflow.renderLedger.record(input,row,result)
+    const pending=studioProgressPending(store.kernel.db,{task:execution,batch,card})
+    if(pending)return JSON.stringify({ok:true,newRun:false,pending,renderState:result.state??'unknown',reused:result.reused===true})
+    await this.runner.unblockCard(card.id)
+    const settled=workflow.renderLedger.rows(input).find((item:any)=>item.intentId===row.intentId)
+    return JSON.stringify({ok:true,newRun:true,renderState:result.state??settled?.state??'unknown',reconciledAbsent:result.reconciledAbsent===true,errorCode:result.errorCode,reused:result.reused===true,oldRunPreserved:true})
+  }
+
   /** Console operator recovery only; never registered as an Agent tool. */
   async reconcileStudioImageOperation(payload:string):Promise<string>{
     const persistence=(this.ctx as any).get('sessionPersistence')
     if(!persistence?.inspect)throw Error('studio-image-reconcile-original-session-required')
     return JSON.stringify(await reconcileStudioImageOperation(this.runner.store,JSON.parse(payload),id=>persistence.inspect(id)))
+  }
+
+  /** Explicit operator action; no Agent tool, model evidence, or automatic unblock. */
+  async reconcileStudioKnownOperation(payload:string):Promise<string>{
+    return JSON.stringify(await reconcileStudioKnownOperation(this.runner.store,JSON.parse(payload),async operation=>{
+      const server=operation.kind==='imageCalls'?'vyibc-image':'vyibc-voice'
+      const host=this.hostMcp().find(h=>h.serverName===server&&h.live)
+      if(!host)throw Error('studio-known-reconcile-provider-unavailable')
+      return pollStudioOperation(host.config,operation)
+    }))
+  }
+
+  async previewExecutionMigration(payload:string):Promise<string>{
+    await this.ready
+    return JSON.stringify(await previewExecutionMigration(this.runner.store,this.ctx,JSON.parse(payload),{quiescent:()=>this.runner.executionMigrationQuiescent()}))
+  }
+  async applyExecutionMigration(payload:string):Promise<string>{
+    await this.ready
+    return JSON.stringify(await applyExecutionMigration(this.runner.store,this.ctx,JSON.parse(payload),{quiescent:()=>this.runner.executionMigrationQuiescent()}))
   }
 
   async unblockCard(payload: string): Promise<string> {

@@ -24,7 +24,7 @@ const toolText = (message: any): string => (message?.content ?? []).flatMap((b: 
 interface McpIdentity { name: string; server: string; rawName: string }
 
 /** Map an Agent-isolated runtime MCP namespace back to its stable authored identity. */
-export function resolveMcpToolIdentity(name: string, declared: McpIdentity[], sources: { serverName: string; tools: string[] }[]): McpIdentity | undefined {
+export function resolveMcpToolIdentity(name: string, declared: McpIdentity[], sources: { serverName: string; tools: string[] }[], presetId?: string): McpIdentity | undefined {
   const candidates = [...declared]
   for (const source of sources) for (const rawName of source.tools) {
     const identity = { name: publicToolName(source.serverName, rawName), server: source.serverName, rawName }
@@ -32,6 +32,13 @@ export function resolveMcpToolIdentity(name: string, declared: McpIdentity[], so
   }
   const exact = candidates.find(candidate => candidate.name === name)
   if (exact) return exact
+  // renderComposition adds the authored preset ID before the official client
+  // hashes long public names. Their raw-name suffix is no longer recoverable;
+  // reproduce that exact identity instead of guessing from a prefix.
+  if (presetId) {
+    const scoped = candidates.find(candidate => publicToolName(`${candidate.server}-${presetId}`, candidate.rawName) === name)
+    if (scoped) return scoped
+  }
   if (!name.startsWith('mcp__')) return undefined
   return candidates.find(candidate => {
     const suffix = `__${candidate.rawName}`
@@ -135,13 +142,13 @@ export class SessionCapabilities {
     if (this.ctx.get('skills')) {
       try {
         const catalog = await this.ctx.get('skills').snapshot({ scope: agent, cwd: session.header?.cwd })
-        skills = catalog.skills.filter((s: any) => s.invocation?.modelInvocable !== false).map((s: any) => ({ name: s.name, source: spec?.skills.includes(s.name) ? 'agent-definition' : 'environment-inherited', state: this.skillRestricted(s.name, agent) ? 'restricted' : loaded.has(s.name) ? 'loaded-in-session-history' : availableNames.has('skill') ? 'available-on-demand' : 'not-callable', provider: s.provider }))
+        skills = catalog.skills.filter((s: any) => s.invocation?.modelInvocable !== false).map((s: any) => ({ name: s.name, source: spec?.skills.includes(s.name) ? 'agent-definition' : 'environment-inherited', state: this.skillRestricted(s.name, agent) ? 'restricted' : loaded.has(s.name) ? 'loaded-in-session-history' : availableNames.has('skill') ? 'available-on-demand' : 'not-callable', provider: s.provider ?? null }))
         skillDiscovery = catalog.complete ? 'complete' : 'partial'
       } catch { skillDiscovery = 'discovery-failed' }
     }
     const registeredStable = new Set<string>()
     const tools = schemas.map((s: any) => {
-      const identity = resolveMcpToolIdentity(s.name, declaredMcp, mcpSources)
+      const identity = resolveMcpToolIdentity(s.name, declaredMcp, mcpSources, spec?.id)
       if (identity) registeredStable.add(identity.name)
       const stableName = identity?.name ?? s.name
       return { name: stableName, ...(stableName !== s.name ? { runtimeName: s.name } : {}), kind: s.name.startsWith('mcp__') ? 'mcp' : 'native', server: identity?.server ?? null, source: CAPABILITY_TOOLS.includes(s.name) ? 'platform' : declared.has(stableName) ? 'agent-definition' : 'environment-inherited', state: availableNames.has(s.name) ? 'registered' : 'restricted', ...(this.restricted(s, agent) ? { reason: 'explicit-standard-exclusion' } : {}), ...(errors.has(s.name) || errors.has(stableName) ? { lastFailure: errors.get(s.name) ?? errors.get(stableName) } : {}) }
@@ -149,7 +156,7 @@ export class SessionCapabilities {
     const out = {
       sessionId: session.id, checkedAt: new Date().toISOString(), live: true,
       inheritancePolicy: { mcp: this.policy.standardMcpInheritance ?? 'inherit', skills: this.policy.standardSkillInheritance ?? 'inherit', excludedSkills: this.policy.standardExcludedSkills ?? [], excludedMcpServers: this.policy.standardExcludedMcpServers ?? [], excludedTools: this.policy.standardExcludedTools ?? [], appliesTo: 'standard-native-session', maxSteps: this.policy.standardMaxSteps ?? STANDARD_LIMIT },
-      definition: { role, name: spec?.name, authored: !!spec, observation: spec ? 'task-console-definition' : 'no-task-console-definition; use runtime facts, not an assumed empty preset', tools: [...declared], skills: spec?.skills ?? [] },
+      definition: { role, name: spec?.name ?? null, authored: !!spec, observation: spec ? 'task-console-definition' : 'no-task-console-definition; use runtime facts, not an assumed empty preset', tools: [...declared], skills: spec?.skills ?? [] },
       current: { tools, skills, skillDiscovery, permissionPreset: this.ctx.get('permissionPresets')?.current(session.events ?? []) ?? 'not-observed', configuredButNotRegistered: [...declared].filter(n => !schemas.some((s: any) => s.name === n) && !registeredStable.has(n)) },
       answerContract: { language: '用户当前消息的语言', registeredIsNotAuthorized: true, cannotCall: tools.filter((t: any) => t.state === 'restricted').map((t: any) => t.name), requiredCaveat: '必须单独说明受限工具不可调用；其余已注册工具也不保证凭据有效或具体操作获授权。禁止总结为全部能力都可使用。Skill 是可按需加载，不等于已加载。' },
       boundaries: ['registered 表示当前工具已注册，不保证凭据有效或目标操作获授权。', '历史加载的 Skill 不证明其全文仍保留在当前上下文。', '底层 CLI 自行加载的能力未获得运行时证据时标为未知，不能算作已加载。'],

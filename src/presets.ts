@@ -35,12 +35,13 @@ export const ID_RE = /^[a-z0-9][a-z0-9-]*$/
 
 /** Native tools the editor offers, each mapping to one composition row. */
 export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: string[] })[] = [
+  { id: 'workflow-runtime',label:'Workflow run tools',group:'任务',writes:true,description:'仅运行已绑定业务扩展的宿主工具；独立聊天没有这些工具，不授予shell/任意文件/MCP。',schemaNames:[],rows:'# Exact workflow tools are granted only inside a bound Task run.' },
   { id: 'studio-runtime', label: 'Studio Task evidence', group: '视频工作室', writes: false,
-    description: '仅 studio-video-v1 Task 内注册；执行者/素材专家可按真实素材 ID 经宿主认证下载归档文件，按角色限制阶段/候选登记、取证及审查；来源卡不是媒体，下载不代表质量通过，普通会话不可用。',
+    description: '仅 studio-video-v1 Task 内注册；执行者/素材专家可按真实素材 ID 经宿主认证下载归档文件，按角色限制阶段/候选登记、取证及审查；来源卡不是媒体，下载不代表质量通过；剪辑执行者可用studio_upload_preview上传已登记候选至宿主配置R2预览，不发布社交平台，普通会话不可用。',
     schemaNames: [...STUDIO_TOOL_NAMES,...STUDIO_SPEECH_TOOL_NAMES,...STUDIO_BOARD_TOOL_NAMES], rows: '# Studio tools are registered by the active Task runner, never by standalone chat.' },
   { id: 'task-create-runtime', label: 'Task creation', group: '任务', writes: true,
     description: '读取真实角色，生成待审查计划并查询审查与执行；不提供放行或业务运维工具，不提升参与者权限。',
-    schemaNames: ['task_create_context', 'task_create_submit', 'task_create_plan_status', 'task_create_status'],
+    schemaNames: ['task_create_context', 'task_create_studio_sources', 'task_create_submit', 'task_create_plan_status', 'task_create_status'],
     rows: "- id: task-create-runtime\n  name: 'dsh-task-console/task-create-tools'" },
   { id: 'ask-user', label: 'ask_user_question', group: '交互', writes: false,
     description: '停下来问人。没有它,拿不准的事只能失败重来。',
@@ -198,7 +199,9 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
     if (tool) {
       // Codex-backed topic searches can exceed the generic 30-second tool budget.
       // Scope the longer cooperative budget to Studio; fetch and other Agents keep defaults.
-      parts.push(id === 'web' && spec.tools.includes('studio-runtime')
+      parts.push(id === 'task-create-runtime'
+        ? `- id: task-create-runtime\n  name: '${fileURLToPath(new URL('./task-create-tools.js',import.meta.url))}'`
+        : id === 'web' && spec.tools.includes('studio-runtime')
         ? `${tool.rows}\n  config:\n    searchTimeoutMs: 120000`
         : tool.rows)
       for (const name of tool.schemaNames) allowedToolNames.add(name)
@@ -235,8 +238,8 @@ export function renderComposition(spec: AgentSpec, hostMcp: HostMcp[], inherited
   void inheritedTools // retained as an API-compatible argument for older callers
   for (const name of WORKER_TOOL_NAMES) allowedToolNames.add(name)
   if (spec.id === 'task-intake') for (const name of TASK_INTAKE_SESSION_TOOLS) allowedToolNames.add(name)
-  const fence = toYaml({ selected: [...allowedToolNames].sort() }, { lineWidth: 0 }).trimEnd()
-  parts.push(`- id: inherited-tool-fence\n  name: 'dsh-task-console/agent-tool-fence'\n  config:\n${indent(fence, 4)}`)
+  const fence = toYaml({ selected: [...allowedToolNames].sort(),...(spec.tools.includes('workflow-runtime')?{workflowRunTools:true}:{}) }, { lineWidth: 0 }).trimEnd()
+  parts.push(`- id: inherited-tool-fence\n  name: '${spec.tools.includes('workflow-runtime')?fileURLToPath(new URL('./agent-tool-fence.js',import.meta.url)):'dsh-task-console/agent-tool-fence'}'\n  config:\n${indent(fence, 4)}`)
 
   const yml=parts.join('\n\n') + '\n'
   return { yml, renamed, permission: permissionOf(spec, () => true), capabilities: capabilityContract(spec,yml,NATIVE_TOOLS,hostMcp) }
@@ -458,13 +461,20 @@ export function validateSpec(raw: unknown): AgentSpec {
   }
 }
 
+export interface PresetWriteOptions {
+  allowMissingSkills?: boolean
+  /** Internal host guard, checked inside the preset writer lock before reads and immediately before replacement.
+   * The lock serializes this process's API writers; it is not a cross-process filesystem CAS. */
+  assertCurrent?: (dir: string) => Promise<void>
+}
 /** Write (or rewrite) one preset directory from a spec. Returns its path. */
-export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root = userPresetRoot(), inheritedTools: string[] = [], options: { allowMissingSkills?: boolean } = {}): Promise<{ path: string; preview: Preview }> {
+export async function writePreset(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root = userPresetRoot(), inheritedTools: string[] = [], options: PresetWriteOptions = {}): Promise<{ path: string; preview: Preview }> {
   return withPresetLock(resolve(root, spec.id), () => writePresetLocked(spec, hostMcp, library, root, inheritedTools, options))
 }
-async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root: string, inheritedTools: string[], options: { allowMissingSkills?: boolean }): Promise<{ path: string; preview: Preview }> {
+async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: SkillEntry[], root: string, inheritedTools: string[], options: PresetWriteOptions): Promise<{ path: string; preview: Preview }> {
   const dir = resolve(root, spec.id)
   if (!dir.startsWith(resolve(root) + '/')) throw new Error('非法 id')
+  await options.assertCurrent?.(dir)
   // Fail before changing any authored files if a selected source vanished.
   const availableSkills = spec.skills.filter(name => selectedSkill(name, library))
   if (!options.allowMissingSkills) for (const name of spec.skills) if (!selectedSkill(name, library)) throw new Error(`Skill 不存在:${name}`)
@@ -491,6 +501,7 @@ async function writePresetLocked(spec: AgentSpec, hostMcp: HostMcp[], library: S
       try { await writeFile(join(staged, ACTION_FILE), await readFile(join(dir, ACTION_FILE)), { mode: 0o600 }) }
       catch (error: any) { if (error.code !== 'ENOENT') throw error }
     }
+    await options.assertCurrent?.(dir)
     if (existed) { await rename(dir, backup); backedUp = true }
     try {
       await rename(staged, dir)

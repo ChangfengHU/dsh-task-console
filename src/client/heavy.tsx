@@ -21,8 +21,10 @@ export function activate(ctx: any): Promise<Api> {
     }
     return {
       exportConfig: () => call('exportConfig'),
+      exportLocalConfig: () => call('exportLocalConfig'),
       createConfigBootstrap: (url: string) => call('createConfigBootstrap', { url }),
-      previewConfigImport: (url: string) => call('previewConfigImport', { url }),
+      previewConfigImport: (url, options) => call('previewConfigImport', { url, ...options }),
+      previewLocalConfigImport: (json, options) => call('previewLocalConfigImport', { json, ...options }),
       applyConfigImport: (importId: string) => call('applyConfigImport', { importId }),
       installConfigRuntime: (url: string) => call('installConfigRuntime', { url }),
       configRuntimeStatus: (jobId: string) => call('configRuntimeStatus', { jobId }),
@@ -51,8 +53,8 @@ export function activate(ctx: any): Promise<Api> {
       setBatchArchived: async (taskId: string, batchId: string, archived: boolean) => { await call('setBatchArchived', { taskId, batchId, archived }) },
       fireTask: (id: string, by?: 'manual' | 'retry', requestId?:string) => call<{ runId: string }>('fireTask', { id, by, requestId }), cancelRun: async (runId: string) => { await call('cancelRun', { runId }) },
       taskSnapshot: (id: string, batchId?: string) => call<TaskSnapshot>('taskSnapshot', { id, batchId, summary: true }), taskGraph: (id: string, batchId?: string, after?: number) => call<GraphSnapshot>('taskGraph', { id, batchId, after }), taskEvents: (id: string) => call<TaskEvent[]>('taskEvents', { id }),
-      taskArtifacts: (id: string, batchId?: string) => call<ArtifactView[]>('taskArtifacts', { id, batchId }), artifactContent: (id: string, artifactId: string, batchId?: string) => call<{ artifact: ArtifactView; base64: string }>('artifactContent', { id, artifactId, batchId }), publishArtifact: (id: string, artifactId: string) => call<{ publicUrl: string }>('publishArtifact', { id, artifactId }),
-      reviewCard: async (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => { await call('reviewCard', { cardId, decision, note, targetCardId }) }, unblockCard: async (cardId: string) => { await call('unblockCard', { cardId }) },
+      taskArtifacts: (id: string, batchId?: string) => call<ArtifactView[]>('taskArtifacts', { id, batchId }), artifactContent: (id: string, artifactId: string, batchId?: string) => call<{ artifact: ArtifactView; base64: string }>('artifactContent', { id, artifactId, batchId }), studioTaskWorkspace: (taskId: string, batchId: string) => call('studioTaskWorkspace', { taskId, batchId }), studioStageArtifactContent: (query: { taskId: string; batchId: string; stage: string; round: number; path: string; sha256: string }) => call('studioStageArtifactContent', query), publishArtifact: (id: string, artifactId: string) => call<{ publicUrl: string }>('publishArtifact', { id, artifactId }),
+      reviewCard: async (cardId: string, decision: 'approve' | 'changes', note?: string, targetCardId?: string) => { await call('reviewCard', { cardId, decision, note, targetCardId }) }, unblockCard: async (cardId: string) => { await call('unblockCard', { cardId }) }, recoverStudioCard: (input: { taskId: string; batchId: string; cardId: string; expectedRunId: string; recoveryId: string; reason: string; revalidateFrom?: 'storyboard' | 'visual' | 'sound' }) => call('recoverStudioCard', input), resumeStudioCard: (input: { taskId: string; batchId: string; cardId: string; expectedCoreRunId: number }) => call('resumeStudioCard', input), previewExecutionMigration: (input:{taskId:string;batchId:string})=>call('previewExecutionMigration',input), applyExecutionMigration: (input:{taskId:string;batchId:string;expectedPreviewSha256:string;reason:string})=>call('applyExecutionMigration',input),
       startAgentSession: (agentId: string, text?: string, cwd?: string) => call<{ sessionId: string; name: string }>('startAgentSession', { agentId, text, cwd }), openSession: (sessionId: string) => openWhenListed(ctx, sessionId),
       sessionTurns: (sessionId: string, page?: number) => call<TurnLedger>('sessionTurns', { sessionId, page }), agentActivity: (agentId: string) => call<any>('agentActivity', { agentId }),
     }

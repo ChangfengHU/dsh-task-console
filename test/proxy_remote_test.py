@@ -24,10 +24,14 @@ class AdapterTests(unittest.TestCase):
         return op
 
     def setUp(self):
+        # Linux machine identity is part of the mocked remote environment, not this Mac.
+        native_read_text = m.Path.read_text
+        self.machine_id = patch.object(m.Path, 'read_text', autospec=True, side_effect=lambda path, *a, **kw: '11111111111111111111111111111111' if str(path) == '/etc/machine-id' else native_read_text(path, *a, **kw)); self.machine_id.start()
         self.files = patch.object(m, 'root_file', return_value=json.dumps(SETTINGS)); self.files.start()
         self.sleep = patch.object(m.time, 'sleep'); self.sleep.start()
 
     def tearDown(self):
+        self.machine_id.stop()
         self.files.stop(); self.sleep.stop()
 
     def test_healthy_node_is_reused_without_controller_write(self):

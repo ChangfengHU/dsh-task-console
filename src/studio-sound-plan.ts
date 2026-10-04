@@ -1,0 +1,45 @@
+import {STUDIO_SPEECH_MAX_SECONDS} from './studio-speech-limits.js'
+import {posix} from 'node:path'
+import type {FrozenDialogue} from './studio-storyboard-script.js'
+const object=(v:any)=>v&&typeof v==='object'&&!Array.isArray(v)
+const HASH=/^[a-f0-9]{64}$/i
+export function soundPlanError(field:string,reason:string):never {
+ throw Error('studio-sound-plan-invalid: '+JSON.stringify({error_code:'studio-sound-plan-invalid',field,reason,retryAfterRepair:true,action:'Read studio_status.state.script. Register one sound-plan-v1 JSON with scriptSha256 and arrays lines, bgm, sfx. Preserve all frozen line ids/text/order. Copy every required audio source into this sound stage directory and list it in manifest.outputs. Use sourcePath (or path for music/effects) referencing that registered file. Measure real duration and hash; repair and register again. Do not remove required music/effects merely to pass validation. Binding is not listening or quality approval.'}))
+}
+/** Bind declared sources to host-probed files. Playback/mixing and licenses need separate QA. */
+export function bindSoundPlan(plan:any,script:FrozenDialogue,outputs:any[],planFile:{path:string;sha256:string}) {
+ if(!object(plan)||plan.schema!=='sound-plan-v1')soundPlanError('schema','Expected sound-plan-v1.')
+ if(!script||!HASH.test(script.sha256??'')||!Array.isArray(script.lines)||!script.lines.length||new Set(script.lines.map(l=>l.id)).size!==script.lines.length)soundPlanError('frozen_script','A valid frozen script is required.')
+ if(plan.scriptSha256!==script.sha256)soundPlanError('scriptSha256','Frozen script differs.')
+ for(const key of ['lines','bgm','sfx'])if(!Array.isArray(plan[key]))soundPlanError(key,'Explicit array required; empty music/effects arrays mean none declared.')
+ if(plan.lines.length!==script.lines.length||plan.lines.some((l:any,i:number)=>!object(l)||l.id!==script.lines[i].id||l.text!==script.lines[i].text))soundPlanError('lines','Frozen line ids, exact text and order must match.')
+ const files=new Map(outputs.map(o=>[o.path,o])),tracks:any[]=[]
+ for(const [key,role] of [['lines','voice'],['bgm','bgm'],['sfx','sfx']]) {
+  if(plan[key].length>1000)soundPlanError(key,'Too many cues.')
+  plan[key].forEach((cue:any,index:number)=>{
+   const field=`${key}[${index}]`
+   if(!object(cue)||typeof cue.id!=='string'||!cue.id.trim())soundPlanError(field,'Nonempty cue id required.')
+   if(!Number.isFinite(cue.start)||!Number.isFinite(cue.end)||cue.start<0||cue.end<=cue.start)soundPlanError(field,'Require finite 0 <= start < end.')
+   const source=cue.sourcePath??(role==='voice'?undefined:cue.path)
+   if(typeof source!=='string'||!source||source.includes('\\')||source.includes('\0')||source.includes(':')||posix.isAbsolute(source)||source.split('/').includes('..'))soundPlanError(field,'Invalid local audio source reference.')
+   // When sourcePath exists, path may be a later edit destination; only the source is delivered here.
+   const file=files.get(posix.normalize(source))
+   if(!file||file.media?.kind!=='audio'||!HASH.test(file.sha256??'')||!Number.isFinite(file.media.durationSeconds)||file.media.durationSeconds<=0)soundPlanError(field,'Source must match a registered, host-probed audio output of this stage.')
+   const signal=file.media.signalEvidence
+   if(signal!==undefined){
+    if(signal?.schema!=='decoded-audio-signal-v1'||signal.sha256!==file.sha256||typeof signal.allSilent!=='boolean'||!Number.isInteger(signal.decodedSamples)||signal.decodedSamples<1||signal.qualityApproved!==false)soundPlanError(field+'.sourcePath','Decoded audio signal receipt is invalid; inspect the actual source and re-register.')
+    if(signal.allSilent)soundPlanError(field+'.sourcePath','The entire required source decodes to exact zero samples in every channel. A silent placeholder (including anullsrc) does not deliver the declared dialogue, BGM or SFX. Obtain and inspect the actual intended source, preserve the required line/cue, and re-register; if unavailable, report the missing source with task_block. Do not remove cues or substitute another placeholder. This check does not judge tone, music suitability or listening quality.')
+   }
+   if(role==='bgm'){
+    if(cue.loop!==undefined&&cue.loop!==false)soundPlanError(field+'.loop','Implicit looping is not supported by this handoff/compiler. Do not use loop:true or another flag to claim repeated playback. Prepare an actual extended music file with available audio tools, probe it and register its real path/hash/duration; final playback still needs listening QA.')
+    if(cue.end-cue.start>file.media.durationSeconds+0.05)soundPlanError(field+'.end','BGM span exceeds the actual source duration by more than 50 ms. Prepare a real music file long enough for the intended cue, or limit this cue to the actual source duration while preserving required music elsewhere. Legitimate short musical loops must first be rendered into an actual extended audio file and registered. Do not relabel a short SFX as BGM to satisfy missing music. Inspect asset_get for an actual archived BGM and acquire it with studio_download_asset({id,path}); a source-only card has no downloadable archive. Alternatively verify rights and obtain the real audio through the original source using available tools. If actual music cannot be obtained, report the missing capability with task_block; do not remove required music or invent a download tool.')
+   }
+   if(role==='voice'&&(file.media.durationSeconds>STUDIO_SPEECH_MAX_SECONDS||cue.end-cue.start>STUDIO_SPEECH_MAX_SECONDS+1e-9))soundPlanError(field,`Speech source and final span must each be <= ${STUDIO_SPEECH_MAX_SECONDS} seconds for the current observer. Request studio_request_preparation_revision with this plan as evidence if the frozen utterance needs restructuring; do not truncate words or silently rewrite it.`)
+   if(cue.sourceSha256!==undefined&&cue.sourceSha256!==file.sha256)soundPlanError(field,'Declared source hash differs from host hash.')
+   // 50 ms allows container rounding; it does not assert cue playback coverage or spoken content.
+   if(cue.sourceDurationSeconds!==undefined&&(!Number.isFinite(cue.sourceDurationSeconds)||cue.sourceDurationSeconds<=0||Math.abs(cue.sourceDurationSeconds-file.media.durationSeconds)>0.05))soundPlanError(field,'Declared source duration differs from probe by more than 50 ms.')
+   tracks.push({role,index,id:cue.id,path:file.path,sha256:file.sha256,media:file.media})
+  })
+ }
+ return {schema:'studio-sound-binding-v1',scriptSha256:script.sha256,plan:{path:planFile.path,sha256:planFile.sha256},tracks,qualityApproved:false}
+}

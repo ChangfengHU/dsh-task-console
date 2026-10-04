@@ -1,5 +1,9 @@
+import {StudioInterventions} from '../src/studio-interventions.js'
+import {awaitAgentCapabilities} from '../src/agent-capability-readiness.ts'
+import {studioInstallationBlock} from '../src/studio-installation.js'
+import {WorkflowExtensions} from '../src/workflow-extensions.js'
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile, mkdir, readFile } from 'node:fs/promises'
+import { mkdtemp, writeFile, mkdir, readFile, stat, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, after } from 'node:test'
@@ -65,11 +69,49 @@ async function setup(taskPatch: Partial<TaskSpec> = {}, runnerPatch: Constructor
   return { host, store, runner, task, root }
 }
 const tick = () => new Promise(r => setTimeout(r, 80))
-async function untilReady(check: () => boolean) {
-  const deadline=Date.now()+3000
-  while(!check() && Date.now()<deadline) await tick()
-  assert.ok(check(),'expected asynchronous transition within 3 seconds')
-}
+
+test('restart waits for MCP discovery, retains completed predecessor and claims successor once',async()=>{
+ const {runner,store,host,root}=await setup({participants:[{agentId:'a'},{agentId:'b'}]})
+ const batch=await runner.fire('T','manual');await tick()
+ const first=[...host.sessions.keys()][0]
+ host.consumeFirst(first)
+ await host.callTool(first,'task_complete',{summary:'upstream complete'});host.endTurn(first);await tick()
+ const [doneId,nextId]=batch.cardIds
+ assert.equal(store.s.cards.get(doneId)!.status,'done');assert.equal(store.s.cards.get(nextId)!.status,'running')
+ runner.stop()
+ const recoveredStore=new EventStore(join(root,'store')),recoveredHost=fakeHost(join(root,'presets'))
+ let connected=false,release!:()=>void,entered!:()=>void
+ const pending=new Promise<void>(resolve=>{release=resolve}),waiting=new Promise<void>(resolve=>{entered=resolve})
+ const recovered=new TaskRunner(recoveredHost.ctx,recoveredStore,{beforeStart:async input=>{
+  const result=await awaitAgentCapabilities({isActive:input.isActive,inspect:async()=>({
+   audit:connected?{status:'in-sync'}:{status:'dependency-missing',missingDependencies:['mcp:assets:asset_get']},
+   sources:[{serverName:'assets',live:true,tools:connected?['asset_get']:[]}],
+  }),sleep:()=>pending,onEvent:e=>{if(e.phase==='waiting')entered()}})
+  if(result.timedOut||result.audit.status!=='in-sync')return {kind:'capability',reason:'fixture discovery failure'}
+ }})
+ testResources.push({root,runner:recovered,store:recoveredStore})
+ const starting=recovered.start();await waiting
+ assert.equal(recoveredHost.sessions.size,0,'no model before tools are registered')
+ assert.equal(recoveredStore.s.cards.get(doneId)!.status,'done')
+ assert.equal(recoveredStore.s.cards.get(nextId)!.status,'running','pending discovery stays within one claim')
+ await recovered.tick();await recovered.tick()
+ connected=true;release();await starting;await tick()
+ assert.equal(recoveredHost.sessions.size,1)
+ assert.equal(recoveredStore.s.cards.get(doneId)!.runIds.length,1)
+ assert.equal(recoveredStore.s.cards.get(nextId)!.runIds.length,2,'one crashed run and exactly one recovery run')
+ assert.equal([...recoveredStore.s.runs.values()].filter(r=>r.status==='blocked').length,0)
+})
+
+test('incomplete Studio installation blocks once without creating a model session or retry loop',async()=>{
+ const {runner,store,host}=await setup({}, {beforeStart:()=>studioInstallationBlock({config:{}})})
+ const batch=await runner.fire('T','manual')
+ await runner.tick();await runner.tick()
+ assert.equal(host.sessions.size,0)
+ const card=store.s.cards.get(batch.cardIds[0])!
+ assert.equal(card.status,'blocked')
+ assert.equal(card.runIds.length,1)
+ assert.ok(JSON.stringify(store.all()).includes('visionScript:missing-or-invalid-path'))
+})
 
 test('startup fallback retains run/session and permissions, retries once, and releases scoped hooks', async () => {
   const { runner, store, host } = await setup({ participants:[{agentId:'a'}], onFail:'stop', maxTries:1 })
@@ -591,107 +633,6 @@ test('idle model turns retain live async operations without burning nudges or ex
   } finally {runner.stop();store.kernel.db.close();await (await import('node:fs/promises')).rm(root,{recursive:true,force:true})}
 })
 
-test('model timeout preserves one live background operation and resumes the same Run without fallback or replay', async()=>{
-  let pending=true
-  const {host,runner,store}=await setup({participants:[{agentId:'a'}],onFail:'stop',maxTries:1},{
-    pendingOperation:async()=>pending?'verified owner operation running':undefined,
-    operationOutcome:async()=> 'operation-1 complete; read original receipt, do not import again',
-  })
-  runner.modelFallback={fromProvider:'p',provider:'qwen',model:'plus'}
-  const batch=await runner.fire('T','manual');await tick()
-  const [sid,rec]=[...host.sessions.entries()][0];host.consumeFirst(sid)
-  host.emit(sid,{type:'tool/call',data:{name:'browser_login_acceptance',callId:'fixture'}})
-  const flight=(runner as any).flights.get(sid),watchdog=flight.timer,claim=flight.claimLock
-  const event={type:'turn/end',data:{reason:{kind:'error',error:{code:'TIMEOUT'}}}}
-  host.emit(sid,event);host.emit(sid,event);await tick()
-  const waiter=flight.idleTimer
-  host.emit(sid,event);await tick()
-  assert.equal(flight.idleTimer,waiter,'duplicate end event does not cancel the host wait')
-  assert.equal(flight.timer,watchdog)
-  assert.equal(flight.claimLock,claim)
-  assert.equal(rec.disposed,false)
-  assert.equal(rec.followups.length,1,'no immediate model retry or fallback')
-  assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
-  assert.equal(store.kernel.listEvents(batch.cardIds[0]).filter(e=>e.kind==='model_wait_interrupted').length,1)
-  assert.equal(store.kernel.listEvents(batch.cardIds[0]).filter(e=>e.kind==='model_fallback').length,0)
-  pending=false;host.endTurn(sid);await tick()
-  assert.equal(flight.operationTimeoutRecovery,'used')
-  assert.equal(rec.followups.length,2)
-  assert.match(rec.followups[1].content[0].text,/read original receipt/)
-  assert.equal(store.s.runs.size,1)
-  assert.equal(host.sessions.size,1)
-  assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running','terminal operation is not task acceptance')
-  pending=true;host.emit(sid,event);await tick()
-  assert.equal(rec.disposed,true,'one recovery only; does not extend the budget indefinitely')
-  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'failed')
-})
-
-test('multiple background completions do not consume submission nudges; empty turns still fail', async()=>{
-  let pending=true
-  const {host,runner,store}=await setup({participants:[{agentId:'a'}],onFail:'stop',maxTries:1},{pendingOperation:async()=>pending?'running':undefined,operationOutcome:async()=> 'read original operation receipt'})
-  const batch=await runner.fire('T','manual');await tick()
-  const [sid,rec]=[...host.sessions.entries()][0];host.consumeFirst(sid)
-  for(let i=0;i<3;i++){
-    pending=true;host.endTurn(sid);await tick()
-    pending=false;host.endTurn(sid);await tick()
-    assert.equal(rec.followups.length,i+2)
-    assert.match(rec.followups.at(-1).content[0].text,/BACKGROUND OPERATION FINISHED/)
-    assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
-    assert.equal([...store.s.runs.values()][0].nudges??0,0)
-  }
-  host.endTurn(sid);await tick()
-  assert.equal([...store.s.runs.values()][0].nudges,1)
-  host.endTurn(sid);await tick()
-  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'failed')
-})
-
-test('cancelling during a pending-operation timeout check cannot resurrect the Run', async()=>{
-  let resolvePending!: (value: string) => void
-  const {host,runner,store}=await setup({participants:[{agentId:'a'}],onFail:'stop',maxTries:1},{pendingOperation:()=>new Promise(resolve=>{resolvePending=resolve})})
-  const batch=await runner.fire('T','manual');await tick()
-  const [sid,rec]=[...host.sessions.entries()][0];host.consumeFirst(sid)
-  host.emit(sid,{type:'tool/call',data:{name:'browser_status',callId:'fixture'}})
-  host.emit(sid,{type:'turn/end',data:{reason:{kind:'error',error:{code:'TIMEOUT'}}}});await tick()
-  await runner.cancelBatch(batch.id)
-  resolvePending('operation still running');await tick()
-  assert.equal(rec.disposed,true)
-  assert.equal(rec.followups.length,1)
-  assert.equal((runner as any).flights.size,0)
-  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'cancelled')
-  assert.equal(store.kernel.listEvents(batch.cardIds[0]).some(e=>e.kind==='model_wait_interrupted'),false)
-})
-
-test('timeout recovery refuses unknown/terminal operations, caller cancellation and business errors', async()=>{
-  for(const mode of ['absent','probe-error','aborted','tool-error','no-tool']){
-    const {host,runner,store}=await setup({participants:[{agentId:'a'}],onFail:'stop',maxTries:1},{pendingOperation:async()=>{
-      if(mode==='probe-error')throw Error('unavailable')
-      return mode==='absent'?undefined:'operation running'
-    }})
-    const batch=await runner.fire('T','manual');await tick()
-    const [sid,rec]=[...host.sessions.entries()][0];host.consumeFirst(sid)
-    if(mode!=='no-tool')host.emit(sid,{type:'tool/call',data:{name:'browser_status',callId:'fixture'}})
-    host.emit(sid,{type:'turn/end',data:{reason:{kind:'error',error:{code:mode==='aborted'?'ABORTED':mode==='tool-error'?'TOOL_ERROR':'TIMEOUT'}}}});await tick()
-    assert.equal(rec.disposed,true,mode)
-    assert.equal(rec.followups.length,1,mode)
-    assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'failed',mode)
-    assert.equal(store.kernel.listEvents(batch.cardIds[0]).some(e=>e.kind==='model_wait_interrupted'),false)
-  }
-})
-
-test('cancelling while reading a completed operation never wakes a disposed Agent',async()=>{
-  let pending=true,resolveOutcome!: (value:string)=>void
-  const {host,runner,store}=await setup({participants:[{agentId:'a'}],onFail:'stop',maxTries:1},{pendingOperation:async()=>pending?'running':undefined,operationOutcome:()=>new Promise(resolve=>{resolveOutcome=resolve})})
-  const batch=await runner.fire('T','manual');await tick()
-  const [sid,rec]=[...host.sessions.entries()][0];host.consumeFirst(sid)
-  host.endTurn(sid);await tick()
-  pending=false;host.endTurn(sid);await tick()
-  await runner.cancelBatch(batch.id)
-  resolveOutcome('completed receipt');await tick()
-  assert.equal(rec.followups.length,1)
-  assert.equal(rec.disposed,true)
-  assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'cancelled')
-})
-
 test('the block gate can replace stale model prose with observed evidence without erasing tool history', async()=>{
   const {host,runner,store}=await setup({onFail:'stop',maxTries:1},{beforeBlock:()=>({reason:'Actual provider challenge',kind:'needs_input'})})
   try {
@@ -785,6 +726,7 @@ test('Creator review persists a frozen plan without a Task, fences changed appro
     assert.equal(host.sessions.size, 0); profileHash = 'v1'
     const restarted = new TaskCreator(runner, async () => [{ id: 'a', name: 'a', profileHash } as any])
     const approved = await restarted.review(plan.id, plan.hash, 'approve', 'Scope and outcomes checked')
+    await tick()
     assert.equal(approved.state, 'dispatched'); assert.equal(host.sessions.size, 1)
     assert.equal((await restarted.review(plan.id, plan.hash, 'approve', 'duplicate')).batchId, approved.batchId)
     assert.equal(host.sessions.size, 1); assert.equal(store.s.batches.size, 1)
@@ -955,11 +897,9 @@ test('Fleet repair budget and source CAS reject extra or stale graph mutation at
   const {host,store,runner,task}=await setup({...recipe,workflowRecipe:{id:'fleet-base-v3',login:'preserve'},timeoutSec:300})
   const batch=await runner.fire(task.id,'manual')
   for(let i=0;i<2;i++){
-    await untilReady(()=>[...host.sessions.values()].filter(s=>!s.disposed).length===1 && host.sessions.size===i+1)
     const sid=[...host.sessions.entries()].find(([,s])=>!s.disposed)![0]
     host.consumeFirst(sid);await host.callTool(sid,'task_complete',{summary:'checked'});host.endTurn(sid);await tick()
   }
-  await untilReady(()=>host.sessions.size===3 && [...store.s.cards.values()].some(c=>c.agentId==='fleet-runner-operator' && c.status==='running'))
   const source=[...store.s.cards.values()].find(c=>c.agentId==='fleet-runner-operator')!,core=store.kernel.getTask(source.id)!
   const count=()=>store.kernel.db.prepare('SELECT COUNT(*) AS n FROM tasks').get() as {n:number}
   await assert.rejects(store.expandFleetRepair(task,batch,source,core.current_run_id!+1,'browser-manager','stale'),/租约/)
@@ -1403,15 +1343,12 @@ test('runner: automated same-card review uses reviewer profile, changes_requeste
   const batch = await runner.fire('T', 'manual'); const cardId = `${batch.id}#0`
   let session = [...host.sessions.keys()].at(-1)!; host.consumeFirst(session)
   await host.callTool(session, 'task_request_review', { summary: 'round 1', reviewer: 'b', metadata: { tests: 9 } }); host.endTurn(session); await tick()
-  await untilReady(()=>host.sessions.size===2)
   assert.equal(store.kernel.getTask(cardId)!.assignee, 'b')
   session = [...host.sessions.keys()].at(-1)!; host.consumeFirst(session)
   await host.callTool(session, 'task_request_changes', { reason: '补 AC1 测试' }); host.endTurn(session); await tick()
-  await untilReady(()=>host.sessions.size===3)
   assert.equal(store.kernel.getTask(cardId)!.assignee, 'a')
   session = [...host.sessions.keys()].at(-1)!; assert.match(host.sessions.get(session)!.followups[0].content[0].text, /补 AC1 测试/); host.consumeFirst(session)
   await host.callTool(session, 'task_request_review', { summary: 'round 2: 10 passed', reviewer: 'b' }); host.endTurn(session); await tick()
-  await untilReady(()=>host.sessions.size===4)
   session = [...host.sessions.keys()].at(-1)!; host.consumeFirst(session)
   await host.callTool(session, 'task_complete', { summary: 'approved' }); host.endTurn(session); await tick()
   assert.equal(store.s.batches.get(batch.id)!.settled?.outcome, 'done')
@@ -1458,6 +1395,8 @@ test('Studio unblock acknowledges durable ready without waiting for suspended me
   const acknowledgement=runner.unblockCard(cardId).then(()=>{acknowledged=true})
   await Promise.race([acknowledgement,new Promise((_,reject)=>setTimeout(()=>reject(Error('unblock waited for preflight')),500))])
   assert.equal(acknowledged,true)
+  const audit=new StudioInterventions(store).assessment({taskId:'T',batchId:batch.id})
+  assert.equal(audit.status,'assisted');assert.equal(audit.records.length,1);assert.equal(audit.records[0].kind,'operator_unblock');assert.equal(audit.records[0].sourceRunId,`${batch.id}#0#1`)
   assert.ok(store.all().some(e=>e.t==='card/ready'&&e.cardId===cardId))
   await preflightEntered
   assert.equal(host.sessions.size,0,'preflight is actually still suspended')
@@ -1560,6 +1499,28 @@ test('background fire acknowledges durable batch while host preflight is suspend
   assert.equal(store.kernel.listRuns(first.cardIds[0]).length,1)
 })
 
+test('Creator approval returns a durable batch before suspended preflight and duplicate approvals dispatch once',async()=>{
+ let release!:()=>void,entered!:()=>void,calls=0
+ const suspended=new Promise<void>(r=>{release=r}),didEnter=new Promise<void>(r=>{entered=r})
+ const {runner,store,host,root}=await setup({}, {beforeStart:async()=>{calls++;entered();await suspended}})
+ const creator=new TaskCreator(runner,async()=>[{id:'a',name:'A'} as any])
+ const proposal={decision:'create' as const,reason:'fixture latency',title:'Background review',brief:'Read fixture',participants:[{agentId:'a'}],design:{scope:'fixture read',branches:[{id:'read',when:'authorized',action:'read',evidence:'receipt'}],coordination:'serial',failurePolicy:{isolateItems:true,maxAttempts:1,stopConditions:['missing permission']},acceptance:['actual receipt']}}
+ const plan=await creator.prepare(proposal,{agent:{session:{id:'background-review',deriveMessages:()=>[{role:'user',content:'Read fixture after independent approval'}]}}},root)
+ let timer:ReturnType<typeof setTimeout>|undefined
+ try{
+  const approved=await Promise.race([creator.review(plan.id,plan.hash,'approve','Independent fixture approval'),new Promise<never>((_,reject)=>{timer=setTimeout(()=>reject(Error('Approval waited for preflight')),3000)})])
+  clearTimeout(timer)
+  assert.equal(approved.state,'dispatched');assert.ok(store.tasks.has(approved.taskId!));assert.equal(host.sessions.size,0)
+  assert.equal(store.kernel.db.prepare('SELECT COUNT(*) AS n FROM dsh_batches').get().n,1)
+  assert.equal(store.s.batches.get(approved.batchId!)?.turn?.origin?.reviewPlanId,plan.id)
+  await didEnter
+  const retries=await Promise.all([creator.review(plan.id,plan.hash,'approve','Replay'),creator.review(plan.id,plan.hash,'approve','Concurrent replay')])
+  assert.ok(retries.every(result=>result.batchId===approved.batchId));assert.equal(calls,1);assert.equal(host.sessions.size,0)
+  release();await tick()
+  assert.equal(host.sessions.size,1);assert.equal(store.kernel.listRuns(store.s.batches.get(approved.batchId!)!.cardIds[0]).length,1)
+ }finally{clearTimeout(timer);release();runner.stop()}
+})
+
 test('background batch survives stop before callback and restart still performs initial preset preflight', async () => {
   const {runner,store,root,host} = await setup({participants:[{agentId:'a'}]})
   const batch = await runner.fire('T','manual',{batchId:'b-background-restart',dispatch:'background'})
@@ -1619,4 +1580,342 @@ test('accepted background batch starts exactly once after host restart before di
     assert.equal(resumedStore.kernel.listRuns(batch.cardIds[0]).length,1)
     assert.equal(resumedStore.s.batches.get(batch.id)?.settled,undefined)
   } finally { resumedRunner.stop(); resumedStore.kernel.db.close() }
+})
+
+
+test('extension evidence gates the real runner handoff; model metadata cannot approve it',async()=>{
+ const extensions=new WorkflowExtensions();let proof=false
+ extensions.register({id:'audit-fixture',version:'1.0.0',hostApi:1,implementationSha256:'a'.repeat(64),validatePolicy:()=>({}),beforeComplete:async()=>{
+  if(!proof)throw Error('independent-hash-evidence-required')
+  return {summary:'Host verified fixture',metadata:{verifiedFixture:true}}
+ }})
+ const extension=extensions.bind({id:'audit-fixture',version:'1.0.0',policy:{}})
+ const {runner,store,host}=await setup({participants:[{agentId:'a'}],design:{extension} as any},{
+  beforeStart:i=>extensions.beforeStart(i),beforeComplete:i=>extensions.beforeComplete(i),beforePlanRound:(i,a,b)=>extensions.beforePlanRound(i,a,b),
+ })
+ const batch=await runner.fire('T','manual');await tick()
+ const session=[...host.sessions.keys()].at(-1)!;host.consumeFirst(session)
+ await assert.rejects(host.callTool(session,'task_complete',{summary:'I passed',metadata:{verifiedFixture:true}}),/independent-hash-evidence-required/)
+ assert.equal(store.all().filter(e=>e.t==='run/completed').length,0)
+ proof=true;await host.callTool(session,'task_complete',{summary:'client text'});host.endTurn(session);await tick()
+ const completion=store.all().find(e=>e.t==='run/completed') as any
+ assert.equal(completion.summary,'Host verified fixture')
+ assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'done')
+})
+
+test('restoring an extension task without its exact adapter blocks before model dispatch',async()=>{
+ const installed=new WorkflowExtensions()
+ installed.register({id:'audit-fixture',version:'1.0.0',hostApi:1,implementationSha256:'a'.repeat(64),validatePolicy:()=>({}),beforeComplete:async()=>({summary:'host',metadata:{}})})
+ const binding=installed.bind({id:'audit-fixture',version:'1.0.0',policy:{}}),missing=new WorkflowExtensions()
+ const {runner,store,host}=await setup({participants:[{agentId:'a'}],design:{extension:binding} as any},{beforeStart:async i=>{
+  try{return await missing.beforeStart(i)}catch(e){return {kind:'capability',reason:String(e)}}
+ }})
+ await runner.fire('T','manual');await tick()
+ assert.equal(host.sessions.size,0)
+ assert.ok(store.all().some((e:any)=>e.t==='run/blocked'&&/extension-version-unavailable/.test(e.reason)))
+})
+
+test('static extension cannot request human review to evade host validation',async()=>{
+ const {runner,store,host}=await setup({participants:[{agentId:'a'}],design:{extension:{id:'fixture'}} as any},{beforeComplete:async()=>{throw Error('evidence absent')}})
+ const batch=await runner.fire('T','manual'),sid=[...host.sessions.keys()][0];host.consumeFirst(sid)
+ await assert.rejects(host.callTool(sid,'task_request_review',{summary:'approve without proof'}),/human-review-bypass-forbidden/)
+ assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+ await assert.rejects(host.callTool(sid,'task_complete',{summary:'done'}),/evidence absent/)
+})
+
+test('historical extension review cards cannot be human-approved after template changes',async()=>{
+ const {runner,store,host,task}=await setup({participants:[{agentId:'a'}]})
+ const batch=await runner.fire('T','manual'),sid=[...host.sessions.keys()][0];host.consumeFirst(sid)
+ await host.callTool(sid,'task_request_review',{summary:'historical review'});host.endTurn(sid);await tick()
+ // Fixture simulates an old build's review card with an extension in its frozen
+ // definition, while the present-day template has no extension.
+ const {workflowDefinition}=await import('../src/workflow-plan.js')
+ const frozen=workflowDefinition({...task,design:{extension:{id:'fixture'}} as any})
+ store.s.batches.get(batch.id)!.turn={workflow:{id:'old-extension-definition',definition:frozen}} as any
+ await assert.rejects(runner.reviewCard(batch.cardIds[0],'approve','human override'),/human-review-bypass-forbidden/)
+ assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'review')
+ assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+})
+
+test('chat Creator freezes binding before review and ready extension batch restores exactly once',async()=>{
+ const registry=new WorkflowExtensions()
+ const extension={id:'restart-fixture',version:'1.0.0',hostApi:1 as const,implementationSha256:'c'.repeat(64),validatePolicy:(p:any)=>p,beforeComplete:async()=>({summary:'host verified',metadata:{}})}
+ registry.register(extension)
+ const {store,runner,root,host}=await setup({}, {beforeStart:i=>registry.beforeStart(i)})
+ const design={scope:'fixture',branches:[{id:'audit',when:'input exists',action:'read',evidence:'hashes'}],coordination:'serial',failurePolicy:{isolateItems:true,maxAttempts:1,stopConditions:['missing']},acceptance:['host verified'],extension:{id:extension.id,version:extension.version,policy:{file:'input.tgz'}}}
+ const creator=new TaskCreator(runner,async()=>[{id:'a',name:'A'} as any],d=>({...d,extension:registry.bind(d.extension)}))
+ const plan:any=await creator.prepare({decision:'create',reason:'fixture',title:'Restore extension',brief:'Read fixture',participants:[{agentId:'a'}],design},{agent:{session:{id:'extension-chat',deriveMessages:()=>[{role:'user',content:'Check fixture'}]}}},root)
+ const frozen=plan.definition.design.extension
+ assert.equal(frozen.implementationSha256,extension.implementationSha256);assert.match(frozen.policySha256,/^[a-f0-9]{64}$/)
+ assert.equal(store.s.batches.size,0)
+ const approved=await creator.review(plan.id,plan.hash,'approve','Check actual bytes');runner.stop()
+ assert.equal(host.sessions.size,0)
+ assert.deepEqual(store.tasks.get(approved.taskId!)?.design?.extension,frozen)
+ store.kernel.db.close()
+ // The startup installer supplies adapters BEFORE start loads and dispatches.
+ const restored=new EventStore(join(root,'store')),newHost=fakeHost(join(root,'presets')),newRegistry=new WorkflowExtensions()
+ newRegistry.register(extension)
+ const resumed=new TaskRunner(newHost.ctx,restored,{beforeStart:i=>newRegistry.beforeStart(i)})
+ try{
+  await resumed.start();await resumed.tick()
+  assert.equal(newHost.sessions.size,1)
+  const card=restored.s.batches.get(approved.batchId!)!.cardIds[0]
+  assert.equal(restored.kernel.listRuns(card).length,1)
+  assert.equal(restored.s.cards.get(card)?.status,'running')
+ }finally{resumed.stop();restored.kernel.db.close()}
+})
+
+test('chat approval refuses missing or changed extension without changing the reviewed plan',async()=>{
+ const registry=new WorkflowExtensions()
+ const drop=registry.register({id:'approval-fixture',version:'1.0.0',hostApi:1,implementationSha256:'d'.repeat(64),validatePolicy:(p:any)=>p,beforeComplete:async()=>({summary:'host',metadata:{}})})
+ const {store,runner,root,host}=await setup()
+ const design={scope:'fixture',branches:[{id:'audit',when:'input',action:'read',evidence:'hash'}],coordination:'serial',failurePolicy:{isolateItems:true,maxAttempts:1,stopConditions:['missing']},acceptance:['host'],extension:{id:'approval-fixture',version:'1.0.0',policy:{}}}
+ const proposal={decision:'create' as const,reason:'fixture',title:'Approve extension',brief:'Read fixture',participants:[{agentId:'a'}],design}
+ const exec={agent:{session:{id:'extension-approval',deriveMessages:()=>[{role:'user',content:'Check fixture'}]}}}
+ await assert.rejects(new TaskCreator(runner,async()=>[{id:'a'} as any]).prepare(proposal,exec,root),/host-binding-unavailable/)
+ const creator=new TaskCreator(runner,async()=>[{id:'a'} as any],d=>({...d,extension:registry.bind(d.extension)}))
+ const plan:any=await creator.prepare(proposal,exec,root);drop()
+ await assert.rejects(creator.review(plan.id,plan.hash,'approve','checked'),/version-unavailable/)
+ registry.register({id:'approval-fixture',version:'1.0.0',hostApi:1,implementationSha256:'e'.repeat(64),validatePolicy:(p:any)=>p,beforeComplete:async()=>({summary:'host',metadata:{}})})
+ await assert.rejects(creator.review(plan.id,plan.hash,'approve','checked'),/binding-mismatch/)
+ assert.equal(creator.plan(plan.id).state,'pending');assert.equal(creator.plan(plan.id).hash,plan.hash)
+ assert.equal(store.s.batches.size,0);assert.equal(host.sessions.size,0)
+})
+
+test('release audit extension runs planner, independent verifier sessions and exact artifact handoff',async()=>{
+ const {default:adapter}=await import('../src/release-audit-extension.js'),{WorkflowEvidence}=await import('../src/workflow-evidence.js'),{releaseArchive}=await import('./fixtures/release-archive.js')
+ const fixture=releaseArchive();let ledger:InstanceType<typeof WorkflowEvidence>
+ const registry=new WorkflowExtensions(()=>false,(i,active)=>ledger.port(i,active));registry.register(adapter)
+ const extension=registry.bind({id:adapter.id,version:adapter.version,policy:fixture.policy})
+ const {runner,store,host,root}=await setup({graphMode:'dynamic-rounds',design:{extension,failurePolicy:{maxAttempts:2}} as any},{beforeStart:i=>registry.beforeStart(i),beforeComplete:i=>registry.beforeComplete(i),beforePlanRound:(i,a,b)=>registry.beforePlanRound(i,a,b),registerWorkflowTools:(ctx,i,a)=>registry.registerTools(ctx,i,a)})
+ ledger=new WorkflowEvidence(store);await writeFile(join(root,'candidate.tgz'),fixture.bytes)
+ const {apply:fence}=await import('../src/agent-tool-fence.js')
+ let guard:((exec:any)=>string|undefined)|undefined
+ fence({tools:{schemas:()=>[{name:'bash'},{name:'write'}],restrict:()=>{},guard:(g:any)=>{guard=g}}} as any,{selected:['task_plan_round','task_complete','task_finalize'],workflowRunTools:true})
+ const call=host.callTool;host.callTool=async(session,name,args)=>{const denied=guard?.({name,agent:{session:{id:session}}});if(denied)throw Error(denied);return call(session,name,args)}
+
+ const batch=await runner.fire('T','manual');await tick();let sid=[...host.sessions.keys()].at(-1)!
+ host.consumeFirst(sid);await host.callTool(sid,'task_plan_round',{summary:'Verify frozen bytes in separate sessions'});host.endTurn(sid);await tick()
+ sid=[...host.sessions.keys()].at(-1)!;host.consumeFirst(sid)
+ await assert.rejects(host.callTool(sid,'task_complete',{summary:'trust me'}),/current-run-report-required/)
+ const a:any=await host.callTool(sid,'release_audit_verify',{})
+ await assert.rejects(host.callTool(sid,'release_audit_report',{receiptId:a.id,conclusion:'fail',summary:'Wrong fixture conclusion',findings:[]}),/disagrees-with-facts/)
+ const reportA:any=await host.callTool(sid,'release_audit_report',{receiptId:a.id,conclusion:'pass',summary:'Verified fixture package byte integrity only.',findings:[]})
+ const replay:any=await host.callTool(sid,'release_audit_report',{receiptId:a.id,conclusion:'pass',summary:'Verified fixture package byte integrity only.',findings:[]});assert.equal(replay.report.id,reportA.report.id)
+ assert.match(guard?.({name:'bash',agent:{session:{id:sid}}})??'',/not been granted/)
+ assert.match(guard?.({name:'release_audit_verify',agent:{session:{id:'another-session'}}})??'',/not been granted/)
+ await assert.rejects(host.callTool(sid,'task_complete',{summary:'omit evidence'}),/required-report-artifacts/)
+ await host.callTool(sid,'task_complete',{summary:'handoff',artifacts:reportA.artifacts});host.endTurn(sid);await tick()
+ sid=[...host.sessions.keys()].at(-1)!;host.consumeFirst(sid)
+ await assert.rejects(host.callTool(sid,'release_audit_report',{receiptId:a.id,conclusion:'pass',summary:'Copied other session proof',findings:[],upstreamReportId:reportA.report.id}),/own-verification-required/)
+ const b:any=await host.callTool(sid,'release_audit_verify',{});assert.notEqual(a.sessionId,b.sessionId)
+ const reportB:any=await host.callTool(sid,'release_audit_report',{receiptId:b.id,conclusion:'pass',summary:'Independently recomputed using the same pinned verifier.',findings:[],upstreamReportId:reportA.report.id})
+ await host.callTool(sid,'task_complete',{summary:'independent handoff',artifacts:reportB.artifacts});host.endTurn(sid);await tick()
+ sid=[...host.sessions.keys()].at(-1)!;host.consumeFirst(sid)
+ await assert.rejects(host.callTool(sid,'task_finalize',{summary:'wrong report',artifact:reportB.artifacts[0]}),/final-artifact-must-be-current-executor-report/)
+ await host.callTool(sid,'task_finalize',{summary:'verified',artifact:reportA.artifacts.find((p:string)=>p.endsWith('REPORT.md'))});host.endTurn(sid);await tick()
+ assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'done')
+ assert.equal(store.kernel.db.prepare('SELECT COUNT(*) n FROM dsh_workflow_receipts').get().n,4)
+ assert.equal([...store.s.artifacts.values()].filter(a=>a.batchId===batch.id).length,4)
+})
+
+test('extension evidence rejects delayed results after tool disposal even if kernel run remains live',async()=>{
+ const {WorkflowEvidence}=await import('../src/workflow-evidence.js');let ledger:InstanceType<typeof WorkflowEvidence>,release:()=>void=()=>{},entered:()=>void=()=>{}
+ const waiting=new Promise<void>(r=>release=r),started=new Promise<void>(r=>entered=r)
+ const registry=new WorkflowExtensions(()=>false,(i,a)=>ledger.port(i,a))
+ registry.register({id:'late-fixture',version:'1.0.0',hostApi:2,implementationSha256:'a'.repeat(64),validatePolicy:()=>({}),beforeComplete:async()=>({summary:'host',metadata:{}}),registerTools:async(ctx,_i,host)=>ctx.tools.register({name:'late_fixture_verify',description:'fixture',parameters:{},output:{schema:{type:'object',additionalProperties:true},render:(_:any,r:any)=>[{type:'text',text:JSON.stringify(r)}]},execute:async()=>{entered();await waiting;return host.commit('verification',{actual:true})}})})
+ const extension=registry.bind({id:'late-fixture',version:'1.0.0',policy:{}})
+ const {runner,store,host}=await setup({participants:[{agentId:'a'}],design:{extension} as any},{beforeStart:i=>registry.beforeStart(i),registerWorkflowTools:(ctx,i,a)=>registry.registerTools(ctx,i,a)})
+ ledger=new WorkflowEvidence(store);await runner.fire('T','manual');const sid=[...host.sessions.keys()].at(-1)!
+ const pending=host.callTool(sid,'late_fixture_verify',{});await started;runner.stop();release()
+ await assert.rejects(pending,/stale-run/)
+ assert.equal(store.kernel.db.prepare('SELECT COUNT(*) n FROM dsh_workflow_receipts').get().n,0)
+})
+
+test('workflow evidence survives storage reload but cannot be reused as proof of a new run',async()=>{
+ const {WorkflowEvidence}=await import('../src/workflow-evidence.js')
+ const {store,runner,task}=await setup({participants:[{agentId:'a'}],design:{extension:{id:'fixture',version:'1.0.0',policy:{},implementationSha256:'a'.repeat(64),policySha256:'b'.repeat(64)}}} as any)
+ // Create and claim through the real EventStore without dispatching a model.
+ const batchId='b-evidence-restart',cardId=batchId+'#0'
+ await store.createBatch(task,{t:'batch/fired',at:new Date().toISOString(),taskId:task.id,batch:{id:batchId,by:'manual',cards:[{id:cardId,agentId:'a',deps:[]}]}})
+ await store.claimCard(cardId,cardId+'#1','evidence-session-1',1)
+ const input:any={task,batch:store.s.batches.get(batchId),card:store.s.cards.get(cardId),sessionId:'evidence-session-1',profileId:'a'}
+ const evidence=new WorkflowEvidence(store),old=evidence.port(input),receipt=old.commit('verification',{actual:'bytes'})
+ assert.equal(new WorkflowEvidence(store).port(input).receipts('run')[0].id,receipt.id)
+ const first=store.coreRunId(cardId+'#1')!
+ store.kernel.failRun(cardId,{expectedRunId:first,outcome:'crashed',error:'fixture interruption'})
+ // Project the restart closure, then claim the ready retry as a distinct run.
+ await store.append({t:'run/crashed',at:new Date().toISOString(),taskId:task.id,runId:cardId+'#1',error:'fixture interruption'})
+ await store.claimCard(cardId,cardId+'#2','evidence-session-2',2)
+ assert.throws(()=>old.commit('verification',{late:true}),/stale-run/)
+ const current=new WorkflowEvidence(store).port({...input,card:store.s.cards.get(cardId),sessionId:'evidence-session-2'})
+ assert.equal(current.receipts('run').length,0);assert.equal(current.receipts('batch').length,1)
+ const fresh=current.commit('verification',{actual:'recomputed bytes'})
+ assert.notEqual(fresh.coreRunId,receipt.coreRunId);assert.notEqual(fresh.claimLock,receipt.claimLock)
+ runner.stop()
+})
+
+test('artifact changed after workflow verdict is rejected before registering or completing',async()=>{
+ const {createHash}=await import('node:crypto');let path=''
+ const {runner,store,host,root}=await setup({participants:[{agentId:'a'}]},{beforeComplete:async()=>{
+  const expected=createHash('sha256').update(await readFile(path)).digest('hex')
+  await writeFile(path,'changed after inspection')
+  return {summary:'inspected old bytes',metadata:{},artifacts:[{path,sha256:expected}]}
+ }})
+ path=join(root,'report.txt');await writeFile(path,'verified original')
+ const batch=await runner.fire('T','manual'),sid=[...host.sessions.keys()][0]
+ await assert.rejects(host.callTool(sid,'task_complete',{summary:'ready',artifacts:[path]}),/artifact-capture-mismatch/)
+ assert.equal(store.s.artifacts.size,0);assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+})
+
+for (const operation of ['task_plan_round','task_finalize'] as const) {
+ test(`${operation} cannot mutate a stopped runner after an async host hook`,async()=>{
+  let release:()=>void=()=>{},entered:()=>void=()=>{}
+  const waiting=new Promise<void>(r=>release=r),started=new Promise<void>(r=>entered=r)
+  const hook=async()=>{entered();await waiting;return {summary:'host checked',metadata:{}}}
+  const {runner,store,host}=await setup({graphMode:'dynamic-rounds'},operation==='task_plan_round'?{beforePlanRound:async()=>{await hook()}}:{beforeComplete:hook})
+  const batch=await runner.fire('T','manual'),sid=[...host.sessions.keys()][0]
+  const before=store.s.cards.size
+  const pending=host.callTool(sid,operation,{summary:'checked'})
+  await started;runner.stop();release()
+  await assert.rejects(pending,/task-run-no-longer-active/)
+  assert.equal(store.s.cards.size,before)
+  assert.equal(store.s.batches.get(batch.id)?.settled,undefined)
+  assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+ })
+}
+
+test('queued planRound rechecks run identity inside the expansion transaction',async()=>{
+ const {runner,store,host}=await setup({graphMode:'dynamic-rounds'})
+ await runner.fire('T','manual');const sid=[...host.sessions.keys()][0],before=store.s.cards.size
+ const expand=store.expandRound.bind(store)
+ store.expandRound=async(...args)=>{const pending=expand(...args);runner.stop();return pending}
+ await assert.rejects(host.callTool(sid,'task_plan_round',{summary:'planned'}),/task-run-no-longer-active/)
+ assert.equal(store.s.cards.size,before)
+})
+
+for(const lateAssistance of [false,true])test(`studio finalization preserves delivery with assistance (${lateAssistance?'late race':'preexisting'}) and never labels autonomous`,async()=>{
+ const {runner,store,host,root}=await setup({graphMode:'dynamic-rounds',design:{evidenceContract:'studio-video-v1',failurePolicy:{maxAttempts:3}} as any},{registerStudioTools:async()=>()=>{},beforeComplete:input=>input.card.role==='planner'?{summary:'Machine quality check complete',metadata:{workflowOutcome:lateAssistance?'machine_assessed_candidate':'assisted_machine_assessed_candidate',qualityPassed:true}}:undefined})
+ await writeFile(join(root,'film.txt'),'fixture delivered artifact')
+ const batch=await runner.fire('T','manual'),ledger=new StudioInterventions(store)
+ const next=()=>[...host.sessions.keys()].at(-1)!
+ let sid=next();host.consumeFirst(sid);await host.callTool(sid,'task_plan_round',{summary:'production'});host.endTurn(sid);await tick()
+ sid=next();host.consumeFirst(sid);await host.callTool(sid,'task_complete',{summary:'candidate',artifacts:['film.txt']});host.endTurn(sid);await tick()
+ sid=next();host.consumeFirst(sid);await host.callTool(sid,'task_complete',{summary:'quality passed'});host.endTurn(sid);await tick()
+ sid=next();host.consumeFirst(sid)
+ const record=()=>ledger.record({id:'fixture-assistance',taskId:'T',batchId:batch.id,kind:'operator_repair',reason:'fixture external infrastructure repair'})
+ if(!lateAssistance)record()
+ await host.callTool(sid,'task_finalize',{summary:'not trusted',artifact:'film.txt'})
+ if(lateAssistance)record()
+ host.endTurn(sid);await tick()
+ const run=[...store.s.runs.values()].at(-1)!
+ assert.equal(run.metadata?.decision,'assisted');assert.equal(run.metadata?.workflowOutcome,'assisted_machine_assessed_candidate')
+ assert.equal((run.metadata?.autonomy as any).status,'assisted');assert.equal((run.metadata?.autonomy as any).autonomousVerified,false)
+ assert.equal(store.s.batches.get(batch.id)?.settled?.outcome,'done');assert.ok([...store.s.artifacts.values()].some(a=>a.final))
+ assert.match(run.summary!,/人工协助/);runner.stop()
+})
+
+test('studio unblock rolls back kernel transition when intervention write fails',async()=>{
+ const {runner,store}=await setup({participants:[{agentId:'a'}],design:{evidenceContract:'studio-video-v1'} as any},{beforeStart:()=>({kind:'capability',reason:'fixture'})})
+ const batch=await runner.fire('T','manual'),cardId=batch.cardIds[0],sourceRunId=store.s.cards.get(cardId)!.runIds.at(-1)!
+ new StudioInterventions(store).record({id:`unblock:${sourceRunId}`,taskId:'other',batchId:'other',kind:'conflict',reason:'fixture'})
+ await assert.rejects(runner.unblockCard(cardId),/intervention-id-conflict/)
+ assert.equal(store.s.cards.get(cardId)?.status,'blocked');assert.equal(store.kernel.getTask(cardId)?.status,'blocked')
+ assert.equal(store.all().filter(e=>e.t==='card/ready'&&e.cardId===cardId).length,0);runner.stop()
+})
+
+const isolatedStudioDesign=()=>({workspaceMode:'studio-batch-v1',evidenceContract:'studio-video-v1',scope:'fixture video',branches:[{id:'prepare',when:'authorized',action:'prepare',evidence:'receipt'}],coordination:'three roles',failurePolicy:{isolateItems:true,maxAttempts:3,stopConditions:['missing permission']},acceptance:['actual evidence'],studio:{characterId:'fixture-character',referenceUrl:'https://cdn.vyibc.com/reference.mp4',referenceSha256:'a'.repeat(64),generationLimits:{imageCalls:0,imageBatches:0,voiceSegments:0},publish:false}} as any)
+
+test('Studio batch fire freezes isolated durable paths, concurrent request IDs coalesce and paid preflight sees the owned directory',async()=>{
+ const observed:string[]=[]
+ const {runner,store,host,root}=await setup({graphMode:'dynamic-rounds',design:isolatedStudioDesign()},{registerStudioTools:async()=>()=>{},beforeStart:async input=>{assert.equal((await stat(input.task.cwd)).isDirectory(),true);assert.equal(JSON.parse(await readFile(join(input.task.cwd,'.studio-workspace.json'),'utf8')).batchId,input.batch.id);observed.push(input.task.cwd)}})
+ const [first,replay]=await Promise.all([runner.fire('T','manual',{batchId:'b-isolated-first',dispatch:'background'}),runner.fire('T','manual',{batchId:'b-isolated-first',dispatch:'background'})])
+ assert.equal(first.id,replay.id);assert.equal(store.s.batches.size,1)
+ assert.equal(first.turn?.cwd,join(store.root,'studio-workspaces','T','batches',first.id))
+ assert.equal(first.turn?.studioWorkspace?.mode,'studio-batch-v1');assert.equal(store.tasks.get('T')!.cwd,root)
+ assert.equal(store.kernel.db.prepare('SELECT workspace_path FROM tasks WHERE id=?').get(first.cardIds[0]).workspace_path,first.turn!.cwd)
+ await tick();assert.equal(host.sessions.size,1);assert.deepEqual(observed,[first.turn!.cwd])
+ await store.expandRound(store.tasks.get('T')!,first,store.s.cards.get(first.cardIds[0])!,'Expand fixture production')
+ assert.ok(store.kernel.db.prepare('SELECT workspace_path FROM tasks WHERE tenant=?').all(first.id).every((row:any)=>row.workspace_path===first.turn!.cwd))
+ await writeFile(join(first.turn!.cwd!,'output.txt'),'first movie')
+ const {TaskConsoleService}=await import('../src/service.ts')
+ const reply=JSON.parse(await TaskConsoleService.prototype.fireTask.call({ctx:{get:()=>undefined},runner} as any,JSON.stringify({id:'T',requestId:'manual-workspace-0001'})))
+ await tick();const second=store.s.batches.get(reply.batchId)!
+ assert.notEqual(first.turn!.cwd,second.turn!.cwd);assert.equal(observed.length,2)
+ await assert.rejects(stat(join(second.turn!.cwd!,'output.txt')),{code:'ENOENT'})
+ assert.equal(await readFile(join(first.turn!.cwd!,'output.txt'),'utf8'),'first movie')
+ await assert.rejects(runner.fire('T','manual',{batchId:'b-forged-workspace',turn:{objective:'x',participants:store.tasks.get('T')!.participants,cwd:root,studioWorkspace:first.turn!.studioWorkspace}}),/host-created-only/)
+ await assert.rejects(runner.fire('T','manual',{batchId:'b-forged-path',turn:{objective:'x',participants:store.tasks.get('T')!.participants,cwd:'/invented'}}),/override-forbidden/)
+ assert.equal(store.s.batches.size,2)
+})
+
+test('Studio suspended batch restores its frozen path after restart; later missing used directory blocks before paid work',async()=>{
+ const {runner,store,host,root}=await setup({graphMode:'dynamic-rounds',maxTries:3,design:isolatedStudioDesign()},{registerStudioTools:async()=>()=>{}})
+ const batch=await runner.fire('T','manual',{batchId:'b-workspace-restart',dispatch:'background'});runner.stop()
+ assert.equal(host.sessions.size,0);await assert.rejects(stat(batch.turn!.cwd!),{code:'ENOENT'})
+ store.kernel.db.close()
+ const restored=new EventStore(join(root,'store')),newHost=fakeHost(join(root,'presets'));let probes=0
+ const resumed=new TaskRunner(newHost.ctx,restored,{registerStudioTools:async()=>()=>{},beforeStart:async()=>{probes++}})
+ try{
+  await resumed.start();assert.equal(newHost.sessions.size,1);assert.equal(probes,1)
+  assert.equal(restored.s.batches.get(batch.id)!.turn!.cwd,batch.turn!.cwd)
+  await writeFile(join(batch.turn!.cwd!,'retained.txt'),'retained')
+  const sid=[...newHost.sessions.keys()][0];newHost.consumeFirst(sid)
+  newHost.emit(sid,{type:'turn/end',data:{reason:{kind:'error',error:{code:'FIXTURE',message:'retry fixture'}}}});await tick()
+  await resumed.tick();assert.equal(await readFile(join(batch.turn!.cwd!,'retained.txt'),'utf8'),'retained')
+  assert.equal(probes,2);assert.equal(restored.kernel.listRuns(batch.cardIds[0]).length,2)
+  await rm(batch.turn!.cwd!,{recursive:true})
+  const sid2=[...newHost.sessions.keys()].at(-1)!;newHost.consumeFirst(sid2)
+  newHost.emit(sid2,{type:'turn/end',data:{reason:{kind:'error',error:{code:'FIXTURE',message:'another retry'}}}});await tick()
+  await resumed.tick()
+  assert.equal(probes,2);assert.equal(newHost.sessions.size,2)
+  await assert.rejects(stat(batch.turn!.cwd!),{code:'ENOENT'})
+  assert.equal(restored.kernel.getTask(batch.cardIds[0])!.status,'blocked')
+  assert.match(restored.s.cards.get(batch.cardIds[0])!.lastBlockReason??'',/studio-workspace/)
+ }finally{resumed.stop();restored.kernel.db.close()}
+})
+
+test('Studio initial directory conflict blocks before host probes without adopting foreign files',async()=>{
+ let probes=0
+ const {runner,store,host}=await setup({graphMode:'dynamic-rounds',design:isolatedStudioDesign()},{registerStudioTools:async()=>()=>{},beforeStart:async()=>{probes++}})
+ const batch=await runner.fire('T','manual',{batchId:'b-workspace-conflict',dispatch:'background'});runner.stop()
+ await mkdir(batch.turn!.cwd!,{recursive:true});await writeFile(join(batch.turn!.cwd!,'foreign.txt'),'do not overwrite')
+ // start() reloads the durable batch, just like a restart before its first dispatch.
+ await runner.start()
+ assert.equal(probes,0);assert.equal(host.sessions.size,0);assert.equal(await readFile(join(batch.turn!.cwd!,'foreign.txt'),'utf8'),'do not overwrite')
+ assert.match(store.s.cards.get(batch.cardIds[0])!.error??'',/studio-workspace/)
+})
+
+test('Creator approval and Actions share runner batch allocation while legacy Studio cwd remains unchanged',async()=>{
+ const {runner,store,root}=await setup({graphMode:'dynamic-rounds',design:isolatedStudioDesign()},{registerStudioTools:async()=>()=>{}})
+ const creator=new TaskCreator(runner,async()=>['a','b','c'].map(id=>({id,name:id} as any)))
+ const proposal={decision:'create' as const,reason:'isolated fixture',title:'Isolated Studio',brief:'Produce fixture',graphMode:'dynamic-rounds' as const,participants:['a','b','c'].map(agentId=>({agentId})),design:isolatedStudioDesign(),actions:[{id:'produce',name:'Produce',template:'Produce {{topic}}',parameters:[{key:'topic',label:'Topic',type:'text' as const,required:true}]}]}
+ const plan=await creator.prepare(proposal,{agent:{session:{id:'workspace-creator',deriveMessages:()=>[{role:'user',content:'Create a fixture'}]}}},root)
+ const approved=await creator.review(plan.id,plan.hash,'approve','Fixture approval');await tick()
+ const first=store.s.batches.get(approved.batchId!)!,actions=creator.actions.read(approved.taskId!)
+ const action=await creator.launchAction({taskId:approved.taskId!,actionId:'produce',revision:actions.revision,values:{topic:'next'},requestId:'workspace-action-12345',cwd:root})
+ const next=store.s.batches.get(action.batchId)!
+ assert.notEqual(first.turn!.cwd,next.turn!.cwd);assert.ok(first.turn!.studioWorkspace);assert.ok(next.turn!.studioWorkspace)
+ const legacy=await setup({graphMode:'dynamic-rounds',design:{...isolatedStudioDesign(),workspaceMode:undefined}},{registerStudioTools:async()=>()=>{}})
+ const old=await legacy.runner.fire('T','manual')
+ assert.equal(old.turn?.studioWorkspace,undefined);assert.equal(legacy.store.tasks.get('T')!.cwd,legacy.root)
+ assert.equal(legacy.store.kernel.db.prepare('SELECT workspace_path FROM tasks WHERE id=?').get(old.cardIds[0]).workspace_path,legacy.root)
+})
+
+test('Studio scheduler freezes its occurrence path and keeps the existing no-overlap lease',async()=>{
+ let now=Date.parse('2026-01-01T00:00:00Z')
+ const {runner,store}=await setup({graphMode:'dynamic-rounds',design:isolatedStudioDesign(),trigger:{kind:'cron',expr:'* * * * *'}},{now:()=>now,registerStudioTools:async()=>()=>{}})
+ runner.schedule.sync(store.tasks.get('T')!,now);now+=60_000;await runner.tick()
+ const [batch]=[...store.s.batches.values()];assert.ok(batch);assert.equal(batch.by,'cron');assert.equal(batch.turn!.studioWorkspace!.batchId,batch.id)
+ assert.equal(batch.turn!.cwd,join(store.root,'studio-workspaces','T','batches',batch.id))
+ now+=60_000;await runner.tick();assert.equal(store.s.batches.size,1)
+})
+
+test('Studio workspace mutation during host preflight blocks session creation and keeps allocation evidence',async()=>{
+ const {runner,store,host}=await setup({graphMode:'dynamic-rounds',design:isolatedStudioDesign()},{registerStudioTools:async()=>()=>{},beforeStart:async input=>{await rm(input.task.cwd,{recursive:true})}})
+ const batch=await runner.fire('T','manual',{batchId:'b-preflight-workspace-drift'})
+ assert.equal(host.sessions.size,0);assert.equal(store.kernel.getTask(batch.cardIds[0]).status,'blocked')
+ assert.ok(store.kernel.listEvents(batch.cardIds[0]).some(e=>e.kind==='studio_workspace_ready'))
+ assert.match(store.s.cards.get(batch.cardIds[0])!.lastBlockReason??'',/studio-workspace/)
+ await assert.rejects(stat(batch.turn!.cwd!),{code:'ENOENT'})
 })

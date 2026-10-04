@@ -49,6 +49,10 @@ export interface TaskOrigin {
  * accidentally inherited from the first incident that created the Task.
  */
 export interface TaskTurn {
+  /** Host-created only at an opted-in batch fire; legacy turns have no binding. */
+  executionBinding?: import('./batch-execution-binding.ts').BatchExecutionBinding
+  /** Host-owned directory frozen with a newly opted-in batch, never supplied by callers. */
+  studioWorkspace?: import('./studio-workspace.js').StudioBatchWorkspace
   action?: import('./task-actions.ts').TaskActionSnapshot
   objective: string
   participants: Participant[]
@@ -87,6 +91,8 @@ export interface TaskSpec {
   origin?: TaskOrigin
   /** Present only on the execution view for one signal-specific turn. */
   targets?: TaskTarget[]
+  /** Configuration provenance, not an authenticated chat-origin or historical receipt. */
+  configMigration?: { digest: string; workflowKind: 'chat' | 'manual' | 'external' }
 }
 
 export type BlockKind = 'needs_input' | 'dependency' | 'capability' | 'transient'
@@ -125,6 +131,7 @@ export type CardStatus = 'todo' | 'ready' | 'running' | 'blocked' | 'done' | 're
 
 export interface Card {
   id: string
+  supersededBy?: string
   batchId: string
   taskId: string
   /** Position in the chain, for display. */
@@ -189,6 +196,8 @@ export interface Artifact {
 }
 
 export type Event =
+  | { t:'studio/preparation-requested'; at:string; taskId:string; batchId:string; cardId:string; requestId:string; reason:string }
+  | { t:'studio/preparation-released'; at:string; taskId:string; batchId:string; requestId:string; plannerId:string; supersededCards:string[]; cancelledCards:string[]; cancelledRuns:string[]; deps:string[]; handoff:string }
   | { t: 'task/created'; at: string; taskId: string; task: TaskSpec }
   | { t: 'task/revised'; at: string; taskId: string; task: TaskSpec; previous: TaskSpec; planId: string }
   | { t: 'task/enabled'; at: string; taskId: string; enabled: boolean }
@@ -266,6 +275,17 @@ export function fold(events: Event[]): State {
       case 'batch/fired': {
         s.batches.set(e.batch.id, { id: e.batch.id, taskId: e.taskId, firedAt: e.at, by: e.batch.by, cardIds: e.batch.cards.map(c => c.id), ...(e.batch.turn ? { turn: e.batch.turn } : {}) })
         e.batch.cards.forEach((c, i) => s.cards.set(c.id, { ...c, id: c.id, batchId: e.batch.id, taskId: e.taskId, index: i, agentId: c.agentId, brief: c.brief, deps: c.deps, status: c.deps.length ? 'todo' : 'ready', runIds: [], consecutiveFailures: 0, blockRecurrences: 0 }))
+        break
+      }
+      case 'studio/preparation-requested': {
+        const c=s.cards.get(e.cardId);if(c)c.summary=`制作前退回：${e.reason}`
+        break
+      }
+      case 'studio/preparation-released': {
+        for(const id of e.cancelledRuns){const r=s.runs.get(id);if(r)finishRun(r,'cancelled','cancelled',e.at,`制作前返修 ${e.requestId}`)}
+        for(const id of e.supersededCards){const c=s.cards.get(id);if(c)c.supersededBy=e.requestId}
+        for(const id of e.cancelledCards){const c=s.cards.get(id);if(c){c.status='cancelled';c.endedAt=e.at;c.currentRunId=undefined}}
+        const p=s.cards.get(e.plannerId);if(p){p.deps=e.deps;p.brief=[p.brief,e.handoff].filter(Boolean).join('\n\n')}
         break
       }
       case 'card/created': {
@@ -424,6 +444,8 @@ export function describe(e: Event, s: State, agentName: (id: string) => string):
   const who = (runId: string) => { const r = s.runs.get(runId); const c = r && s.cards.get(r.cardId); return r?.profileId ? agentName(r.profileId) : c ? agentName(c.agentId) : runId }
   const card = (cardId: string) => { const c = s.cards.get(cardId); return c ? agentName(c.agentId) : cardId }
   switch (e.t) {
+    case 'studio/preparation-requested': return `${card(e.cardId)} 请求制作前返修：${e.reason}`
+    case 'studio/preparation-released': return `旧轮已退役，交回${card(e.plannerId)}修订；保留原预算和产物`
     case 'task/created': return `建卡「${e.task.title}」,${e.task.participants.map(p => agentName(p.agentId)).join(' → ')}`
     case 'task/revised': return `审查更新「${e.task.title}」，保留旧执行，定时仍停用`
     case 'task/enabled': return e.enabled ? '启用时间表' : '停用时间表'

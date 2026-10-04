@@ -1,11 +1,14 @@
 {
   "name": "dsh-task-console",
-  "version": "0.31.7",
+  "version": "0.32.3",
   "description": "Local-first Agent presets and task orchestration for DeepSeek Harness, backed by SQLite.",
   "license": "MIT",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
+    "./workflow-extensions": {
+      "default": "./lib/workflow-extensions.js"
+    },
     ".": {
       "default": "./lib/index.js"
     },
@@ -41,6 +44,8 @@
     "src",
     "presets",
     "docs/proxy-mcp.md",
+    "docs/workflow-extensions.md",
+    "docs/release-audit.md",
     "docs/agent-actions.md",
     "scripts/preset-skills.mjs",
     "scripts/install-task-intake.mjs",
@@ -55,7 +60,16 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "studio/helpers/*.py",
+    "studio/roles",
+    "studio/manifest.json",
+    "studio/README.md",
+    "scripts/package-studio.mjs",
+    "scripts/configure-studio.mjs",
+    "scripts/prepare-package.mjs",
+    "docs/studio-configuration.md",
+    "studio/runtime-assets"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -64,7 +78,10 @@
     "preset:intake": "node scripts/install-task-intake.mjs",
     "preset:creator": "node scripts/install-task-create.mjs",
     "test": "NODE_ENV=test tsx --test test/*.test.ts",
-    "kernel:check": "npm --prefix cloudflare run check"
+    "kernel:check": "npm --prefix cloudflare run check",
+    "prepack": "node scripts/prepare-package.mjs",
+    "test:studio-package": "node --test test/studio-package-payload.test.mjs",
+    "studio:configure": "node scripts/configure-studio.mjs"
   },
   "dsh": {
     "bundle": {

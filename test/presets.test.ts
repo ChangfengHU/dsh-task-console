@@ -165,3 +165,14 @@ test('Studio web search has a bounded 120-second budget while ordinary Agents an
 })
 
 test('text-only file group excludes read_image from the enforced tool grant',()=>{const spec=validateSpec({...base,tools:['fs-text','studio-runtime'],skills:[],mcpTools:{}}),out=renderComposition(spec,[],['read_image']);assert.deepEqual(spec.tools,['fs-text','studio-runtime']);const selected=out.yml.slice(out.yml.indexOf('    selected:'));assert.match(selected,/studio_preview_image/);assert.match(selected,/studio_preview_frames/);assert.doesNotMatch(selected,/^-?\s+- read_image$/m);assert.match(out.yml,/@deepseek-ai\/dsh-tool-fs/);})
+
+test('workflow-runtime marker pins the new fence without granting any ambient tool name',()=>{
+ const preset=validateSpec({...base,tools:['workflow-runtime'],mcpTools:{},skills:[]})
+ const text=renderComposition(preset,[]).yml
+ assert.match(text,/name: '\/.*\/agent-tool-fence\.js'/)
+ assert.match(text,/workflowRunTools: true/)
+ assert.doesNotMatch(text,/dsh-tool-bash|dsh-tool-fs|release_audit_verify|release_audit_report|tool-skill/)
+ const ordinary=renderComposition(validateSpec({...base,tools:[],mcpTools:{},skills:[]}),[]).yml
+ assert.match(ordinary,/name: 'dsh-task-console\/agent-tool-fence'/)
+ assert.doesNotMatch(ordinary,/workflowRunTools/)
+})

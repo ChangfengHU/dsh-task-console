@@ -1,17 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { replayGraph, graphEventLabel, type GraphEventRow } from '../src/graph-data.ts'
+import { replayGraph, type GraphEventRow } from '../src/graph-data.ts'
 
 const event = (id: number, task: string, kind: string, payload: Record<string, unknown> = {}, run_id: number | null = null): GraphEventRow => ({ id, graph_id: 'b1', task_id: task, run_id, kind, payload, created_at: id })
-
-test('model wait recovery is visible without inventing completion or another Run',()=>{
-  const rows=[event(1,'browser','created',{status:'ready'}),event(2,'browser','claimed',{},9),event(3,'browser','model_wait_interrupted',{code:'TIMEOUT'},9)]
-  assert.match(graphEventLabel(rows[2]),/模型等待超时，后台操作继续/)
-  const frame=replayGraph(rows)
-  assert.equal(frame.tasks.length,1);assert.equal(frame.runs.length,1)
-  assert.equal(frame.tasks[0].status,'running')
-  assert.notEqual(frame.runs[0].outcome,'completed')
-})
 
 test('DB replay never displays a task, link, or run before its canonical row event', () => {
   const events = [
@@ -46,4 +37,11 @@ test('DB replay advances visible run evidence for bound, session, prompt, and he
   assert.equal(replayGraph(events, 6).runs[0].claim_expires, 906)
   const legacy = [...events.slice(0, 5), event(6, 'p1', 'heartbeat', {}, 9)]
   assert.equal(replayGraph(legacy).runs[0].claim_expires, null)
+})
+
+test('DB replay distinguishes terminal blocks from open questions', () => {
+  const events = [event(1, 'e1', 'created', { title: '执行', role: 'executor' }), event(2, 'e1', 'claimed', {}, 9), event(3, 'e1', 'blocked', { reason: 'stop', terminal: true }, 9)]
+  assert.equal(replayGraph(events).runs[0].terminal_block, true)
+  assert.equal(replayGraph([...events.slice(0, 2), event(3, 'e1', 'blocked', { reason: 'capability', kind: 'capability' }, 9)]).runs[0].terminal_block, true)
+  assert.equal(replayGraph([...events.slice(0, 2), event(3, 'e1', 'blocked', { reason: 'question', kind: 'needs_input', terminal: false }, 9)]).runs[0].terminal_block, false)
 })

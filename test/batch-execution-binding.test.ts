@@ -1,0 +1,303 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import {mkdtemp,mkdir,writeFile,readFile,rm,cp} from 'node:fs/promises'
+import {tmpdir} from 'node:os'
+import {join} from 'node:path'
+import {createHash} from 'node:crypto'
+import {captureExecutionBinding,verifyExecutionBinding,withBoundPreset,executionRuntimeIdentity,executionRuntimeManifest} from '../src/batch-execution-binding.ts'
+import {persistExecutionBindingSnapshot} from '../src/execution-binding-snapshot.ts'
+import {renderComposition,validateSpec} from '../src/presets.ts'
+import {TaskRunner} from '../src/runner.ts'
+import {EventStore} from '../src/tasks.ts'
+import {validateDesign} from '../src/task-design.ts'
+
+async function fixture(t:any){
+ const root=await mkdtemp(join(tmpdir(),'batch-binding-'));t.after(()=>rm(root,{recursive:true,force:true}))
+ const specs=new Map<string,any>()
+ const save=async(id:string,patch:any={})=>{
+  const dir=join(root,'presets',id);await mkdir(dir,{recursive:true})
+  const spec=validateSpec({...specs.get(id),id,name:id,model:'provider/model',tools:[],skills:['sample'],...patch});specs.set(id,spec)
+  const rendered=renderComposition(spec,[],[])
+  await writeFile(join(dir,'task-console.json'),JSON.stringify(spec));await writeFile(join(dir,'agent.cordis.yml'),rendered.yml);await writeFile(join(dir,'capabilities.lock.json'),JSON.stringify(rendered.capabilities))
+  await mkdir(join(dir,'skills/sample'),{recursive:true});await writeFile(join(dir,'skills/sample/SKILL.md'),'original skill')
+ }
+ for(const id of ['a','b'])await save(id)
+ let model={provider:'default-provider',model:'default-model'},runtime='a'.repeat(64),mount:((id:string)=>Promise<void>)|undefined
+ const sessions:any[]=[]
+ const presets={resolve:async(id:string)=>({id,path:join(root,'presets',id,'agent.cordis.yml')}),mount:async(_:any,id:string)=>mount?.(id)}
+ const ctx:any={on:()=>()=>{},effect:()=>{},get:(name:string)=>name==='agentPresets'?presets:name==='agentDefaultModel'?{currentSelection:()=>({...model})}:name==='permissionPresets'?{set:()=>{}}:undefined,
+  agents:{create:async(opts:any)=>{await opts.setup({});const session:any={options:opts,disposed:false,prompts:[],agent:{session:{id:opts.sessionId},ctx:{tools:{register:()=>()=>{}}},followup:(message:any)=>session.prompts.push(message)}};sessions.push(session);return {agent:session.agent,dispose:async()=>{session.disposed=true}}}}}
+ const task:any={id:'task',title:'Task',brief:'objective',participants:[{agentId:'a'},{agentId:'b'}],trigger:{kind:'once'},cwd:root,timeoutSec:60,onFail:'retry',maxTries:2,enabled:true,createdAt:'2026-09-24T00:00:00Z',design:validateDesign({executionBinding:'agent-runtime-v1',scope:'scope',branches:[{id:'work',when:'ready',action:'work',evidence:'output'}],coordination:'sequence',failurePolicy:{isolateItems:false,maxAttempts:2,stopConditions:['failure']},acceptance:['done']})}
+ return {root,ctx,task,save,sessions,runtime:async()=>runtime,setRuntime:(value:string)=>runtime=value,setModel:(value:any)=>model=value,setMount:(value:any)=>mount=value}
+}
+test('host binding rejects authored model/permission/tool/skill/runtime drift',async t=>{
+ for(const change of ['model','permission','tool','skill','runtime'])await t.test(change,async t=>{
+  const s=await fixture(t);if(change==='default')await s.save('a',{model:''})
+  const binding=await captureExecutionBinding(s.ctx,s.task,'batch',undefined,s.runtime)
+  assert.equal(binding.agents.length,2);assert.equal(binding.agents[0].selection.provider,change==='default'?'default-provider':'provider')
+  if(change==='model')await s.save('a',{model:'provider/new-model'})
+  if(change==='default')s.setModel({provider:'default-provider',model:'changed'})
+  if(change==='permission')await s.save('a',{permissionPreset:'danger-full-access'})
+  if(change==='tool')await s.save('a',{tools:['web']})
+  if(change==='skill')await writeFile(join(s.root,'presets/a/skills/sample/SKILL.md'),'changed bytes')
+  if(change==='runtime')s.setRuntime('b'.repeat(64))
+  await assert.rejects(verifyExecutionBinding(s.ctx,binding,s.task.id,'batch','a',s.runtime),/binding-(agent|runtime)-drift/)
+ })
+})
+test('bound batch keeps frozen default selection; new batches capture a changed global default',async t=>{
+ const s=await fixture(t);await s.save('a',{model:''})
+ const original=await captureExecutionBinding(s.ctx,s.task,'original',undefined,s.runtime)
+ s.setModel({provider:'new-provider',model:'new-model'})
+ await verifyExecutionBinding(s.ctx,original,'task','original','a',s.runtime)
+ const next=await captureExecutionBinding(s.ctx,s.task,'next',undefined,s.runtime)
+ assert.equal(original.agents[0].selection.model,'default-model');assert.equal(next.agents[0].selection.model,'new-model')
+ await s.save('a',{model:'explicit/new-model'})
+ await assert.rejects(verifyExecutionBinding(s.ctx,original,'task','original','a',s.runtime),/agent-drift/)
+})
+
+test('successor dispatch uses the frozen default even after global chat changes provider',async t=>{
+ const s=await runnerFixture(t);await s.save('a',{model:''});await s.save('b',{model:''})
+ const batch=await s.runner.fire('task','manual',{batchId:'batch'})
+ s.setModel({provider:'new-provider',model:'new-model'})
+ const first=s.store.kernel.getTask(batch.cardIds[0]);s.store.kernel.completeTask(first.id,{expectedRunId:first.current_run_id})
+ const card=s.store.s.cards.get(batch.cardIds[1])!;s.store.kernel.db.prepare("UPDATE tasks SET status='ready' WHERE id=?").run(card.id)
+ await (s.runner as any).startRun(s.task,batch,card)
+ assert.equal(s.sessions.length,2);assert.deepEqual(s.sessions[1].options.agentOptions,{provider:'default-provider',model:'default-model'})
+ assert.equal(s.ctx.get('agentDefaultModel').currentSelection().provider,'new-provider')
+})
+test('new batch captures new settings; original cannot be rebound, assigned outside roster, or tampered',async t=>{
+ const s=await fixture(t),first=await captureExecutionBinding(s.ctx,s.task,'one',undefined,s.runtime)
+ await s.save('a',{model:'provider/new'});const second=await captureExecutionBinding(s.ctx,s.task,'two',undefined,s.runtime)
+ assert.notEqual(first.sha256,second.sha256);assert.equal(first.agents[0].selection.model,'model')
+ await assert.rejects(verifyExecutionBinding(s.ctx,first,'task','two','a',s.runtime),/binding-invalid/)
+ await assert.rejects(verifyExecutionBinding(s.ctx,first,'task','one','foreign',s.runtime),/assignee-unbound/)
+ const altered=structuredClone(second);altered.agents[0].permission='danger-full-access'
+ await assert.rejects(verifyExecutionBinding(s.ctx,altered,'task','two','a',s.runtime),/binding-invalid/)
+})
+test('mount interval mutation is rejected; credential-bearing preset bodies never enter binding',async t=>{
+ const s=await fixture(t);await s.save('a',{persona:'private prompt SECRET_BEARER',mcpPolicy:{}})
+ const binding=await captureExecutionBinding(s.ctx,s.task,'batch',{fromProvider:'provider',provider:'fallback',model:'fallback-model'},s.runtime)
+ assert.ok(!JSON.stringify(binding).includes('SECRET_BEARER'));assert.deepEqual(binding.fallback,{fromProvider:'provider',provider:'fallback',model:'fallback-model'})
+ await assert.rejects(withBoundPreset(s.ctx,binding,'task','batch','a',()=>s.save('a',{model:'provider/new'}),s.runtime),/agent-drift/)
+})
+test('runtime digest detects changed source bytes and invalid installed manifest coverage',async t=>{
+ const s=await fixture(t),root=join(s.root,'runtime');await mkdir(join(root,'src'),{recursive:true});await writeFile(join(root,'package.json'),'{}');await writeFile(join(root,'src/tool.ts'),'old')
+ const before=await executionRuntimeIdentity(root);await writeFile(join(root,'src/tool.ts'),'new');assert.notEqual(await executionRuntimeIdentity(root),before)
+ await writeFile(join(root,'DEPLOY_MANIFEST.json'),JSON.stringify({'src/tool.ts':'0'.repeat(64)}));await assert.rejects(executionRuntimeIdentity(root),/manifest-changed/)
+ for(const malformed of [null,[],{},'string',{'src/tool.ts':'not-a-digest'}]){
+  await writeFile(join(root,'DEPLOY_MANIFEST.json'),JSON.stringify(malformed));await assert.rejects(executionRuntimeIdentity(root),/manifest-invalid/)
+ }
+ const rows={'package.json':createHash('sha256').update('{}').digest('hex'),'src/tool.ts':createHash('sha256').update('new').digest('hex')}
+ await writeFile(join(root,'DEPLOY_MANIFEST.json'),JSON.stringify(rows));const installed=await executionRuntimeIdentity(root)
+ assert.match(installed,/^[a-f0-9]{64}$/);await writeFile(join(root,'src/tool.ts'),'mutated');await assert.rejects(executionRuntimeIdentity(root),/manifest-changed/)
+})
+async function runnerFixture(t:any,options:any={}){
+ const s=await fixture(t),store=new EventStore(join(s.root,'store')),runner=new TaskRunner(s.ctx,store,{maxInProgress:1,executionRuntimeIdentity:s.runtime,persistExecutionBindingSnapshot:async()=>({testOnly:true}),...options})
+ t.after(()=>{runner.stop();if(store.kernel.db.open)store.kernel.db.close()})
+ await runner.start()
+ await store.append({t:'task/created',at:'2026-09-24T00:00:00Z',taskId:s.task.id,task:s.task})
+ return {...s,store,runner}
+}
+test('new opted-in fire atomically persists binding; later stage drift blocks without creating a session',async t=>{
+ const s=await runnerFixture(t);const batch=await s.runner.fire('task','manual',{batchId:'batch'})
+ assert.ok(batch.turn?.executionBinding);assert.equal(s.sessions.length,1)
+ const frozen=s.store.kernel.db.prepare('SELECT turn_json FROM dsh_batches WHERE id=?').get('batch').turn_json
+  await s.save('b',{model:'provider/changed'})
+  const first=s.store.kernel.getTask(batch.cardIds[0]);s.store.kernel.completeTask(batch.cardIds[0],{expectedRunId:first.current_run_id})
+ const card=s.store.s.cards.get(batch.cardIds[1])!;s.store.kernel.db.prepare("UPDATE tasks SET status='ready' WHERE id=?").run(card.id)
+ await (s.runner as any).startRun(s.task,batch,card)
+ assert.equal(s.sessions.length,1);assert.equal(s.store.kernel.getTask(card.id).status,'blocked')
+ assert.equal(s.store.kernel.db.prepare('SELECT turn_json FROM dsh_batches WHERE id=?').get('batch').turn_json,frozen)
+ assert.equal(s.sessions[0].options.agentOptions.model,'model')
+ assert.ok(s.store.kernel.listEvents(batch.cardIds[0]).some((e:any)=>e.kind==='execution_binding_verified'))
+})
+test('bound batch is not committed or dispatched when its immutable execution snapshot cannot be written',async t=>{
+ const s=await runnerFixture(t,{persistExecutionBindingSnapshot:async()=>{throw Error('snapshot storage unavailable')}})
+ await assert.rejects(s.runner.fire('task','manual',{batchId:'no-snapshot'}),/snapshot storage unavailable/)
+ assert.equal(s.store.s.batches.has('no-snapshot'),false)
+ assert.equal(s.sessions.length,0)
+})
+test('binding drift during beforeStart blocks before mount and cannot be supplied by the caller',async t=>{
+ const s=await runnerFixture(t);(s.runner as any).beforeStart=async()=>{await s.save('a',{model:'provider/changed'})}
+ const batch=await s.runner.fire('task','manual',{batchId:'batch'});assert.equal(s.sessions.length,0);assert.equal(s.store.kernel.getTask(batch.cardIds[0]).status,'blocked')
+ await assert.rejects(s.runner.fire('task','manual',{batchId:'forged',turn:batch.turn}),/host-created-only/)
+ const again=await s.runner.fire('task','manual',{batchId:'batch'});assert.equal(again.turn?.executionBinding?.sha256,batch.turn?.executionBinding?.sha256)
+})
+test('legacy fire remains live and does not capture a runtime identity',async t=>{
+ const s=await runnerFixture(t,{executionRuntimeIdentity:async()=>{throw Error('legacy must not capture')}})
+ const legacy={...s.task,design:undefined};await s.store.append({t:'task/created',at:'2026-09-24T00:00:00Z',taskId:s.task.id,task:legacy})
+ const batch=await s.runner.fire('task','manual');assert.equal(batch.turn?.executionBinding,undefined);assert.equal(s.sessions.length,1)
+})
+
+test('bound startup fallback retains captured selection even when global fallback changes',async t=>{
+ const s=await runnerFixture(t),resolved:any[]=[]
+ const get=s.ctx.get;s.ctx.get=(key:string)=>key==='llm'?{resolveCallConfig:async(value:any)=>{resolved.push(value);return value}}:get(key)
+ s.runner.modelFallback={fromProvider:'provider',provider:'frozen-fallback',model:'frozen-model'}
+ await s.runner.fire('task','manual',{batchId:'batch'})
+ s.runner.modelFallback={fromProvider:'provider',provider:'changed-global',model:'changed-model'}
+ const flight=[...(s.runner as any).flights.values()][0] as any
+ flight.handle.agent.ctx.on=()=>()=>{}
+ await (s.runner as any).onTurnEnd(flight,{kind:'error',error:{code:'TRANSPORT'}})
+ assert.deepEqual(resolved,[{provider:'frozen-fallback',model:'frozen-model'}])
+ assert.ok(s.store.kernel.listEvents(flight.cardId).some((e:any)=>e.kind==='model_fallback'))
+})
+
+test('preset mutation during mounting creates no prompt and blocks the bound run',async t=>{
+ const s=await runnerFixture(t);s.setMount(async()=>s.save('a',{model:'provider/changed-during-mount'}))
+ const batch=await s.runner.fire('task','manual',{batchId:'batch'})
+ assert.equal(s.sessions.length,1);assert.ok(s.sessions.every(v=>v.prompts.length===0&&v.disposed));assert.equal((s.runner as any).flights.size,0);assert.equal(s.store.kernel.getTask(batch.cardIds[0]).status,'blocked')
+})
+
+test('bound mount failure disposes the returned session and records only a safe reason',async t=>{
+ const s=await runnerFixture(t);s.setMount(async()=>{throw Error('private transport SECRET')})
+ const batch=await s.runner.fire('task','manual',{batchId:'batch'})
+ assert.equal(s.sessions.length,1);assert.ok(s.sessions[0].disposed);assert.equal(s.sessions[0].prompts.length,0);assert.equal((s.runner as any).flights.size,0)
+ assert.equal(s.store.kernel.getTask(batch.cardIds[0]).status,'blocked')
+ const events=JSON.stringify(s.store.kernel.listEvents(batch.cardIds[0]));assert.match(events,/binding-mount-unavailable/);assert.ok(!events.includes('SECRET'))
+})
+
+test('binding drift after session creation disposes the session before dispatch',async t=>{
+ const s=await runnerFixture(t);(s.runner as any).onSessionCreated=async()=>s.setRuntime('b'.repeat(64))
+ const batch=await s.runner.fire('task','manual',{batchId:'batch'})
+ assert.equal(s.sessions.length,1);assert.ok(s.sessions[0].disposed);assert.equal(s.sessions[0].prompts.length,0);assert.equal((s.runner as any).flights.size,0)
+ assert.equal(s.store.kernel.getTask(batch.cardIds[0]).status,'blocked');assert.ok(s.store.kernel.listEvents(batch.cardIds[0]).some((e:any)=>e.kind==='execution_binding_rejected'))
+})
+
+test('retry after a terminal attempt rechecks the same binding without silently recapturing',async t=>{
+ const s=await runnerFixture(t),batch=await s.runner.fire('task','manual',{batchId:'batch'})
+ const first=s.store.kernel.getTask(batch.cardIds[0]);s.store.kernel.failRun(first.id,{expectedRunId:first.current_run_id,outcome:'failed',error:'fixture'})
+ const previous=batch.turn!.executionBinding!.sha256
+ await s.save('a',{model:'provider/new-before-retry'})
+ s.store.kernel.db.prepare("UPDATE tasks SET status='ready' WHERE id=?").run(first.id)
+ await (s.runner as any).startRun(s.task,batch,s.store.s.cards.get(first.id))
+ assert.equal(s.sessions.length,1);assert.equal(s.store.kernel.getTask(first.id).status,'blocked');assert.equal(s.store.s.batches.get(batch.id)!.turn!.executionBinding!.sha256,previous)
+})
+test('manual unblock checks the frozen execution identity before creating a retry Run',async t=>{
+ const s=await runnerFixture(t),batch=await s.runner.fire('task','manual',{batchId:'batch'}),cardId=batch.cardIds[0],run=s.store.s.cards.get(cardId)!.runIds.at(-1)!,core=s.store.coreRunId(run)!
+ await s.save('a',{model:'provider/changed'})
+ assert.equal(s.store.kernel.blockTask(cardId,{expectedRunId:core,reason:'test block',kind:'capability'}),true)
+ s.store.kernel.db.prepare("UPDATE tasks SET status='blocked' WHERE id=?").run(cardId)
+ s.store.s.cards.get(cardId)!.status='blocked'
+ const runs=s.store.kernel.listRuns(cardId).length,sessions=s.sessions.length
+ await assert.rejects(s.runner.unblockCard(cardId),/task-recovery-binding-migration-required:batch-execution-binding-agent-drift/)
+ assert.equal(s.store.kernel.getTask(cardId).status,'blocked')
+ assert.equal(s.store.kernel.listRuns(cardId).length,runs)
+ assert.equal(s.sessions.length,sessions)
+})
+
+test('binding persists on reload, and preparation specialists are captured with the full selected roster',async t=>{
+ const s=await runnerFixture(t)
+ await s.save('specialist');await s.save('notifier');await s.save('proxy')
+ const task={...s.task,design:{...s.task.design,studioStages:[{id:'sound',agentId:'specialist'}],notifications:{agentId:'notifier'},proxy:{agentId:'proxy'}}}
+ const full=await captureExecutionBinding(s.ctx,task,'all-roles',undefined,s.runtime)
+ assert.deepEqual(full.agents.map(a=>a.id),['a','b','specialist','notifier','proxy'])
+ const batch=await s.runner.fire('task','manual',{batchId:'batch'}),before=batch.turn!.executionBinding!.sha256
+ s.runner.stop();s.store.kernel.db.close()
+ const loaded=new EventStore(join(s.root,'store'));await loaded.load();t.after(()=>loaded.kernel.db.close())
+ assert.equal(loaded.s.batches.get('batch')!.turn!.executionBinding!.sha256,before)
+ await s.save('a',{model:'provider/changed-after-reload'})
+ await assert.rejects(verifyExecutionBinding(s.ctx,loaded.s.batches.get('batch')!.turn!.executionBinding!,'task','batch','a',s.runtime),/agent-drift/)
+})
+
+test('batch workspace and execution identity freeze together before any directory allocation or provider probe',async t=>{
+ const s=await runnerFixture(t,{registerStudioTools:async()=>()=>{}})
+ await s.save('c')
+ const task={...s.task,graphMode:'dynamic-rounds',participants:['a','b','c'].map(agentId=>({agentId})),design:{...s.task.design,evidenceContract:'studio-video-v1',workspaceMode:'studio-batch-v1'}}
+ await s.store.append({t:'task/created',at:'2026-09-24T00:00:00Z',taskId:task.id,task})
+ const [batch,replay]=await Promise.all([s.runner.fire(task.id,'manual',{batchId:'workspace-bound',dispatch:'background'}),s.runner.fire(task.id,'manual',{batchId:'workspace-bound',dispatch:'background'})]);s.runner.stop()
+ assert.equal(batch.id,replay.id);assert.equal(s.store.s.batches.size,1)
+ const turn=JSON.parse(s.store.kernel.db.prepare('SELECT turn_json FROM dsh_batches WHERE id=?').get(batch.id).turn_json)
+ assert.equal(turn.studioWorkspace.batchId,turn.executionBinding.batchId)
+ assert.equal(turn.cwd,turn.studioWorkspace.path);assert.equal(turn.workflow.definition.design.workspaceMode,'studio-batch-v1')
+ await assert.rejects(readFile(join(turn.cwd,'.studio-workspace.json')),{code:'ENOENT'});assert.equal(s.sessions.length,0)
+})
+
+// Migration fixture reuses the real SQLite runner and authored preset locks.
+import {previewExecutionMigration,applyExecutionMigration,effectiveExecutionBinding,releasePathOnly} from '../src/batch-execution-migration.ts'
+async function migrationFixture(t:any,useDefault=false){
+ const s=await runnerFixture(t),oldRuntimeRoot=join(s.root,'releases/runtime-aaaaaaaaaaaa'),runtimeRoot=join(s.root,'releases/runtime-bbbbbbbbbbbb')
+ if(useDefault)for(const id of ['a','b'])await s.save(id,{model:''})
+ await mkdir(join(oldRuntimeRoot,'src'),{recursive:true});await writeFile(join(oldRuntimeRoot,'package.json'),'{"dependencies":{}}');await writeFile(join(oldRuntimeRoot,'src/entry.js'),'export {}')
+ s.setRuntime(await executionRuntimeIdentity(oldRuntimeRoot))
+ const batch=await s.runner.fire('task','manual',{batchId:'batch'});s.runner.stop()
+ for(const card of batch.cardIds){const core=s.store.kernel.getTask(card);if(core.current_run_id)s.store.kernel.failRun(card,{expectedRunId:core.current_run_id,outcome:'failed',error:'fixture'});s.store.kernel.db.prepare("UPDATE tasks SET status='blocked',current_run_id=NULL,claim_lock=NULL,claim_expires=NULL,worker_pid=NULL WHERE id=?").run(card)}
+ const binding=batch.turn!.executionBinding!,snapshotRoot=join(s.root,'releases/evidence/execution-binding-snapshots')
+ await cp(oldRuntimeRoot,runtimeRoot,{recursive:true})
+ const oldRuntime=await executionRuntimeManifest(oldRuntimeRoot),newRuntime=await executionRuntimeIdentity(runtimeRoot)
+ await persistExecutionBindingSnapshot(binding,{root:snapshotRoot,runtime:oldRuntime})
+ s.setRuntime(newRuntime)
+ return {...s,batch,binding,dir:join(snapshotRoot,binding.sha256),options:{runtime:s.runtime,runtimeRoot}}
+}
+test('runtime migration preserves frozen default without changing global model or authored grants',async t=>{
+ const s=await migrationFixture(t,true),args={taskId:'task',batchId:'batch'}
+ s.setModel({provider:'new-provider',model:'new-model'})
+ const p=await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ assert.deepEqual(p.binding.agents,s.binding.agents)
+ await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p.previewSha256,reason:'platform fix with frozen model'},s.options)
+ await verifyExecutionBinding(s.ctx,effectiveExecutionBinding(s.store.kernel.db,s.binding),'task','batch','a',s.runtime)
+ assert.equal(s.ctx.get('agentDefaultModel').currentSelection().provider,'new-provider')
+})
+test('migration preserves original and runtime refreshes append a verified chain',async t=>{
+ const s=await migrationFixture(t),args={taskId:'task',batchId:'batch'},before=JSON.stringify(s.batch.turn),p=await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ assert.equal(p.binding.runtimeSha256,await s.runtime());assert.deepEqual(p.runtimeChanges.changedFiles,[]);assert.deepEqual(p.runtimeChanges.addedFiles,[]);assert.deepEqual(p.runtimeChanges.removedFiles,[]);await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p.previewSha256,reason:'platform fix'},s.options)
+ assert.equal(JSON.stringify(s.batch.turn),before);assert.equal(effectiveExecutionBinding(s.store.kernel.db,s.binding).sha256,p.binding.sha256)
+ assert.equal(s.store.kernel.db.prepare('SELECT count(*) AS n FROM dsh_studio_interventions').get().n,1)
+ await verifyExecutionBinding(s.ctx,effectiveExecutionBinding(s.store.kernel.db,s.binding),'task','batch','a',s.runtime)
+ const reloaded=new EventStore(join(s.root,'store'));await reloaded.load();assert.equal(effectiveExecutionBinding(reloaded.kernel.db,reloaded.s.batches.get('batch')!.turn!.executionBinding!).sha256,p.binding.sha256);reloaded.kernel.db.close()
+ await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/runtime-current/)
+ s.store.kernel.db.exec('DROP TABLE dsh_execution_binding_runtime_refreshes') // legacy database first encountered by a runtime-refresh release
+ const runtimeNext=join(s.root,'releases/runtime-cccccccccccc');await cp(s.options.runtimeRoot,runtimeNext,{recursive:true});s.options.runtimeRoot=runtimeNext;s.setRuntime(await executionRuntimeIdentity(runtimeNext));const p2=await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ assert.equal(p2.previousEffectiveSha256,p.binding.sha256);assert.equal(p2.sequence,1)
+ await applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p2.previewSha256,reason:'verify the next pinned runtime release'},s.options)
+ const effective=effectiveExecutionBinding(s.store.kernel.db,s.binding);assert.equal(effective.runtimeSha256,await s.runtime());assert.equal(effective.sha256,p2.binding.sha256)
+ assert.equal(s.store.kernel.db.prepare('SELECT count(*) AS n FROM dsh_execution_binding_runtime_refreshes WHERE batch_id=?').get('batch').n,1)
+ assert.equal(s.store.kernel.db.prepare('SELECT count(*) AS n FROM dsh_execution_binding_migrations WHERE batch_id=?').get('batch').n,1)
+ s.store.kernel.db.prepare("UPDATE dsh_execution_binding_migrations SET original_sha='bad'").run();assert.throws(()=>effectiveExecutionBinding(s.store.kernel.db,s.binding),/invalid-overlay/)
+})
+test('migration refuses stale preview, authority drift, untrusted evidence and dispatchable queue',async t=>{
+ const s=await migrationFixture(t),args={taskId:'task',batchId:'batch'},p=await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ await assert.rejects(applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:'0'.repeat(64),reason:'fix'},s.options),/preview-changed/)
+ await s.save('a',{model:'provider/changed'});await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/authority-drift/)
+ await s.save('a',{model:'provider/model'});await writeFile(join(s.dir,'a/task-console.json'),'{}');await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/snapshot-hash/)
+ s.store.kernel.db.prepare("UPDATE tasks SET status='ready' WHERE id=?").run(s.batch.cardIds[0]);await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/not-quiescent/)
+})
+test('path-only comparator rejects YAML policy, module or foreign root changes',()=>{
+ const old="- id: mcp-a\n  name: '/r/runtime-aaaaaaaaaaaa/lib/filtered-mcp-client.js'\n  config: true",current=old.replace('aaaaaaaaaaaa','bbbbbbbbbbbb')
+ assert.ok(releasePathOnly(old,current,'/r/runtime-bbbbbbbbbbbb'))
+ assert.ok(!releasePathOnly(old,current.replace('true','false'),'/r/runtime-bbbbbbbbbbbb'))
+ assert.ok(!releasePathOnly(old,current.replace('filtered-mcp-client','evil'),'/r/runtime-bbbbbbbbbbbb'))
+ assert.ok(!releasePathOnly(old,current,'/foreign/runtime-bbbbbbbbbbbb'))
+})
+
+test('stopping while reconciliation waits cannot dispatch a newly ready card',async t=>{
+ const s=await runnerFixture(t),batch=await s.runner.fire('task','manual',{batchId:'batch'})
+ let release!:()=>void,entered!:()=>void;const gate=new Promise<void>(r=>release=r),started=new Promise<void>(r=>entered=r)
+ ;(s.runner as any).reconcileProgressOperations=async()=>{entered();await gate}
+ const ticking=s.runner.tick();await started
+ const target=batch.cardIds[1];s.store.kernel.db.prepare("UPDATE tasks SET status='ready' WHERE id=?").run(target)
+ const before=s.store.kernel.listEvents(target).length,runCount=s.store.kernel.listRuns(target).length,sessions=s.sessions.length
+ s.runner.stop();release();await ticking
+ assert.equal(s.store.kernel.listRuns(target).length,runCount);assert.equal(s.store.kernel.listEvents(target).length,before);assert.equal(s.sessions.length,sessions)
+})
+test('claim queue checks lifecycle inside the atomic transition',async t=>{
+ const s=await runnerFixture(t),batch=await s.runner.fire('task','manual',{batchId:'batch'}),target=batch.cardIds[1]
+ s.store.kernel.db.prepare("UPDATE tasks SET status='ready' WHERE id=?").run(target)
+ let active=true;const queued=s.store.claimCard(target,'never','never',1,false,()=>active);active=false
+ assert.equal(await queued,undefined);assert.equal(s.store.kernel.listRuns(target).length,0)
+})
+test('apply rejects archive during final verification; migration remains absent',async t=>{
+ const s=await migrationFixture(t),args={taskId:'task',batchId:'batch'},p=await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ let checks=0;const options={...s.options,quiescent:()=>{checks++;if(checks===3)s.store.s.batches.get('batch')!.archivedAt='now';return true}}
+ await assert.rejects(applyExecutionMigration(s.store,s.ctx,{...args,expectedPreviewSha256:p.previewSha256,reason:'fix'},options),/migration-context/)
+ assert.equal(effectiveExecutionBinding(s.store.kernel.db,s.binding).sha256,s.binding.sha256)
+})
+
+test('settled historical ready rows do not block migration but any durable claim still does',async t=>{
+ const s=await migrationFixture(t),args={taskId:'task',batchId:'batch'}
+ s.store.kernel.db.prepare("INSERT INTO dsh_batches(id,spec_id,fired_at,fired_by,settled_at) VALUES('historical','task',1,'manual',2)").run()
+ const id='historical-card';s.store.kernel.db.prepare("INSERT INTO tasks(id,title,body,status,created_by,created_at) VALUES(?,'history','','ready','fixture',1)").run(id)
+ s.store.kernel.db.prepare("INSERT INTO dsh_card_bindings(card_id,spec_id,batch_id,position,brief) VALUES(?,'task','historical',0,'')").run(id)
+ await previewExecutionMigration(s.store,s.ctx,args,s.options)
+ s.store.kernel.db.prepare("UPDATE tasks SET claim_lock='stale' WHERE id=?").run(id)
+ await assert.rejects(previewExecutionMigration(s.store,s.ctx,args,s.options),/not-quiescent/)
+})

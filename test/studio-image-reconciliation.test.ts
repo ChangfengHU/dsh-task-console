@@ -15,7 +15,7 @@ async function setup(t:any){
  await store.createBatch(task,{t:'batch/fired',at,taskId:'T',batch:{id:'B',by:'manual',cards:[{id:'C',agentId:'a',role:'executor',round:1,deps:[]}]}} as any)
  store.kernel.claimTask('C');await store.append({t:'run/claimed',at,taskId:'T',cardId:'C',runId:'R',sessionId:'session',attempt:1})
  const context={task,batch:{id:'B'},card:{role:'executor'},sessionId:'session'},ops=new StudioOperations(store)
- ops.configure(context,{imageCalls:6,voiceSegments:40})
+ ops.configure(context,{imageCalls:6,voiceSegments:40,imageBatches:6})
  const request={prompt:'specific background',engine:'mixed',referenceImageUrl:'https://cdn.vyibc.com/reference.mp4',wait:false}
  await assert.rejects(ops.invoke(context,'vyibc-image_generate_image',request,async()=>{throw Error('response lost')}),/submission-unknown/)
  const input={taskId:'T',batchId:'B',expectedRunId:'R',intent:ops.snapshot(context).operations[0].intent,jobId:'dt_one',recoveryId:'reconcile-one',reason:'Match original input and terminal upstream failure',request}

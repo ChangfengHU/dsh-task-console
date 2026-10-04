@@ -1,7 +1,10 @@
 import {createHash} from 'node:crypto'
+import {productionArgumentError} from './studio-production-arguments.js'
 import {studioStageFor,type StudioStageId} from './studio-stages.js'
 
 export const REQUIRED_PRODUCTION_SKILLS=['hyperframes','hyperframes-core','studio-character-workflow'] as const
+export const REQUIRED_PLANNING_SKILLS=['studio-director'] as const
+export const REQUIRED_REVIEW_SKILLS=['studio-quality'] as const
 /** Matches the authored Taskbook specialists; not every stage installs HyperFrames
  * or vyibc-image. Character design supplies the visual generation instructions. */
 export const REQUIRED_STAGE_SKILLS:Record<StudioStageId,readonly string[]>={
@@ -11,13 +14,15 @@ export const REQUIRED_STAGE_SKILLS:Record<StudioStageId,readonly string[]>={
 }
 export function requiredStudioSkills(input:any):readonly string[]{
  if(input.task?.design?.evidenceContract!=='studio-video-v1')return []
+ if(input.card?.role==='planner')return REQUIRED_PLANNING_SKILLS
+ if(input.card?.role==='reviewer')return REQUIRED_REVIEW_SKILLS
  if(input.card?.role==='executor')return REQUIRED_PRODUCTION_SKILLS
  if(input.card?.role!=='studio-stage')return []
  const stage=studioStageFor(input)
  if(!stage)throw Error('studio-skill-stage-identity-required')
  return REQUIRED_STAGE_SKILLS[stage.id]
 }
-const READ_ONLY=new Set(['skill','read','glob','grep','studio_status','studio_read_text','studio_character_image','studio_reference_frames','studio_reference_audio','studio_preview_image','studio_preview_frames','studio_preview_audio','session_capabilities','environment_capabilities','job_list','job_output','job_kill','task_block','task_notify'])
+const READ_ONLY=new Set(['skill','read','glob','grep','studio_status','studio_read_guide','studio_read_text','studio_character_image','studio_character_profile','studio_reference_overview','studio_reference_frames','studio_reference_audio','studio_preview_image','studio_preview_frames','studio_preview_audio','session_capabilities','environment_capabilities','job_list','job_output','job_kill','task_block','task_notify'])
 const READ_MCP=/(?:^|__|_)(?:character_get|character_assets|character_search|asset_get|asset_search|library_info|project_get|get_task|list_results)$/
 
 /** Workflow guard, not an OS sandbox or proof of comprehension/film quality. */
@@ -43,7 +48,8 @@ export function registerStudioSkillGate(ctx:any,options:{input:any;isActive:()=>
   if(!options.isActive())return 'studio-skill-gate-stale-run'
   if(READ_ONLY.has(exec.name)||READ_MCP.test(exec.name))return
   const missing=required.filter(name=>!loaded.has(name))
-  if(missing.length)return `studio-required-skills-not-loaded: before production or shell execution, actually call skill with each JSON argument ${missing.map(name=>JSON.stringify({name})).join(', ')}. These installed instructions must be returned successfully in this session. Do not invent another path or treat this as permission denial. Loading is not quality approval.`
+  if(missing.length)return `studio-required-skills-not-loaded: before planning, production, or review submission, actually call skill with each JSON argument ${missing.map(name=>JSON.stringify({name})).join(', ')}. These installed instructions must be returned successfully in this session. Do not invent another path or treat this as permission denial. Loading is not quality approval.`
+  return productionArgumentError(exec.name,exec.arguments)
  })
  return()=>{stopGuard();stopResult()}
 }

@@ -155,8 +155,8 @@ test('real service scope refreshes studio status budget on success and unknown s
   const db=new Database(':memory:');t.after(()=>db.close())
   const task:any={id:'studio-task',design:{evidenceContract:'studio-video-v1',studio:{characterId:'character-any',referenceSha256:'b'.repeat(64),referenceUrl:'https://cdn.vyibc.com/approved.mp4'}}}
   const batch:any={id:'batch'},card:any={id:'card',role:'executor',agentId:'studio-video-producer'}
-  const run={taskId:task.id,batchId:batch.id,cardId:card.id,sessionId:'task-live-producer',status:'running'}
-  const store:any={kernel:{db},tasks:new Map([[task.id,task]]),s:{runs:new Map([['run',run]]),batches:new Map([[batch.id,batch]]),cards:new Map([[card.id,card]])}}
+  const run={id:'run',taskId:task.id,batchId:batch.id,cardId:card.id,sessionId:'task-live-producer',status:'running'}
+  const store:any={kernel:{db,getTask:()=>({status:'running',current_run_id:1,claim_expires:Math.floor(Date.now()/1000)+600})},coreRunId:()=>1,tasks:new Map([[task.id,task]]),s:{runs:new Map([['run',run]]),batches:new Map([[batch.id,batch]]),cards:new Map([[card.id,card]])}}
   const input={task,batch,card,sessionId:run.sessionId},ops=new StudioOperations(store),workflow=new StudioWorkflow(store)
   workflow.recordScript({...input,card:{...card,role:'planner'}},{sha256:'c'.repeat(64),lines:['one','two','three'].map(text=>({id:text,text}))})
   ops.configure(input,{imageCalls:6,voiceSegments:80})
@@ -168,4 +168,11 @@ test('real service scope refreshes studio status budget on success and unknown s
   await assert.rejects(service.scopedMcp('vyibc-voice_synthesize',{segments:[{text:'two'},{text:'three'}]},exec,async()=>{throw Error('timeout')}),/submission-unknown/)
   assert.equal(workflow.status(input).budget.used.voiceSegments,3)
   assert.equal(ops.snapshot(input).unknown,true)
+})
+test('asset catalog task calls reach the host pagination path after preset namespace rename',async()=>{
+ let rawSeen='';const ctx={get:()=>({scopedMcp:(raw:string,args:any,_exec:any,invoke:any)=>{rawSeen=raw;return invoke(args)}})}
+ const identity={serverName:'vyibc-cartoon-assets-studio-taskbook-sound',sourceEntryId:'mcp-vyibc-cartoon-assets',sourceServerName:'vyibc-cartoon-assets'}
+ const args={kind:'bgm',limit:5};const result=await executeWithTaskScope(ctx,identity,'asset_search',args,{agent:{session:{id:'task-catalog'}}},async x=>x)
+ assert.equal(rawSeen,'asset_search');assert.deepEqual(result,args)
+ assert.throws(()=>executeWithTaskScope({},identity,'asset_search',args,{agent:{session:{id:'task-catalog'}}},()=>{}),/scope guard unavailable/)
 })

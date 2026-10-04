@@ -18,7 +18,7 @@ import { build } from 'esbuild'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 // An explicit staging directory lets browser tests validate assets before publishing.
@@ -33,6 +33,7 @@ const HOST_EXTERNAL = ['@deepseek-ai/cordis', '@deepseek-ai/dsh-*', '@deepseek-a
 await build({
   entryPoints: [
     join(root, 'src/index.ts'),
+    join(root, 'src/workflow-extensions.ts'),
     join(root, 'src/typert.host.ts'),
     join(root, 'src/studio-schema.ts'),
     join(root, 'src/studio-recovery-api.ts'),
@@ -53,6 +54,13 @@ await build({
   external: HOST_EXTERNAL,
   logLevel: 'info',
 })
+
+// Bundle exact trusted adapters; the manifest drives BOTH startup and upgrades.
+const {WORKFLOW_HOST_API}=await import(pathToFileURL(join(out,'workflow-extensions.js')).href)
+await build({entryPoints:[join(root,'src/release-audit-extension.ts')],outfile:join(out,'workflows/release-audit.mjs'),bundle:true,format:'esm',platform:'node',target:'node20',external:['node:*'],logLevel:'info'})
+const adapterBytes=await readFile(join(out,'workflows/release-audit.mjs'))
+const adapter=(await import(pathToFileURL(join(out,'workflows/release-audit.mjs')).href)).default
+await writeFile(join(out,'workflow-compat.json'),JSON.stringify({schemaVersion:1,hostApi:WORKFLOW_HOST_API,studioFeatures:['dialogue-language-zh-CN-v1','preparation-revision-v1','visual-coverage-requirements-v1','visual-coverage-components-v2','studio-interventions-v1','batch-execution-binding-v1','studio-batch-workspace-v1','studio-bounded-progress-v1','studio-sound-requirements-v3','studio-progress-reconciliation-v1','batch-execution-migration-v1'],extensions:[{id:adapter.id,version:adapter.version,hostApi:adapter.hostApi,implementationSha256:createHash('sha256').update(adapterBytes).digest('hex'),bundle:'lib/workflows/release-audit.mjs'}]},null,2)+'\n')
 
 async function writeClient(assetHash) {
 const client = await build({

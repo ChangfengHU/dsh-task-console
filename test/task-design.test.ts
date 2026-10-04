@@ -11,6 +11,7 @@ export const design = { scope: 'Read real inventory and preserve excluded resour
   acceptance: ['Every discovered item has an evidence-linked outcome'] }
 test('design requires explicit branches, bounded retry and testable acceptance', () => {
   assert.deepEqual(validateDesign(design), design)
+  assert.throws(()=>validateDesign({...design,progressPolicy:'studio-bounded-v1'}),/unsupported-studio-progress-policy/)
   assert.throws(() => validateDesign(undefined), /branches/)
   assert.throws(() => validateDesign({ ...design, branches: [design.branches[0], design.branches[0]] }), /重复/)
   assert.throws(() => validateDesign({ ...design, acceptance: [] }), /acceptance/)

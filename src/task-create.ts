@@ -7,11 +7,15 @@ import { batchStatus, cardRun, validateTask, type TaskSpec, type TaskTurn } from
 import type { TaskRunner } from './runner.ts'
 import type { IntakeAgent } from './task-intake.ts'
 import { workflowDefinition } from './workflow-plan.ts'
+import { validateStudioPolicy as studioEvidenceDefaults } from './studio-evidence.mjs'
+import {composeStudioTaskDraft,STUDIO_TASK_REQUEST_CONTRACT} from './studio-task-draft.js'
+import {planStudioWorkspace,ensureStudioWorkspace,type StudioWorkspace} from './studio-workspace.js'
 import { composeRecipe, fleetRecipeDesign, workflowRecipes, type WorkflowRecipe } from './workflow-recipes.ts'
 import { validateDesign, taskAgentIds, type TaskDesign } from './task-design.ts'
 import { TaskActions, validateTaskActions, type TaskActionInput } from './task-actions.ts'
 import type { AgentAction } from './agent-actions.ts'
 import fleetTaskActions from '../presets/fleet-task-actions.json' with { type: 'json' }
+import { isChatWorkflow } from './task-kind.ts'
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export function userInput(exec: ToolExecutionLike) {
@@ -32,15 +36,24 @@ export type TaskProposal = {
   trigger?: TaskSpec['trigger']
   actions?: AgentAction[]
   recurringObjective?: string
+  studioRequest?: unknown
+}
+
+const studioActions:AgentAction[]=[{id:'studio-produce',name:'制作候选预览',description:'使用已审查角色、参考、预算和质检标准制作新候选；不发布。',template:'制作下一部候选预览。主题：{{topic}}。主题留空时自主研究选题；保持已审查角色、参考、预算和验收，不发布。',parameters:[{key:'topic',label:'本次主题（留空自主选题）',type:'text',required:false,default:''}],enabled:true,isDefault:true}]
+function assertStudioSubmission(proposal:TaskProposal){
+  if(proposal.decision!=='create'||Object.keys(proposal).some(k=>!['decision','reason','studioRequest'].includes(k)))throw Error('studio-request-create-only: use only decision=create, reason and studioRequest; do not mix Task fields, paths, bindings, actions or recipes')
 }
 
 export class TaskCreator {
   private queue: Promise<unknown> = Promise.resolve()
-  constructor(readonly runner: TaskRunner, readonly agents: () => Promise<IntakeAgent[]>) {}
+  constructor(readonly runner: TaskRunner, readonly agents: () => Promise<IntakeAgent[]>, readonly bindDesign: (design:TaskDesign)=>TaskDesign = design => {
+    if(design.extension)throw Error('workflow-extension-host-binding-unavailable')
+    return design
+  }, readonly extensions:()=>unknown[]=()=>[]) {}
   get actions() { return new TaskActions(this.runner) }
 
   catalog() {
-    return [...this.runner.store.tasks.values()].filter(t => !t.archivedAt && (t.enabled || t.trigger.kind === 'cron') && t.origin?.source === 'task-chat')
+    return [...this.runner.store.tasks.values()].filter(t => !t.archivedAt && (t.enabled || t.trigger.kind === 'cron') && isChatWorkflow(t))
       .map(({ id, title, brief, participants, graphMode, workflowRecipe, design, trigger }) => ({ id, title, brief, participants, trigger,
         actionCount: this.actions.read(id).actions.filter(a => a.enabled !== false).length,
         scheduleEnabled: trigger.kind === 'cron' ? this.runner.store.tasks.get(id)!.enabled : null,
@@ -48,10 +61,23 @@ export class TaskCreator {
   }
 
   async context() {
-    return { agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
-      designFields: { scope:'required string, not an object; reusable target-selection policy, no fixed IP', branches:'required array of {id:string,when:string,action:string,evidence:string}', coordination:'required string describing actual role dependencies', failurePolicy:'{isolateItems:boolean,maxAttempts:integer 1..3,stopConditions:string[]}', acceptance:'required nonempty string[] of business evidence criteria', optional:'notifications only when requested; evidenceContract only for a matching catalog contract, not a Fleet recipe ID' },
+    return { workflowExtensions:this.extensions(), agents: (await this.agents()).filter(a => !['task-create-agent', 'task-intake'].includes(a.id)), tasks: this.catalog(), recipes: workflowRecipes,
+      designFields: { scope:'required string, not an object; reusable target-selection policy, no fixed IP', branches:'required array of {id:string,when:string,action:string,evidence:string}', coordination:'required string describing actual role dependencies', failurePolicy:'{isolateItems:boolean,maxAttempts:integer 1..3,stopConditions:string[]}', acceptance:'required nonempty string[] of business evidence criteria', optional:'extension:{id,version,policy} only for a trusted installed host extension; exact host/policy digests are frozen before review. notifications only when requested; evidenceContract only for a matching catalog contract, not a Fleet recipe ID' },
+      studioCreationContract: {
+        kind:'host-composed-draft', executableRecipe:false, automaticallyStarts:false,
+        route:'Use task_create_submit with only decision=create, reason and studioRequest. The host composes the complete pending plan and default Task Action from the current installed roster, reserving a Task-specific workspace beneath its Task store. Chat cwd is not used. Only independent approval creates the owned directory; submission creates no workspace, Task or Agent. New batches receive separate owned subdirectories; retries of one batch retain its directory. Do not also supply design, actions, Task fields, paths or execution snapshots. Complete manually authored designs remain supported separately.',
+        request:{...STUDIO_TASK_REQUEST_CONTRACT,shape:{characterId:'resolved existing character ID string',referenceUrl:'selected source metadata candidate HTTPS URL string',referenceSha256:'source-declared expected file SHA-256 string; not yet verified',roles:Object.fromEntries(STUDIO_TASK_REQUEST_CONTRACT.roles.map(role=>[role,'exact installed Agent ID string from context.agents'])),generationLimits:Object.fromEntries(STUDIO_TASK_REQUEST_CONTRACT.generationLimits.required.map(key=>[key,'explicit authorized integer within the contract bounds'])),topic:'optional string; omit or leave blank for autonomous selection'},actions:studioActions},
+        sourceDiscovery:{tool:'task_create_studio_sources',steps:[{query:'character name or description; inspect real returned IDs'},{characterId:'selected real ID; inspect full current profile and reference candidates'}],limits:'Read-only metadata discovery through the configured host. Missing references are explicit; do not invent IDs, URLs or hashes. Candidate metadata is not a verified download or an approved baseline. Use the selected candidate URL and declared expected SHA unchanged in a pending-review studioRequest; no Creator download is required before submission. Host preflight must match actual downloaded bytes before production, followed by actual reference observation. Missing metadata blocks submission; neither metadata nor matching bytes establishes baseline approval.'},
+        design:{evidenceContract:'studio-video-v1',executionBinding:'agent-runtime-v1',studioStages:['storyboard','visual','sound']},
+        executionBinding:'Opt in for new definitions on this supporting host only. The runner captures actual role/model/skill/runtime bindings at batch start; callers cannot supply a fabricated execution snapshot. Existing tasks are not upgraded by reading this context.',
+        roles:{participants:['planner','executor','reviewer'],specialists:['storyboard','visual','sound'],selection:'Select six different installed agent IDs from context.agents with the actual needed tools and skills. participants is ordered director, editor, independent reviewer. design.studioStages contains {id,agentId,brief} for all three specialists, separate from the main roles.'},
+        studio:{requiredInputs:['characterId','referenceUrl','referenceSha256','generationLimits'],defaults:(()=>{const p=studioEvidenceDefaults({}).policy;return {width:p.width,height:p.height,fps:p.fps,...STUDIO_TASK_REQUEST_CONTRACT.defaults,requiredDimensions:p.requiredDimensions}})(),recommendedContracts:{dialogueLanguage:'zh-CN',visualCoverage:'components-v2'},publish:false,
+          sources:'Resolve the authorized character ID and source metadata reference candidate first. referenceUrl must be HTTPS on cdn.vyibc.com without query, fragment or credentials; referenceSha256 is the source-declared expected file hash. Unverified metadata may enter pending review; host preflight must match actual bytes before production, then actual observation is required. Missing metadata cannot be invented; this does not establish baseline approval.',
+          generationLimits:'Explicitly set {imageCalls,voiceSegments,imageBatches}: imageCalls counts generated image/prompt items (0..6), imageBatches counts submissions (0..6), voiceSegments counts synthesis segments (0..80). These are distinct budgets, not a requested asset count; choose within user authorization, never silently increase.'},
+        quality:'Complete design scope, branches, coordination, failurePolicy and acceptance remain mandatory. Actual stage files, frozen dialogue, reference comparison, complete audio and continuous-motion evidence are required by the runtime. Valid schema, successful render and completed handoff do not approve quality. Preview delivery does not authorize social publication.',
+      },
       fleetRecipeDesign: { recipe:'fleet-base-v3', use:'选择该配方且无额外设计约束时可省略 design，宿主将按 login 策略填入以下可审查默认设计。显式传入 design 时仍完整校验并独立审查，不覆盖自定义约束。', preserve:fleetRecipeDesign('preserve'), provisionGemini:fleetRecipeDesign('provision-gemini') },
-      revisionCandidates: [...this.runner.store.tasks.values()].filter(t=>!t.enabled && !t.archivedAt && t.origin?.source === 'task-chat')
+      revisionCandidates: [...this.runner.store.tasks.values()].filter(t=>!t.enabled && !t.archivedAt && isChatWorkflow(t))
         .map(t=>({id:t.id,title:t.title,trigger:t.trigger,...(t.workflowRecipe ? {workflowRecipe:t.workflowRecipe} : {}),manualAvailable:t.trigger.kind === 'cron'})),
       loginDiagnosis: '巡查可显式审查 browserPatrol.resumeAfterCopyLimit=1（需 actions 包含 resume）：复制预算耗尽但有同 Task 同故障已确认导入时，保留计数，允许额外一次正常登录续接。先新鲜 verify；canResume=true 应冻结 resume 而非再次 provision。原账号由 MCP 跨会话解析并核对当前授权，禁止静默换号；不再次导入、不重启、不绕过验证码。续接后独立20分钟4样本；失败只报告真实原因。一个目标失败，继续其他目标，本轮有界收口；未登录或未知不等于整轮执行协议应永久阻塞。旧计划不自动获得额外预算，必须 revise 审查。',
       recurringInput: 'create/revise 定时计划可显式提供顶层 recurringObjective：完整可复用的业务执行目标，包含原始目标的范围、禁令、验收与通知约束，但不含“生成待审查计划/等待审批”这类 Creator 控制指令。它与原始请求并列供独立审查，批准后才用于后续 cron；不提供时保留旧输入语义。不得省略原请求中的操作限制。reuse 不允许改写它。',
@@ -65,7 +91,7 @@ export class TaskCreator {
       evidenceContracts: [{ id: 'browser-patrol-v2', purpose: '周期性浏览器登录巡查：dynamic-rounds 的规划者→Gate→浏览器管理员→只读评估者→规划者。规划者每轮用 task_plan_round(summary,items:[{ip,instance,action:verify|provision|resume,reason}]) 冻结真实目标和动作；未知先验证，有未登录证据才允许 provision。MCP 强制逐目标累计修复预算；无删除重建权限。执行者取得本轮操作终态即 task_complete 交给独立评估者，不等待整个Task ready。仅评估者可 task_wait 对修改过的实例分时独立复验，同一卡新Run；其他角色不能等待下游采样。已健康实例只做当前检查。评估者 task_complete 交接通过/返工结论，不等于业务通过；规划者 task_finalize 由真实工具证据把关。', browserPatrol: { scope: 'fleet-existing-authorized', actions: ['provision','resume'], observationMinutes: 20, minSamples: 4 }, notifications: '需要企微时显式设置 design.notifications={channel:"wecom",chatIds:[已确认群ID]}。有独立通知员时加 agentId:"wecom-notifier"，通知员只配企微MCP，三个主角色不变。规划者 task_notify 冻结报告并创建通知支线；通知员经自己的MCP发送，不阻塞修复，记录独立卡/会话/回执。旧计划没有agentId才由规划者直接发送；先用 vyibc-wecom_list_groups 发现现有订阅群；只有一个群时预填其真实chatId交审查，多个群再询问。禁止索要已有密钥或默认广播。' },
         { id: 'task-final-handoff-v1', purpose: '通用 static-chain 末尾通知：将 wecom-notifier 作为最后一个参与者，设置 design.notifications={channel:"wecom",chatIds:[已确认群ID],agentId:"wecom-notifier",mode:"final-handoff"}。宿主只从已完成的上游卡冻结摘要，通知员只能 task_notify(completed)；收件群、正文和去重回执由宿主控制，不能直接 send_message。' },
         { id: 'browser-patrol-v1', purpose: '旧版单角色巡查兼容；新定时和动态返工目标使用v2，不为兼容改写历史计划。' }],
-      contract: 'Task 是可复用目标/流程，不绑定 IP。task_create_submit 只保存待审查计划，不启动执行；审查入口独立于创建 Agent。每次先提供 design:{scope,branches:[{id,when,action,evidence}],coordination,failurePolicy:{isolateItems,maxAttempts,stopConditions:[]},acceptance:[]}。条件由业务 Agent 根据真实工具证据执行，不能把自然语言条件伪装成内核自动 DAG。static-chain 按所选业务角色交接，也可只选一个业务 Agent 处理多目标分支；dynamic-rounds 仅用于规划者、执行者、评估者三人返工协议。不得改变 Agent 权限。' }
+      contract: 'Task 是可复用目标/流程，不绑定 IP。task_create_submit 只保存待审查计划，不启动执行；审查入口独立于创建 Agent。普通完整设计先提供 design:{scope,branches:[{id,when,action,evidence}],coordination,failurePolicy:{isolateItems,maxAttempts,stopConditions:[]},acceptance:[]}；Studio可只传studioCreationContract.request规定的studioRequest，由宿主补齐待审查设计。条件由业务 Agent 根据真实工具证据执行，不能把自然语言条件伪装成内核自动 DAG。static-chain 按所选业务角色交接，也可只选一个业务 Agent 处理多目标分支；dynamic-rounds 仅用于规划者、执行者、评估者三人返工协议。不得改变 Agent 权限。' }
   }
 
   async prepare(proposal: TaskProposal, exec: ToolExecutionLike, cwd?: string) {
@@ -73,7 +99,8 @@ export class TaskCreator {
       composeRecipe(proposal.recipe) // Validate the selected policy before supplying defaults.
       proposal = {...proposal,design:fleetRecipeDesign(proposal.recipe.login)}
     }
-    validateDesign(proposal.design)
+    if(proposal.studioRequest!==undefined)assertStudioSubmission(proposal)
+    else validateDesign(proposal.design)
     const input = userInput(exec)
     const pending = this.queue.then(() => this.dispatch(proposal, input, exec, cwd, false, true))
     this.queue = pending.catch(() => undefined)
@@ -152,6 +179,8 @@ export class TaskCreator {
       request: p.input.text, definition: workflowDefinition(p.task), decision: p.decision,
       ...(p.recurringObjective ? { recurringObjective: p.recurringObjective } : {}),
       actions: p.actions ?? [],
+      ...(p.studioResolution?{studioResolution:p.studioResolution}:{}),
+      ...(p.studioWorkspace?{workspace:p.studioWorkspace}:{}),
       ...(p.previous ? { previousDefinition: workflowDefinition(p.previous), revisionTaskId: p.previous.id } : {}),
       taskId: row.task_id, batchId: row.batch_id, path: `/#/tc/tasks/plans/${row.id}`,
       note: row.state === 'pending' ? '待审查；尚未创建执行 Task/Batch，未启动任何执行 Agent。' : '审批记录与原始计划保留，修改需生成新计划。' }
@@ -169,8 +198,10 @@ export class TaskCreator {
         db.prepare("UPDATE dsh_task_plans SET state='rejected',reviewed_at=?,review_reason=? WHERE id=? AND state='pending'").run(new Date().toISOString(), reason.trim(), id)
         return this.plan(id)
       }
+      if(p.task.design?.extension && digest(this.bindDesign(p.task.design))!==digest(p.task.design))throw Error('workflow-extension-reviewed-binding-changed')
       const selected = taskAgentIds(p.task).map(id => roster.find(r => r.id === id) ?? null)
       if (digest(selected) !== p.rosterHash) throw new Error('参与 Agent 的能力或配置已变化，需创建并审查新计划')
+      if(p.studioWorkspace)await ensureStudioWorkspace(p.studioWorkspace,p.task.id,p.task.cwd,p.decision==='create')
       if (p.decision === 'revise') {
         const definition = workflowDefinition(p.task)
         const turn: TaskTurn = { objective: p.recurringObjective ?? `${p.task.brief}\n\n[THIS EXECUTION — USER REQUEST]\n${p.input.text}`, participants: p.task.participants,
@@ -207,7 +238,9 @@ export class TaskCreator {
         db.prepare("UPDATE dsh_task_plans SET state='awaiting_trial',task_id=? WHERE id=? AND state='approved'").run(p.task.id, id)
         return this.plan(id)
       }
-      await this.runner.fire(p.task.id, 'manual', { batchId: p.batchId, turn })
+      // fire persists the batch before queueing the existing runner dispatcher.
+      // Approval must not wait for host preflight or provider session startup.
+      await this.runner.fire(p.task.id, 'manual', { batchId: p.batchId, turn, dispatch: 'background' })
       db.prepare("UPDATE dsh_task_plans SET state='dispatched',task_id=?,batch_id=? WHERE id=? AND state='approved'").run(p.task.id, p.batchId, id)
       return this.plan(id)
     })
@@ -275,6 +308,18 @@ export class TaskCreator {
     const scrub = (value: string) => leases.reduce((s, l) => s.split(l.password).join('[credential supplied privately]'), value)
     try {
       let proposal: TaskProposal = JSON.parse(scrub(JSON.stringify(raw)))
+      let studioDraft:ReturnType<typeof composeStudioTaskDraft>|undefined
+      let studioWorkspace:StudioWorkspace|undefined
+      if(proposal.studioRequest!==undefined){
+        assertStudioSubmission(proposal)
+        if(!stageOnly)throw Error('studio-request-independent-review-required')
+        const taskId=`T-chat-${input.requestId.slice(0,20)}`
+        studioWorkspace=await planStudioWorkspace(store.root,taskId)
+        cwd=studioWorkspace.path
+        studioDraft=composeStudioTaskDraft(proposal.studioRequest,{taskId,cwd,createdAt:new Date().toISOString(),installedAgentIds:[...ids],executionBindingSupported:true})
+        const draft=studioDraft.draft
+        proposal={decision:'create',reason:proposal.reason,title:draft.title,brief:draft.brief,participants:draft.participants,graphMode:draft.graphMode,design:draft.design,trigger:draft.trigger,actions:structuredClone(studioActions)}
+      }
       const actions = proposal.actions === undefined ? undefined : validateTaskActions(proposal.actions)
       if (actions && proposal.decision !== 'create') throw Error('复用或更新工作流不覆盖 Actions，请在 Task Actions 页单独配置')
       if (proposal.recipe) {
@@ -285,8 +330,16 @@ export class TaskCreator {
       let task: TaskSpec, previous: TaskSpec | undefined
       if (proposal.decision === 'reuse' || proposal.decision === 'revise') {
         const found = store.tasks.get(proposal.taskId ?? '')
-        if (!found || found.archivedAt || (proposal.decision !== 'revise' && !found.enabled && found.trigger.kind !== 'cron') || found.origin?.source !== 'task-chat') throw new Error('只能复用未归档且允许手动执行的聊天工作流；不能重放巡检 Signal')
+        if (!found || found.archivedAt || (proposal.decision !== 'revise' && !found.enabled && found.trigger.kind !== 'cron') || !isChatWorkflow(found)) throw new Error('只能复用未归档且允许手动执行的聊天工作流；不能重放巡检 Signal')
         task = found
+        if(found.origin?.reviewPlanId){
+          const reviewed=this.plansDb().prepare('SELECT payload FROM dsh_task_plans WHERE id=?').get(found.origin.reviewPlanId) as any
+          studioWorkspace=reviewed?JSON.parse(reviewed.payload).studioWorkspace:undefined
+          if(studioWorkspace){
+            if(cwd!==undefined&&cwd!==studioWorkspace.path)throw Error('studio-workspace-override-forbidden')
+            cwd=await ensureStudioWorkspace(studioWorkspace,found.id,found.cwd)
+          }
+        }
         if (proposal.trigger && JSON.stringify(proposal.trigger) !== JSON.stringify(task.trigger)) throw new Error('复用不能修改时间表；需创建新的待审查计划')
         if (proposal.decision === 'revise') {
           if (found.enabled) throw new Error('只能审查更新已暂停的 Task')
@@ -312,7 +365,7 @@ export class TaskCreator {
         const reusable = (value: string) => ips.reduce((s, ip) => s.split(ip).join('{{target}}'), scrub(value))
         task = validateTask({ id: `T-chat-${input.requestId.slice(0, 20)}`, title: reusable(proposal.title ?? ''), brief: reusable(proposal.brief ?? ''),
           participants: proposal.participants?.map(p => ({ agentId: p.agentId, brief: reusable(p.brief ?? '') })), graphMode: proposal.graphMode,
-          trigger: proposal.trigger, cwd, timeoutSec: 7200, onFail: 'stop', maxTries: 1 }, ids)
+          trigger: proposal.trigger, cwd, timeoutSec:studioDraft?.draft.timeoutSec??7200,onFail:studioDraft?.draft.onFail??'stop',maxTries:studioDraft?.draft.maxTries??1 }, ids)
         task.origin = { source: 'task-chat', signalId: input.requestId, intakeSessionId: input.sessionId, decision: 'create', reason: scrub(proposal.reason) }
         if (proposal.recipe) task.workflowRecipe = { ...proposal.recipe }
       }
@@ -321,12 +374,16 @@ export class TaskCreator {
         throw Error('定时业务目标仅允许在 create/revise 待审查计划中提供2至32000字符；复用不能改写')
       if (task.participants.length > 8 || task.participants.some(p => !ids.has(p.agentId))) throw new Error('工作流角色已失效或超出 8 位参与者上限')
       if (proposal.design) {
-        if (proposal.decision === 'reuse' && JSON.stringify(validateDesign(proposal.design)) !== JSON.stringify(task.design)) throw new Error('复用不能改写决策设计；请创建新的待审查计划')
+        if (proposal.decision === 'reuse' && JSON.stringify(this.bindDesign(validateDesign(proposal.design))) !== JSON.stringify(task.design)) throw new Error('复用不能改写决策设计；请创建新的待审查计划')
         const reusableDesign = proposal.decision !== 'reuse'
           ? JSON.parse(ips.reduce((s, ip) => s.split(ip).join('{{target}}'), JSON.stringify(proposal.design)))
           : proposal.design
-        task = { ...task, design: validateDesign(reusableDesign) }
+        task = { ...task, design: this.bindDesign(validateDesign(reusableDesign)) }
       }
+      if(task.design?.extension)task={...task,design:this.bindDesign(task.design)}
+      // Validate cross-field/roster constraints after the final design is attached.
+      // Do not replace the existing lifecycle/origin with validateTask defaults.
+      validateTask(task,ids)
       if (task.design?.evidenceContract === 'browser-patrol-v2') {
         if (task.graphMode !== 'dynamic-rounds' || new Set(task.participants.map(p => p.agentId)).size !== 3) throw new Error('巡查v2需要三个不同的规划/执行/独立评估角色')
         const team = task.participants.map(p => roster.find(r => r.id === p.agentId)!)
@@ -359,7 +416,7 @@ export class TaskCreator {
         const notifier=roster.find(r=>r.id===agentId), tools=Object.values(notifier?.mcpTools ?? {}).flat().map(t=>t.replace(/-/g,'_'))
         if (!notifier || !tools.includes('vyibc_wecom_send_message') || tools.some(t=>!['vyibc_wecom_send_message','vyibc_wecom_list_groups','vyibc_wecom_status','vyibc_wecom_list_messages'].includes(t)) || notifier.tools.length || notifier.skills.length) throw new Error('通知员仅允许企微 MCP，不得包含业务、SSH、金库或其他工具/技能')
       }
-      const hash = digest({ proposal, text: scrub(input.text), cwd, ...(actionInput ? { action: actionInput.snapshot } : {}) })
+      const hash = digest({ proposal, text: scrub(input.text), cwd, ...(task.design?.extension ? { workflowExtension:task.design.extension } : {}), ...(actionInput ? { action: actionInput.snapshot } : {}) })
       if (old && old.payload_hash !== hash) throw new Error('同一提交已被接受；不能替换尚未派发的计划')
       if (old && store.s.batches.has(old.batch_id)) return this.status(old.task_id, old.batch_id)
       // Pausing cron does not disable manual use. The same reviewed definition and
@@ -380,6 +437,8 @@ export class TaskCreator {
           ...(proposal.recurringObjective ? { recurringObjective: proposal.recurringObjective.trim() } : {}),
           ...(previous ? { previous } : {}),
           ...(actions ? { actions } : {}),
+          ...(studioDraft?{studioResolution:studioDraft.resolution}:{}),
+          ...(studioWorkspace?{studioWorkspace}:{}),
           decision: proposal.decision, reason: proposal.reason, targets: ips.map(ip => ({ kind: 'fleet-node', id: ip })),
           rosterHash: digest(taskAgentIds(task).map(id => roster.find(r => r.id === id))) })
         const oldPlan = db.prepare('SELECT id FROM dsh_task_plans WHERE id=?').get(planId)

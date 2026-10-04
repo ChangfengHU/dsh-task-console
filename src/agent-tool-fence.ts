@@ -1,3 +1,4 @@
+import {hasWorkflowToolGrant} from './workflow-tool-grants.js'
 /**
  * Agent-preset tool fence.
  *
@@ -16,7 +17,13 @@ const CAPABILITY_TOOLS = ['session_capabilities', 'environment_capabilities']
 export const name = 'task-console-agent-tool-fence'
 export const inject = ['tools']
 
-export interface Config { selected?: string[]; allow?: string[]; deny?: string[] }
+export interface Config { workflowRunTools?:boolean; selected?: string[]; allow?: string[]; deny?: string[] }
+
+export function deniedToolGuidance(name:string,selected:Set<string>):string {
+  const base='This Agent has not been granted that tool.'
+  if(name==='read_image'&&selected.has('studio_character_image'))return base+' For the locked studio character, call studio_status and then studio_character_image with an exact characterReferences[].id. This denial does not mean image inspection is unavailable.'+(selected.has('studio_preview_image')?' Production specialists can inspect an existing project image with studio_preview_image({path}); that tool still enforces its role and project scope.':'')
+  return base
+}
 
 export function apply(ctx: Context, config: Config): void {
   if (Array.isArray(config?.selected)) {
@@ -24,7 +31,7 @@ export function apply(ctx: Context, config: Config): void {
     const inherited = ctx.tools.schemas().map(schema => schema.name)
     const deny = inherited.filter(name => !selected.has(name))
     if (deny.length) ctx.tools.restrict({ deny })
-    ctx.tools.guard(exec => selected.has(exec.name) ? undefined : 'This Agent has not been granted that tool.')
+    ctx.tools.guard(exec => selected.has(exec.name) || config.workflowRunTools===true&&hasWorkflowToolGrant(exec) ? undefined : deniedToolGuidance(exec.name,selected))
     return
   }
   if (Array.isArray(config?.allow)) {

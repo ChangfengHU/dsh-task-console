@@ -11,6 +11,14 @@ export const TASK_INTAKE_AGENT_ID = 'task-intake'
 const OUT = { type: 'object', additionalProperties: true, properties: { ok: { type: 'boolean', required: true } } } as const
 const render = (_args: unknown, value: unknown) => [{ type: 'text' as const, text: JSON.stringify(value) }]
 
+export function intakeContextForModel(context: TaskIntakeContext, includeAllAgents = false) {
+  const required=context.requiredExecutorTools
+  if(includeAllAgents||!required?.length||context.items)return context
+  // Large unrelated tool inventories otherwise hide the eligible roles from the model.
+  const agents=context.agents.filter(agent=>required.every(tool=>agent.toolSchemas?.includes(tool))||required.every(tool=>agent.taskExpertise?.includes(tool)))
+  return {...context,agents,rosterView:{filtered:true,total:context.agents.length,shown:agents.length,expand:'Call task_intake_context with includeAllAgents:true to inspect other supporting roles.'}}
+}
+
 function modelSelection(ctx: any, spec: Awaited<ReturnType<typeof readSpec>>): { provider: string; model: string; reasoningEffort?: string } | undefined {
   let selection: any
   try { selection = ctx.get('agentDefaultModel')?.currentSelection?.() } catch { /* no host default */ }
@@ -93,10 +101,10 @@ export async function decideTaskSignalWithAgent(
     const disposers: (() => void)[] = []
     disposers.push(handle.agent.ctx.tools.register(defineTool({
       name: 'task_intake_context',
-      description: '读取本次唯一可信的候选 Task、Agent 能力名册和创建/复用政策。必须在决定前调用。',
-      parameters: {},
+      description: '读取本次唯一可信的候选 Task、Agent 能力名册和创建/复用政策。必须在决定前调用。有明确执行工具契约时默认显示具备完整执行能力或领域声明的角色；需要其他协作角色时传 includeAllAgents:true。',
+      parameters: {includeAllAgents:{type:'boolean',description:'返回完整 Agent 名册；默认优先展示本次工具契约的适配角色。'}},
       output: { schema: { type: 'object', additionalProperties: true }, render },
-      async execute() { contextRead = true; return context },
+      async execute(args?: {includeAllAgents?:boolean}) { contextRead = true; return intakeContextForModel(context,args?.includeAllAgents===true) },
     })))
     disposers.push(handle.agent.ctx.tools.register(defineTool({
       name: 'task_intake_decide',

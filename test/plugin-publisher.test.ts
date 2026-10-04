@@ -6,6 +6,7 @@ import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntim
 import {registerPluginPublisher} from '../src/plugin-publisher-tools.ts'
 import {validateSpec,NATIVE_TOOLS} from '../src/presets.ts'
 import {validateTaskIntakeDecision} from '../src/task-intake.ts'
+import {intakeContextForModel} from '../src/task-intake-agent.ts'
 const id='12345678-1234-1234-1234-123456789abc'
 const appId='asdk_app_6ac1f14048b88191a1aa282f102f65f6'
 test('native upload turn excludes ambient Apps, MCP, shell and browsing',()=>{
@@ -82,6 +83,11 @@ test('publisher presets match the registered capability contract',async()=>{
  }
  const requiredExecutorTools=['fleet_plugin_publish','fleet_plugin_publish_status']
  const context={agents,requiredExecutorTools,candidateTasks:[],policy:[]}
+ const large={...context,agents:[...Array.from({length:100},(_,i)=>({id:'unrelated-'+i,toolSchemas:['other']})),...agents]}
+ const focused=intakeContextForModel(large)
+ assert.deepEqual(focused.agents.map(a=>a.id),agents.map(a=>a.id))
+ assert.equal(intakeContextForModel(large,true).agents.length,103)
+ assert.equal(intakeContextForModel({...large,requiredExecutorTools:undefined}).agents.length,103)
  const decision={action:'create',title:'Private plugin update',reason:'Use dedicated registered roles and exact live tool contracts.',confidence:1,workflow:'dynamic-rounds',participants:[{agentId:'plugin-publisher-planner',role:'planner'},{agentId:'plugin-publisher',role:'executor'},{agentId:'plugin-publisher-reviewer',role:'reviewer'}]}
  assert.equal(validateTaskIntakeDecision(decision,context).action,'create')
  const reviewer=agents.find(a=>a.id==='plugin-publisher-reviewer')

@@ -83,8 +83,6 @@ export interface McpServer {
   target: string
   /** Tools it registered right now (public `mcp__<server>__<tool>` names, prefix stripped). */
   tools: string[]
-  /** Portable backend policy only; host authentication never travels with presets. */
-  imageGeneration?: import('./image-policy.ts').ImagePolicy
   disabled: boolean
 }
 
@@ -97,6 +95,7 @@ export interface SkillEntry {
 }
 
 export interface Catalog {
+  nativeImageBuiltin?: { registered: boolean; defaultBackend: string; allowedBackends: string[] }
   tools: NativeTool[]
   mcp: McpServer[]
   skills: SkillEntry[]
@@ -110,6 +109,8 @@ export interface Catalog {
 
 /** What the editor authors; persisted beside the composition as task-console.json. */
 export interface AgentSpec {
+  /** Optional overrides for the host built-in tool, never a separate image Agent. */
+  imageGeneration?: import('./image-policy.ts').ImagePolicy
   id: string
   name: string
   description: string

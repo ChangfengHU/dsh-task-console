@@ -9,6 +9,10 @@ import { apply as installImageTools } from '../src/image-generation-tools.ts'
 import { ToolRuntime, defineTool } from '@deepseek-ai/dsh-tools'
 import { Context } from '@deepseek-ai/cordis'
 import { createEnvelope, parseEnvelope } from '../src/config-migration.ts'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { apply as installHost, IMAGE_ROUTING_INSTRUCTION } from '../src/native-image-host.ts'
 const policy=imagePolicy(undefined)
 const request={requestId:'sample-1',prompt:'a circle',references:[]}
 const image={attachmentId:'a',mediaType:'image/png',bytes:1,width:1,height:1}
@@ -62,7 +66,7 @@ test('bounded status waiting is cancellable without cancelling the accepted job'
 test('real ToolRuntime validates canonical output, returns image blocks, and honours permission guard',async()=>{
  const db=new Database(':memory:'),jobs=new ImageJobs(db,{codex:ok})
  const root=new Context();root.provide('systemPrompt',{tools:()=>{}});const runtime=new ToolRuntime(root)
- const ctx={get:(name: string)=>name==='taskConsole'?{imageGeneration:jobs}:undefined,tools:{register:(s: any)=>runtime.register(defineTool(s))},effect:(fn: any)=>fn()}
+ const ctx={get:(name: string)=>name==='nativeImages'?{jobs}:undefined,tools:{register:(s: any)=>runtime.register(s)},effect:(fn: any)=>fn()}
  await installImageTools(ctx,policy)
  const agent={ctx:root,session:{id:'owner',events:[]}},signal=new AbortController().signal
  const invoke=(name: string,args: any)=>runtime.execute({name,arguments:args,agent,callId:'tool-proof',signal} as any)
@@ -70,4 +74,27 @@ test('real ToolRuntime validates canonical output, returns image blocks, and hon
   const status=await invoke('image_generate_status',{jobId:value.jobId,waitMs:0});assert.equal(status.isError,false);assert.equal(status.content[1].type,'image')
   const undo=runtime.guard(()=> 'Image permission denied');assert.equal((await invoke('image_generate',{requestId:'denied',prompt:'circle'})).isError,true);undo();assert.throws(()=>jobs.status('intruder',value.jobId),/当前会话/)
  }finally{await jobs.dispose();db.close();await root.fiber.dispose()}
+})
+test('host native tools work in an ordinary session without Task service or an image Agent; preference respects exclusions',async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'dsh-native-host-test-')),root=new Context();root.provide('systemPrompt',{tools:()=>{}})
+ const runtime=new ToolRuntime(root),provided=new Map<string,any>(),disposers:any[]=[],hooks=new Map<string,any>()
+ const ctx={get:(name:string)=>provided.get(name),provide:(name:string,value:any)=>provided.set(name,value),tools:{register:(s:any)=>runtime.register(s)},effect:(fn:any)=>{const dispose=fn();if(dispose)disposers.push(dispose)},on:(name:string,fn:any)=>{hooks.set(name,fn);return()=>hooks.delete(name)}}
+ try {
+  await installHost(ctx,{stateDir:dir})
+  assert.equal(provided.has('taskConsole'),false)
+  assert.deepEqual(provided.get('nativeImages').policy.allowedBackends,['codex','gemini'])
+  const agent={ctx:root,session:{id:'ordinary-standard-session',events:[]}}
+  assert.ok(runtime.schemas(agent as any).some(s=>s.name==='image_generate'))
+  const started=await runtime.execute({name:'image_generate',arguments:{requestId:'ordinary',prompt:'a circle'},agent,callId:'host-proof',signal:new AbortController().signal} as any)
+  assert.equal(started.isError,false)
+  const receipt=JSON.parse((started.content[0] as any).text)
+  const final=await provided.get('nativeImages').jobs.waitStatus(agent.session.id,receipt.jobId,1000,new AbortController().signal)
+  assert.equal(final.code,'BACKEND_UNAVAILABLE');assert.equal(final.mayHaveConsumedQuota,false)
+  const assemble=hooks.get('system-prompt/assemble')
+  const visible=await assemble({}, {}, async()=>({tools:[{name:'image_generate'}],contexts:[]}))
+  assert.equal(visible.contexts[0].text,IMAGE_ROUTING_INSTRUCTION)
+  assert.match(visible.contexts[0].text,/用户明确指定/);assert.match(visible.contexts[0].text,/超时/)
+  const hidden=await assemble({}, {}, async()=>({tools:[],contexts:[]}));assert.deepEqual(hidden.contexts,[])
+  await assert.rejects(installHost(ctx,{stateDir:dir}),/重复安装/)
+ }finally{for(const dispose of disposers.reverse())await dispose();await root.fiber.dispose();await rm(dir,{recursive:true,force:true})}
 })

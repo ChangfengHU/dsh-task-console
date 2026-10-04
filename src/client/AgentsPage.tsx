@@ -14,7 +14,7 @@ import { QueryCache } from './query-cache.ts'
 import { imagePolicy, type ImagePolicy, type ImageBackend } from '../image-policy.ts'
 const agentPages=new WeakMap<Api,QueryCache<Awaited<ReturnType<Api['agentPage']>>>>()
 
-const EMPTY: AgentSpec = { id: '', name: '', description: '', persona: '', model: '', effort: 'medium', permissionPreset: 'workspace-write', tools: ['ask-user'], mcpTools: {}, mcpPolicy: {}, skills: [] }
+const EMPTY: AgentSpec = { id: '', name: '', description: '', persona: '', model: '', effort: 'medium', permissionPreset: 'workspace-write', tools: ['ask-user','image-generation'], mcpTools: {}, mcpPolicy: {}, skills: [] }
 const PERM: Record<Preview['permission'], { label: string; cls: string; dot: string }> = {
   'read-only': { label: '只读', cls: 'dtc-p-ok', dot: 'ro' },
   'limited-write': { label: '受限可写', cls: 'dtc-p-warn', dot: 'lw' },
@@ -77,9 +77,9 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
   const initial = useMemo<AgentSpec>(() => {
     if (!id && stash) { const s = stash; stash = null; return s }
     if (row?.spec) return row.spec
-    if (row) return { ...EMPTY, id: row.id, name: row.name, description: row.description }
+    if (row) return { ...EMPTY, tools:['ask-user',...(catalog.nativeImageBuiltin?.registered && ['standard','code','cordis'].includes(row.id)?['image-generation']:[])], id: row.id, name: row.name, description: row.description }
     return { ...EMPTY, model: catalog.defaultModel }
-  }, [id, row, catalog.defaultModel])
+  }, [id, row, catalog.defaultModel, catalog.nativeImageBuiltin])
   const [spec, setSpec] = useState<AgentSpec>(initial)
   const image = imagePolicy(spec.imageGeneration)
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -205,7 +205,8 @@ function AgentEditor({ api, catalog, agents, id, onSaved, toast }: { api: Api; c
               </div>
             ))}
             {spec.tools.includes('image-generation') ? <div className="dtc-panel" aria-label="内置生图设置">
-              <h3>内置生图 · 与主会话模型独立</h3>
+              <h3>宿主内置生图 · 与主会话模型独立</h3>
+              <p className="dtc-note">这是默认 Tool，不是一个 Agent。普通生图优先 image_generate；仅本地不可用或用户明确指定 MCP 时使用已授权 MCP。现有受限 Agent 的工具围栏不会被绕过。</p>
               <div className="dtc-fields">
                 <label>默认生图后端<select value={image.defaultBackend} disabled={readOnly} onChange={e=>{const b=e.target.value as ImageBackend; set('imageGeneration',{...image,defaultBackend:b,allowedBackends:[...new Set([...image.allowedBackends,b])]})}}><option value="codex">Codex · 本机登录</option><option value="gemini">Gemini · 本机 AGY Pool</option></select></label>
                 <label>失败切换<select value={image.fallback} disabled={readOnly} onChange={e=>set('imageGeneration',{...image,fallback:e.target.value as ImagePolicy['fallback']})}><option value="none">不自动切换</option><option value="unavailable-only">仅提交前未就绪时切换</option></select></label>

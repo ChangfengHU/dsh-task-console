@@ -70,7 +70,7 @@ export class TaskConsoleService extends TypertRemoteService {
   static inject = ['loader', 'tools', 'agents', 'workspaceRegistry', 'permissionPresets']
 
   readonly runner: TaskRunner
-  imageGeneration?: import('./image-jobs.ts').ImageJobs
+  get imageGeneration(): import('./image-jobs.ts').ImageJobs | undefined { return (this.ctx as any).get('nativeImages')?.jobs }
   readonly intake: TaskIntakeCoordinator
   readonly creator: TaskCreator
   capabilities!: SessionCapabilities
@@ -343,6 +343,7 @@ export class TaskConsoleService extends TypertRemoteService {
     const defaultModel = def ? `${def.provider}/${def.model}` : ''
     const models = [...new Set([defaultModel, ...KNOWN_MODELS].filter(Boolean))]
     const out: Catalog = {
+      ...((this.ctx as any).get('nativeImages') ? { nativeImageBuiltin:{registered:this.hostToolNames().includes('image_generate'),defaultBackend:(this.ctx as any).get('nativeImages').policy.defaultBackend,allowedBackends:(this.ctx as any).get('nativeImages').policy.allowedBackends} } : {}),
       tools: NATIVE_TOOLS.map(({ rows: _rows, schemaNames: _schemaNames, ...t }) => t),
       mcp: this.hostMcp().map(({ config: _c, live: _l, ...m }) => m),
       skills: await scanSkills(),

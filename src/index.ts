@@ -16,8 +16,8 @@ import { TaskConsoleService } from './service.ts'
 import { registerPublicHtmlTool } from './public-upload.ts'
 import { registerTaskSignalHttp } from './task-intake-http.ts'
 import { fallbackSelection } from './model-fallback.ts'
-import { ImageJobs } from './image-jobs.ts'
-import { imageBackends, type ImageHostConfig } from './image-backends.ts'
+import type { ImageHostConfig } from './image-backends.ts'
+import * as NativeImageHost from './native-image-host.ts'
 
 export const name = 'task-console'
 export const inject = ['loader', 'tools', 'agents', 'webServer', 'workspaceRegistry']
@@ -50,9 +50,7 @@ export { TASK_INTAKE_AGENT_ID } from './task-intake-agent.ts'
 export async function apply(ctx: Context, config: CapabilityPolicy & ImageHostConfig & { taskFallbackModel?: string; taskFallbackFromProvider?: string } = {}): Promise<void> {
   await ctx.plugin(TaskConsoleService)
   await (ctx as any).get('taskConsole').ready
-  const service = (ctx as any).get('taskConsole')
-  service.imageGeneration = new ImageJobs(service.runner.store.kernel.db,imageBackends(ctx,config))
-  ctx.effect(()=>()=>service.imageGeneration.dispose(), 'task-console: native image job ownership')
+  if (!(ctx as any).get('nativeImages')) await ctx.plugin(NativeImageHost,{codexImageProvider:config.codexImageProvider,codexImageModel:config.codexImageModel,geminiImagePoolDir:config.geminiImagePoolDir,geminiImageModel:config.geminiImageModel})
   const fallback = fallbackSelection(config.taskFallbackModel ?? '')
   ;(ctx as any).get('taskConsole').runner.modelFallback = fallback ? { ...fallback, fromProvider: config.taskFallbackFromProvider ?? 'codex-local' } : undefined
   ;(ctx as any).get('taskConsole').capabilities.policy = config

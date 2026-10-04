@@ -31,8 +31,8 @@ export const ID_RE = /^[a-z0-9][a-z0-9-]*$/
 
 /** Native tools the editor offers, each mapping to one composition row. */
 export const NATIVE_TOOLS: readonly (NativeTool & { rows: string; schemaNames: string[] })[] = [
-  { id:'image-generation',label:'image_generate · Codex / Gemini',group:'图像',writes:true,
-    description:'原生生图/编辑工具，主会话模型无关。可选默认后端、授权后端与会话预算；异步回执，不通过 MCP。',
+  { id:'image-generation',label:'image_generate · Codex / Gemini',group:'本机',writes:true,
+    description:'宿主内置生图/编辑工具，标准会话默认优先使用；无需创建生图 Agent。仅本地不可用或明确指定时使用已授权 MCP。',
     schemaNames:['image_generate','image_generate_status','image_generate_cancel'],
     rows:"- id: native-image-tools\n  name: 'dsh-task-console/image-generation-tools'" },
   { id: 'task-create-runtime', label: 'Task creation', group: '任务', writes: true,

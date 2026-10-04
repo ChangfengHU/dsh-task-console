@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "hostApi": 2,
+  "studioFeatures": [
+    "dialogue-language-zh-CN-v1",
+    "preparation-revision-v1",
+    "visual-coverage-requirements-v1",
+    "visual-coverage-components-v2",
+    "studio-interventions-v1",
+    "batch-execution-binding-v1",
+    "studio-batch-workspace-v1",
+    "studio-bounded-progress-v1",
+    "studio-sound-requirements-v3",
+    "studio-progress-reconciliation-v1",
+    "batch-execution-migration-v1"
+  ],
+  "extensions": [
+    {
+      "id": "release-audit",
+      "version": "1.0.0",
+      "hostApi": 2,
+      "implementationSha256": "cfee56f30a8505ad5280a496bb5ed6087a6d5750751c9d8e76774600476a0b8b",
+      "bundle": "lib/workflows/release-audit.mjs"
+    }
+  ]
+}

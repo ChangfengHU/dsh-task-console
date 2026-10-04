@@ -18,7 +18,21 @@ export interface Platform {
   close(): Promise<void>
 }
 
-/** A deterministic, two-tool client. No inference turn or arbitrary tool is exposed. */
+export function publisherRuntimeConfig(effective: any = {}) {
+  const config: Record<string, unknown> = {'features.shell_tool':false,'features.unified_exec':false,'features.multi_agent':false,'features.skill_mcp_dependency_install':false,web_search:'disabled','apps._default.enabled':false,'apps.connector_openai_plugin_creator.enabled':true,'apps.connector_openai_plugin_creator.default_tools_enabled':false,'apps.connector_openai_plugin_creator.tools.update_plugin.enabled':true,'apps.connector_openai_plugin_creator.tools.get_plugin_files.enabled':true}
+  for(const name of Object.keys(effective.mcp_servers||{}))config['mcp_servers.'+name+'.enabled']=false
+  for(const name of Object.keys(effective.apps||{}))if(!['_default','connector_openai_plugin_creator'].includes(name))config['apps.'+name+'.enabled']=false
+  return config
+}
+
+export function verifyUploadInvocation(item:any, archive:string, expected:string) {
+  requireValue(item?.type==='mcpToolCall'&&item.server==='codex_apps'&&item.tool==='plugin_creator.update_plugin','verification_failed')
+  const args=typeof item.arguments==='string'?JSON.parse(item.arguments):item.arguments
+  requireValue(args?.plugin_id===PACKAGE_ID&&args.archive===archive&&args.expected_release_id===expected&&Object.keys(args).length===3,'verification_failed')
+  requireValue(item.status==='completed'&&!item.error&&!item.result?.isError,'publisher_unavailable')
+}
+
+/** Direct source reads; one native turn performs the host's required file upload. */
 export async function openPluginCreator(binary = join(homedir(), '.local/bin/codex')): Promise<Platform> {
   const env: NodeJS.ProcessEnv = {}
   for (const key of ['HOME','PATH','USER','LOGNAME','LANG','TMPDIR','CODEX_HOME','SSL_CERT_FILE','SSL_CERT_DIR','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy']) {
@@ -26,6 +40,7 @@ export async function openPluginCreator(binary = join(homedir(), '.local/bin/cod
   }
   const child = spawn(binary, ['app-server', '--listen', 'stdio://'], {cwd: tmpdir(), env, stdio: ['pipe','pipe','pipe']})
   let serial = 0, ended = false, exited = false
+  let observeTurn: ((message:any)=>void)|undefined
   const pending = new Map<number, {resolve: (x: any) => void; reject: (x: Error) => void; timer: NodeJS.Timeout}>()
   const send = (value: unknown) => { if (!ended) child.stdin.write(JSON.stringify(value) + '\n') }
   const rejectAll = () => { ended = true; for (const p of pending.values()) {clearTimeout(p.timer); p.reject(new Error('publisher_unavailable'))} pending.clear() }
@@ -39,6 +54,7 @@ export async function openPluginCreator(binary = join(homedir(), '.local/bin/cod
     if (line.length > 4 * 1024 * 1024) {rejectAll(); child.kill(); return}
     let m: any; try {m = JSON.parse(line)} catch {return}
     if (m.method && m.id != null) {send({id:m.id,error:{code:-32601,message:'Interactive requests are not supported by the bounded publisher.'}}); return}
+    if(m.method)observeTurn?.(m)
     const p = pending.get(m.id)
     if (!p) return
     pending.delete(m.id); clearTimeout(p.timer)
@@ -60,7 +76,8 @@ export async function openPluginCreator(binary = join(homedir(), '.local/bin/cod
     send({method:'initialized',params:{}})
     const account=await rpc('account/read',{refreshToken:false})
     requireValue(account.account?.type==='chatgpt','authorization_required')
-    const started=await rpc('thread/start',{cwd:tmpdir(),ephemeral:true,sandbox:'read-only',approvalPolicy:'never',developerInstructions:'Owner-authorized private plugin update. No inference, shell, credential changes, plugin creation, or sharing changes.'})
+    const effective=await rpc('config/read',{includeLayers:false})
+    const started=await rpc('thread/start',{cwd:tmpdir(),ephemeral:true,sandbox:'read-only',approvalPolicy:'never',model:'gpt-5.6-terra',config:publisherRuntimeConfig(effective.config),baseInstructions:'You perform only the exact owner-approved Plugin Creator update requested. No shell, browsing, file changes, retries, plugin creation, or other operations.',developerInstructions:'The archive is immutable and prevalidated. Invoke the specified update_plugin once with the exact three arguments. Do not inspect or modify other files or plugins. Report the tool outcome and stop. Do not claim success without the tool result.'})
     const threadId=started.thread.id
     const apps=await rpc('app/installed',{threadId,forceRefresh:true})
     requireValue(apps.apps?.some((a:any)=>a.id==='connector_openai_plugin_creator'&&a.isEnabled!==false&&a.isCallable!==false),'authorization_required')
@@ -80,7 +97,27 @@ export async function openPluginCreator(binary = join(homedir(), '.local/bin/cod
       if(!value)for(const c of result.content||[])if(c.type==='text'){try{value=JSON.parse(c.text);break}catch{}}
       requireValue(value,'publisher_unavailable');return value.result??value
     }
-    return {read:()=>call(readTool,{plugin_id:PACKAGE_ID,read_paths:FILES}),update:async(archive,expected)=>{await call(updateTool,{plugin_id:PACKAGE_ID,archive,expected_release_id:expected})},close}
+    const update=async(archive:string,expected:string)=>{
+      const invocations:any[]=[]
+      let resolveTurn:()=>void,rejectTurn:(error:Error)=>void
+      const done=new Promise<void>((resolve,reject)=>{resolveTurn=resolve;rejectTurn=reject})
+      void done.catch(()=>{})
+      // The normal tool handler resolves openai/fileParams. Raw MCP calls do not.
+      const timer=setTimeout(()=>rejectTurn(new Error('publisher_unavailable')),120000)
+      observeTurn=m=>{
+        if(m.params?.threadId!==threadId)return
+        if(m.method==='item/completed'&&m.params.item?.type==='mcpToolCall')invocations.push(m.params.item)
+        if(m.method==='turn/completed')m.params.turn?.status==='completed'?resolveTurn():rejectTurn(new Error('publisher_unavailable'))
+      }
+      try{
+        const args={plugin_id:PACKAGE_ID,archive,expected_release_id:expected}
+        await rpc('turn/start',{threadId,effort:'low',input:[{type:'text',text:'Perform the owner-authorized update_plugin exactly once with these arguments: '+JSON.stringify(args)+'. The archive has already been approved and validated. Do not call other tools, change arguments, or retry. Report the result and stop.'},{type:'mention',name:'Plugin Creator',path:'app://connector_openai_plugin_creator'}]})
+        await done
+        requireValue(invocations.length===1,'verification_failed')
+        verifyUploadInvocation(invocations[0],archive,expected)
+      }finally{clearTimeout(timer);observeTurn=undefined;done.catch(()=>{})}
+    }
+    return {read:()=>call(readTool,{plugin_id:PACKAGE_ID,read_paths:FILES}),update,close}
   } catch(error) {await close(); throw error}
 }
 

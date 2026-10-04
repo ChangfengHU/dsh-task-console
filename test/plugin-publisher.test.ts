@@ -2,12 +2,28 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createHash} from 'node:crypto'
 import {readFile,stat} from 'node:fs/promises'
-import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource} from '../src/plugin-publisher.ts'
+import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntimeConfig,verifyUploadInvocation} from '../src/plugin-publisher.ts'
 import {registerPluginPublisher} from '../src/plugin-publisher-tools.ts'
 import {validateSpec,NATIVE_TOOLS} from '../src/presets.ts'
 import {validateTaskIntakeDecision} from '../src/task-intake.ts'
 const id='12345678-1234-1234-1234-123456789abc'
 const appId='asdk_app_6ac1f14048b88191a1aa282f102f65f6'
+test('native upload turn excludes ambient Apps, MCP, shell and browsing',()=>{
+ const config=publisherRuntimeConfig({apps:{other:{enabled:true}},mcp_servers:{vault:{url:'unused'},browser:{url:'unused'}}})
+ assert.equal(config['apps.other.enabled'],false)
+ assert.equal(config['mcp_servers.vault.enabled'],false)
+ assert.equal(config['mcp_servers.browser.enabled'],false)
+ assert.equal(config['apps.connector_openai_plugin_creator.default_tools_enabled'],false)
+ assert.equal(config['apps.connector_openai_plugin_creator.tools.update_plugin.enabled'],true)
+ assert.equal(config['features.shell_tool'],false)
+ assert.equal(config['features.unified_exec'],false)
+ assert.equal(config.web_search,'disabled')
+})
+test('native upload receipt must match the exact approved invocation and succeed',()=>{
+ const item={type:'mcpToolCall',server:'codex_apps',tool:'plugin_creator.update_plugin',status:'completed',arguments:{plugin_id:PACKAGE_ID,archive:'/tmp/release.zip',expected_release_id:'pluginrel_before'},result:{isError:false}}
+ assert.doesNotThrow(()=>verifyUploadInvocation(item,'/tmp/release.zip','pluginrel_before'))
+ for(const changed of [{...item,status:'failed'},{...item,tool:'plugin_creator.create_plugin'},{...item,arguments:{...item.arguments,plugin_id:'other'}},{...item,result:{isError:true}},{...item,arguments:{...item.arguments,archive:'/tmp/other.zip'}}])assert.throws(()=>verifyUploadInvocation(changed,'/tmp/release.zip','pluginrel_before'))
+})
 function fixture(){
  const token='x'.repeat(32),archive=Buffer.from('test archive'),sha=createHash('sha256').update(archive).digest('hex')
  const root={name:'vyibc-personal-content',version:'0.1.3',extensions:{'com.openai':{interface:{defaultPrompt:['prompt']}}}}

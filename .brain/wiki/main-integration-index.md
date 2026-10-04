@@ -1,0 +1,2 @@
+- [main-deployment-source-unification](main-deployment-source-unification.md) - Main versus active deployment provenance.
+- [deployed-source-provenance](deployed-source-provenance.md) - Resolve enabled paths before synchronizing.

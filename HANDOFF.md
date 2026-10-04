@@ -1,5 +1,19 @@
 # Task Console runtime contracts
 
+## Fleet private plugin publication
+
+See `docs/plugin-publisher.md` for the owner-scoped Task Signal to native Codex
+Plugin Creator adapter, role installer and recovery checks. It updates approved
+Personal Trace releases without using the operator's desktop or changing the
+ordinary Codex model adapter. The runtime authenticates as the existing owner;
+this is not a general multi-tenant platform publishing API.
+`DSH_TASK_INTAKE_TOKEN` remains in the existing host service environment and Fleet
+Worker secret; a domain-separated derived credential protects publication jobs.
+Never put that credential or native account tokens into Tasks or browser state.
+Build/install its dedicated presets at a zero-native-session/zero-Task-claim
+boundary. Preserve original plugin/App/scope and require official file readback;
+Task completion is not independent proof of ChatGPT business-tool availability.
+
 ## Full Fleet onboarding acceptance (v3)
 
 `fleet-base-v3` is a separately reviewed recipe, not an automatic rewrite of v1/v2

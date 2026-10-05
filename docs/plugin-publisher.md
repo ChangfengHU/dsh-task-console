@@ -8,10 +8,24 @@ a second scheduler. A dedicated native Codex app-server client calls three offic
 Plugin Creator tools. The ordinary Codex model adapter is not changed or granted
 Apps access. The user's Mac is not required to stay online.
 
-This initial adapter only updates the original Personal Trace private package.
+The adapter updates the reviewed original Personal Trace and Flow private packages.
 It cannot create plugins, change ownership/discoverability, replace cloud App
 bindings, delete omitted files, or publish arbitrary archives. More products need
 explicit reviewed identity mappings and their actual source/permissions.
+
+Flow's private package and a canonical cloud App are different identities. Its
+private-package update must not be reported as cloud App registration, Try in
+chat, user installation or authorized business execution. Fleet and the native
+publisher both validate the approved package/name/App tuple. New cloud App
+bindings require actual registration and a separately reviewed identity mapping;
+typing an App ID into a Fleet draft does not register or authorize it.
+
+Portable products import the complete verified package, retaining Skill reference
+and script trees, README and MCP declarations. Changed associations cannot replace
+the source inventory. Host-only empty keywords/headers and compatible HTTP
+transport spelling normalize for readback; changed endpoints and nonempty headers
+still fail. Native text reads use bounded batches rather than assuming one read
+can accept an entire plugin. Core/entry annotations do not execute a Skill.
 
 ## Install and activate
 

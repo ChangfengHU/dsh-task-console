@@ -9,6 +9,15 @@ import { gunzipSync } from 'node:zlib'
 
 export const PACKAGE_ID = 'plugins_6ac15b9d3e4c8191b2f6ff943d1e574d'
 const APP_ID = 'asdk_app_6ac1f14048b88191a1aa282f102f65f6'
+export const PUBLISH_TARGETS = {
+ 'vyibc-personal-content':{packageId:PACKAGE_ID,appId:APP_ID},
+ 'vyibc-flow-video-studio':{packageId:'plugins_6ac374b9d988819187fc2677405e443d',appId:''},
+} as const
+function targetFor(snapshot:any){
+ const target=PUBLISH_TARGETS[snapshot.packageName as keyof typeof PUBLISH_TARGETS]
+ requireValue(target&&snapshot.packageId===target.packageId&&snapshot.appId===target.appId,'identity_mismatch')
+ return target
+}
 const FILES = ['plugin.json', '.codex-plugin/plugin.json', '.app.json', 'mcp.json', '.mcp.json', 'skills/personal-content/SKILL.md']
 const fail = (code: string): never => { throw new Error(code) }
 const requireValue = (ok: unknown, code: string) => { if (!ok) fail(code) }
@@ -27,15 +36,15 @@ export function publisherRuntimeConfig(effective: any = {}) {
   return config
 }
 
-export function verifyUploadInvocation(item:any, archive:string, expected:string) {
+export function verifyUploadInvocation(item:any, archive:string, expected:string, packageId:string=PACKAGE_ID) {
   requireValue(item?.type==='mcpToolCall'&&item.server==='codex_apps'&&item.tool==='plugin_creator.update_plugin','verification_failed')
   const args=typeof item.arguments==='string'?JSON.parse(item.arguments):item.arguments
-  requireValue(args?.plugin_id===PACKAGE_ID&&args.archive===archive&&args.expected_release_id===expected&&Object.keys(args).length===3,'verification_failed')
+  requireValue(args?.plugin_id===packageId&&args.archive===archive&&args.expected_release_id===expected&&Object.keys(args).length===3,'verification_failed')
   requireValue(item.status==='completed'&&!item.error&&!item.result?.isError,'publisher_unavailable')
 }
 
-export function uploadTurnRequest(archive:string,expected:string) {
-  const args={plugin_id:PACKAGE_ID,archive,expected_release_id:expected}
+export function uploadTurnRequest(archive:string,expected:string,packageId:string=PACKAGE_ID) {
+  const args={plugin_id:packageId,archive,expected_release_id:expected}
   return 'Use functions.exec to run exactly this JavaScript. Resolve the executable name from ALL_TOOLS; do not guess a namespace. '+
     'const matches = ALL_TOOLS.filter(t => /plugin_creator.*update_plugin$/.test(t.name)); '+
     'if (matches.length !== 1) throw new Error("publisher_tool_not_found"); '+
@@ -44,7 +53,8 @@ export function uploadTurnRequest(archive:string,expected:string) {
 }
 
 /** Direct source reads; one native turn performs the host's required file upload. */
-export async function openPluginCreator(binary = join(homedir(), '.local/bin/codex')): Promise<Platform> {
+export async function openPluginCreator(binary = join(homedir(), '.local/bin/codex'),packageId:string=PACKAGE_ID): Promise<Platform> {
+  requireValue(Object.values(PUBLISH_TARGETS).some(t=>t.packageId===packageId),'identity_mismatch')
   const env: NodeJS.ProcessEnv = {}
   for (const key of ['HOME','PATH','USER','LOGNAME','LANG','TMPDIR','CODEX_HOME','SSL_CERT_FILE','SSL_CERT_DIR','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','http_proxy','https_proxy','all_proxy','no_proxy']) {
     if (process.env[key]) env[key] = process.env[key]
@@ -122,32 +132,33 @@ export async function openPluginCreator(binary = join(homedir(), '.local/bin/cod
         if(m.method==='turn/completed')m.params.turn?.status==='completed'?resolveTurn():rejectTurn(new Error('publisher_unavailable'))
       }
       try{
-        await rpc('turn/start',{threadId,effort:'low',input:[{type:'text',text:uploadTurnRequest(archive,expected)},{type:'mention',name:'Plugin Creator',path:'app://connector_openai_plugin_creator'}]})
+        await rpc('turn/start',{threadId,effort:'low',input:[{type:'text',text:uploadTurnRequest(archive,expected,packageId)},{type:'mention',name:'Plugin Creator',path:'app://connector_openai_plugin_creator'}]})
         await done
         console.info('[plugin-publisher] native upload receipt',JSON.stringify({calls:invocations.map(item=>({server:item.server,tool:item.tool,status:item.status,error:Boolean(item.error||item.result?.isError)}))}))
         requireValue(invocations.length===1,'verification_failed')
-        verifyUploadInvocation(invocations[0],archive,expected)
+        verifyUploadInvocation(invocations[0],archive,expected,packageId)
       }finally{clearTimeout(timer);observeTurn=undefined;done.catch(()=>{})}
     }
     const read=async(paths=FILES,binaryPaths:string[]=[])=>{
-      const result=await call(readTool,{plugin_id:PACKAGE_ID,read_paths:FILES.slice(0,5)})
+      const hasApp=Object.values(PUBLISH_TARGETS).find(t=>t.packageId===packageId)?.appId
+      const result=await call(readTool,{plugin_id:packageId,read_paths:FILES.slice(0,5).filter(path=>hasApp||path!=='.app.json')})
       let offset=result.next_offset
       for(let page=0;offset!=null&&page<20;page++){
-        const next=await call(readTool,{plugin_id:PACKAGE_ID,offset})
+        const next=await call(readTool,{plugin_id:packageId,offset})
         requireValue(next.plugin.current_release_id===result.plugin.current_release_id,'platform_conflict')
         result.files.push(...next.files);offset=next.next_offset
       }
       requireValue(offset==null&&result.files.length<=250,'source_changed')
       const available=new Set<string>(result.files.map((f:any)=>f.path))
       const texts=paths.filter(p=>available.has(p)&&!binaryPaths.includes(p)&&!Object.hasOwn(result.contents,p))
-      for(let i=0;i<texts.length;i+=20){
-        const next=await call(readTool,{plugin_id:PACKAGE_ID,read_paths:texts.slice(i,i+20)})
+      for(let i=0;i<texts.length;i+=10){
+        const next=await call(readTool,{plugin_id:packageId,read_paths:texts.slice(i,i+10)})
         requireValue(next.plugin.current_release_id===result.plugin.current_release_id,'platform_conflict')
         Object.assign(result.contents,next.contents)
       }
       if(binaryPaths.length){
-        const owned=await call(archiveTool,{plugin_id:PACKAGE_ID,release_id:result.plugin.current_release_id})
-        requireValue(owned.plugin.plugin_id===PACKAGE_ID&&owned.release.release_id===result.plugin.current_release_id,'identity_mismatch')
+        const owned=await call(archiveTool,{plugin_id:packageId,release_id:result.plugin.current_release_id})
+        requireValue(owned.plugin.plugin_id===packageId&&owned.release.release_id===result.plugin.current_release_id,'identity_mismatch')
         const url=new URL(owned.download_url)
         requireValue(url.protocol==='https:'&&url.hostname.endsWith('.oaiusercontent.com')&&!url.username&&!url.password&&!url.port,'verification_failed')
         const response=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(20000)})
@@ -162,7 +173,21 @@ export async function openPluginCreator(binary = join(homedir(), '.local/bin/cod
 
 function sameText(path: string, a: string, b: string) {
   if (typeof a!=='string'||typeof b!=='string')return false
-  if(path.endsWith('.json')){try{return isDeepStrictEqual(JSON.parse(a),JSON.parse(b))}catch{return false}}
+  if(path.endsWith('.json')){try{
+   const normalized=(text:string)=>{
+    const value=JSON.parse(text)
+    if(path==='.mcp.json')for(const server of Object.values<any>(value.mcpServers||{})){
+     if(server.type==='http')server.type='streamable-http'
+     if(server.headers&&Object.keys(server.headers).length===0)delete server.headers
+    }
+    if(path==='.codex-plugin/plugin.json'){
+     if(typeof value.skills==='string')value.skills=value.skills.replace(/\/$/,'')
+     if(Array.isArray(value.interface?.keywords)&&value.interface.keywords.length===0)delete value.interface.keywords
+    }
+    return value
+   }
+   return isDeepStrictEqual(normalized(a),normalized(b))
+  }catch{return false}}
   return a===b
 }
 /** Read owned tar.gz without filesystem extraction or executing bundled files. */
@@ -185,22 +210,24 @@ export function ownedTarFiles(compressed:Buffer,paths:string[]) {
   }
   requireValue(paths.every(p=>Object.hasOwn(result,p)),'verification_failed');return result
 }
-const allowedFile=(path:string)=>FILES.includes(path)||path==='assets/icon.png'||/^skills\/[a-z][a-z0-9-]{1,79}\/(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_ -]+\/)*[A-Za-z0-9_ .-]+$/.test(path)&&!path.split('/').some(p=>p==='.'||p==='..'||p==='node_modules')
+const allowedFile=(path:string)=>FILES.includes(path)||path==='README.md'||path==='assets/icon.png'||/^skills\/[a-z][a-z0-9-]{1,79}\/(?!.*(?:^|\/)\.)(?:[A-Za-z0-9_ -]+\/)*[A-Za-z0-9_ .-]+$/.test(path)&&!path.split('/').some(p=>p==='.'||p==='..'||p==='node_modules')
 export function validateSource(snapshot:any,current:any) {
-  requireValue(snapshot.packageId===PACKAGE_ID&&snapshot.appId===APP_ID&&snapshot.packageName==='vyibc-personal-content','identity_mismatch')
-  requireValue(current.plugin?.plugin_id===PACKAGE_ID&&current.plugin?.scope==='USER'&&current.plugin?.discoverability==='PRIVATE','identity_mismatch')
-  requireValue(current.plugin.name==='vyibc-personal-content','identity_mismatch')
+  const target=targetFor(snapshot)
+  requireValue(current.plugin?.plugin_id===target.packageId&&current.plugin?.scope==='USER'&&current.plugin?.discoverability==='PRIVATE','identity_mismatch')
+  requireValue(current.plugin.name===snapshot.packageName,'identity_mismatch')
   const next=JSON.parse(snapshot.files['plugin.json']),before=JSON.parse(current.contents['plugin.json'])
   requireValue(next.name===before.name&&next.version===snapshot.version,'identity_mismatch')
-  const app=JSON.parse(snapshot.files['.app.json'])
-  requireValue(app.apps?.['vyibc-personal-content']?.id===APP_ID&&app.apps?.['vyibc-personal-content']?.required===true&&Object.keys(app.apps).length===1,'identity_mismatch')
-  for(const path of ['.app.json','mcp.json','.mcp.json'])requireValue(sameText(path,snapshot.files[path],current.contents[path]),'source_changed')
+  if(target.appId){
+   const app=JSON.parse(snapshot.files['.app.json'])
+   requireValue(app.apps?.[snapshot.packageName]?.id===target.appId&&app.apps?.[snapshot.packageName]?.required===true&&Object.keys(app.apps).length===1,'identity_mismatch')
+  }else requireValue(!snapshot.files['.app.json']&&!current.contents['.app.json']&&!next.extensions?.['com.openai']?.apps,'identity_mismatch')
+  for(const path of ['.app.json','mcp.json','.mcp.json'])if(snapshot.files[path]!==undefined||current.contents[path]!==undefined)requireValue(sameText(path,snapshot.files[path],current.contents[path]),'source_changed')
   requireValue(JSON.stringify(next.extensions?.['com.openai']?.interface?.defaultPrompt)===JSON.stringify(before.extensions?.['com.openai']?.interface?.defaultPrompt),'source_changed')
   const paths=Object.keys(snapshot.files)
-  requireValue(paths.length<=250&&paths.every(allowedFile)&&FILES.slice(0,5).every(p=>typeof snapshot.files[p]==='string'),'source_changed')
+  requireValue(paths.length<=250&&paths.every(allowedFile)&&FILES.slice(0,5).filter(p=>target.appId||p!=='.app.json').every(p=>typeof snapshot.files[p]==='string'),'source_changed')
   requireValue((snapshot.binaryPaths||[]).every((p:string)=>paths.includes(p)&&allowedFile(p)),'source_changed')
   // Official update is an overlay: omission is NOT deletion. Fail before upload.
-  requireValue((current.files||[]).filter((f:any)=>f.path.startsWith('skills/')).every((f:any)=>paths.includes(f.path)),'platform_file_delete_unsupported')
+  requireValue((current.files||[]).filter((f:any)=>f.path.startsWith('skills/')||f.path==='README.md').every((f:any)=>paths.includes(f.path)),'platform_file_delete_unsupported')
 }
 export function verifyReadback(snapshot:any,current:any) {
   validateSource(snapshot,current)
@@ -249,7 +276,8 @@ export class PluginPublisher {
       const data=await this.request(id,'job'),s=data.snapshot
       const archive=await this.request(id,'archive')
       requireValue(createHash('sha256').update(archive).digest('hex')===data.archiveSha,'archive_integrity_failed')
-      platform=await (this.options.platform||openPluginCreator)()
+      const approved=targetFor(s)
+      platform=await (this.options.platform?this.options.platform():openPluginCreator(undefined,approved.packageId))
       const paths=Object.keys(s.files),binaryPaths=s.binaryPaths||[]
       let current=await platform.read(paths,binaryPaths);validateSource(s,current)
       if(current.plugin.version!==s.version){
@@ -263,7 +291,7 @@ export class PluginPublisher {
       if(current.plugin.version===s.version&&binaryPaths.length&&!current.binaryContents)current=await platform.read(paths,binaryPaths)
       const releaseId=verifyReadback(s,current)
       requireValue(releaseId!==data.job.expectedReleaseId,'verification_failed')
-      await this.request(id,'finish',{claim,pluginId:PACKAGE_ID,version:s.version,releaseId,archiveSha:data.archiveSha})
+      await this.request(id,'finish',{claim,pluginId:approved.packageId,version:s.version,releaseId,archiveSha:data.archiveSha})
     }catch(error){
       const allowed=['platform_conflict','identity_mismatch','archive_integrity_failed','source_changed','authorization_required','verification_failed','platform_file_delete_unsupported']
       const reason=mutationAttempted?'unknown_outcome':allowed.includes((error as Error).message)?(error as Error).message:'publisher_unavailable'

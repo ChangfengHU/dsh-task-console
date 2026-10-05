@@ -33,6 +33,23 @@ test('native upload receipt must match the exact approved invocation and succeed
  assert.doesNotThrow(()=>verifyUploadInvocation(item,'/tmp/release.zip','pluginrel_before'))
  for(const changed of [{...item,status:'failed'},{...item,tool:'plugin_creator.create_plugin'},{...item,arguments:{...item.arguments,plugin_id:'other'}},{...item,result:{isError:true}},{...item,arguments:{...item.arguments,archive:'/tmp/other.zip'}}])assert.throws(()=>verifyUploadInvocation(changed,'/tmp/release.zip','pluginrel_before'))
 })
+test('Flow identity stays separate, full trees are retained and normalized host MCP fields are equivalent',()=>{
+ const f=fixture(),name='vyibc-flow-video-studio',packageId='plugins_6ac374b9d988819187fc2677405e443d'
+ delete f.snapshot.files['.app.json'];delete f.current.contents['.app.json']
+ Object.assign(f.snapshot,{packageName:name,packageId,appId:''})
+ Object.assign(f.current.plugin,{name,plugin_id:packageId,version:'0.1.3',current_release_id:'pluginrel_flow'})
+ const root=JSON.parse(f.snapshot.files['plugin.json']);root.name=name
+ f.snapshot.files['plugin.json']=JSON.stringify(root)
+ f.snapshot.files['.codex-plugin/plugin.json']=JSON.stringify({...root,skills:'./skills/',interface:root.extensions['com.openai'].interface})
+ f.snapshot.files['.mcp.json']=JSON.stringify({mcpServers:{video:{type:'http',url:'https://fleet.vyibc.com/mcp/video'}}})
+ f.snapshot.files['README.md']='Flow usage';f.snapshot.files['skills/flow-video-studio/references/rules.md']='rules'
+ f.current.contents={...f.snapshot.files,'.codex-plugin/plugin.json':JSON.stringify({...root,skills:'./skills',interface:{...root.extensions['com.openai'].interface,keywords:[]}}),'.mcp.json':JSON.stringify({mcpServers:{video:{type:'streamable-http',url:'https://fleet.vyibc.com/mcp/video',headers:{}}}})}
+ assert.doesNotThrow(()=>validateSource(f.snapshot,f.current))
+ assert.equal(verifyReadback(f.snapshot,f.current),'pluginrel_flow')
+ assert.throws(()=>validateSource({...f.snapshot,appId:'asdk_app_fake'},f.current),/identity_mismatch/)
+ f.current.contents['.mcp.json']=JSON.stringify({mcpServers:{video:{type:'streamable-http',url:'https://other.example/mcp'}}})
+ assert.throws(()=>validateSource(f.snapshot,f.current),/source_changed/)
+})
 function fixture(){
  const token='x'.repeat(32),archive=Buffer.from('test archive'),sha=createHash('sha256').update(archive).digest('hex')
  const root={name:'vyibc-personal-content',version:'0.1.3',extensions:{'com.openai':{interface:{defaultPrompt:['prompt']}}}}

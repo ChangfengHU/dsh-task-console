@@ -4,7 +4,7 @@
 
 Fleet Hub owns product source, immutable release archives, approval and jobs.
 DSH uses its existing Task Signal/planner/executor/reviewer pipeline; it is not
-a second scheduler. A dedicated native Codex app-server client calls two official
+a second scheduler. A dedicated native Codex app-server client calls three official
 Plugin Creator tools. The ordinary Codex model adapter is not changed or granted
 Apps access. The user's Mac is not required to stay online.
 
@@ -51,7 +51,8 @@ Native Codex is `~/.local/bin/codex`, under the existing owner's ChatGPT login.
 The client uses documented app-server JSON RPC and authenticates through that
 runtime, not copied browser cookies or a desktop IPC shim. It verifies ChatGPT
 account type, Plugin Creator installation and live tool discovery. Only
-`plugin_creator.get_plugin_files` and `plugin_creator.update_plugin` are called.
+`plugin_creator.get_plugin_files`, `plugin_creator.get_owned_plugin_archive`,
+and `plugin_creator.update_plugin` are called.
 Interactive server requests are denied. Source reads use direct tool calls;
 upload uses one low-effort native Codex turn so its host performs
 `openai/fileParams` conversion. Raw `mcpServer/tool/call` accepts the rewritten
@@ -71,9 +72,14 @@ The model provides only the approved release UUID. The executor claims a durable
 Fleet lease, downloads that immutable archive, verifies SHA-256 and current
 platform identity/scope/App/default prompts, then updates using the frozen
 `expected_release_id`. Temporary ZIPs are mode0600 and removed afterward.
-Successful readback compares version, release ID and six text files. JSON is
-structurally compared because the platform may normalize manifests. Binary icon
-bytes are covered by archive integrity, not independently fetched by readback.
+Successful readback compares version, release ID and every imported text file,
+including scripts and references. JSON is structurally compared because the
+platform may normalize manifests. Binary icons/resources are independently
+verified from the same owner's official current-release archive, fetched with
+bounded HTTPS, no forwarded credentials or filesystem extraction. File listing
+and text reads are paginated/batched within official tool limits. Missing old
+Skill files stop publication with `platform_file_delete_unsupported` because
+official updates overlay rather than delete. Never report an omission as deletion.
 Use deep JSON equality, not `JSON.stringify(JSON.parse(...))`: the latter still
 compares insertion order. Arrays and values remain order/value sensitive.
 
@@ -95,10 +101,11 @@ compares insertion order. Arrays and values remain order/value sensitive.
   Do not invoke `fireTask` on an external-signal Task or delete its old rounds.
 - `blocked` means inspect the exact error/task. Do not override identity,
   archive or platform-conflict guards to make a green result.
-- `verified` means official package/version/text readback completed. It does not
+- `verified` means official package/version/full-file readback completed. It does not
   prove an existing ChatGPT conversation refreshed or a business MCP call ran.
 - For initial acceptance, use Fleet administrator login and click
-  Personal Trace > 更新插件 > 更新到 ChatGPT. Record the real DSH Task ID,
+  Personal Trace > 更新插件 > 刷新 Skill > 生成版本 > 更新到 ChatGPT.
+  Generation and publishing are separate explicit operations. Record the real DSH Task ID,
   original plugin ID, platform release ID and matching Fleet digest/receipt.
   Unit/fixture tests and read-only capability probes are not this acceptance.
 
@@ -106,3 +113,22 @@ Regression entrypoints: `test/plugin-publisher.test.ts`, task-intake tests,
 capability-contract/readiness and agent-tool-fence tests. Fleet counterpart:
 `/home/claude/linux-clash-skill/docs/hub-plugin-publishing.md`
 (`ChangfengHU/linux-clash-skill`, private).
+
+For a read-only native platform probe (no upload), run
+`/usr/bin/node --import tsx scripts/verify-plugin-publisher-readonly.ts` on 95.
+It verifies current package identity, text files and official owned-archive icon
+readback; outputs metadata/counts only, not credentials or signed URLs.
+Stage with `DTC_BUILD_OUT=/tmp/dsh-hub-skills-stage /usr/bin/node scripts/build.mjs`
+and compare output to lib before activation. For this change only
+`lib/plugin-publisher-tools.js` differs; preserve all other runtime bundles and
+activate only after both running sessions and unfinished claims are zero.
+# 2026-10-04 canonical Skill acceptance
+
+The first full-path read exposed PNG being sent to the text-only read API. Both
+baseline and post-upload reads now receive binaryPaths; baseline owned-archive
+reads select only already-existing paths, allowing new binary assets. Fifteen
+publisher tests pass. Same immutable Fleet release reached verified at
+2026-10-04T21:34:52.292Z and official0.1.5 release
+pluginrel_6ac2c66f88e48191b5e97f2cbc4ea3ae. Independent no-upload probe confirms
+the original USER/PRIVATE package, nine files and9936-byte icon. Legacy extra
+files are preserved by overlay. Task state alone is never a platform receipt.

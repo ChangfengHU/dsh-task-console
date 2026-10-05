@@ -63,7 +63,7 @@ test('bounded status waiting is cancellable without cancelling the accepted job'
  const controller=new AbortController();const waiting=jobs.waitStatus('owner',id,15000,controller.signal);controller.abort();await assert.rejects(waiting);assert.equal(jobs.status('owner',id).state,'running')
  finish({images:[image],model:'test'});assert.equal((await settled(jobs,id)).state,'completed');await jobs.dispose();db.close()
 })
-test('real ToolRuntime validates canonical output, returns image blocks, and honours permission guard',async()=>{
+test('real ToolRuntime returns text-only assets on status/replay/cancel and honours permission guard',async()=>{
  const db=new Database(':memory:'),jobs=new ImageJobs(db,{codex:ok})
  const root=new Context();root.provide('systemPrompt',{tools:()=>{}});const runtime=new ToolRuntime(root)
  const ctx={get:(name: string)=>name==='nativeImages'?{jobs}:undefined,tools:{register:(s: any)=>runtime.register(s)},effect:(fn: any)=>fn()}
@@ -71,9 +71,17 @@ test('real ToolRuntime validates canonical output, returns image blocks, and hon
  const agent={ctx:root,session:{id:'owner',events:[]}},signal=new AbortController().signal
  const invoke=(name: string,args: any)=>runtime.execute({name,arguments:args,agent,callId:'tool-proof',signal} as any)
  try {const start=await invoke('image_generate',{requestId:request.requestId,prompt:request.prompt});assert.equal(start.isError,false);const value=JSON.parse((start.content[0] as any).text);await settled(jobs,value.jobId)
-  const status=await invoke('image_generate_status',{jobId:value.jobId,waitMs:0});assert.equal(status.isError,false);assert.equal(status.content[1].type,'image')
+  const status=await invoke('image_generate_status',{jobId:value.jobId,waitMs:0});assert.equal(status.isError,false);assert.deepEqual(status.content.map((b:any)=>b.type),['text']);assert.deepEqual(JSON.parse((status.content[0] as any).text).images,[image])
+  for(const result of [await invoke('image_generate',{requestId:request.requestId,prompt:request.prompt}),await invoke('image_generate_cancel',{jobId:value.jobId})]){assert.equal(result.isError,false);assert.deepEqual(result.content.map((b:any)=>b.type),['text']);assert.equal(JSON.parse((result.content[0] as any).text).state,'completed')}
+  const edit=await invoke('image_generate',{requestId:'edit-own',prompt:'edit circle',referenceAttachmentIds:['a']});assert.equal(edit.isError,false)
+  const foreign=await runtime.execute({name:'image_generate',arguments:{requestId:'foreign',prompt:'circle',referenceAttachmentIds:['a']},agent:{...agent,session:{id:'intruder',events:[]}},callId:'foreign',signal} as any);assert.equal(foreign.isError,true)
   const undo=runtime.guard(()=> 'Image permission denied');assert.equal((await invoke('image_generate',{requestId:'denied',prompt:'circle'})).isError,true);undo();assert.throws(()=>jobs.status('intruder',value.jobId),/当前会话/)
  }finally{await jobs.dispose();db.close();await root.fiber.dispose()}
+})
+test('observed reference ownership is durable and never crosses sessions',async()=>{
+ const db=new Database(':memory:');let jobs=new ImageJobs(db,{codex:ok})
+ jobs.recordReference('owner',image);assert.deepEqual(jobs.references('owner').get('a'),image);assert.equal(jobs.references('intruder').size,0)
+ await jobs.dispose();jobs=new ImageJobs(db,{codex:ok});assert.deepEqual(jobs.references('owner').get('a'),image);await jobs.dispose();db.close()
 })
 test('host native tools work in an ordinary session without Task service or an image Agent; preference respects exclusions',async()=>{
  const dir=await mkdtemp(join(tmpdir(),'dsh-native-host-test-')),root=new Context();root.provide('systemPrompt',{tools:()=>{}})

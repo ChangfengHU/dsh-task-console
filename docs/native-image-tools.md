@@ -17,10 +17,20 @@ Agent 配置包含默认后端、允许后端、是否允许任务覆盖、提�
 ## 调用
 
 1. `image_generate({prompt,requestId,backend?,referenceAttachmentIds?})` 受理后立即返回 `jobId`。同一请求复用 `requestId`；提示词/参考图改变则使用新 ID。
-2. `image_generate_status({jobId,waitMs?})` 默认有界等待 15 秒，成功返回真实图片 attachment blocks。`running` 不是成功。
+2. `image_generate_status({jobId,waitMs?})` 默认有界等待 15 秒，成功返回真实图片资产元数据，不向会话模型返回图片块。用户在本会话 Images 页查看/下载图片。`running` 不是成功。
 3. `image_generate_cancel({jobId})` 取消自己的任务。只取消查询等待不会取消后台生成；取消不保证上游没有消耗额度。
 
-参考图最多四张，只接受当前会话消息中已有的结构化图片附件 ID；不解析文本里的假附件，不接受任意路径或远端图片 URL。
+参考图最多四张，只接受当前会话消息中已有的结构化图片附件 ID，或宿主记录属于当前会话的已识别/已生成资产；不解析文本里的假附件，不接受任意路径或远端图片 URL。
+
+## 固定识图与模型无关的回执
+
+识图和生图是同一现有仓库中的宿主能力，不是新的 Agent、MCP 或独立仓库。
+
+- `read_image` 保留原生工具的参数、权限、文件解析、格式/大小验证及附件存储。在执行扩展中只给原生读图的图片准入检查提供独立视觉路线，真实会话模型选择不变；固定视觉模型单次读取附件，结果以文字/JSON 返回。
+- `visionProvider` 默认 `qwen-bailian`，`visionModel` 默认 `qwen3.7-plus`，可在 Task 插件或独立 native-image-host 的宿主配置中修改。模型必须真实支持图片且该机器认证可用；不自动切换备用模型。读取图片会调用专用视觉后端，可能计费；识别报告不是主模型直接看到原图，不能保证像素级判断。
+- 三项 `image_generate*` 全部返回文本 JSON，包括 completed 重放与取消已完成任务。生成后端选择继续使用已有 Codex/Gemini 策略，与聊天模型无关。
+- Images 会话页通过现有受保护 Remote API 查询属于指定会话的任务，再读取该任务已完成的资产；不新增公开图片 HTTP 路由，不将图片块塞回聊天历史。资产 API 不接受任意附件 ID 或文件路径。
+- 新源文件 `src/fixed-vision.ts` 位于 `dsh-task-console`；不直接修改第三方宿主包。独立宿主挂载入口保持 `dsh-task-console/native-image-host`，原工具围栏保持有效。
 
 宿主全局最多两项并发。请求先记录到独立 `$DSH_HOME/native-images/jobs.sqlite`，不依赖 Task 数据库或 Agent preset，再调用上游。Task 插件通过宿主服务读取未结束的图片任务，拒绝提前交卷。超时、宿主重启及已提交失败不自动重发、不切换后端；仅明确的提交前未就绪且授权时允许切换一次。会话请求上限不是价格额度，也不替代视频工作室独立的业务预算/质检闸门。
 

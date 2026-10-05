@@ -16,6 +16,7 @@ export class ImageJobs {
       id TEXT PRIMARY KEY, owner TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL,
       backend TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
       result_json TEXT NOT NULL, UNIQUE(owner,request_id))`)
+    db.exec('CREATE TABLE IF NOT EXISTS dsh_native_image_refs (owner TEXT NOT NULL, attachment_id TEXT NOT NULL, ref_json TEXT NOT NULL, PRIMARY KEY(owner,attachment_id))')
     db.prepare("UPDATE dsh_native_image_jobs SET state='interrupted',updated_at=?,result_json=? WHERE state='running'").run(new Date().toISOString(), JSON.stringify({ code:'HOST_RESTARTED', message:'宿主重启；执行结果未知，不自动重发。' }))
   }
   status(owner: string, id: string): any {
@@ -25,6 +26,19 @@ export class ImageJobs {
   }
   pending(owner: string): string | undefined {
     return this.db.prepare("SELECT id FROM dsh_native_image_jobs WHERE owner=? AND state='running' ORDER BY created_at LIMIT 1").get(owner)?.id
+  }
+  list(owner: string): any[] {
+    if (!owner) throw Error('真实会话必需')
+    return this.db.prepare('SELECT id FROM dsh_native_image_jobs WHERE owner=? ORDER BY created_at DESC LIMIT 100').all(owner).map((row:any)=>this.status(owner,row.id))
+  }
+  recordReference(owner:string, image:any):void {
+    if(!owner||!image?.attachmentId)throw Error('真实图片归属必需')
+    this.db.prepare('INSERT OR REPLACE INTO dsh_native_image_refs VALUES (?,?,?)').run(owner,String(image.attachmentId),JSON.stringify(image))
+  }
+  references(owner:string):Map<string,any> {
+    const refs=new Map<string,any>(this.db.prepare('SELECT attachment_id,ref_json FROM dsh_native_image_refs WHERE owner=?').all(owner).map((r:any)=>[r.attachment_id,JSON.parse(r.ref_json)]))
+    for(const receipt of this.list(owner))for(const ref of receipt.images || [])refs.set(String(ref.attachmentId),ref)
+    return refs
   }
   async waitStatus(owner: string, id: string, waitMs: number, signal: AbortSignal): Promise<any> {
     const initial = this.status(owner,id)

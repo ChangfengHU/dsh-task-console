@@ -6,6 +6,7 @@ import { installLightStyles } from './light-styles.ts'
 import { agentMentionSource } from './agent-mentions.ts'
 import { installSessionShortcuts } from './session-shortcuts.tsx'
 import { SessionCapabilitiesView } from './SessionCapabilities.tsx'
+import { NativeImagesView } from './NativeImages.tsx'
 
 declare const require: (id: string) => unknown
 declare const __DTC_VERSION__: string
@@ -47,6 +48,7 @@ export async function apply(ctx: any): Promise<void> {
   ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({ name: 'sidebar.footer.action', id: 'task-console', order: 30, inject: () => ({ ctx }) }, FooterEntry))
   ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'task-console-trace', order: 25, label: () => 'Trace', inject: (sessionId: string) => ({ ctx, sessionId }) }, LazyTrace))
   ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'task-console-capabilities', order: 26, label: () => 'Capabilities', inject: (sessionId: string) => ({ sessionId }) }, SessionCapabilitiesView))
+  ctx.slots.inject('conversation.view', () => ctx.slots.register({ name: 'conversation.view', id: 'task-console-images', order: 27, label: () => 'Images', inject: (sessionId: string) => ({sessionId}) }, NativeImagesView))
   try { ctx.effect(() => ctx.inputTriggers.registerSource(agentMentionSource(ctx, async () => (await loadHeavy()).activate(ctx), go)), 'task-console: lazy @agent trigger') } catch (error) { console.warn('[task-console] @agent trigger not registered:', error) }
 }
 

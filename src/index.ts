@@ -25,6 +25,7 @@ import { fallbackSelection } from './model-fallback.ts'
 import {readStudioHostConfiguration,type StudioConfigBinding} from './studio-config.js'
 import type { ImageHostConfig } from './image-backends.ts'
 import * as NativeImageHost from './native-image-host.ts'
+import type { VisionConfig } from './fixed-vision.ts'
 
 export const name = 'task-console'
 export const inject = ['loader', 'tools', 'agents', 'webServer', 'workspaceRegistry']
@@ -36,6 +37,8 @@ export const Config = z.object({
   codexImageModel:z.string().default(''),
   geminiImagePoolDir:z.string().default(''),
   geminiImageModel:z.string().default('gemini-3.1-flash-image'),
+  visionProvider:z.string().default('qwen-bailian'),
+  visionModel:z.string().default('qwen3.7-plus'),
   taskFallbackFromProvider: z.string().default('codex-local'),
   standardMaxSteps: z.natural().min(1).default(24),
   standardMcpInheritance: z.union(['inherit', 'discover-only']).default('inherit'),
@@ -56,14 +59,14 @@ export { applyAgentPermission } from './agent-session.ts'
 export { TaskIntakeCoordinator, validateTaskIntakeDecision, validateTaskSignal } from './task-intake.ts'
 export { TASK_INTAKE_AGENT_ID } from './task-intake-agent.ts'
 
-export async function apply(ctx: Context, config: CapabilityPolicy & StudioConfigBinding & ImageHostConfig & { taskFallbackModel?: string; taskFallbackFromProvider?: string; workflowModules?:WorkflowModule[] } = {}): Promise<void> {
+export async function apply(ctx: Context, config: CapabilityPolicy & StudioConfigBinding & ImageHostConfig & VisionConfig & { taskFallbackModel?: string; taskFallbackFromProvider?: string; workflowModules?:WorkflowModule[] } = {}): Promise<void> {
   // Reject explicit broken configuration before the service recovers/dispatches Tasks.
   if(config.studioConfigPath!==undefined)await readStudioHostConfiguration(config.studioConfigPath)
   const bundled=await loadBundledWorkflowModules(new URL('../',import.meta.url))
   const workflowExtensions=[...bundled,...await loadWorkflowModules(config.workflowModules??[])]
   await ctx.plugin(TaskConsoleService,{workflowExtensions,studioConfigPath:config.studioConfigPath})
   await (ctx as any).get('taskConsole').ready
-  if (!(ctx as any).get('nativeImages')) await ctx.plugin(NativeImageHost,{codexImageProvider:config.codexImageProvider,codexImageModel:config.codexImageModel,geminiImagePoolDir:config.geminiImagePoolDir,geminiImageModel:config.geminiImageModel})
+  if (!(ctx as any).get('nativeImages')) await ctx.plugin(NativeImageHost,{codexImageProvider:config.codexImageProvider,codexImageModel:config.codexImageModel,geminiImagePoolDir:config.geminiImagePoolDir,geminiImageModel:config.geminiImageModel,visionProvider:config.visionProvider,visionModel:config.visionModel})
   const fallback = fallbackSelection(config.taskFallbackModel ?? '')
   ;(ctx as any).get('taskConsole').runner.modelFallback = fallback ? { ...fallback, fromProvider: config.taskFallbackFromProvider ?? 'codex-local' } : undefined
   ;(ctx as any).get('taskConsole').capabilities.policy = config

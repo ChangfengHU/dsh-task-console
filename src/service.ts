@@ -149,6 +149,22 @@ export class TaskConsoleService extends TypertRemoteService {
 
   readonly runner: TaskRunner
   get imageGeneration(): import('./image-jobs.ts').ImageJobs | undefined { return (this.ctx as any).get('nativeImages')?.jobs }
+  async nativeImageJobs(payload:string):Promise<string> {
+    const {sessionId}=JSON.parse(payload)
+    if(typeof sessionId!=='string'||!sessionId)throw Error('会话 ID 必需')
+    return JSON.stringify({jobs:this.imageGeneration?.list(sessionId) ?? []})
+  }
+  async nativeImageAsset(payload:string):Promise<string> {
+    const {sessionId,jobId,index=0}=JSON.parse(payload)
+    if(typeof sessionId!=='string'||!sessionId||typeof jobId!=='string'||!Number.isSafeInteger(index)||index<0||index>3)throw Error('图片请求无效')
+    const receipt=this.imageGeneration?.status(sessionId,jobId)
+    const image=receipt?.state==='completed'?receipt.images?.[index]:undefined
+    if(!image)throw Error('当前会话没有这个已完成图片资产')
+    const store=(this.ctx as any).get('attachments')
+    if(!store)throw Error('图片存储未配置')
+    const loaded=await store.readImage(image)
+    return JSON.stringify({image,data:Buffer.from(loaded.data).toString('base64')})
+  }
   readonly intake: TaskIntakeCoordinator
   readonly creator: TaskCreator
   capabilities!: SessionCapabilities

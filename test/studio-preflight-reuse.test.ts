@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os'
 import {join} from 'node:path'
 import {refreshStudioCapabilities} from '../src/studio-host.ts'
 import {fileSha256} from '../src/studio-tools.ts'
+import {executionAssetProof,speechCalibrationFixture} from './fixtures/studio-runtime.ts'
 
 async function fixture(t:any){
  const cwd=await mkdtemp(join(tmpdir(),'studio-preflight-reuse-'));t.after(()=>rm(cwd,{recursive:true,force:true}))
@@ -14,7 +15,8 @@ async function fixture(t:any){
  await writeFile(profilePath,JSON.stringify(profile));const profileSha=await fileSha256(profilePath)
  const sha256=await fileSha256(path),p={ok:true,path,sha256,proofPath}
  const task={id:cwd,cwd,design:{studio:{referenceSha256:sha256,characterId:'c'}}}
- const value={ok:true,capabilities:{reference:p,frames:p,hyperframes:{...p,hyperframes_verified:true,scope:'actual_hyperframes_smoke_render'},character:{...p,characterId:'c',imagePath:path,imageSha256:sha256,profilePath,sha256:profileSha,profileVersion:3}}}
+ const runtime=await executionAssetProof(cwd,proofPath)
+ const value={ok:true,capabilities:{...runtime,reference:p,frames:p,hyperframes:{...runtime.hyperframes,...p,hyperframes_verified:true,scope:'actual_hyperframes_smoke_render'},character:{...p,characterId:'c',imagePath:path,imageSha256:sha256,profilePath,sha256:profileSha,profileVersion:3}}}
  const records:any[]=[],workflow:any={recordCapability:(_:any,v:any)=>records.push(v)}
  let calls=0
  const config:any={preflightScript:script},execute=async()=>{calls++;return value}
@@ -57,13 +59,12 @@ test('config, helper bytes, runtime replacement and task scope invalidate reuse'
 })
 
 test('calibration files are reread on a warm preflight without running the host again',async t=>{
- const s=await fixture(t),calibrationPath=join(s.cwd,'calibration.json'),regressionPath=join(s.cwd,'regression.json')
+ const s=await fixture(t)
  const sha256=s.value.capabilities.reference.sha256
- await writeFile(calibrationPath,JSON.stringify({results:[{ok:true,audio_sha256:sha256,observation:{input_modality:'input_audio',finish_reason:'stop',audio_sha256:sha256}}]}))
- await writeFile(regressionPath,'{}')
- const config={...s.config,calibrationPath,calibrationRegressionPath:regressionPath,audioScript:'fixture',vaultTokenFile:'unused'}
+ const calibration=await speechCalibrationFixture(s.cwd,sha256)
+ const config={...s.config,...calibration,audioScript:'fixture',vaultTokenFile:'unused'}
  await s.refresh(s.task,config);assert.equal(s.records.find(v=>v.name==='audio').status,'passed')
- s.records.length=0;await writeFile(calibrationPath,'{}');await s.refresh(s.task,config)
+ s.records.length=0;await writeFile(calibration.calibrationPath,'{}');await s.refresh(s.task,config)
  assert.equal(s.calls(),1);assert.equal(s.records.find(v=>v.name==='audio').status,'unknown')
 })
 

@@ -2,9 +2,22 @@
 import {spawn} from 'node:child_process'
 import {createHash} from 'node:crypto'
 export const VERIFIER=String.raw`
-import sys,io,json,tarfile,hashlib,posixpath,resource
-resource.setrlimit(resource.RLIMIT_AS,(512*1024*1024,512*1024*1024))
-resource.setrlimit(resource.RLIMIT_CPU,(20,20))
+import sys,io,json,tarfile,hashlib,posixpath,resource,gzip
+def constrain(kind,value):
+ _,hard=resource.getrlimit(kind)
+ bounded=value if hard==resource.RLIM_INFINITY else min(value,hard)
+ resource.setrlimit(kind,(bounded,bounded))
+try:
+ constrain(resource.RLIMIT_AS,512*1024*1024)
+ address_space='rlimit'
+except (ValueError,OSError):
+ # Darwin exposes RLIMIT_AS but cannot lower it. Archive expansion is bounded
+ # before tarfile sees any headers (including oversized PAX metadata). Other
+ # platforms must still enforce the process address-space limit or fail closed.
+ if sys.platform!='darwin':raise
+ address_space='bounded-archive'
+constrain(resource.RLIMIT_CPU,20)
+MAX_EXPANDED_ARCHIVE=100*1024*1024
 raw=sys.stdin.buffer.read(32*1024*1024+1)
 expected,commit=sys.argv[1:3]
 def sha(b):return hashlib.sha256(b).hexdigest()
@@ -18,7 +31,10 @@ try:
  if len(raw)>32*1024*1024:raise ValueError('archive-too-large')
  if sha(raw)!=expected:raise ValueError('frozen-archive-changed')
  rows=[];special={};seen=set();total=0
- with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as tf:
+ with gzip.GzipFile(fileobj=io.BytesIO(raw),mode='rb') as gz:
+  expanded=gz.read(MAX_EXPANDED_ARCHIVE+1)
+ if len(expanded)>MAX_EXPANDED_ARCHIVE:raise ValueError('expanded-archive-limit')
+ with tarfile.open(fileobj=io.BytesIO(expanded),mode='r:') as tf:
   for m in tf:
    n=m.name
    if len(rows)>=256 or len(n)>512:raise ValueError('archive-member-limit')
@@ -50,9 +66,9 @@ try:
   if not row['matches']:failed.append('member-hash-mismatch:'+row['name'])
  revision_matches=special['SOURCE_REVISION'].decode('utf-8').strip()==commit
  if not revision_matches:failed.append('source-revision-content-mismatch')
- print(json.dumps({'schema':'release-audit-facts-v1','status':'fail' if failed else 'pass','archiveSha256':sha(raw),'expectedCommit':commit,'revisionContentMatches':revision_matches,'manifestEntries':len(manifest),'members':rows,'failures':failed,'scope':'byte-integrity-only','verifierRuntime':sys.version.split()[0]}))
+ print(json.dumps({'schema':'release-audit-facts-v1','status':'fail' if failed else 'pass','archiveSha256':sha(raw),'expectedCommit':commit,'revisionContentMatches':revision_matches,'manifestEntries':len(manifest),'members':rows,'failures':failed,'scope':'byte-integrity-only','verifierRuntime':sys.version.split()[0],'addressSpacePolicy':address_space}))
 except Exception as e:
- print(json.dumps({'schema':'release-audit-facts-v1','status':'fail','archiveSha256':sha(raw),'expectedCommit':commit,'failures':[str(e) if isinstance(e,ValueError) else type(e).__name__],'members':[],'scope':'byte-integrity-only','verifierRuntime':sys.version.split()[0]}))
+ print(json.dumps({'schema':'release-audit-facts-v1','status':'fail','archiveSha256':sha(raw),'expectedCommit':commit,'failures':[str(e) if isinstance(e,ValueError) else type(e).__name__],'members':[],'scope':'byte-integrity-only','verifierRuntime':sys.version.split()[0],'addressSpacePolicy':address_space}))
 `
 export const VERIFIER_SHA256=createHash('sha256').update(VERIFIER).digest('hex')
 export function verifyArchive(bytes:Buffer,archiveSha256:string,commit:string):Promise<Record<string,any>>{

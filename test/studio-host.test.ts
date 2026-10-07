@@ -2,17 +2,17 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtemp,writeFile,readFile,rm,mkdir,realpath} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
-import {join,resolve} from 'node:path'
+import {join} from 'node:path'
 import {createHash} from 'node:crypto'
 import {refreshStudioCapabilities,observeStudioAudio,observeStudioVision,checkStudioSpeech} from '../src/studio-host.ts'
 import {fileSha256} from '../src/studio-tools.ts'
+import {speechCalibrationFixture} from './fixtures/studio-runtime.ts'
 async function setup(t:any){const cwd=await realpath(await mkdtemp(join(tmpdir(),'studio-host-test-')));t.after(()=>rm(cwd,{recursive:true,force:true}));const path=join(cwd,'asset'),proofPath=join(cwd,'proof.json');await writeFile(path,'asset');await writeFile(proofPath,'{}');await mkdir(join(cwd,'.studio-host'));const profilePath=join(cwd,'.studio-host/character.json');await writeFile(profilePath,JSON.stringify({character_id:'c',profile_version:3,profile:{personality:['真实'],scene_design_plan:['宿舍']},voice_recommendation:{voice_id:'approved-voice'}}));const profileSha=await fileSha256(profilePath);const sha256=await fileSha256(path),task={id:cwd,cwd,design:{studio:{referenceSha256:sha256,characterId:'c'}}},records:any[]=[],workflow:any={recordCapability:(_:any,v:any)=>records.push(v)};return {cwd,path,sha256,task,records,workflow,proofPath,profilePath,profileSha}}
 test('actual dependency proofs map HyperFrames, freeze reference and character paths',async t=>{const s=await setup(t),p={ok:true,path:s.path,sha256:s.sha256,proofPath:s.proofPath};let calls=0;const runtime=await runtimeProof(s);const opts={config:{preflightScript:'fake'},execute:async()=>{calls++;return {capabilities:{...runtime,reference:p,frames:p,hyperframes:{...runtime.hyperframes,...p,hyperframes_verified:true,scope:'actual_hyperframes_smoke_render'},character:{...p,characterId:'c',imagePath:s.path,imageSha256:s.sha256,profilePath:s.profilePath,sha256:s.profileSha,profileVersion:3,profileAssetId:'profile'}}}}};const result=await refreshStudioCapabilities(s.workflow,s.task,opts);assert.equal(result.reference.sha256,s.sha256);assert.equal(result.characterReferences[0].id,'profile');assert.equal(result.characterProfile?.profileVersion,3);assert.equal(result.characterProfile?.sha256,s.profileSha);assert.equal(s.records.find(v=>v.name==='render').status,'passed');await refreshStudioCapabilities(s.workflow,s.task,opts);assert.equal(calls,1);await writeFile(s.path,'tampered');s.records.length=0;await refreshStudioCapabilities(s.workflow,s.task,opts);assert.equal(s.records.find(v=>v.name==='reference').status,'failed')})
 test('FFmpeg-only smoke never satisfies HyperFrames render capability',async t=>{const s=await setup(t);await refreshStudioCapabilities(s.workflow,s.task,{config:{preflightScript:'fake'},execute:async()=>({capabilities:{render:{ok:true,path:s.path,sha256:s.sha256,proofPath:s.proofPath}}})});assert.equal(s.records.find(v=>v.name==='render').status,'failed')})
-test('actual saved calibration grants bounded capability for its explicitly selected model, never performance approval',async t=>{
- const s=await setup(t),calibrationPath=process.env.STUDIO_TEST_CALIBRATION_PATH??resolve('../autonomous-studio/evidence/speech-calibration.json')
- const saved=JSON.parse(await readFile(calibrationPath,'utf8')),audioObserverModel=saved.results.find((v:any)=>v.sample==='clean')?.observation?.requested_model
- await refreshStudioCapabilities(s.workflow,s.task,{config:{calibrationPath,audioObserverModel,audioScript:'script',vaultTokenFile:'file'}})
+test('saved deterministic technical calibration fixture is model-bound, never actual model or performance approval',async t=>{
+ const s=await setup(t),calibration=await speechCalibrationFixture(s.cwd,s.sha256)
+ await refreshStudioCapabilities(s.workflow,s.task,{config:{...calibration,audioScript:'script',vaultTokenFile:'file'}})
  const r=s.records.find(v=>v.name==='audio_calibration');assert.equal(r.status,'passed');assert.match(r.reason,/performance_calibrated=false/);assert.match(r.reason,/retrospective/);assert.equal(s.records.find(v=>v.name==='audio').status,'passed')
 })
 test('all four audio calibration observations must match the active host model; absent or mixed identities fail closed',async t=>{

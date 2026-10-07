@@ -8,11 +8,14 @@ import {execFileSync} from 'node:child_process'
 import {createHash} from 'node:crypto'
 import {HELPERS,RUNTIME_ASSETS,packageStudio,verifyStudioPayload} from '../scripts/package-studio.mjs'
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..')
-const helperSource=n=>n==='studio_upload.py'?join(root,'../studio_upload.py'):join(root,'../autonomous-studio',n)
+const helperSource=n=>join(root,'studio/helpers',n)
 const env={...process.env,PATH:dirname(process.execPath)+':'+process.env.PATH}
 
 async function fixture(base){
- await mkdir(join(base,'studio'),{recursive:true});await cp(join(root,'studio/roles'),join(base,'studio/roles'),{recursive:true});await packageStudio(base,join(root,'../autonomous-studio'));return base
+ // The checked-in, hash-covered payload is the portable source of this fixture.
+ // No undeclared sibling development checkout or private evidence is required.
+ await mkdir(base,{recursive:true});await cp(join(root,'studio'),join(base,'studio'),{recursive:true})
+ await packageStudio(base,join(base,'absent-development-source'));return base
 }
 
 test('actual npm tarball contains verified isolated helper closure, no private payload; repacks without parent',async t=>{
@@ -36,7 +39,7 @@ test('actual npm tarball contains verified isolated helper closure, no private p
  execFileSync('tar',['-xzf',join(temp,result.filename),'-C',temp])
  const installed=join(temp,'package'), manifest=await verifyStudioPayload(installed)
  assert.equal(manifest.runtimeVerified,false);assert.equal(manifest.proofsPackaged,false);assert.equal(manifest.rolesPackaged,true);assert.equal(manifest.runtimeAssetsPackaged,true)
- for(const n of RUNTIME_ASSETS)assert.deepEqual(await readFile(join(installed,'studio/runtime-assets',n)),await readFile(join(root,'../runtime-assets',n)))
+ for(const n of RUNTIME_ASSETS)assert.deepEqual(await readFile(join(installed,'studio/runtime-assets',n)),await readFile(join(root,'studio/runtime-assets',n)))
  for(const n of HELPERS)assert.deepEqual(await readFile(join(installed,'studio/helpers',n)),await readFile(helperSource(n)))
  // Isolated import execution with network and subprocess execution forbidden.
  const code=String.raw`
@@ -93,6 +96,7 @@ test('declared helper imports cannot silently acquire an unbundled dependency',a
  const source=join(temp,'sources');await mkdir(source)
  await mkdir(join(temp,'package/studio'),{recursive:true});await cp(join(root,'studio/roles'),join(temp,'package/studio/roles'),{recursive:true})
  for(const n of HELPERS)await cp(helperSource(n),n==='studio_upload.py'?join(temp,n):join(source,n))
+ await cp(join(root,'studio/runtime-assets'),join(temp,'runtime-assets'),{recursive:true})
  await writeFile(join(source,'audio_signals.py'),'import omitted_local_helper\n')
  await assert.rejects(packageStudio(join(temp,'package'),source),/Undeclared Python dependency/)
 })

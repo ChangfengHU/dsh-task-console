@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {mkdtemp,mkdir,writeFile,readFile,rm,readdir} from 'node:fs/promises'
-import {join,resolve,relative} from 'node:path'
+import {join,relative} from 'node:path'
 import {tmpdir} from 'node:os'
 import {createHash} from 'node:crypto'
 import {promisify} from 'node:util'
@@ -10,6 +10,8 @@ import {registerStageFiles,verifyStageReceipt} from '../src/studio-stage-files.t
 import {registerStudioBoardTools} from '../src/studio-board-tools.ts'
 import {validateStudioStages,studioStageCardId,studioStageRows} from '../src/studio-stages.ts'
 import {validateStudioPolicy} from '../src/studio-policy.ts'
+import {fileURLToPath} from 'node:url'
+const compiler=process.env.STUDIO_TEST_STORYBOARD_COMPILER??fileURLToPath(new URL('../studio/helpers/compile_storyboard.py',import.meta.url))
 const run=promisify(execFile),sha=(v:Buffer|string)=>createHash('sha256').update(v).digest('hex')
 const stages=validateStudioStages(['storyboard','visual','sound'].map(id=>({id,agentId:`video-${id}`,brief:'prepare actual stage'})))
 async function fixture(t:any){
@@ -39,7 +41,7 @@ async function fixture(t:any){
  const saveSidecar=()=>writeFile(join(cwd,'binding.json'),JSON.stringify(sidecar));await saveSidecar()
  let tool:any,calls=0
  const editor={task,batch,card:{id:'B#e1',agentId:'editor',role:'executor',round:1},sessionId:'editor'}
- const dispose=await registerStudioBoardTools({tools:{register:(v:any)=>{tool=v;return()=>{}}}},{input:editor,workflow,isActive:()=>true,compile:async ({boardPath,outputDirectory})=>{calls++;const r=await run('python3',[resolve('../autonomous-studio/compile_storyboard.py'),'--project-root',cwd,'--board',relative(cwd,boardPath),'--output',outputDirectory]);return JSON.parse(r.stdout)}});t.after(dispose)
+ const dispose=await registerStudioBoardTools({tools:{register:(v:any)=>{tool=v;return()=>{}}}},{input:editor,workflow,isActive:()=>true,compile:async ({boardPath,outputDirectory})=>{calls++;const r=await run('python3',[compiler,'--project-root',cwd,'--board',relative(cwd,boardPath),'--output',outputDirectory]);return JSON.parse(r.stdout)}});t.after(dispose)
  return {cwd,receipts,policy,story,saveStory,plan,savePlan,registerVisual,sidecar,saveSidecar,board,imagePath,workflow,input,editor,tool,calls:()=>calls,execute:(args:any={})=>tool.execute({boardPath:'execution.json',bindingPath:'binding.json',...args})}
 }
 test('opt-in v2 registers actual media then SDK/Python compiles with frozen sidecar and safe replay',async t=>{

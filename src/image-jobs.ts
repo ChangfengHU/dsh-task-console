@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { imagePolicy, type ImageBackend, type ImagePolicy } from './image-policy.ts'
 
-export interface ImageRequest { requestId: string; prompt: string; backend?: ImageBackend; references: any[] }
+export interface ImageRequest { requestId: string; prompt: string; backend?: ImageBackend; references: any[]; executionId?:string }
 export interface ImageProvider {
-  prepare(signal: AbortSignal): Promise<{ generate(request: ImageRequest, signal: AbortSignal): Promise<{ images: any[]; model: string }> }>
+  prepare(signal: AbortSignal): Promise<{ generate(request: ImageRequest, signal: AbortSignal): Promise<{ images: any[]; model: string;route?:string;routeReason?:string }> }>
 }
 /** An explicit pre-dispatch unavailability is the only permitted fallback. */
 export class ImageUnavailable extends Error {}
@@ -11,7 +11,8 @@ export class ImageUnavailable extends Error {}
 /** Durable receipts, not an in-memory polling loop. Never auto-replay uncertain jobs. */
 export class ImageJobs {
   private live = new Map<string, { controller: AbortController; promise: Promise<void> }>()
-  constructor(private db: any, private providers: Partial<Record<ImageBackend, ImageProvider>>, private timeoutMs = 240000, private concurrency = 2) {
+  constructor(private db: any, private providers: Partial<Record<ImageBackend, ImageProvider>>, private timeoutMs = 240000, private concurrency = 10) {
+    if(!Number.isSafeInteger(concurrency)||concurrency<1||concurrency>100)throw Error('生图并发必须为 1–100')
     db.exec(`CREATE TABLE IF NOT EXISTS dsh_native_image_jobs (
       id TEXT PRIMARY KEY, owner TEXT NOT NULL, request_id TEXT NOT NULL, digest TEXT NOT NULL,
       backend TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
@@ -70,7 +71,7 @@ export class ImageJobs {
     const controller = new AbortController()
     // Register before yielding so concurrent calls cannot evade the limit.
     const entry = { controller, promise:Promise.resolve() }; this.live.set(id,entry)
-    entry.promise = this.perform(id, request, policy, controller).finally(() => this.live.delete(id))
+    entry.promise = this.perform(id, request, input.backend?{...policy,fallback:'none'}:policy, controller).finally(() => this.live.delete(id))
     return this.status(owner,id)
   }
   private async perform(id: string, request: ImageRequest, policy: ImagePolicy, controller: AbortController) {
@@ -89,10 +90,11 @@ export class ImageJobs {
         this.db.prepare('UPDATE dsh_native_image_jobs SET backend=? WHERE id=?').run(backend,id)
       }
       controller.signal.throwIfAborted(); dispatched = true
-      const result = await prepared.generate(request,controller.signal)
+      // The user requestId is session scoped; the service needs a globally unique job ID.
+      const result = await prepared.generate({...request,executionId:id},controller.signal)
       controller.signal.throwIfAborted()
       if (!result.images.length || result.images.length > 4) throw Error('上游没有返回可验证的图片')
-      this.finish(id,'completed',{ images:result.images, model:result.model, execution:'verified-image-output' })
+      this.finish(id,'completed',{ images:result.images, model:result.model,...(result.route?{route:result.route,routeReason:result.routeReason}:{}), execution:'verified-image-output' })
     } catch (error) {
       const state = controller.signal.aborted ? timedOut ? 'interrupted' : 'cancelled' : dispatched ? 'failed' : 'unavailable'
       this.finish(id,state,{ code:timedOut?'TIMEOUT_UNKNOWN':controller.signal.aborted?'CANCELLED':dispatched?'GENERATION_FAILED':'BACKEND_UNAVAILABLE', message:timedOut?'等待超时，执行结果未知；不自动重发。':controller.signal.aborted?'请求已取消；上游可能已消耗额度。':dispatched?'生成未取得有效图片；不自动重试或切换后端。':'生图后端未就绪，请检查宿主配置。', mayHaveConsumedQuota:dispatched })

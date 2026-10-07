@@ -142,7 +142,11 @@ export async function applyStudioRoleInstall(options:StudioRoleInstallOptions,ex
     try{await mkdir(target,{mode:0o700})}catch(e:any){if(e.code==='EEXIST')return {agentId:role.spec.id,status:'conflict' as const,reason:'target-created-since-plan'};throw Error('studio-role-install-create-failed')}
     try{
      // Exclusive children prevent clobbering a concurrently written file. Never delete a partial target.
-     await cp(join(stagedRoot,role.spec.id),target,{recursive:true,force:false,errorOnExist:true})
+     // target is our exclusive reservation, so copying the directory itself
+     // with errorOnExist rejects that reservation on supported Node runtimes.
+     // Copy children instead: any concurrently created child still fails closed.
+     const source=join(stagedRoot,role.spec.id)
+     for(const name of await readdir(source))await cp(join(source,name),join(target,name),{recursive:true,force:false,errorOnExist:true})
      return {agentId:role.spec.id,status:'installed' as const}
     }catch{return {agentId:role.spec.id,status:'partial' as const,reason:'copy-failed-preserved-for-inspection'}}
    })

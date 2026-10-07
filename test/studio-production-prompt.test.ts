@@ -4,7 +4,7 @@ import {cardMessage} from '../src/tasks.ts'
 import {studioStageRows,validateStudioStages} from '../src/studio-stages.ts'
 const stages=validateStudioStages(['storyboard','visual','sound'].map(id=>({id,agentId:`video-${id}`,brief:'Prepare actual materials'})))
 const task:any={id:'task',title:'Video',brief:'Make the film',participants:[{agentId:'director'},{agentId:'editor'},{agentId:'reviewer'}],graphMode:'dynamic-rounds',design:{evidenceContract:'studio-video-v1',studioStages:stages}}
-const message=(role:string)=>cardMessage(task,{id:'card',index:0,round:2,role,agentId:'test',brief:'Use actual materials'} as any,'batch',[])
+const message=(role:string)=>cardMessage(task,role==='studio-stage'?{...studioStageRows(task,'batch',2,'planner')[0],index:0}:{id:'card',index:0,round:2,role,agentId:'test',brief:'Use actual materials'} as any,'batch',[])
 test('real sound card receives authenticated download, source-card and failure paths with its frozen script rules',()=>{
  const sound=studioStageRows(task,'batch',2,'planner').find(c=>c.agentId==='video-sound')!
  const prompt=cardMessage(task,{...sound,index:0} as any,'batch',[])

@@ -4,6 +4,8 @@ import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises'
 import {join} from 'node:path'
 import {tmpdir} from 'node:os'
 import {execFile} from 'node:child_process'
+import childProcess from 'node:child_process'
+import {syncBuiltinESMExports} from 'node:module'
 import {promisify} from 'node:util'
 import {createHash} from 'node:crypto'
 import {inspectAudioSignal} from '../src/studio-audio-signal.ts'
@@ -39,6 +41,13 @@ test('hash-keyed cache cannot accept changed silent bytes as the previous nonzer
 test('timeout kills decoder before rejecting, errors are not cached and no decoder diagnostic leaks',async t=>{
  const root=await fixture(t),file=await audio(root,'source','anullsrc=r=16000:cl=mono'),binary=join(root,'decoder'),pidPath=join(root,'pid')
  const prior=process.env.FFMPEG_PATH;t.after(()=>{if(prior===undefined)delete process.env.FFMPEG_PATH;else process.env.FFMPEG_PATH=prior})
+ // macOS may delay executing a freshly created shebang script. Launch this
+ // synthetic decoder through Python explicitly; the child, timeout and SIGKILL
+ // remain real, and all non-fixture subprocess launches are unchanged.
+ const spawn=childProcess.spawn
+ t.mock.method(childProcess,'spawn',((file:any,args:any,options:any)=>file===binary?spawn('python3',[binary,...args],options):spawn(file,args,options)) as typeof spawn)
+ syncBuiltinESMExports()
+ t.after(()=>{t.mock.restoreAll();syncBuiltinESMExports()})
  await writeFile(binary,`#!/usr/bin/env python3\nimport os,time,signal,sys\nopen(${JSON.stringify(pidPath)},'w').write(str(os.getpid()))\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nsys.stderr.write('PRIVATE_FAKE_DIAGNOSTIC')\nsys.stderr.flush()\ntime.sleep(30)\n`,{mode:0o700});process.env.FFMPEG_PATH=binary
  const started=Date.now();await assert.rejects(inspectAudioSignal(file.path,file.hash,{timeoutMs:250}),e=>{assert.equal((e as Error).message,'studio-audio-signal-timeout');return true})
  assert.ok(Date.now()-started<3000)

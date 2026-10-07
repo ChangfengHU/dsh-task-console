@@ -37,6 +37,9 @@ export const Config = z.object({
   codexImageModel:z.string().default(''),
   geminiImagePoolDir:z.string().default(''),
   geminiImageModel:z.string().default('gemini-3.1-flash-image'),
+  geminiImageRoutes:z.array(z.object({id:z.string(),origin:z.string(),apiKeyEnv:z.string()})).default([]),
+  geminiImageFallback:z.union([z.const(null),z.object({id:z.string(),origin:z.string(),apiKeyEnv:z.string()})]).default(null),
+  imageConcurrency:z.natural().min(1).max(100).default(10),
   visionProvider:z.string().default('qwen-bailian'),
   visionModel:z.string().default('qwen3.7-plus'),
   taskFallbackFromProvider: z.string().default('codex-local'),
@@ -66,7 +69,7 @@ export async function apply(ctx: Context, config: CapabilityPolicy & StudioConfi
   const workflowExtensions=[...bundled,...await loadWorkflowModules(config.workflowModules??[])]
   await ctx.plugin(TaskConsoleService,{workflowExtensions,studioConfigPath:config.studioConfigPath})
   await (ctx as any).get('taskConsole').ready
-  if (!(ctx as any).get('nativeImages')) await ctx.plugin(NativeImageHost,{codexImageProvider:config.codexImageProvider,codexImageModel:config.codexImageModel,geminiImagePoolDir:config.geminiImagePoolDir,geminiImageModel:config.geminiImageModel,visionProvider:config.visionProvider,visionModel:config.visionModel})
+  if (!(ctx as any).get('nativeImages')) await ctx.plugin(NativeImageHost,{codexImageProvider:config.codexImageProvider,codexImageModel:config.codexImageModel,geminiImagePoolDir:config.geminiImagePoolDir,geminiImageModel:config.geminiImageModel,geminiImageRoutes:config.geminiImageRoutes,geminiImageFallback:config.geminiImageFallback,imageConcurrency:config.imageConcurrency,visionProvider:config.visionProvider,visionModel:config.visionModel})
   const fallback = fallbackSelection(config.taskFallbackModel ?? '')
   ;(ctx as any).get('taskConsole').runner.modelFallback = fallback ? { ...fallback, fromProvider: config.taskFallbackFromProvider ?? 'codex-local' } : undefined
   ;(ctx as any).get('taskConsole').capabilities.policy = config

@@ -17,6 +17,18 @@ const policy=imagePolicy(undefined)
 const request={requestId:'sample-1',prompt:'a circle',references:[]}
 const image={attachmentId:'a',mediaType:'image/png',bytes:1,width:1,height:1}
 const ok: ImageProvider={prepare:async()=>({generate:async()=>({images:[image],model:'test-image'})})}
+test('ten concurrent jobs admitted; eleventh blocked before dispatch; owner isolation remains',async()=>{
+ const db=new Database(':memory:'),resolvers:((v:any)=>void)[]=[],jobs=new ImageJobs(db,{codex:{prepare:async()=>({generate:()=>new Promise(resolve=>resolvers.push(resolve))})}})
+ try{
+  const receipts=Array.from({length:10},(_,i)=>jobs.start('owner-'+i,{...request,requestId:'parallel-'+i},policy))
+  assert.throws(()=>jobs.start('extra',{...request,requestId:'overflow'},policy),/并发已满/)
+  await new Promise(resolve=>setImmediate(resolve));assert.equal(resolvers.length,10)
+  for(const [i,r] of receipts.entries())assert.throws(()=>jobs.status('other',r.jobId),/当前会话/)
+  for(const resolve of resolvers)resolve({images:[image],model:'test-image'})
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.ok(receipts.every((r,i)=>jobs.status('owner-'+i,r.jobId).state==='completed'))
+ }finally{await jobs.dispose();db.close()}
+})
 async function settled(jobs: ImageJobs,id: string) { for(let n=0;n<100;n++){const x=jobs.status('owner',id);if(x.state!=='running')return x;await new Promise(r=>setTimeout(r,2))}throw Error('did not settle') }
 test('image policy is strict, default off in legacy presets and credentials never migrate',()=>{
   assert.throws(()=>imagePolicy({...policy,token:'secret'}),/未知/)
@@ -42,6 +54,9 @@ test('only explicit unavailable preflight may fallback; post-dispatch never dupl
   const gemini={prepare:async()=>({generate:async()=>{fallback++;return{images:[image],model:'gemini'}}})}
   let jobs=new ImageJobs(db,{codex:{prepare:async()=>{throw new ImageUnavailable('missing')}},gemini})
   assert.equal((await settled(jobs,jobs.start('owner',request,p as any).jobId)).backend,'gemini');assert.equal(fallback,1);await jobs.dispose()
+  jobs=new ImageJobs(db,{codex:{prepare:async()=>{throw new ImageUnavailable('missing')}},gemini})
+  const explicit=await settled(jobs,jobs.start('owner',{...request,requestId:'explicit',backend:'codex'},p as any).jobId)
+  assert.equal(explicit.state,'unavailable');assert.equal(explicit.code,'BACKEND_UNAVAILABLE');assert.equal(explicit.mayHaveConsumedQuota,false);assert.equal(fallback,1);await jobs.dispose()
   jobs=new ImageJobs(db,{codex:{prepare:async()=>({generate:async()=>{throw Error('network unknown')}})},gemini})
   const failed=await settled(jobs,jobs.start('owner',{...request,requestId:'second'},p as any).jobId);assert.equal(failed.state,'failed');assert.equal(failed.mayHaveConsumedQuota,true);assert.equal(fallback,1);await jobs.dispose();db.close()
 })

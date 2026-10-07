@@ -7,6 +7,7 @@ import {registerStudioTools} from '../src/studio-tools.ts'
 import {mkdtemp,rm} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import {join} from 'node:path'
+import {studioStageRows,validateStudioStages} from '../src/studio-stages.ts'
 
 function setup(t:any){
  const db=new Database(':memory:');t.after(()=>db.close())
@@ -71,7 +72,9 @@ test('actual studio_status returns current batch voice handoff even before capab
  const s=setup(t),cwd=await mkdtemp(join(tmpdir(),'studio-job-status-'));t.after(()=>rm(cwd,{recursive:true,force:true}))
  s.insert('voice','vyibc-voice_synthesize','submitted','current-voice-job')
  const workflow=new StudioWorkflow({kernel:{db:s.db}})
- const input={...s.input,task:{...s.input.task,cwd,design:{evidenceContract:'studio-video-v1',studio:{characterId:'character',referenceSha256:'b'.repeat(64),referenceUrl:'https://cdn.vyibc.com/approved.mp4'}}},card:{role:'studio-stage'},sessionId:'sound-session'}
+ const stages=validateStudioStages(['storyboard','visual','sound'].map(id=>({id,agentId:`fixture-${id}`,brief:'technical fixture only'})))
+ const task={...s.input.task,cwd,design:{evidenceContract:'studio-video-v1',studioStages:stages,studio:{characterId:'character',referenceSha256:'b'.repeat(64),referenceUrl:'https://cdn.vyibc.com/approved.mp4'}}}
+ const input={...s.input,task,card:studioStageRows(task,s.input.batch.id,1,'planner').find(c=>c.agentId==='fixture-sound')!,sessionId:'sound-session'}
  const tools:any={},ctx={tools:{register:(tool:any)=>{tools[tool.name]=tool;return()=>{}}}}
  await registerStudioTools(ctx,{input,workflow,isActive:()=>true})
  const before=s.db.prepare('SELECT * FROM dsh_studio_operations').all()

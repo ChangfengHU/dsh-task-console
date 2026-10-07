@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createHash} from 'node:crypto'
 import {readFile,stat} from 'node:fs/promises'
-import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntimeConfig,verifyUploadInvocation,uploadTurnRequest,verifyReadback,ownedTarFiles,publisherSafeDiagnostic,PublisherDiagnosticError,openPluginCreator} from '../src/plugin-publisher.ts'
+import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntimeConfig,verifyUploadInvocation,uploadTurnRequest,verifyReadback,ownedTarFiles,publisherSafeDiagnostic,PublisherDiagnosticError,openPluginCreator,boundedUploadApproval} from '../src/plugin-publisher.ts'
 import {gzipSync} from 'node:zlib'
 import {EventEmitter} from 'node:events'
 import {PassThrough} from 'node:stream'
@@ -20,12 +20,22 @@ test('native upload discovers the callable name and carries only approved argume
  assert.ok(!text.includes('tools.mcp__plugin_creator__'))
 })
 test('native upload turn excludes ambient Apps, MCP, shell and browsing',()=>{
- const config=publisherRuntimeConfig({apps:{other:{enabled:true}},mcp_servers:{vault:{url:'unused'},browser:{url:'unused'}}})
+ const config=publisherRuntimeConfig({apps:{other:{enabled:true},connector_openai_plugin_creator:{approvals_reviewer:'auto_review'}},mcp_servers:{vault:{url:'unused'},browser:{url:'unused'}}})
  assert.equal(config['apps.other.enabled'],false)
  assert.equal(config['mcp_servers.vault.enabled'],false)
  assert.equal(config['mcp_servers.browser.enabled'],false)
  assert.equal(config['apps.connector_openai_plugin_creator.default_tools_enabled'],false)
- assert.equal(config['apps.connector_openai_plugin_creator.tools.update_plugin.enabled'],true)
+ assert.equal(config['apps.connector_openai_plugin_creator.approvals_reviewer'],'user')
+ assert.deepEqual(config['apps.connector_openai_plugin_creator.tools'],{
+  'plugin_creator.update_plugin':{enabled:true,approval_mode:'prompt'},
+  'plugin_creator.get_plugin_files':{enabled:true,approval_mode:'prompt'},
+  'plugin_creator.get_owned_plugin_archive':{enabled:true,approval_mode:'prompt'},
+ })
+ assert.equal(Object.keys(config['apps.connector_openai_plugin_creator.tools'] as any).length,3)
+ for(const short of ['update_plugin','get_plugin_files','get_owned_plugin_archive']){
+  assert.equal(config['apps.connector_openai_plugin_creator.tools.'+short+'.enabled'],undefined)
+  assert.equal(Object.hasOwn(config['apps.connector_openai_plugin_creator.tools'] as object,short),false)
+ }
  assert.equal(config['features.shell_tool'],false)
  assert.equal(config['features.unified_exec'],false)
  assert.equal(config.web_search,'disabled')
@@ -108,9 +118,78 @@ test('uploader diagnostics reject forged reasons and unsupported marker suffixes
   for(const sensitive of ['reason-secret','signed.example','token=hidden','/tmp/private','content'])assert.ok(!JSON.stringify(error).includes(sensitive))
  }
 })
+test('native approval rejection is distinct from tool disablement or OAuth failure',()=>{
+ const message='MCP tool call requires approval, but approval policy is never'
+ const safe=publisherSafeDiagnostic('native_upload',{message:message+' Bearer approval-secret https://signed.example/?token=hidden'})
+ assert.deepEqual(safe,{stage:'native_upload',category:'authorization',reason:'native_approval_required'})
+ for(const sensitive of [message,'approval-secret','signed.example','token=hidden'])assert.ok(!JSON.stringify(safe).includes(sensitive))
+ const item={type:'mcpToolCall',server:'codex_apps',tool:'plugin_creator.update_plugin',status:'failed',arguments:{plugin_id:PACKAGE_ID,archive:'/tmp/release.zip',expected_release_id:'pluginrel_before'},error:{message},result:null}
+ assert.throws(()=>verifyUploadInvocation(item,'/tmp/release.zip','pluginrel_before'),(error:any)=>{
+  assert.ok(error instanceof PublisherDiagnosticError)
+  assert.deepEqual(error.diagnostic,{...safe,event:'tool_failed'});return true
+ })
+})
+test('exact local tool-policy errors are distinct from OAuth or upstream failures',()=>{
+ for(const message of [
+  "MCP tool 'plugin_creator.update_plugin' is disabled by policy",
+  "MCP tool 'plugin_creator.get_plugin_files' is disabled by config",
+  "MCP tool 'plugin_creator.get_owned_plugin_archive' is disabled by app configuration",
+  'MCP tool call blocked by app configuration',
+  'originating MCP tool is disabled by app configuration',
+ ])assert.deepEqual(publisherSafeDiagnostic('native_upload',{message}),{stage:'native_upload',category:'authorization',reason:'local_tool_disabled'})
+ const secret='Bearer local-policy-secret https://signed.example/?token=hidden'
+ for(const message of [
+  "MCP tool '"+secret+"' is disabled by policy",
+  "MCP tool 'other.write' is disabled by policy",
+  "MCP tool 'plugin_creator.update_plugin' is disabled by "+secret,
+  'MCP tool call blocked by app configuration '+secret,
+  "prefix MCP tool 'plugin_creator.update_plugin' is disabled by policy",
+ ]){
+  const safe=publisherSafeDiagnostic('native_upload',{message,reason:secret,result:{content:[{text:secret}]}})
+  assert.deepEqual(safe,{stage:'native_upload',category:'unknown'})
+  for(const sensitive of ['local-policy-secret','signed.example','token=hidden','content'])assert.ok(!JSON.stringify(safe).includes(sensitive))
+ }
+ const item={type:'mcpToolCall',server:'codex_apps',tool:'plugin_creator.update_plugin',status:'failed',arguments:{plugin_id:PACKAGE_ID,archive:'/tmp/release.zip',expected_release_id:'pluginrel_before'},error:{message:"MCP tool 'plugin_creator.update_plugin' is disabled by policy"},result:null}
+ assert.throws(()=>verifyUploadInvocation(item,'/tmp/release.zip','pluginrel_before'),(error:any)=>{
+  assert.ok(error instanceof PublisherDiagnosticError)
+  assert.deepEqual(error.diagnostic,{stage:'native_upload',category:'authorization',reason:'local_tool_disabled',event:'tool_failed'})
+  assert.ok(!JSON.stringify(error).includes(item.error.message));return true
+ })
+})
 
 type NativeOutcome='exit'|'error'|'eof'|'stdin_error'|'stdout_error'|'turn_failed'|'turn_interrupted'|'timeout'|'tool_failed'|'server_request'|'completed'
-function nativeFixture(outcome:NativeOutcome,serverMethod='item/tool/requestUserInput',failureMessage='MCP error -32602: Invalid params'){
+const approvedArgs={plugin_id:PACKAGE_ID,archive:'/tmp/release.zip',expected_release_id:'pluginrel_before'}
+const approvedItem={type:'mcpToolCall',id:'publisher-upload-item',server:'codex_apps',tool:'plugin_creator.update_plugin',status:'inProgress',arguments:approvedArgs,appContext:{connectorId:'connector_openai_plugin_creator'}}
+const approvedElicitation={threadId:'publisher-test-thread',turnId:'publisher-test-turn',serverName:'codex_apps',mode:'form',message:'Native approval text is not an authorization input',requestedSchema:{type:'object',properties:{}},_meta:{codex_approval_kind:'mcp_tool_call',persist:['session','always'],source:'connector',connector_id:'connector_openai_plugin_creator',tool_title:'Update Plugin',tool_description:'Description is not identity',link_id:null,link_is_implicit:true,connector_name:'Plugin Creator',connector_description:'Description is not identity',tool_params:approvedArgs,tool_params_display:{archive:'Display data is not authorization'}}}
+const expectedUpload={threadId:'publisher-test-thread',turnId:'publisher-test-turn',archive:'/tmp/release.zip',expectedReleaseId:'pluginrel_before',packageId:PACKAGE_ID}
+test('native empty-form approval binds only the tracked call and exact immutable arguments',()=>{
+ const tracked={threadId:expectedUpload.threadId,turnId:expectedUpload.turnId,item:approvedItem}
+ assert.deepEqual(boundedUploadApproval(approvedElicitation,tracked,expectedUpload),{action:'accept',content:{},_meta:null})
+ assert.deepEqual(boundedUploadApproval({...approvedElicitation,message:'Bearer never-retained-secret',_meta:{...approvedElicitation._meta,tool_title:'Bearer never-retained-secret',tool_description:'Bearer never-retained-secret',tool_params_display:{archive:'/tmp/other.zip'}}},tracked,expectedUpload),{action:'accept',content:{},_meta:null})
+ for(const params of [
+  {...approvedElicitation,threadId:'other'},
+  {...approvedElicitation,turnId:'other'},
+  {...approvedElicitation,turnId:null},
+  {...approvedElicitation,serverName:'other'},
+  {...approvedElicitation,mode:'url'},
+  {...approvedElicitation,requestedSchema:{type:'object',properties:{persist:{type:'string'}}}},
+  {...approvedElicitation,requestedSchema:{type:'object',properties:{},required:[]}},
+  {...approvedElicitation,_meta:{...approvedElicitation._meta,codex_approval_kind:'other'}},
+  {...approvedElicitation,_meta:{...approvedElicitation._meta,source:'other'}},
+  {...approvedElicitation,_meta:{...approvedElicitation._meta,source:undefined}},
+  {...approvedElicitation,_meta:{...approvedElicitation._meta,connector_id:'other'}},
+  {...approvedElicitation,_meta:{...approvedElicitation._meta,approval_scope:'always'}},
+  {...approvedElicitation,_meta:{...approvedElicitation._meta,tool_params:JSON.stringify(approvedArgs)}},
+  {...approvedElicitation,_meta:{...approvedElicitation._meta,persist:['always','session']}},
+  {...approvedElicitation,_meta:{...approvedElicitation._meta,tool_params:{...approvedArgs,archive:'/tmp/other.zip'}}},
+  {...approvedElicitation,_meta:{...approvedElicitation._meta,tool_params:{...approvedArgs,expected_release_id:'other'}}},
+  {...approvedElicitation,_meta:{...approvedElicitation._meta,tool_params:{...approvedArgs,plugin_id:'other'}}},
+  {...approvedElicitation,_meta:{...approvedElicitation._meta,tool_params:{...approvedArgs,extra:true}}},
+ ])assert.equal(boundedUploadApproval(params,tracked,expectedUpload),undefined)
+ for(const item of [{...approvedItem,id:''},{...approvedItem,status:'completed'},{...approvedItem,server:'other'},{...approvedItem,tool:'other.write'},{...approvedItem,arguments:{...approvedArgs,extra:true}},{...approvedItem,appContext:{connectorId:'other'}}])assert.equal(boundedUploadApproval(approvedElicitation,{...tracked,item},expectedUpload),undefined)
+ for(const changed of [{...tracked,threadId:'other'},{...tracked,turnId:'other'},null])assert.equal(boundedUploadApproval(approvedElicitation,changed,expectedUpload),undefined)
+})
+function nativeFixture(outcome:NativeOutcome,serverMethod='item/tool/requestUserInput',failureMessage='MCP error -32602: Invalid params',installedApps:any[]=[{id:'connector_openai_plugin_creator',runtimeName:'Plugin Creator',enabled:true,callable:true}]){
  const child=new EventEmitter() as any
  child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough()
  let terminated=false,requests=0
@@ -118,18 +197,22 @@ function nativeFixture(outcome:NativeOutcome,serverMethod='item/tool/requestUser
  const exit=()=>{if(!terminated){terminated=true;child.emit('exit',1,null)}}
  child.kill=()=>{queueMicrotask(exit);return true}
  const write=(value:unknown)=>child.stdout.write(JSON.stringify(value)+'\n')
- const notification=(method:string,params:unknown)=>write({method,params:{threadId:'publisher-test-thread',...params as any}})
+ const notification=(method:string,params:unknown)=>write({method,params:{threadId:'publisher-test-thread',turnId:'publisher-test-turn',...params as any}})
+ const finishSuccess=()=>{
+  notification('item/completed',{item:{...approvedItem,status:'completed',result:{content:[],structuredContent:null,_meta:null},error:null}})
+  notification('turn/completed',{turn:{id:'publisher-test-turn',status:'completed'}})
+ }
  const secret='Bearer process-secret https://signed.example/?token=hidden'
  child.stdin.on('data',(buffer:Buffer)=>{
   for(const line of buffer.toString().trim().split('\n')){
    const request=JSON.parse(line);if(request.id==null)continue
-   if(request.method==null){serverResponses.push(request);continue}
+   if(request.method==null){serverResponses.push(request);if(outcome==='completed'&&request.result?.action==='accept')queueMicrotask(finishSuccess);continue}
    requests++
    let result:any={}
    if(request.method==='account/read')result={account:{type:'chatgpt'}}
    if(request.method==='config/read')result={config:{}}
-   if(request.method==='thread/start')result={thread:{id:'publisher-test-thread'}}
-   if(request.method==='app/installed')result={apps:[{id:'connector_openai_plugin_creator',isEnabled:true,isCallable:true}]}
+   if(request.method==='thread/start')result={thread:{id:'publisher-test-thread'},approvalPolicy:'on-request',approvalsReviewer:'user',sandbox:{type:'readOnly',networkAccess:false}}
+   if(request.method==='app/installed')result={apps:installedApps}
    if(request.method==='mcpServerStatus/list')result={data:[{name:'codex_apps',tools:Object.fromEntries(['get_plugin_files','get_owned_plugin_archive','update_plugin'].map(name=>['plugin_creator.'+name,{name:'plugin_creator.'+name}]))}]}
    if(request.method==='turn/start')result={turn:{id:'publisher-test-turn',status:'inProgress'}}
    write({id:request.id,result})
@@ -144,9 +227,11 @@ function nativeFixture(outcome:NativeOutcome,serverMethod='item/tool/requestUser
      notification('turn/completed',{turn:{id:'publisher-test-turn',status:'failed'}})
     }
     if(outcome==='turn_interrupted')notification('turn/completed',{turn:{id:'publisher-test-turn',status:'interrupted'}})
+    if(outcome==='tool_failed'||outcome==='server_request'||outcome==='completed')notification('item/started',{item:approvedItem})
     if(outcome==='server_request')write({id:'publisher-server-request',method:serverMethod,params:{threadId:'publisher-test-thread',credentials:secret,message:secret,url:secret}})
-    if(outcome==='tool_failed'||outcome==='server_request'||outcome==='completed'){
-     notification('item/completed',{item:{type:'mcpToolCall',server:'codex_apps',tool:'plugin_creator.update_plugin',status:outcome==='completed'?'completed':'failed',arguments:{plugin_id:PACKAGE_ID,archive:'/tmp/release.zip',expected_release_id:'pluginrel_before'},...(outcome==='tool_failed'?{error:{message:failureMessage+' '+secret},result:null}:outcome==='server_request'?{error:{message:'Tool request declined'},result:null}:{result:{content:[],structuredContent:null,_meta:null},error:null})}})
+    if(outcome==='completed')write({id:'publisher-approval-request',method:'mcpServer/elicitation/request',params:approvedElicitation})
+    if(outcome==='tool_failed'||outcome==='server_request'){
+     notification('item/completed',{item:{...approvedItem,status:'failed',...(outcome==='tool_failed'?{error:{message:failureMessage+' '+secret},result:null}:{error:{message:'Tool request declined'},result:null})}})
      notification('turn/completed',{turn:{id:'publisher-test-turn',status:'completed'}})
     }
    })
@@ -154,6 +239,204 @@ function nativeFixture(outcome:NativeOutcome,serverMethod='item/tool/requestUser
  })
  return {spawn:(()=>child) as any,secret,requests:()=>requests,serverResponses}
 }
+function nativeApprovalFixture(scenario:(io:any)=>void,afterApproval?:(io:any)=>void,policy:any='on-request',reviewer:any='user',sandbox:any='readOnly'){
+ const child=new EventEmitter() as any
+ child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough()
+ let terminated=false,turnRequest:any,turnReplied=false
+ const serverResponses:any[]=[],requests:any[]=[]
+ const write=(value:unknown)=>child.stdout.write(JSON.stringify(value)+'\n')
+ const notification=(method:string,params:any)=>write({method,params:{threadId:expectedUpload.threadId,turnId:expectedUpload.turnId,...params}})
+ const io={
+  notification,
+  start:(item:any=approvedItem,context:any={})=>notification('item/started',{...context,item}),
+  approval:(params:any=approvedElicitation,id='bounded-approval')=>write({id,method:'mcpServer/elicitation/request',params}),
+  reply:()=>{turnReplied=true;write({id:turnRequest.id,result:{turn:{id:expectedUpload.turnId,status:'inProgress'}}})},
+  replyError:()=>write({id:turnRequest.id,error:{code:-32603,message:'Bearer turn-start-secret'}}),
+  complete:(item:any={...approvedItem,status:'completed',result:{isError:false},error:null},context:any={})=>{
+   notification('item/completed',{...context,item})
+   notification('turn/completed',{...context,turn:{id:context.turnId??expectedUpload.turnId,status:'completed'}})
+  },
+  serverResponses,turnReplied:()=>turnReplied,
+ }
+ child.kill=()=>{if(!terminated){terminated=true;queueMicrotask(()=>child.emit('exit',0,null))}return true}
+ child.stdin.on('data',(buffer:Buffer)=>{
+  for(const line of buffer.toString().trim().split('\n')){
+   const request=JSON.parse(line);if(request.id==null)continue
+   if(!request.method){
+    serverResponses.push(request)
+    if(request.result?.action==='accept')queueMicrotask(()=>afterApproval?afterApproval(io):io.complete())
+    continue
+   }
+   requests.push(request)
+   let result:any={}
+   if(request.method==='account/read')result={account:{type:'chatgpt'}}
+   if(request.method==='config/read')result={config:{}}
+   if(request.method==='thread/start')result={thread:{id:expectedUpload.threadId},approvalPolicy:policy,approvalsReviewer:reviewer,sandbox:{type:sandbox,networkAccess:false}}
+   if(request.method==='app/installed')result={apps:[{id:'connector_openai_plugin_creator',enabled:true,callable:true}]}
+   if(request.method==='mcpServerStatus/list')result={data:[{name:'codex_apps',tools:Object.fromEntries(['get_plugin_files','get_owned_plugin_archive','update_plugin'].map(name=>['plugin_creator.'+name,{name:'plugin_creator.'+name}]))}]}
+   if(request.method==='turn/start'){turnRequest=request;queueMicrotask(()=>scenario(io));continue}
+   write({id:request.id,result})
+  }
+ })
+ return {spawn:(()=>child) as any,serverResponses,requests}
+}
+test('native approval waits for successful turn/start RPC even when notifications arrive first',async(t)=>{
+ t.mock.method(console,'info',()=>{})
+ const fake=nativeApprovalFixture((io:any)=>{
+  io.notification('turn/started',{turn:{id:expectedUpload.turnId,status:'inProgress'}})
+  io.start();io.approval()
+  assert.deepEqual(io.serverResponses,[])
+  io.reply()
+ })
+ const platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+ try{
+  await platform.update('/tmp/release.zip','pluginrel_before')
+  assert.deepEqual(fake.serverResponses,[{id:'bounded-approval',result:{action:'accept',content:{},_meta:null}}])
+ }finally{await platform.close()}
+})
+test('native single-call approval never echoes prompt text, display parameters or persistence choices',async(t)=>{
+ const secret='Bearer approval-display-secret https://signed.example/?token=hidden /tmp/private/archive.zip'
+ const logs:any[]=[];t.mock.method(console,'info',(...args:any[])=>logs.push(args));t.mock.method(console,'warn',(...args:any[])=>logs.push(args))
+ const fake=nativeApprovalFixture((io:any)=>{
+  io.reply();io.start();io.approval({...approvedElicitation,message:secret,_meta:{...approvedElicitation._meta,tool_title:secret,tool_description:secret,connector_description:secret,tool_params_display:{archive:secret}}})
+ }),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+ try{await platform.update('/tmp/release.zip','pluginrel_before')}finally{await platform.close()}
+ assert.deepEqual(fake.serverResponses,[{id:'bounded-approval',result:{action:'accept',content:{},_meta:null}}])
+ for(const sensitive of ['approval-display-secret','signed.example','token=hidden','/tmp/private']){
+  assert.ok(!JSON.stringify(logs).includes(sensitive));assert.ok(!JSON.stringify(fake.serverResponses).includes(sensitive))
+ }
+})
+test('native approval fails closed for wrong contexts, extra arguments and unfamiliar forms',async(t)=>{
+ t.mock.method(console,'warn',()=>{});t.mock.method(console,'info',()=>{})
+ const scenarios=[
+  (io:any)=>{io.reply();io.start();io.approval({...approvedElicitation,threadId:'other-thread'})},
+  (io:any)=>{io.reply();io.start();io.approval({...approvedElicitation,turnId:'other-turn'})},
+  (io:any)=>{io.reply();io.start({...approvedItem,arguments:{...approvedArgs,extra:true}});io.approval()},
+  (io:any)=>{io.reply();io.start({...approvedItem,arguments:{...approvedArgs,archive:'/tmp/other.zip'}});io.approval()},
+  (io:any)=>{io.reply();io.start({...approvedItem,arguments:{...approvedArgs,plugin_id:'other-plugin'}});io.approval()},
+  (io:any)=>{io.reply();io.start({...approvedItem,arguments:{...approvedArgs,expected_release_id:'other-CAS'}});io.approval()},
+  (io:any)=>{io.reply();io.start();io.approval({...approvedElicitation,requestedSchema:{type:'object',properties:{choice:{type:'string',enum:['Allow forever']}}}})},
+  (io:any)=>{io.reply();io.start();io.approval({...approvedElicitation,_meta:{...approvedElicitation._meta,tool_params:{...approvedArgs,extra:true}}})},
+  (io:any)=>{io.reply();io.start(approvedItem,{turnId:'other-turn'});io.approval()},
+  (io:any)=>{io.reply();io.start(approvedItem,{threadId:'other-thread'});io.approval()},
+  (io:any)=>{io.reply();io.approval()},
+ ]
+ for(const scenario of scenarios){
+  const fake=nativeApprovalFixture(scenario),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:10})
+  try{await assert.rejects(platform.update('/tmp/release.zip','pluginrel_before'))}finally{await platform.close()}
+  assert.equal(fake.serverResponses.filter(response=>response.result?.action==='accept').length,0)
+ }
+})
+test('completion, error or conflicting turn before RPC confirmation cannot release held approval',async(t)=>{
+ t.mock.method(console,'warn',()=>{});t.mock.method(console,'info',()=>{})
+ for(const terminal of [
+  (io:any)=>io.complete(),
+  (io:any)=>io.notification('error',{error:{message:'Bearer terminal-secret'},willRetry:false}),
+  (io:any)=>io.notification('turn/started',{turn:{id:'conflicting-turn',status:'inProgress'}}),
+ ]){
+  const fake=nativeApprovalFixture((io:any)=>{
+   io.notification('turn/started',{turn:{id:expectedUpload.turnId,status:'inProgress'}})
+   io.start();io.approval();terminal(io);io.reply()
+  }),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+  try{await assert.rejects(platform.update('/tmp/release.zip','pluginrel_before'))}finally{await platform.close()}
+  assert.equal(fake.serverResponses.filter(response=>response.result?.action==='accept').length,0)
+ }
+})
+test('failed turn/start RPC and active completion/error never approve a held or late request',async(t)=>{
+ const logs:any[]=[];t.mock.method(console,'warn',(...args:any[])=>logs.push(args));t.mock.method(console,'info',(...args:any[])=>logs.push(args))
+ for(const scenario of [
+  (io:any)=>{io.start();io.approval();io.replyError()},
+  (io:any)=>{io.reply();io.start();io.complete();io.approval()},
+  (io:any)=>{io.reply();io.start();io.notification('error',{error:{message:'Bearer active-error-secret'},willRetry:true});io.approval()},
+ ]){
+  const fake=nativeApprovalFixture(scenario),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+  try{await assert.rejects(platform.update('/tmp/release.zip','pluginrel_before'))}finally{await platform.close()}
+  assert.equal(fake.serverResponses.filter(response=>response.result?.action==='accept').length,0)
+ }
+ for(const secret of ['turn-start-secret','active-error-secret'])assert.ok(!JSON.stringify(logs).includes(secret))
+})
+test('wrong-turn error and completion cannot close or complete the confirmed upload turn',async(t)=>{
+ t.mock.method(console,'info',()=>{})
+ const fake=nativeApprovalFixture((io:any)=>{
+  io.reply();io.start()
+  io.notification('error',{turnId:'other-turn',error:{message:'unrelated'},willRetry:false})
+  io.complete(undefined,{turnId:'other-turn'})
+  io.approval()
+ }),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+ try{
+  await platform.update('/tmp/release.zip','pluginrel_before')
+  assert.equal(fake.serverResponses.filter(response=>response.result?.action==='accept').length,1)
+ }finally{await platform.close()}
+})
+test('second native calls and duplicate approvals are interrupted without a second acceptance',async(t)=>{
+ t.mock.method(console,'warn',()=>{});t.mock.method(console,'info',()=>{})
+ for(const next of [
+  (io:any)=>{io.start({...approvedItem,id:'second-item'});io.approval(approvedElicitation,'second-approval')},
+  (io:any)=>io.approval(approvedElicitation,'duplicate-approval'),
+ ]){
+  const fake=nativeApprovalFixture((io:any)=>{io.reply();io.start();io.approval()},next),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+  try{await assert.rejects(platform.update('/tmp/release.zip','pluginrel_before'))}finally{await platform.close()}
+  assert.equal(fake.serverResponses.filter(response=>response.result?.action==='accept').length,1)
+  assert.ok(fake.requests.some(request=>request.method==='turn/interrupt'&&request.params.threadId===expectedUpload.threadId&&request.params.turnId===expectedUpload.turnId))
+ }
+})
+test('completed receipt must keep the original native item ID and turn',async(t)=>{
+ t.mock.method(console,'warn',()=>{});t.mock.method(console,'info',()=>{})
+ for(const finish of [
+  (io:any)=>io.complete({...approvedItem,id:'different-item',status:'completed',result:{isError:false}}),
+  (io:any)=>io.complete({...approvedItem,status:'completed',arguments:{...approvedArgs,archive:'/tmp/other.zip'},result:{isError:false}}),
+  (io:any)=>io.complete(undefined,{turnId:'other-turn'}),
+  (io:any)=>io.complete(undefined,{threadId:'other-thread'}),
+ ]){
+  const fake=nativeApprovalFixture((io:any)=>{io.reply();io.start();io.approval()},finish),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:10})
+  try{await assert.rejects(platform.update('/tmp/release.zip','pluginrel_before'))}finally{await platform.close()}
+  assert.equal(fake.serverResponses.filter(response=>response.result?.action==='accept').length,1)
+ }
+})
+test('timeout closes approval before late requests and unsafe effective approval policy blocks turn',async(t)=>{
+ t.mock.method(console,'warn',()=>{});t.mock.method(console,'info',()=>{})
+ let retained:any
+ const fake=nativeApprovalFixture((io:any)=>{retained=io;io.reply();io.start()})
+ const platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1})
+ try{
+  await assert.rejects(platform.update('/tmp/release.zip','pluginrel_before'),PublisherDiagnosticError)
+  retained.approval()
+  assert.equal(fake.serverResponses.filter(response=>response.result?.action==='accept').length,0)
+ }finally{await platform.close()}
+ for(const [policy,reviewer,sandbox] of [['never','user','readOnly'],['on-request','auto_review','readOnly'],['on-request','guardian_subagent','readOnly'],['on-request','user','workspaceWrite'],['on-request','user','dangerFullAccess'],[null,'user','readOnly'],['on-request',null,'readOnly'],['on-request','user',null]]){
+  const unsafe=nativeApprovalFixture(()=>assert.fail('turn must not start'),undefined,policy,reviewer,sandbox)
+  await assert.rejects(openPluginCreator('fake-codex',PACKAGE_ID,{spawn:unsafe.spawn}),/authorization_required/)
+  assert.equal(unsafe.requests.some(request=>request.method==='turn/start'),false)
+  const start=unsafe.requests.find(request=>request.method==='thread/start')
+  assert.equal(start.params.approvalPolicy,'on-request');assert.equal(start.params.approvalsReviewer,'user');assert.equal(start.params.sandbox,'read-only')
+ }
+})
+test('installed runtime guard accepts the official enabled/callable fields, not metadata aliases',async(t)=>{
+ t.mock.method(console,'info',()=>{})
+ const fake=nativeFixture('completed',undefined,undefined,[{id:'connector_openai_plugin_creator',runtimeName:'Plugin Creator',enabled:true,callable:true,isEnabled:false,isCallable:false}])
+ const platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+ try{await platform.update('/tmp/release.zip','pluginrel_before');assert.equal(fake.requests(),7)}finally{await platform.close()}
+})
+test('installed runtime guard fails closed before inventory or upload when real flags are disabled or missing',async()=>{
+ const app={id:'connector_openai_plugin_creator',runtimeName:'Plugin Creator',enabled:true,callable:true}
+ for(const apps of [
+  [{...app,enabled:false}],
+  [{...app,callable:false}],
+  [{...app,enabled:undefined}],
+  [{...app,callable:undefined}],
+  [{id:app.id,isEnabled:true,isCallable:true}],
+  [{...app,enabled:'true'}],
+  [{...app,callable:1}],
+  [{...app,id:'other-app'}],
+  [null],
+  [],
+ ]){
+  const fake=nativeFixture('completed',undefined,undefined,apps)
+  await assert.rejects(openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000}),/authorization_required/)
+  assert.equal(fake.requests(),5)
+  assert.deepEqual(fake.serverResponses,[])
+ }
+})
 test('native exit/error/EOF interrupts upload waiting after turn/start has responded',async(t)=>{
  const logs:unknown[]=[];t.mock.method(console,'warn',(...args:unknown[])=>logs.push(args))
  for(const [outcome,event] of [['exit','process_exit'],['error','process_error'],['eof','process_eof'],['stdin_error','stdin_error'],['stdout_error','stdout_error']] as const){

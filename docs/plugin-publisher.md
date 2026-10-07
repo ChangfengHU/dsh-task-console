@@ -31,7 +31,10 @@ can accept an entire plugin. Core/entry annotations do not execute a Skill.
 
 The source repo is `ChangfengHU/dsh-task-console`, checked out on 95 at
 `/home/claude/dsh-task-console`. The running `sop-dsh-web.service` uses the
-existing profile's symlink to this checkout. Build with `node scripts/build.mjs`.
+existing profile's installed package symlink, which may point to a frozen release
+package rather than the checkout. Resolve that symlink before activating a
+bundle; pulling source alone does not update the running package. Build with
+`node scripts/build.mjs`.
 Install only the dedicated roles with:
 
 ```sh
@@ -67,7 +70,7 @@ runtime, not copied browser cookies or a desktop IPC shim. It verifies ChatGPT
 account type, Plugin Creator installation and live tool discovery. Only
 `plugin_creator.get_plugin_files`, `plugin_creator.get_owned_plugin_archive`,
 and `plugin_creator.update_plugin` are called.
-Interactive server requests are denied. Source reads use direct tool calls;
+Unrecognized interactive server requests are denied. Source reads use direct tool calls;
 upload uses one low-effort native Codex turn so its host performs
 `openai/fileParams` conversion. Raw `mcpServer/tool/call` accepts the rewritten
 path schema but sends a string to the connector, whose actual archive parameter
@@ -75,6 +78,37 @@ is an uploaded-file object. Do not implement private upload HTTP endpoints to
 work around that mismatch. The native turn disables ambient Apps/MCP servers,
 shell and web search and enables only Plugin Creator read/update tools. Its
 single actual update invocation must match the exact approved three arguments.
+The isolated thread uses `approvalPolicy="on-request"` and
+`approvalsReviewer="user"`; the scoped Plugin Creator reviewer also stays
+`user`. All three visible tools explicitly use `approval_mode="prompt"`:
+they cannot silently inherit an owner's no-prompt or automatic-review setting.
+The returned thread policy must confirm user review and a read-only sandbox.
+The client accepts only the native empty
+`mcpServer/elicitation/request` approval form for the active confirmed turn and
+its sole started `plugin_creator.update_plugin` call. The native approval kind,
+connector and original tool parameters must match that call and the frozen
+plugin ID/archive/CAS release ID. A matching form receives one
+`{action:"accept",content:{},_meta:null}` response; no session or persistent
+approval is granted. Foreign turns, additional calls, replayed/late requests,
+changed arguments and ordinary provider login/input forms remain denied.
+An unverified `turn/started` notification cannot authorize a call before the
+corresponding `turn/start` RPC succeeds. Completion receipts must match that
+confirmed turn and the approved item ID. Timeout, completion and interruption
+close the approval window; a second call stops the turn. Full readback remains
+mandatory even after a matching approval and successful native receipt.
+Plugin Creator keeps `default_tools_enabled=false`. The bounded runtime sets
+`apps.connector_openai_plugin_creator.tools` as one JSON table with exactly
+`plugin_creator.update_plugin`, `plugin_creator.get_plugin_files`, and
+`plugin_creator.get_owned_plugin_archive`, each enabled. These are the public
+MCP catalog names; a whole-table override avoids ambiguous dotted paths rather
+than relying on short aliases. Do not flatten the names into dotted config
+paths: CLI 0.160.1 also does not preserve the full
+key when quotes are embedded in such a path. The whole-table override preserves
+the dots as part of each key without enabling unrelated tools or apps.
+The installed-runtime guard uses the actual `enabled` and `callable` fields,
+both strictly `true`; legacy `isEnabled` / `isCallable` metadata is not a grant.
+These checks and configuration normalization alone do not confirm a successful
+upload: an actual native receipt and full independent readback remain required.
 The turn resolves the executable tool name from its own `ALL_TOOLS` inventory;
 MCP protocol names and code-mode JavaScript names are not interchangeable.
 The host logs only allowlisted tool identity/status/count and safe typed failure
@@ -99,7 +133,15 @@ unknown labels, connector-provided `reason` fields and marker suffixes are not
 copied. The complete public archive-code reference is
 [Plugin submission errors](https://developers.openai.com/plugins/deploy/submission-errors).
 These safe reasons are visible in existing receipt/failure journal events and
-do not change retries, interactive-request denial, or full-file readback.
+do not change retries, the bounded approval checks, or full-file readback.
+Exact known local tool-disabled sentences retain `reason: local_tool_disabled`
+with category `authorization`. This means the native app/tool configuration
+blocked execution; it does not mean Google OAuth, connector credentials, or
+plugin ownership failed. The original message/tool name is never logged, and
+this diagnostic does not bypass policy or turn a failed receipt into success.
+`native_approval_required` identifies the exact native failure when a write
+requires approval but the thread uses `approvalPolicy="never"`; it must not be
+misreported as expired OAuth, duplicate version, or a successful submission.
 Turn errors separately expose `codexErrorInfo`: the official
 `httpConnectionFailed`, `responseStreamConnectionFailed`,
 `responseStreamDisconnected` and `responseTooManyFailedAttempts` variants retain
@@ -108,7 +150,10 @@ Denied server requests emit `native server request rejected` with the fixed
 `server_request_rejected` event and an allowlisted method or `unknown`, never
 request parameters. Its `authorization` category identifies the local denial
 boundary; it is not proof that connector credentials failed. The rejection
-policy is unchanged and never automatically approves these requests.
+policy does not grant arbitrary interactive requests. Only the exact native
+single-call publication approval described above can be accepted; login, user
+verification, credential refresh and permissions requests are not substituted
+for that approval.
 Independent source readback, not the model's final text, determines success.
 Do not treat this private-owner flow as a supported commercial/multi-tenant API;
 check OpenAI authentication terms and supported grants before broadening it.

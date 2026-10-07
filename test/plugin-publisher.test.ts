@@ -189,6 +189,20 @@ test('native empty-form approval binds only the tracked call and exact immutable
  for(const item of [{...approvedItem,id:''},{...approvedItem,status:'completed'},{...approvedItem,server:'other'},{...approvedItem,tool:'other.write'},{...approvedItem,arguments:{...approvedArgs,extra:true}},{...approvedItem,appContext:{connectorId:'other'}}])assert.equal(boundedUploadApproval(approvedElicitation,{...tracked,item},expectedUpload),undefined)
  for(const changed of [{...tracked,threadId:'other'},{...tracked,turnId:'other'},null])assert.equal(boundedUploadApproval(approvedElicitation,changed,expectedUpload),undefined)
 })
+test('native prompt approval accepts omitted persist only, never arbitrary persistence metadata',()=>{
+ const tracked={threadId:expectedUpload.threadId,turnId:expectedUpload.turnId,item:approvedItem}
+ const meta=Object.fromEntries(Object.entries(approvedElicitation._meta).filter(([key])=>key!=='persist'))
+ assert.equal(Object.keys(meta).length,11)
+ assert.equal(Object.hasOwn(meta,'persist'),false)
+ assert.deepEqual(boundedUploadApproval({...approvedElicitation,_meta:meta},tracked,expectedUpload),{action:'accept',content:{},_meta:null})
+ assert.deepEqual(boundedUploadApproval(approvedElicitation,tracked,expectedUpload),{action:'accept',content:{},_meta:null})
+ for(const persist of [undefined,null,[],['session'],['always'],['always','session'],['once'],['session','always','once'],'always',{},true]){
+  const params={...approvedElicitation,_meta:{...meta,persist}}
+  assert.equal(Object.hasOwn(params._meta,'persist'),true)
+  assert.equal(boundedUploadApproval(params,tracked,expectedUpload),undefined)
+ }
+ for(const changed of [{...meta,source:'other'},{...meta,connector_id:'other'},{...meta,codex_approval_kind:'other'},{...meta,tool_params:{...approvedArgs,archive:'/tmp/other.zip'}},{...meta,approval_scope:'always'}])assert.equal(boundedUploadApproval({...approvedElicitation,_meta:changed},tracked,expectedUpload),undefined)
+})
 function nativeFixture(outcome:NativeOutcome,serverMethod='item/tool/requestUserInput',failureMessage='MCP error -32602: Invalid params',installedApps:any[]=[{id:'connector_openai_plugin_creator',runtimeName:'Plugin Creator',enabled:true,callable:true}]){
  const child=new EventEmitter() as any
  child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough()
@@ -288,6 +302,16 @@ test('native approval waits for successful turn/start RPC even when notification
   assert.deepEqual(io.serverResponses,[])
   io.reply()
  })
+ const platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+ try{
+  await platform.update('/tmp/release.zip','pluginrel_before')
+  assert.deepEqual(fake.serverResponses,[{id:'bounded-approval',result:{action:'accept',content:{},_meta:null}}])
+ }finally{await platform.close()}
+})
+test('real 11-key prompt form with absent persist authorizes exactly one native upload',async(t)=>{
+ t.mock.method(console,'info',()=>{})
+ const meta=Object.fromEntries(Object.entries(approvedElicitation._meta).filter(([key])=>key!=='persist'))
+ const fake=nativeApprovalFixture((io:any)=>{io.reply();io.start();io.approval({...approvedElicitation,_meta:meta})})
  const platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
  try{
   await platform.update('/tmp/release.zip','pluginrel_before')

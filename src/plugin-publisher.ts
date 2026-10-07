@@ -177,7 +177,7 @@ export function boundedUploadApproval(params:any,tracked:any,expected:ApprovedUp
   if(params.threadId!==expected.threadId||params.turnId!==expected.turnId||params.serverName!=='codex_apps'||params.mode!=='form'||!approvedUploadItem(tracked,expected)||tracked.item.status!=='inProgress')return
   if(!isDeepStrictEqual(params.requestedSchema,{type:'object',properties:{}}))return
   const meta=params._meta
-  if(!meta||typeof meta!=='object'||Array.isArray(meta)||Object.keys(meta).some(key=>!UPLOAD_APPROVAL_META_KEYS.has(key))||meta.codex_approval_kind!=='mcp_tool_call'||meta.source!=='connector'||meta.connector_id!=='connector_openai_plugin_creator'||!isDeepStrictEqual(meta.persist,['session','always'])||typeof meta.tool_params!=='object'||!approvedUploadArguments(meta.tool_params,expected))return
+  if(!meta||typeof meta!=='object'||Array.isArray(meta)||Object.keys(meta).some(key=>!UPLOAD_APPROVAL_META_KEYS.has(key))||meta.codex_approval_kind!=='mcp_tool_call'||meta.source!=='connector'||meta.connector_id!=='connector_openai_plugin_creator'||(Object.hasOwn(meta,'persist')&&!isDeepStrictEqual(meta.persist,['session','always']))||typeof meta.tool_params!=='object'||!approvedUploadArguments(meta.tool_params,expected))return
   // Empty native approval form has no user data. Omitting persistence metadata
   // makes this an acceptance of this call only, never session/always approval.
   return {action:'accept',content:{},_meta:null}

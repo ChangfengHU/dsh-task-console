@@ -91,6 +91,11 @@ plugin ID/archive/CAS release ID. A matching form receives one
 `{action:"accept",content:{},_meta:null}` response; no session or persistent
 approval is granted. Foreign turns, additional calls, replayed/late requests,
 changed arguments and ordinary provider login/input forms remain denied.
+Under explicit `approval_mode="prompt"`, the native approval metadata omits
+the optional `persist` choices. The guard accepts that complete omission or
+the original exact `["session","always"]` choices, but rejects other present
+values. These are available UI choices, not a grant: the fixed response still
+contains no persistence field or answer.
 An unverified `turn/started` notification cannot authorize a call before the
 corresponding `turn/start` RPC succeeds. Completion receipts must match that
 confirmed turn and the approved item ID. Timeout, completion and interruption

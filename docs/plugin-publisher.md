@@ -78,13 +78,28 @@ single actual update invocation must match the exact approved three arguments.
 The turn resolves the executable tool name from its own `ALL_TOOLS` inventory;
 MCP protocol names and code-mode JavaScript names are not interchangeable.
 The host logs only allowlisted tool identity/status/count and safe typed failure
-diagnostics: stage/event, a fixed category, numeric error code/HTTP status and
+diagnostics: stage/event, a fixed category/reason, numeric error code/HTTP status and
 elapsed time. It never logs raw error messages, result content, arguments,
 archive paths, signed URLs, credentials or stderr. Unknown error labels remain
 `unknown`, not an arbitrary string copied from the connector.
 App-server MCP item errors expose only a message, not typed code/HTTP fields.
 The diagnostic accepts bounded fixed invalid-parameter phrases and standard
 MCP/JSON-RPC code prefixes from that message without storing the original text.
+Diagnostic v3 also extracts fixed `reason` enums from the CLI 0.160.1 uploader's
+known error fragments: `local_file_open_failed`, `upload_response_parse_failed`,
+`blob_upload_failed`, `upload_finalization_failed`, and
+`upload_download_url_missing`. These classify the upload boundary as
+`file_upload`, not proof that a platform write did or did not happen. Exact
+public archive-validation codes (for example `archive_format_not_zip` and
+`archive_member_unreadable`) retain their allowlisted code as `reason` and map
+to `invalid_arguments`; `plugin_version_unchanged` maps to `release_conflict`.
+Typed HTTP/error classifications retain precedence when present. Matching is
+bounded to the first 4096 message characters and uses fixed token boundaries;
+unknown labels, connector-provided `reason` fields and marker suffixes are not
+copied. The complete public archive-code reference is
+[Plugin submission errors](https://developers.openai.com/plugins/deploy/submission-errors).
+These safe reasons are visible in existing receipt/failure journal events and
+do not change retries, interactive-request denial, or full-file readback.
 Turn errors separately expose `codexErrorInfo`: the official
 `httpConnectionFailed`, `responseStreamConnectionFailed`,
 `responseStreamDisconnected` and `responseTooManyFailedAttempts` variants retain

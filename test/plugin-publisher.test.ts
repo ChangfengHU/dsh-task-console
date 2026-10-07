@@ -73,9 +73,44 @@ test('official turn variants and message-only MCP errors retain safe fixed diagn
   for(const sensitive of ['classified-secret','signed.example','token=hidden','/tmp/private'])assert.ok(!JSON.stringify(safe).includes(sensitive))
  }
 })
+test('native uploader failures and public archive codes retain fixed safe reasons',()=>{
+ const secret='Bearer uploader-secret https://signed.example/?token=hidden /tmp/private/archive.zip'
+ const uploadReasons=[
+  ['failed to open OpenAI file upload contents','local_file_open_failed'],
+  ['failed to parse OpenAI file response from','upload_response_parse_failed'],
+  ['OpenAI file blob upload attempt failed','blob_upload_failed'],
+  ['upload finalization returned an error','upload_finalization_failed'],
+  ['missing download_url','upload_download_url_missing'],
+ ] as const
+ const archiveReasons=['archive_empty','archive_too_large','archive_format_not_zip','archive_member_path_empty','archive_member_path_has_outer_whitespace','archive_member_path_has_backslash','archive_member_path_absolute','archive_member_path_has_empty_segment','archive_member_path_has_parent_segment','archive_member_path_too_deep','archive_member_path_too_long','archive_member_path_normalization_collision','archive_member_type_unsupported','archive_member_too_large','archive_member_path_duplicate','archive_member_path_type_conflict','archive_too_many_entries','archive_uncompressed_too_large','archive_member_unreadable','plugin_name_mismatch'] as const
+ for(const [fragment,reason,category] of [...uploadReasons.map(([fragment,reason])=>[fragment,reason,'file_upload'] as const),...archiveReasons.map(reason=>[reason,reason,'invalid_arguments'] as const),['plugin_version_unchanged','plugin_version_unchanged','release_conflict'] as const]){
+  const safe=publisherSafeDiagnostic('native_upload',{message:'MCP tool call error: '+fragment+': '+secret,reason:secret,result:{content:[{text:secret}]}})
+  assert.deepEqual(safe,{stage:'native_upload',category,reason})
+  const error=new PublisherDiagnosticError({...safe,event:'tool_failed'})
+  assert.deepEqual(error.diagnostic,{stage:'native_upload',category,reason,event:'tool_failed'})
+  for(const sensitive of ['uploader-secret','signed.example','token=hidden','/tmp/private','content'])assert.ok(!JSON.stringify(error).includes(sensitive))
+ }
+ assert.deepEqual(publisherSafeDiagnostic('native_upload',{code:'archive_format_not_zip',message:secret}),{stage:'native_upload',category:'invalid_arguments',reason:'archive_format_not_zip'})
+ assert.deepEqual(publisherSafeDiagnostic('native_upload',{httpStatus:403,message:'OpenAI file blob upload attempt failed '+secret}),{stage:'native_upload',category:'authorization',reason:'blob_upload_failed',httpStatus:403})
+})
+test('uploader diagnostics reject forged reasons and unsupported marker suffixes',()=>{
+ const secret='Bearer reason-secret https://signed.example/?token=hidden /tmp/private/archive.zip'
+ for(const source of [
+  {reason:secret,message:secret},
+  {reason:'blob_upload_failed',message:'unrecognized '+secret},
+  {code:'archive_format_not_zip_forged',message:'archive_format_not_zip_forged '+secret},
+  {code:'__proto__',message:'xarchive_empty '+secret},
+  {message:'x'.repeat(4096)+' missing download_url '+secret},
+ ])assert.deepEqual(publisherSafeDiagnostic('native_upload',source),{stage:'native_upload',category:'unknown'})
+ for(const reason of [secret,'__proto__','constructor',{toString:()=> 'blob_upload_failed',secret}]){
+  const error=new PublisherDiagnosticError({stage:'native_upload',category:'unknown',event:'tool_failed',reason,message:secret,result:{content:[{text:secret}]}} as any)
+  assert.deepEqual(error.diagnostic,{stage:'native_upload',category:'unknown',event:'tool_failed'})
+  for(const sensitive of ['reason-secret','signed.example','token=hidden','/tmp/private','content'])assert.ok(!JSON.stringify(error).includes(sensitive))
+ }
+})
 
 type NativeOutcome='exit'|'error'|'eof'|'stdin_error'|'stdout_error'|'turn_failed'|'turn_interrupted'|'timeout'|'tool_failed'|'server_request'|'completed'
-function nativeFixture(outcome:NativeOutcome,serverMethod='item/tool/requestUserInput'){
+function nativeFixture(outcome:NativeOutcome,serverMethod='item/tool/requestUserInput',failureMessage='MCP error -32602: Invalid params'){
  const child=new EventEmitter() as any
  child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough()
  let terminated=false,requests=0
@@ -111,7 +146,7 @@ function nativeFixture(outcome:NativeOutcome,serverMethod='item/tool/requestUser
     if(outcome==='turn_interrupted')notification('turn/completed',{turn:{id:'publisher-test-turn',status:'interrupted'}})
     if(outcome==='server_request')write({id:'publisher-server-request',method:serverMethod,params:{threadId:'publisher-test-thread',credentials:secret,message:secret,url:secret}})
     if(outcome==='tool_failed'||outcome==='server_request'||outcome==='completed'){
-     notification('item/completed',{item:{type:'mcpToolCall',server:'codex_apps',tool:'plugin_creator.update_plugin',status:outcome==='completed'?'completed':'failed',arguments:{plugin_id:PACKAGE_ID,archive:'/tmp/release.zip',expected_release_id:'pluginrel_before'},...(outcome==='tool_failed'?{error:{message:'MCP error -32602: Invalid params '+secret},result:null}:outcome==='server_request'?{error:{message:'Tool request declined'},result:null}:{result:{content:[],structuredContent:null,_meta:null},error:null})}})
+     notification('item/completed',{item:{type:'mcpToolCall',server:'codex_apps',tool:'plugin_creator.update_plugin',status:outcome==='completed'?'completed':'failed',arguments:{plugin_id:PACKAGE_ID,archive:'/tmp/release.zip',expected_release_id:'pluginrel_before'},...(outcome==='tool_failed'?{error:{message:failureMessage+' '+secret},result:null}:outcome==='server_request'?{error:{message:'Tool request declined'},result:null}:{result:{content:[],structuredContent:null,_meta:null},error:null})}})
      notification('turn/completed',{turn:{id:'publisher-test-turn',status:'completed'}})
     }
    })
@@ -146,6 +181,20 @@ test('native failed/interrupted/timed-out turns and failed tool receipts log saf
  }
  const receipt=logs.find((args:any)=>args[0]==='[plugin-publisher] native upload receipt') as any[]
  assert.deepEqual(JSON.parse(receipt[1]).calls[0].diagnostic,{stage:'native_upload',category:'invalid_arguments',errorCode:-32602})
+})
+test('failed native receipts preserve uploader reason without becoming successful',async(t)=>{
+ const logs:unknown[]=[];t.mock.method(console,'warn',(...args:unknown[])=>logs.push(args));t.mock.method(console,'info',(...args:unknown[])=>logs.push(args))
+ const fake=nativeFixture('tool_failed',undefined,'OpenAI file blob upload attempt failed'),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+ try{
+  await assert.rejects(platform.update('/tmp/release.zip','pluginrel_before'),(error:any)=>{
+   assert.ok(error instanceof PublisherDiagnosticError)
+   assert.deepEqual(error.diagnostic,{stage:'native_upload',category:'file_upload',reason:'blob_upload_failed',event:'tool_failed'});return true
+  })
+ }finally{await platform.close()}
+ const receipt=logs.find((args:any)=>args[0]==='[plugin-publisher] native upload receipt') as any[]
+ assert.deepEqual(JSON.parse(receipt[1]).calls[0].diagnostic,{stage:'native_upload',category:'file_upload',reason:'blob_upload_failed'})
+ assert.equal(JSON.parse(receipt[1]).calls[0].status,'failed')
+ for(const sensitive of ['process-secret','signed.example','token=hidden','OpenAI file blob upload attempt failed'])assert.ok(!JSON.stringify(logs).includes(sensitive))
 })
 test('native server requests remain denied and log only an allowlisted method',async(t)=>{
  const logs:unknown[]=[];t.mock.method(console,'warn',(...args:unknown[])=>logs.push(args));t.mock.method(console,'info',(...args:unknown[])=>logs.push(args))

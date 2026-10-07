@@ -30,11 +30,43 @@ export interface Platform {
 }
 
 export type PublisherFailureCategory = 'authorization'|'file_upload'|'release_conflict'|'rate_limit'|'timeout'|'transport'|'invalid_arguments'|'upstream'|'interrupted'|'unknown'
+// Exact uploader fragments from Codex 0.160.1 and public plugin archive codes.
+// This is an output allowlist, not a place to copy connector-provided labels.
+const FAILURE_REASONS = {
+  local_file_open_failed:{category:'file_upload',fragment:'failed to open OpenAI file upload contents'},
+  upload_response_parse_failed:{category:'file_upload',fragment:'failed to parse OpenAI file response from'},
+  blob_upload_failed:{category:'file_upload',fragment:'OpenAI file blob upload attempt failed'},
+  upload_finalization_failed:{category:'file_upload',fragment:'upload finalization returned an error'},
+  upload_download_url_missing:{category:'file_upload',fragment:'missing download_url'},
+  archive_empty:{category:'invalid_arguments',fragment:'archive_empty'},
+  archive_too_large:{category:'invalid_arguments',fragment:'archive_too_large'},
+  archive_format_not_zip:{category:'invalid_arguments',fragment:'archive_format_not_zip'},
+  archive_member_path_empty:{category:'invalid_arguments',fragment:'archive_member_path_empty'},
+  archive_member_path_has_outer_whitespace:{category:'invalid_arguments',fragment:'archive_member_path_has_outer_whitespace'},
+  archive_member_path_has_backslash:{category:'invalid_arguments',fragment:'archive_member_path_has_backslash'},
+  archive_member_path_absolute:{category:'invalid_arguments',fragment:'archive_member_path_absolute'},
+  archive_member_path_has_empty_segment:{category:'invalid_arguments',fragment:'archive_member_path_has_empty_segment'},
+  archive_member_path_has_parent_segment:{category:'invalid_arguments',fragment:'archive_member_path_has_parent_segment'},
+  archive_member_path_too_deep:{category:'invalid_arguments',fragment:'archive_member_path_too_deep'},
+  archive_member_path_too_long:{category:'invalid_arguments',fragment:'archive_member_path_too_long'},
+  archive_member_path_normalization_collision:{category:'invalid_arguments',fragment:'archive_member_path_normalization_collision'},
+  archive_member_type_unsupported:{category:'invalid_arguments',fragment:'archive_member_type_unsupported'},
+  archive_member_too_large:{category:'invalid_arguments',fragment:'archive_member_too_large'},
+  archive_member_path_duplicate:{category:'invalid_arguments',fragment:'archive_member_path_duplicate'},
+  archive_member_path_type_conflict:{category:'invalid_arguments',fragment:'archive_member_path_type_conflict'},
+  archive_too_many_entries:{category:'invalid_arguments',fragment:'archive_too_many_entries'},
+  archive_uncompressed_too_large:{category:'invalid_arguments',fragment:'archive_uncompressed_too_large'},
+  archive_member_unreadable:{category:'invalid_arguments',fragment:'archive_member_unreadable'},
+  plugin_name_mismatch:{category:'invalid_arguments',fragment:'plugin_name_mismatch'},
+  plugin_version_unchanged:{category:'release_conflict',fragment:'plugin_version_unchanged'},
+} as const
+export type PublisherFailureReason = keyof typeof FAILURE_REASONS
 type PublisherDiagnosticStage = 'native_upload'|'native_rpc'|'native_process'|'publisher'
 type PublisherDiagnosticEvent = 'tool_failed'|'rpc_error'|'rpc_timeout'|'turn_failed'|'turn_interrupted'|'turn_timeout'|'process_error'|'process_exit'|'process_eof'|'process_timeout'|'process_closed'|'stdin_error'|'stdout_error'|'stdout_limit'|'server_request_rejected'|'publish_failed'
 export interface PublisherSafeDiagnostic {
   stage: PublisherDiagnosticStage
   category: PublisherFailureCategory
+  reason?: PublisherFailureReason
   event?: PublisherDiagnosticEvent
   errorCode?: number
   httpStatus?: number
@@ -61,6 +93,7 @@ export function publisherSafeDiagnostic(stage:PublisherDiagnosticStage,error:unk
   const errorCode=fields.map(value=>value.code).find(value=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=-2147483648&&value<=2147483647)??(messageCode===undefined?undefined:Number(messageCode))
   const httpStatus=fields.flatMap(value=>[value.httpStatus,value.httpStatusCode,value.statusCode]).find(value=>typeof value==='number'&&Number.isInteger(value)&&value>=100&&value<=599)
   const labels=[source.code,source.data?.code,typeof info==='string'?info:undefined,...(info&&typeof info==='object'?Object.keys(info):[])].filter((value):value is string=>typeof value==='string')
+  const reason=(Object.keys(FAILURE_REASONS) as PublisherFailureReason[]).find(key=>labels.some(label=>label.toLowerCase()===key)||message!==undefined&&new RegExp('\\b'+FAILURE_REASONS[key].fragment+'\\b','i').test(message))
   let category=labels.map(value=>{const key=value.toLowerCase();return Object.hasOwn(ERROR_CATEGORIES,key)?ERROR_CATEGORIES[key]:undefined}).find(Boolean)||fallback
   if(httpStatus===401||httpStatus===403)category='authorization'
   else if(httpStatus===409||httpStatus===412)category='release_conflict'
@@ -68,6 +101,7 @@ export function publisherSafeDiagnostic(stage:PublisherDiagnosticStage,error:unk
   else if(httpStatus===408||httpStatus===504)category='timeout'
   else if(httpStatus===400||httpStatus===422||errorCode===-32602)category='invalid_arguments'
   else if(httpStatus>=500||errorCode===-32603)category='upstream'
+  if(category==='unknown'&&reason!==undefined)category=FAILURE_REASONS[reason].category
   // A bounded message can classify a known failure, but is never retained/logged.
   if(category==='unknown'&&message!==undefined){
     if(/\b(?:unauthorized|forbidden|permission denied|authentication required|invalid token|token expired)\b/i.test(message))category='authorization'
@@ -77,7 +111,7 @@ export function publisherSafeDiagnostic(stage:PublisherDiagnosticStage,error:unk
     else if(/\b(?:timed out|timeout)\b/i.test(message))category='timeout'
     else if(/\b(?:invalid (?:arguments|params|parameters)|invalid_arguments|invalid_params)\b/i.test(message))category='invalid_arguments'
   }
-  return {stage,category,...(errorCode!==undefined?{errorCode}:{}),...(httpStatus!==undefined?{httpStatus}:{})}
+  return {stage,category,...(reason!==undefined?{reason}:{}),...(errorCode!==undefined?{errorCode}:{}),...(httpStatus!==undefined?{httpStatus}:{})}
 }
 export class PublisherDiagnosticError extends Error {
   readonly diagnostic:Readonly<PublisherSafeDiagnostic>
@@ -87,7 +121,7 @@ export class PublisherDiagnosticError extends Error {
     const stages:PublisherDiagnosticStage[]=['native_upload','native_rpc','native_process','publisher']
     const categories:PublisherFailureCategory[]=['authorization','file_upload','release_conflict','rate_limit','timeout','transport','invalid_arguments','upstream','interrupted','unknown']
     const events:PublisherDiagnosticEvent[]=['tool_failed','rpc_error','rpc_timeout','turn_failed','turn_interrupted','turn_timeout','process_error','process_exit','process_eof','process_timeout','process_closed','stdin_error','stdout_error','stdout_limit','server_request_rejected','publish_failed']
-    this.diagnostic=Object.freeze({stage:stages.includes(diagnostic.stage)?diagnostic.stage:'publisher',category:categories.includes(diagnostic.category)?diagnostic.category:'unknown',...(events.includes(diagnostic.event!)?{event:diagnostic.event}:{}),...(safe.errorCode!==undefined?{errorCode:safe.errorCode}:{}),...(safe.httpStatus!==undefined?{httpStatus:safe.httpStatus}:{})})
+    this.diagnostic=Object.freeze({stage:stages.includes(diagnostic.stage)?diagnostic.stage:'publisher',category:categories.includes(diagnostic.category)?diagnostic.category:'unknown',...(typeof diagnostic.reason==='string'&&Object.hasOwn(FAILURE_REASONS,diagnostic.reason)?{reason:diagnostic.reason}:{}),...(events.includes(diagnostic.event!)?{event:diagnostic.event}:{}),...(safe.errorCode!==undefined?{errorCode:safe.errorCode}:{}),...(safe.httpStatus!==undefined?{httpStatus:safe.httpStatus}:{})})
   }
 }
 

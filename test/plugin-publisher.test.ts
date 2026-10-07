@@ -2,8 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {createHash} from 'node:crypto'
 import {readFile,stat} from 'node:fs/promises'
-import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntimeConfig,verifyUploadInvocation,uploadTurnRequest,verifyReadback,ownedTarFiles} from '../src/plugin-publisher.ts'
+import {PluginPublisher,PACKAGE_ID,publisherToken,validateSource,publisherRuntimeConfig,verifyUploadInvocation,uploadTurnRequest,verifyReadback,ownedTarFiles,publisherSafeDiagnostic,PublisherDiagnosticError,openPluginCreator} from '../src/plugin-publisher.ts'
 import {gzipSync} from 'node:zlib'
+import {EventEmitter} from 'node:events'
+import {PassThrough} from 'node:stream'
 import {registerPluginPublisher} from '../src/plugin-publisher-tools.ts'
 import {validateSpec,NATIVE_TOOLS} from '../src/presets.ts'
 import {validateTaskIntakeDecision} from '../src/task-intake.ts'
@@ -32,6 +34,134 @@ test('native upload receipt must match the exact approved invocation and succeed
  const item={type:'mcpToolCall',server:'codex_apps',tool:'plugin_creator.update_plugin',status:'completed',arguments:{plugin_id:PACKAGE_ID,archive:'/tmp/release.zip',expected_release_id:'pluginrel_before'},result:{isError:false}}
  assert.doesNotThrow(()=>verifyUploadInvocation(item,'/tmp/release.zip','pluginrel_before'))
  for(const changed of [{...item,status:'failed'},{...item,tool:'plugin_creator.create_plugin'},{...item,arguments:{...item.arguments,plugin_id:'other'}},{...item,result:{isError:true}},{...item,arguments:{...item.arguments,archive:'/tmp/other.zip'}}])assert.throws(()=>verifyUploadInvocation(changed,'/tmp/release.zip','pluginrel_before'))
+})
+test('native failure diagnostics retain only typed categories and numeric error metadata',()=>{
+ const secret='Bearer secret-token https://signed.example/archive?secret=credential /tmp/private/archive.zip'
+ const diagnostic=publisherSafeDiagnostic('native_upload',{code:-32602,httpStatus:422,message:secret,data:{password:secret},content:[{text:secret}]})
+ assert.deepEqual(diagnostic,{stage:'native_upload',category:'invalid_arguments',errorCode:-32602,httpStatus:422})
+ const item={type:'mcpToolCall',server:'codex_apps',tool:'plugin_creator.update_plugin',status:'failed',arguments:{plugin_id:PACKAGE_ID,archive:'/tmp/release.zip',expected_release_id:'pluginrel_before'},error:{message:'Unauthorized '+secret},result:null}
+ assert.throws(()=>verifyUploadInvocation(item,'/tmp/release.zip','pluginrel_before'),(error:any)=>{
+  assert.ok(error instanceof PublisherDiagnosticError)
+  assert.equal(error.message,'publisher_unavailable')
+  assert.deepEqual(error.diagnostic,{stage:'native_upload',category:'authorization',event:'tool_failed'})
+  for(const sensitive of ['secret-token','signed.example','credential','/tmp/private'])assert.ok(!JSON.stringify(error).includes(sensitive));return true
+ })
+ for(const [source,category] of [[{code:'file_upload_failed'},'file_upload'],[{code:'release_conflict'},'release_conflict'],[{codexErrorInfo:'usageLimitExceeded'},'rate_limit'],[{codexErrorInfo:{httpConnectionFailed:{httpStatusCode:503}}},'upstream'],[{message:'file upload failed '+secret},'file_upload'],[{code:'__proto__',httpStatus:999,errorCode:secret,message:secret},'unknown']] as const){
+  const safe=publisherSafeDiagnostic('native_upload',source)
+  assert.equal(safe.category,category);for(const sensitive of ['secret-token','signed.example','credential','/tmp/private'])assert.ok(!JSON.stringify(safe).includes(sensitive))
+ }
+ const forged=new PublisherDiagnosticError({stage:secret,category:secret,event:secret,errorCode:secret,httpStatus:secret,message:secret} as any)
+ assert.deepEqual(forged.diagnostic,{stage:'publisher',category:'unknown'})
+})
+test('official turn variants and message-only MCP errors retain safe fixed diagnostics',()=>{
+ const secret='Bearer classified-secret https://signed.example/?token=hidden /tmp/private/archive.zip'
+ for(const [source,expected] of [
+  [{message:secret,codexErrorInfo:{responseStreamConnectionFailed:{httpStatusCode:429}}},{category:'rate_limit',httpStatus:429}],
+  [{message:secret,codexErrorInfo:{responseStreamDisconnected:{httpStatusCode:504}}},{category:'timeout',httpStatus:504}],
+  [{message:secret,codexErrorInfo:{responseTooManyFailedAttempts:{httpStatusCode:502}}},{category:'upstream',httpStatus:502}],
+  [{message:secret,codexErrorInfo:{responseStreamConnectionFailed:{httpStatusCode:null}}},{category:'transport'}],
+  [{message:secret,codexErrorInfo:'internalServerError'},{category:'upstream'}],
+  [{message:'Tool call failed: MCP error: -32602: Invalid parameters '+secret},{category:'invalid_arguments',errorCode:-32602}],
+  [{message:'Mcp error -32603: '+secret},{category:'upstream',errorCode:-32603}],
+  [{message:'MCP error -32000: '+secret},{category:'unknown',errorCode:-32000}],
+  [{message:'Invalid arguments '+secret},{category:'invalid_arguments'}],
+  [{message:'MCP error -3260200000: '+secret},{category:'unknown'}],
+  [{message:'unrecognized '+secret},{category:'unknown'}],
+ ] as const){
+  const safe=publisherSafeDiagnostic('native_upload',source)
+  assert.deepEqual(safe,{stage:'native_upload',...expected})
+  for(const sensitive of ['classified-secret','signed.example','token=hidden','/tmp/private'])assert.ok(!JSON.stringify(safe).includes(sensitive))
+ }
+})
+
+type NativeOutcome='exit'|'error'|'eof'|'stdin_error'|'stdout_error'|'turn_failed'|'turn_interrupted'|'timeout'|'tool_failed'|'server_request'|'completed'
+function nativeFixture(outcome:NativeOutcome,serverMethod='item/tool/requestUserInput'){
+ const child=new EventEmitter() as any
+ child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough()
+ let terminated=false,requests=0
+ const serverResponses:any[]=[]
+ const exit=()=>{if(!terminated){terminated=true;child.emit('exit',1,null)}}
+ child.kill=()=>{queueMicrotask(exit);return true}
+ const write=(value:unknown)=>child.stdout.write(JSON.stringify(value)+'\n')
+ const notification=(method:string,params:unknown)=>write({method,params:{threadId:'publisher-test-thread',...params as any}})
+ const secret='Bearer process-secret https://signed.example/?token=hidden'
+ child.stdin.on('data',(buffer:Buffer)=>{
+  for(const line of buffer.toString().trim().split('\n')){
+   const request=JSON.parse(line);if(request.id==null)continue
+   if(request.method==null){serverResponses.push(request);continue}
+   requests++
+   let result:any={}
+   if(request.method==='account/read')result={account:{type:'chatgpt'}}
+   if(request.method==='config/read')result={config:{}}
+   if(request.method==='thread/start')result={thread:{id:'publisher-test-thread'}}
+   if(request.method==='app/installed')result={apps:[{id:'connector_openai_plugin_creator',isEnabled:true,isCallable:true}]}
+   if(request.method==='mcpServerStatus/list')result={data:[{name:'codex_apps',tools:Object.fromEntries(['get_plugin_files','get_owned_plugin_archive','update_plugin'].map(name=>['plugin_creator.'+name,{name:'plugin_creator.'+name}]))}]}
+   if(request.method==='turn/start')result={turn:{id:'publisher-test-turn',status:'inProgress'}}
+   write({id:request.id,result})
+   if(request.method==='turn/start')queueMicrotask(()=>{
+    if(outcome==='exit')exit()
+    if(outcome==='error')child.emit('error',Object.assign(new Error(secret),{code:'ECONNRESET'}))
+    if(outcome==='eof')child.stdout.end()
+    if(outcome==='stdin_error')child.stdin.emit('error',Object.assign(new Error(secret),{code:'EPIPE'}))
+    if(outcome==='stdout_error')child.stdout.emit('error',Object.assign(new Error(secret),{code:'ECONNRESET'}))
+    if(outcome==='turn_failed'){
+     notification('error',{error:{code:-32000,codexErrorInfo:'usageLimitExceeded',message:secret},willRetry:false})
+     notification('turn/completed',{turn:{id:'publisher-test-turn',status:'failed'}})
+    }
+    if(outcome==='turn_interrupted')notification('turn/completed',{turn:{id:'publisher-test-turn',status:'interrupted'}})
+    if(outcome==='server_request')write({id:'publisher-server-request',method:serverMethod,params:{threadId:'publisher-test-thread',credentials:secret,message:secret,url:secret}})
+    if(outcome==='tool_failed'||outcome==='server_request'||outcome==='completed'){
+     notification('item/completed',{item:{type:'mcpToolCall',server:'codex_apps',tool:'plugin_creator.update_plugin',status:outcome==='completed'?'completed':'failed',arguments:{plugin_id:PACKAGE_ID,archive:'/tmp/release.zip',expected_release_id:'pluginrel_before'},...(outcome==='tool_failed'?{error:{message:'MCP error -32602: Invalid params '+secret},result:null}:outcome==='server_request'?{error:{message:'Tool request declined'},result:null}:{result:{content:[],structuredContent:null,_meta:null},error:null})}})
+     notification('turn/completed',{turn:{id:'publisher-test-turn',status:'completed'}})
+    }
+   })
+  }
+ })
+ return {spawn:(()=>child) as any,secret,requests:()=>requests,serverResponses}
+}
+test('native exit/error/EOF interrupts upload waiting after turn/start has responded',async(t)=>{
+ const logs:unknown[]=[];t.mock.method(console,'warn',(...args:unknown[])=>logs.push(args))
+ for(const [outcome,event] of [['exit','process_exit'],['error','process_error'],['eof','process_eof'],['stdin_error','stdin_error'],['stdout_error','stdout_error']] as const){
+  const fake=nativeFixture(outcome),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+  try{
+   await assert.rejects(platform.update('/tmp/release.zip','pluginrel_before'),(error:any)=>{
+    assert.ok(error instanceof PublisherDiagnosticError)
+    assert.equal(error.diagnostic.stage,'native_process');assert.equal(error.diagnostic.category,'transport');assert.equal(error.diagnostic.event,event);return true
+   })
+   assert.equal(fake.requests(),7)
+  }finally{await platform.close()}
+  for(const sensitive of ['process-secret','signed.example','token=hidden'])assert.ok(!JSON.stringify(logs).includes(sensitive))
+ }
+})
+test('native failed/interrupted/timed-out turns and failed tool receipts log safe typed failures',async(t)=>{
+ const logs:unknown[]=[];t.mock.method(console,'warn',(...args:unknown[])=>logs.push(args));t.mock.method(console,'info',(...args:unknown[])=>logs.push(args))
+ for(const [outcome,event,category] of [['turn_failed','turn_failed','rate_limit'],['turn_interrupted','turn_interrupted','interrupted'],['timeout','turn_timeout','timeout'],['tool_failed','tool_failed','invalid_arguments']] as const){
+  const fake=nativeFixture(outcome),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:10})
+  try{
+   await assert.rejects(platform.update('/tmp/release.zip','pluginrel_before'),(error:any)=>{
+    assert.ok(error instanceof PublisherDiagnosticError);assert.equal(error.diagnostic.event,event);assert.equal(error.diagnostic.category,category);return true
+   })
+  }finally{await platform.close()}
+  for(const sensitive of ['process-secret','signed.example','token=hidden'])assert.ok(!JSON.stringify(logs).includes(sensitive))
+ }
+ const receipt=logs.find((args:any)=>args[0]==='[plugin-publisher] native upload receipt') as any[]
+ assert.deepEqual(JSON.parse(receipt[1]).calls[0].diagnostic,{stage:'native_upload',category:'invalid_arguments',errorCode:-32602})
+})
+test('native server requests remain denied and log only an allowlisted method',async(t)=>{
+ const logs:unknown[]=[];t.mock.method(console,'warn',(...args:unknown[])=>logs.push(args));t.mock.method(console,'info',(...args:unknown[])=>logs.push(args))
+ for(const method of ['item/tool/requestUserInput','mcpServer/elicitation/request','account/chatgptAuthTokens/refresh','Bearer malicious-method https://signed.example/?token=hidden']){
+  const fake=nativeFixture('server_request',method),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+  try{await assert.rejects(platform.update('/tmp/release.zip','pluginrel_before'),PublisherDiagnosticError)}finally{await platform.close()}
+  assert.deepEqual(fake.serverResponses,[{id:'publisher-server-request',error:{code:-32601,message:'Interactive requests are not supported by the bounded publisher.'}}])
+ }
+ const rejections=logs.filter((args:any)=>args[0]==='[plugin-publisher] native server request rejected').map((args:any)=>JSON.parse(args[1]))
+ assert.deepEqual(rejections,['item/tool/requestUserInput','mcpServer/elicitation/request','account/chatgptAuthTokens/refresh','unknown'].map(method=>({stage:'native_rpc',category:'authorization',event:'server_request_rejected',method})))
+ for(const sensitive of ['process-secret','malicious-method','signed.example','token=hidden','credentials'])assert.ok(!JSON.stringify(logs).includes(sensitive))
+})
+test('native successful upload still requires the exact completed official invocation',async(t)=>{
+ t.mock.method(console,'info',()=>{})
+ const fake=nativeFixture('completed'),platform=await openPluginCreator('fake-codex',PACKAGE_ID,{spawn:fake.spawn,uploadTimeoutMs:1000})
+ try{await platform.update('/tmp/release.zip','pluginrel_before')}finally{await platform.close()}
 })
 test('Flow identity stays separate, full trees are retained and normalized host MCP fields are equivalent',()=>{
  const f=fixture(),name='vyibc-flow-video-studio',packageId='plugins_6ac374b9d988819187fc2677405e443d'
@@ -95,6 +225,17 @@ test('unknown write outcome is reconciled without a second upload',async()=>{
  assert.ok(!JSON.stringify(f.state).includes('secret upstream'))
  f.state.leaseUntil='2000-01-01T00:00:00.000Z'
  await p.start(id);assert.equal((await p.settled(id)).state,'verified');assert.equal(f.updates(),1)
+})
+test('typed native failure remains unknown_outcome and is only logged as safe diagnostics',async(t)=>{
+ const logs:unknown[]=[];t.mock.method(console,'warn',(...args:unknown[])=>logs.push(args))
+ const f=fixture(),original=f.options.platform
+ f.options.platform=async()=>({...await original(),update:async()=>{throw new PublisherDiagnosticError({...publisherSafeDiagnostic('native_upload',{code:-32602,httpStatus:422,message:'Bearer never-log-this'}),event:'tool_failed'})}})
+ const p=new PluginPublisher(f.options);await p.start(id)
+ assert.equal((await p.settled(id)).state,'verifying');assert.equal(f.state.error,'unknown_outcome');assert.equal(f.updates(),0)
+ assert.deepEqual(f.state.proof,{claim:id,error:'unknown_outcome'})
+ const row=logs.find((args:any)=>args[0]==='[plugin-publisher] publish failed') as any[]
+ assert.deepEqual(JSON.parse(row[1]),{releaseId:id,outcome:'unknown_outcome',diagnostic:{stage:'native_upload',category:'invalid_arguments',event:'tool_failed',errorCode:-32602,httpStatus:422}})
+ assert.ok(!JSON.stringify([logs,f.state]).includes('never-log-this'))
 })
 test('concurrent official update, changed scope and changed connection all block',async()=>{
  for(const change of [(f:any)=>f.current.plugin.current_release_id='pluginrel_other',(f:any)=>f.current.plugin.scope='WORKSPACE',(f:any)=>f.snapshot.files['.app.json']='{}']){

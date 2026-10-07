@@ -77,7 +77,23 @@ shell and web search and enables only Plugin Creator read/update tools. Its
 single actual update invocation must match the exact approved three arguments.
 The turn resolves the executable tool name from its own `ALL_TOOLS` inventory;
 MCP protocol names and code-mode JavaScript names are not interchangeable.
-The host logs only tool identity/status/count, never archive contents or tokens.
+The host logs only allowlisted tool identity/status/count and safe typed failure
+diagnostics: stage/event, a fixed category, numeric error code/HTTP status and
+elapsed time. It never logs raw error messages, result content, arguments,
+archive paths, signed URLs, credentials or stderr. Unknown error labels remain
+`unknown`, not an arbitrary string copied from the connector.
+App-server MCP item errors expose only a message, not typed code/HTTP fields.
+The diagnostic accepts bounded fixed invalid-parameter phrases and standard
+MCP/JSON-RPC code prefixes from that message without storing the original text.
+Turn errors separately expose `codexErrorInfo`: the official
+`httpConnectionFailed`, `responseStreamConnectionFailed`,
+`responseStreamDisconnected` and `responseTooManyFailedAttempts` variants retain
+only their numeric HTTP status, while `internalServerError` maps to `upstream`.
+Denied server requests emit `native server request rejected` with the fixed
+`server_request_rejected` event and an allowlisted method or `unknown`, never
+request parameters. Its `authorization` category identifies the local denial
+boundary; it is not proof that connector credentials failed. The rejection
+policy is unchanged and never automatically approves these requests.
 Independent source readback, not the model's final text, determines success.
 Do not treat this private-owner flow as a supported commercial/multi-tenant API;
 check OpenAI authentication terms and supported grants before broadening it.
@@ -99,6 +115,17 @@ compares insertion order. Arrays and values remain order/value sensitive.
 
 ## Recovery and acceptance
 
+- A failed native `update_plugin` receipt is not a successful publication.
+  Its safe category is retained in `[plugin-publisher] native upload receipt`,
+  `native upload failed` and `publish failed` journal entries. It still records
+  `unknown_outcome` after a mutation was attempted: a connector failure alone
+  cannot prove that no platform write occurred. Do not loosen the exact call,
+  identity, frozen release ID or independent full-file readback guards.
+- Native process exit/error/stdout EOF (including stdin/stdout errors) rejects
+  the outstanding upload wait immediately, rather than waiting for the
+  120-second turn timer. Turn failure, interruption and timeout have distinct
+  allowlisted events/categories. Raw process/authentication stderr remains
+  discarded. These diagnostics do not expose new credentials or grant retries.
 - `queued` is submitted, not published; follow the DSH Task link.
 - `needs_triage` before Task creation can be retried by its authenticated
   producer using the same immutable Signal and `?retry=1`. This appends a

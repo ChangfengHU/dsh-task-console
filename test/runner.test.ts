@@ -15,6 +15,7 @@ import { taskCredential } from '../src/task-credentials.ts'
 import { TaskNotifications } from '../src/task-notifications.ts'
 import { composeRecipe } from '../src/workflow-recipes.ts'
 import { FleetRepairRequired } from '../src/fleet-workflow-evidence.ts'
+import { observeOnboardBackground, pendingOnboardOperation, takeOnboardContinuation } from '../src/onboard-background.ts'
 
 const testResources: { root: string; runner: TaskRunner; store: EventStore }[] = []
 after(async () => {
@@ -629,9 +630,48 @@ test('idle model turns retain live async operations without burning nudges or ex
     assert.equal(outcomeReads,1)
     assert.match(host.sessions.get(session)!.followups.at(-1).content[0].text,/operation-1 complete/)
     assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+    assert.equal(store.s.runs.get(flight.runId)?.nudges,0)
     await host.callTool(session,'task_complete',{summary:'actual terminal receipt'});host.endTurn(session);await tick()
     assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'done')
   } finally {runner.stop();store.kernel.db.close();await (await import('node:fs/promises')).rm(root,{recursive:true,force:true})}
+})
+
+test('multiple onboarding terminal receipts continue the same Run without consuming protocol corrections', async () => {
+  const input = (x:any)=>({sessionId:x.sessionId,profileId:'fleet-installer'})
+  const {host,runner,store}=await setup({onFail:'stop',maxTries:1},{
+    pendingOperation:x=>pendingOnboardOperation(input(x)),
+    operationContinuation:x=>takeOnboardContinuation(input(x)),
+  })
+  const dispose:(()=>void)[]=[]
+  try {
+    const batch=await runner.fire('T','manual');await tick()
+    const session=[...host.sessions.keys()][0];host.consumeFirst(session)
+    const flight=(runner as any).flights.get(session),watchdog=flight.timer,lock=flight.claimLock
+    for (const initial of ['succeeded','running','succeeded','failed']) {
+      let status=initial
+      dispose.push(observeOnboardBackground(session,'onb-fixture',async()=>({phase:'running',run_id:'onb-fixture',async_operation:{status}})))
+      const followups=host.sessions.get(session)!.followups.length
+      host.endTurn(session);await tick()
+      if (status==='running') {
+        assert.equal(host.sessions.get(session)!.followups.length,followups)
+        status='succeeded';host.endTurn(session);await tick()
+      }
+      assert.equal(host.sessions.get(session)!.followups.length,followups+1)
+      assert.match(host.sessions.get(session)!.followups.at(-1).content[0].text,/收录真实回执/)
+      assert.equal(store.s.runs.get(flight.runId)?.nudges,0)
+      assert.equal(store.s.cards.get(batch.cardIds[0])?.status,'running')
+      assert.equal(flight.timer,watchdog)
+      assert.equal(flight.claimLock,lock)
+      assert.equal(host.sessions.size,1,'no premature downstream session')
+    }
+    const receipts=store.kernel.db.prepare("SELECT COUNT(*) AS n FROM task_events WHERE kind='operation_resumed'").get() as any
+    assert.equal(receipts.n,4)
+    // Consumed receipts cannot keep a silent Agent alive forever.
+    host.endTurn(session);await tick()
+    assert.equal(store.s.runs.get(flight.runId)?.nudges,1)
+    host.endTurn(session);await tick()
+    assert.equal(store.s.runs.get(flight.runId)?.outcome,'protocol_violation')
+  } finally {dispose.forEach(fn=>fn());runner.stop()}
 })
 
 test('the block gate can replace stale model prose with observed evidence without erasing tool history', async()=>{

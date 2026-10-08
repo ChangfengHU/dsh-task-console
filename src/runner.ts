@@ -93,6 +93,8 @@ export interface RunnerOptions {
   beforeBlock?: (input: CompletionCheck) => BlockDecision | void | Promise<BlockDecision | void>
   afterBlock?: (input: CompletionCheck) => Promise<void>
   pendingOperation?: (input: CompletionCheck) => Promise<string | undefined>
+  /** Consume a verified terminal edge, including operations completed before turn/end. */
+  operationContinuation?: (input: CompletionCheck) => string | undefined | Promise<string | undefined>
   operationOutcome?: (input: CompletionCheck) => Promise<string | undefined>
   scheduledTurn?: (task: TaskSpec, occurrenceId: string) => Promise<TaskTurn | undefined>
   beforePlanRound?: (input: CompletionCheck, items: unknown, proxyItems?: unknown) => Promise<{ items: unknown; commit: () => void } | undefined>
@@ -144,6 +146,7 @@ export class TaskRunner {
   private readonly beforeBlock?: RunnerOptions['beforeBlock']
   private readonly afterBlock?: RunnerOptions['afterBlock']
   private readonly pendingOperation?: RunnerOptions['pendingOperation']
+  private readonly operationContinuation?: RunnerOptions['operationContinuation']
   private readonly operationOutcome?: RunnerOptions['operationOutcome']
   private readonly scheduledTurn?: RunnerOptions['scheduledTurn']
   private readonly beforePlanRound?: RunnerOptions['beforePlanRound']
@@ -167,6 +170,7 @@ export class TaskRunner {
     this.beforeBlock = opts.beforeBlock
     this.afterBlock = opts.afterBlock
     this.pendingOperation = opts.pendingOperation
+    this.operationContinuation = opts.operationContinuation
     this.operationOutcome = opts.operationOutcome
     this.scheduledTurn = opts.scheduledTurn
     this.beforePlanRound = opts.beforePlanRound
@@ -1001,11 +1005,19 @@ export class TaskRunner {
           ;(f.idleTimer as any).unref?.()
           return
         }
-        if (f.waitedForOperation) {
-          outcomeNotice = await this.operationOutcome?.({ task: taskForBatch(base, batch), batch, card, sessionId: f.sessionId, profileId: f.profileId })
-          f.waitedForOperation = false
-        }
+        const input = { task: taskForBatch(base, batch), batch, card, sessionId: f.sessionId, profileId: f.profileId }
+        outcomeNotice = await this.operationContinuation?.(input)
+        if (!outcomeNotice && f.waitedForOperation) outcomeNotice = await this.operationOutcome?.(input)
+        f.waitedForOperation = false
       } catch { await this.finish(f, 'run/failed', 'failed', '无法核验后台操作状态，未宣称完成'); return }
+    }
+    if (!this.flights.has(f.sessionId)) return
+    if (outcomeNotice) {
+      // A receipt-driven continuation is normal progress, not a protocol repair.
+      // Keep the same Run/claim and original watchdog; do not spend nudges.
+      this.store.kernel.recordEvent(f.cardId, 'operation_resumed', { reason: 'background-terminal-receipt' }, f.coreRunId)
+      f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: outcomeNotice }], source: { kind: 'user' } })
+      return
     }
     const nativeEvidence = !!base && !!batch && ['browser-patrol-v2','studio-video-v1'].includes(taskForBatch(base,batch).design?.evidenceContract??'') && card?.role !== 'planner'
     const studioPlanner = !!base && !!batch && taskForBatch(base,batch).design?.evidenceContract === 'studio-video-v1' && card?.role === 'planner'
@@ -1013,7 +1025,7 @@ export class TaskRunner {
     if ((run?.nudges ?? 0) < maxNudges) {
       await this.append({ t: 'run/nudged', taskId: f.taskId, runId: f.runId })
       const correction = studioPlanner ? '上次只有普通文本，没有执行规划交接工具。请依据真实证据，实际调用 task_plan_round 安排继续制作或返修；全部验收通过才实际调用 task_finalize；无法继续则调用 task_block。参数使用工具定义的 JSON 对象，不要在普通文字中写函数调用，也不要重复已完成的外部操作。' : nativeEvidence ? `${(run?.nudges ?? 0) > 0 ? '最后一次协议纠正。' : ''}上次只有普通文本，没有执行交卷工具。现在请实际调用 task_complete，仅传 JSON 对象 {"summary":"简短如实交接"}，省略 metadata 和 artifacts；或实际调用 task_block 说明阻塞。宿主自动读取证据，不接受你口述成功。不要复查或重发业务操作，不要再次只输出“我将调用”的文字。` : NUDGE
-      f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: outcomeNotice ? `${outcomeNotice}\n\n${correction}` : correction }], source: { kind: 'user' } })
+      f.handle.agent.followup({ id: randomUUID(), role: 'user', content: [{ type: 'text', text: correction }], source: { kind: 'user' } })
       return
     }
     await this.finish(f, 'run/failed', 'protocol_violation', `经过 ${maxNudges} 次协议纠正仍未调用 task_complete / task_block`)

@@ -69,7 +69,7 @@ import {
   type HostMcp,
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
-import { pendingOnboardOperation, onboardOperationOutcome } from './onboard-background.ts'
+import { pendingOnboardOperation, onboardOperationOutcome, takeOnboardContinuation } from './onboard-background.ts'
 import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask, taskForBatch } from './tasks.ts'
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
@@ -354,6 +354,7 @@ export class TaskConsoleService extends TypertRemoteService {
         if (report?.failure) return { reason: report.failure, kind: 'capability' }
       },
       pendingOperation: async input => this.imageGeneration?.pending(input.sessionId) ?? new ProxyWorkflow(this.runner.store).pending(input) ?? await pendingOnboardOperation(input) ?? await pendingBrowserOperation(input),
+      operationContinuation: takeOnboardContinuation,
       afterBlock: async input => {
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2' || !input.task.design.notifications?.agentId || input.card.role === 'notifier') return
         const report=(await this.patrolWorkflow(input)).snapshot(input)

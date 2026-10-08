@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { readFile } from 'node:fs/promises'
-import { validateTaskActions, assertTaskActionLogin } from '../src/task-actions.ts'
+import { validateTaskActions, assertTaskActionLogin, taskActionAccountId } from '../src/task-actions.ts'
 import { actionCandidates } from '../src/agent-actions.ts'
 
 const starter = JSON.parse(await readFile(new URL('../presets/fleet-task-actions.json', import.meta.url), 'utf8'))
@@ -18,12 +18,21 @@ test('Task Action schema validates reusable fleet example, rejects authority fie
 
 test('Task account intent narrows trusted provision/copy/resume without widening existing permissions', () => {
   const snapshot: any = { parameters: starter[0].parameters, values: { ip: '192.0.2.1', account: 'fixture@example.test · accountId=gemini_12345678 · #12345678' } }
-  const args = { ip: '192.0.2.1', platform: 'gemini', accountId: 'gemini_12345678' }
+  const args = { ip: '192.0.2.1', platform: 'gemini', accountId: 'gemini_12345678', instance: 1, sessionId: 'task-current' }
   assert.doesNotThrow(() => assertTaskActionLogin(snapshot, 'browser_login_provision', args))
   assert.throws(() => assertTaskActionLogin(snapshot, 'browser_login_provision', { ...args, accountId: 'gemini_87654321' }), /指定金库/)
   assert.throws(() => assertTaskActionLogin(snapshot, 'browser_login_provision', { ...args, ip: '192.0.2.2' }), /明确目标/)
   assert.throws(() => assertTaskActionLogin(snapshot, 'browser_login_copy', args), /指定金库/)
   assert.throws(() => assertTaskActionLogin(snapshot, 'browser_login_resume', args), /指定金库/)
   assert.doesNotThrow(() => assertTaskActionLogin(snapshot, 'browser_login_resume', args, { args }))
+  for (const change of [{instance:2},{sessionId:'task-other'},{accountId:'gemini_87654321'}])
+    assert.throws(() => assertTaskActionLogin(snapshot, 'browser_login_resume', args, { args:{...args,...change} }), /指定金库/)
   assert.doesNotThrow(() => assertTaskActionLogin(undefined, 'browser_login_copy', args))
+})
+
+test('automatic allocation resumes without inventing an acceptance operationId', () => {
+  const snapshot: any = { parameters: starter[0].parameters, values: { ip: '192.0.2.1' } }
+  assert.equal(taskActionAccountId(snapshot), undefined)
+  assert.doesNotThrow(() => assertTaskActionLogin(snapshot, 'browser_login_resume', {ip:'192.0.2.1',instance:1,platform:'gemini',sessionId:'task-current'}))
+  assert.throws(() => assertTaskActionLogin(snapshot, 'browser_login_resume', {ip:'192.0.2.2'}), /明确目标/)
 })

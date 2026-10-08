@@ -74,8 +74,8 @@ import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, valid
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
 import { TaskCreator } from './task-create.ts'
-import { assertTaskActionLogin } from './task-actions.ts'
-import { readBrowserAcceptance } from './workflow-acceptance.ts'
+import { assertTaskActionLogin, taskActionAccountId } from './task-actions.ts'
+import { browserResumptionSource } from './workflow-acceptance.ts'
 import { executionHistory } from './execution-history.ts'
 import { ledgerPage } from './ledger-page.ts'
 import { browserPatrolEvidence } from './browser-patrol-evidence.ts'
@@ -433,7 +433,8 @@ export class TaskConsoleService extends TypertRemoteService {
       }
     }
     if (/^browser_login_(copy|provision|resume)$/.test(raw) && batch.turn?.action) {
-      const resumed = raw === 'browser_login_resume' ? await readBrowserAcceptance(args.operationId) : undefined
+      const resumed = raw === 'browser_login_resume' && taskActionAccountId(batch.turn.action)
+        ? await browserResumptionSource(args, sessionId) : undefined
       assertTaskActionLogin(batch.turn.action, raw, args, resumed)
     }
     if(!task.design?.proxy){

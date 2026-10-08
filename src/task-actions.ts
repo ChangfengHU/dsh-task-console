@@ -23,15 +23,19 @@ export function validateTaskActions(raw: unknown): AgentAction[] {
 }
 
 /** Narrow an explicit account selection; never grant extra MCP operations. */
+export function taskActionAccountId(snapshot: TaskActionSnapshot | undefined) {
+  const key = snapshot?.parameters.find(p => p.binding === 'gemini-account')?.key, value = key && snapshot?.values[key]
+  return typeof value === 'string' ? value.match(/(?:^|accountId=)(gemini_[a-f0-9]{8,64})(?:$|\s)/)?.[1] : undefined
+}
 export function assertTaskActionLogin(snapshot: TaskActionSnapshot | undefined, raw: string, args: any, resumed?: any) {
   if (!snapshot) return
   const ipKey = snapshot.parameters.find(p => p.binding === 'target-ip')?.key
   if (ipKey && args.ip !== snapshot.values[ipKey]) throw Error('Task Action 登录操作只能针对本次明确目标')
-  const key = snapshot.parameters.find(p => p.binding === 'gemini-account')?.key, value = key && snapshot.values[key]
-  const accountId = typeof value === 'string' ? value.match(/(?:^|accountId=)(gemini_[a-f0-9]{8,64})(?:$|\s)/)?.[1] : undefined
+  const accountId = taskActionAccountId(snapshot)
   if (!accountId) return
   if (raw === 'browser_login_provision' && args.accountId === accountId && args.platform === 'gemini') return
-  if (raw === 'browser_login_resume' && resumed?.args?.accountId === accountId && resumed?.args?.ip === args.ip && resumed?.args?.platform === 'gemini') return
+  if (raw === 'browser_login_resume' && resumed?.args?.accountId === accountId && resumed?.args?.ip === args.ip && resumed?.args?.platform === 'gemini'
+    && resumed.args.instance === args.instance && resumed.args.sessionId === args.sessionId) return
   throw Error('本次 Task Action 已指定金库账号；必须使用匹配 accountId 的 Gemini provision/续接，不允许换号或从其他浏览器复制')
 }
 export class TaskActions {

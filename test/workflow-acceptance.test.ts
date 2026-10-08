@@ -1,7 +1,18 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createHash } from 'node:crypto'
-import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation, browserOperationOutcome } from '../src/workflow-acceptance.ts'
+import { validateWorkflowCompletion, validateWorkflowBlock, pendingBrowserOperation, browserOperationOutcome, browserResumptionSource } from '../src/workflow-acceptance.ts'
+
+test('resume correlates the latest imported provision from this session, target and instance only', async () => {
+  const args={ip:'192.0.2.10',instance:1,platform:'gemini',sessionId:'task-current'}
+  const job={id:'a'.repeat(32),action:'login-provision',args:{...args,accountId:'gemini_12345678'},startedAt:'2026-10-08T01:00:00Z',events:[{stage:'login_transfer_observed',observation:{imported:1}}]}
+  assert.equal(await browserResumptionSource(args,args.sessionId,{jobs:async()=>[job]}),job)
+  for(const change of [{action:'login-acceptance'},{events:[]},{args:{...job.args,ip:'192.0.2.20'}},{args:{...job.args,instance:2}},{args:{...job.args,sessionId:'other'}}])
+    assert.equal(await browserResumptionSource(args,args.sessionId,{jobs:async()=>[{...job,...change}]}),undefined)
+  assert.equal(await browserResumptionSource(args,'other',{jobs:async()=>{throw Error('must not read')}}),undefined)
+  const latest={...job,id:'b'.repeat(32),startedAt:'2026-10-08T02:00:00Z',args:{...job.args,accountId:'gemini_87654321'}}
+  assert.equal(await browserResumptionSource(args,args.sessionId,{jobs:async()=>[job,latest]}),latest)
+})
 
 function fixture() {
   const now = 2_000_000, sessionId = 'task-example-current-3', requestId = 'accept-current', ip = '192.0.2.10'

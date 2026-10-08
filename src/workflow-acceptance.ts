@@ -21,6 +21,15 @@ async function browserJobs(deps: JobDeps) {
   }))()
 }
 
+/** Resume has no operationId parameter: correlate the host's original import. */
+export async function browserResumptionSource(args: any, sessionId: string, deps: JobDeps = {}) {
+  if (args.sessionId !== sessionId || !Number.isInteger(args.instance) || args.platform !== 'gemini') return
+  return (await browserJobs(deps)).filter(j => j.action === 'login-provision'
+    && j.args?.sessionId === sessionId && j.args.ip === args.ip && j.args.instance === args.instance && j.args.platform === 'gemini'
+    && j.events?.some((e: any) => e.stage === 'login_transfer_observed' && e.observation?.imported === 1))
+    .sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt))[0]
+}
+
 export async function pendingBrowserOperation(input: CompletionCheck, deps: JobDeps = {}): Promise<string | undefined> {
   if (input.profileId !== 'browser-manager' && input.task.design?.evidenceContract !== 'browser-patrol-v2') return
   const now = (deps.now || Date.now)()

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { executeWithTaskScope, taskMediaServer, assertBrowserSession, assertToolArguments, bindBrowserSessionDefinition, instanceServerName, publicToolName, resolveSourceConfig } from '../src/filtered-mcp-client.ts'
+import { executeWithTaskScope, taskMediaServer, assertBrowserSession, assertToolArguments, bindBrowserSessionDefinition, instanceServerName, publicToolName, resolveSourceConfig, normalizeMcpTransport } from '../src/filtered-mcp-client.ts'
 import { createRequire } from 'node:module'
 import { dirname } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -59,8 +59,18 @@ test('filtered MCP resolves a host entry across a preset loader scope', () => {
       if (name === 'taskConsole') return { sourceMcpConfig: (id: string) => id === 'mcp-fleet-browser' ? source : undefined }
     },
   } as any
-  assert.deepEqual(resolveSourceConfig(ctx, 'mcp-fleet-browser'), source)
+  assert.deepEqual(resolveSourceConfig(ctx, 'mcp-fleet-browser'), { ...source, transport: 'stdio' })
   assert.throws(() => resolveSourceConfig(ctx, 'missing'), /unavailable/)
+})
+
+test('legacy host MCP config gets an explicit unambiguous transport without mutation', () => {
+  const stdio = { command: '/usr/bin/node', args: ['server.mjs'] }
+  assert.equal(normalizeMcpTransport(stdio).transport, 'stdio')
+  assert.equal('transport' in stdio, false)
+  assert.equal(normalizeMcpTransport({ url: 'https://example.test/mcp' }).transport, 'streamable-http')
+  assert.equal(normalizeMcpTransport({ ...stdio, transport: 'stdio' }).transport, 'stdio')
+  assert.throws(() => normalizeMcpTransport({}), /transport/)
+  assert.throws(() => normalizeMcpTransport({ ...stdio, url: 'https://example.test/mcp' }), /不明确/)
 })
 
 test('browser identity is bound per execution without changing the MCP schema or accepting spoofed sessions', () => {

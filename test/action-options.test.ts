@@ -3,11 +3,18 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { validateActions, renderAction } from '../src/agent-actions.ts'
 import { makeActionSnippet, reconcileSnippet, trackSnippetEdit, snippetValues, snippetError, snippetProgress, restoreSnippet, resolveSnippetDefaults } from '../src/action-snippet.ts'
-import { optionPage, sourceTool } from '../src/action-options.ts'
+import { optionPage, sourceTool, resolveAccountOption } from '../src/action-options.ts'
 import { fleetActionOptions } from '../src/fleet-action-options.ts'
 
 const seed = JSON.parse(await readFile(new URL('../presets/browser-manager-actions.json', import.meta.url), 'utf8'))
 const action = validateActions(seed.actions)[0]
+test('manual account email and ID resolve uniquely; missing, ambiguous and disabled accounts cannot change identity', () => {
+  const account = { label: 'owner@example.test', value: 'owner@example.test · accountId=gemini_aaaaaaaa · #aaaaaaaa' }
+  for (const value of [account.value, account.label, 'OWNER@example.test', 'gemini_aaaaaaaa']) assert.equal(resolveAccountOption([account], value), account)
+  for (const value of ['owner', '【金库账号】', 'gemini_bbbbbbbb', 'other@example.test']) assert.throws(() => resolveAccountOption([account], value), /未找到/)
+  assert.throws(() => resolveAccountOption([account, { ...account, value: 'owner@example.test · accountId=gemini_bbbbbbbb · #bbbbbbbb' }], account.label), /多个/)
+  assert.throws(() => resolveAccountOption([{ ...account, disabled: true }], account.label), /不可用/)
+})
 function edit(state: ReturnType<typeof makeActionSnippet>, key: string, value: string) {
   const i = state.slots.findIndex(s => s.key === key), slot = state.slots[i]
   const text = state.text.slice(0, slot.start) + value + state.text.slice(slot.end)

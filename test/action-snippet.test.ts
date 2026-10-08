@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { confirmedActionRole, makeActionSnippet, resolveSnippetDefaults, restoreSnippet, snippetError, snippetProgress, trackSnippetEdit } from '../src/action-snippet.ts'
+import { confirmedActionRole, makeActionSnippet, resolveSnippetDefaults, restoreSnippet, snippetError, snippetProgress, trackSnippetEdit, trackPendingSnippet } from '../src/action-snippet.ts'
 import { agentMentionSource } from '../src/client/agent-mentions.ts'
 import { validateActions } from '../src/agent-actions.ts'
 
@@ -15,6 +15,20 @@ test('snippet slots include editable defaults and exact selections, no evaluatio
   assert.deepEqual(s.slots.map(p => s.text.slice(p.start, p.end)), ['【机器 IP】', '【数量】', '【登录】'])
   assert.equal(snippetError(s.slots[0], s.text), '请填写机器 IP')
   assert.equal(snippetError(s.slots[1], s.text), null)
+})
+test('pasted filled Action restores typed IP including whitespace without inventing a candidate', () => {
+  const text = '@新增 在 79.72.76.64\n 新增 1 个；自动登录 是'
+  const restored = restoreSnippet(action, '@新增 ', text)
+  assert.deepEqual(restored.slots.map(s => text.slice(s.start, s.end).trim()), ['79.72.76.64', '1', '是'])
+  assert.ok(restored.slots.every(s => !s.removed))
+  assert.equal(restored.filling, false)
+  const removed = snippetProgress(text, restored.slots.map(s => ({...s,removed:true})),0,false)
+  assert.ok(restoreSnippet(action,'@新增 ',text,removed).slots.every(s=>!s.removed))
+  const plain = text.replace('79.72.76.64\n', '79.72.76.64')
+  const plainSlots = restoreSnippet(action,'@新增 ',plain).slots
+  const tracked = trackPendingSnippet(plain,text,snippetProgress(plain,plainSlots,0,false))!
+  assert.deepEqual(tracked.edited,[],'whitespace-only IP changes do not erase a previously selected account')
+  assert.ok(restoreSnippet(action, '@新增 ', text.replace('新增 1 个', '删除 1 个')).slots.some(s => s.removed))
 })
 test('typed replacement, continued typing, defaults and shifts stay attached to their fields', () => {
   const s = makeActionSnippet(action, '@新增 ')
@@ -141,13 +155,13 @@ test('reload restores exact edited ranges and progress without storing parameter
   assert.equal(restoreSnippet(action, '@新增 ', text, complete).filling, false)
 })
 
-test('legacy or stale metadata restores only actual remaining markers, never guessed field ranges', () => {
+test('legacy or stale metadata restores parameter ranges when the full static template still matches', () => {
   const original = makeActionSnippet(action, '@新增 ')
   const text = original.text.replace('【机器 IP】', '192.0.2.1')
   for (const saved of [undefined, snippetProgress(original.text, original.slots, 0, true)]) {
     const restored = restoreSnippet(action, '@新增 ', text, saved)
     assert.equal(restored.current, 1)
-    assert.equal(restored.slots[0].removed, true)
+    assert.equal(text.slice(restored.slots[0].start, restored.slots[0].end), '192.0.2.1')
     assert.equal(text.slice(restored.slots[1].start, restored.slots[1].end), '【数量】')
     assert.equal(restored.filling, true)
   }

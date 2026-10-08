@@ -5,6 +5,7 @@ import { createServer, type Server } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { pendingOnboardOperation } from '../src/onboard-background.ts'
 import {
   HttpFleetOnboardCloudTransport,
   HttpFleetOnboardLedger,
@@ -72,6 +73,19 @@ function registry(adapter?: FleetOnboardHostAdapter, readOnly = false) {
   const ctx = { tools: { register(definition: any) { definitions.push(definition); return () => undefined } } }
   return registerFleetOnboardTools(ctx, adapter, readOnly).then(dispose => ({ definitions, dispose }))
 }
+
+test('registered installer tool attaches its real operation to the host wait observer', async () => {
+  const exec = execution(`Install ${IP}`)
+  const sessionId = exec.agent!.session!.id!
+  const result = {schema:1,ok:true,operation:'start',ip:IP,phase:'running',reason:'operation-still-running',run_id:'onb-tool-test',execution_available:true,needs_input:false,run_created:true,probe_executed:true}
+  const adapter = {start:async()=>result,status:async()=>({...result,async_operation:{status:'running'}})} as unknown as FleetOnboardHostAdapter
+  const {definitions,dispose} = await registry(adapter)
+  try {
+    await definitions.find(d=>d.name==='fleet_onboard_start').execute({ip:IP},exec)
+    assert.match((await pendingOnboardOperation({sessionId,profileId:'fleet-installer'}))!,/仍在执行/)
+  } finally {dispose()}
+  assert.equal(await pendingOnboardOperation({sessionId,profileId:'fleet-installer'}),undefined)
+})
 
 test('read-only onboarding capability registers no start or resume tools', async () => {
   const { definitions, dispose } = await registry(undefined, true)

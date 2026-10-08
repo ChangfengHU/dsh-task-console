@@ -90,7 +90,7 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
           if (catalog.taskId) {
             const snippet = snippets.get(sessionId)
             if (!snippet || snippet.error()) throw Error(snippet?.error() ?? '请重新选择 Task Action，恢复参数位置')
-            await snippet.validate()
+            text = (await snippet.validate()).slice(prefix.length)
             const raw = snippet.values(), values = Object.fromEntries(Object.entries(raw).map(([k,v]) => {
               const p = action.parameters.find(p => p.key === k)!
               return [k, p.type === 'number' && v !== '' ? Number(v) : p.type === 'boolean' ? v === 'true' : v]
@@ -106,7 +106,8 @@ export function agentMentionSource(ctx: any, api: () => Promise<Api>, go: (path:
           if (newSession && !canChooseAgent(sessionId)) throw Error('当前会话已有角色，请重新选择该角色的 Action')
           const message = snippets.get(sessionId)?.error()
           if (message) throw Error(message)
-          await snippets.get(sessionId)?.validate()
+          const normalized = await snippets.get(sessionId)?.validate()
+          if (normalized !== undefined) text = normalized.slice(prefix.length)
           text = resolveSnippetDefaults(action, text)
           const placeholders = makeActionSnippet(action).slots
           if (!text.trim() || placeholders.some(s => text.includes(s.marker)) || /\{\{[^{}]+\}\}/.test(text)) throw Error('请填写剩余占位符后再发送')

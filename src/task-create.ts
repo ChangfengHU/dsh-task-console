@@ -265,7 +265,7 @@ export class TaskCreator {
     return pending
   }
 
-  async launchAction(query: TaskActionInput) {
+  async launchAction(query: TaskActionInput, normalize?: (input: TaskActionInput) => Promise<TaskActionInput>) {
     if (!/^[a-zA-Z0-9-]{16,80}$/.test(query.requestId)) throw Error('需要稳定的提交 ID')
     const pending = this.queue.then(async () => {
       const db = this.runner.store.kernel.db
@@ -274,7 +274,7 @@ export class TaskCreator {
       const old = db.prepare('SELECT * FROM dsh_task_action_requests WHERE id=?').get(requestId) as any
       if (old && old.hash !== hash) throw Error('同一提交不能替换参数，请新建一次明确的执行')
       if (old && this.runner.store.s.batches.has(old.batch_id)) return this.status(old.task_id, old.batch_id)
-      const resolved = this.actions.resolve(query)
+      const resolved = this.actions.resolve(normalize ? await normalize(query) : query)
       if (!old) db.prepare('INSERT INTO dsh_task_action_requests VALUES (?,?,?,?)').run(requestId, hash, query.taskId, batchId)
       const input = { text: resolved.text, requestId, sessionId: `workflow-${query.requestId}` }
       return this.dispatch({ decision: 'reuse', taskId: query.taskId, reason: '用户通过 Task Action 提交本次参数' }, input, {}, query.cwd, true, false, resolved)

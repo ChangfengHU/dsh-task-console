@@ -1,6 +1,6 @@
 import { parameterVisible, type AgentAction } from '../agent-actions.ts'
 import { makeActionSnippet, restoreSnippet, snippetDefault, snippetError, snippetProgress, trackSnippetEdit, reconcileSnippet, snippetValues, type SnippetProgress } from '../action-snippet.ts'
-import { optionPage, type ActionOptionPage } from '../action-options.ts'
+import { optionPage, resolveAccountOption, type ActionOptionPage } from '../action-options.ts'
 import { actionOptionPopup } from './action-options.ts'
 
 /** Session-owned native input bridge. DOM is used only for focus/selection, never draft writes. */
@@ -97,6 +97,12 @@ export function installActionSnippet(ctx: any, sessionId: string, action: AgentA
       const before = snippetValues(slots, previous)
       const reconciled = reconcileSnippet(trackSnippetEdit(slots, previous, text, current), text, before)
       slots = reconciled.slots
+      if (slots.some(s => s.removed)) {
+        const recovered = restoreSnippet(action, prefix, text)
+        if (recovered.slots.every(s => !s.removed)) {
+          slots = recovered.slots; current = recovered.current; filling = recovered.filling
+        }
+      }
       if (reconciled.text !== text) { previous = reconciled.text; input.setDraft(reconciled.text); save(); queueCandidates(); return }
     }
     else { slots = slots.map(s => ({ ...s, removed: true })); filling = false }
@@ -161,12 +167,26 @@ export function installActionSnippet(ctx: any, sessionId: string, action: AgentA
   const stopRole = ctx.sessions.list.subscribe(() => { if (!active()) cancelCandidates() })
   const validate = async () => {
     const draft = input.state.getSnapshot().draft, values = snippetValues(slots, draft)
+    const replacements = new Map<string, string>()
     for (const slot of slots.filter(s => !s.removed && !s.inactive && s.parameter.source === 'fleet.gemini-accounts')) {
       const value = draft.slice(slot.start, slot.end).trim()
       const result = await options.candidates?.(slot.key, values, value, 1)
       if (!active() || input.state.getSnapshot().draft !== draft) throw Error('草稿或角色已变化，请重新确认')
-      if (!result?.items.some(c => !c.disabled && c.value === value)) throw Error('指定账号来源当前不可用，请重新选择；未执行登录')
+      if (!result || result.pages > 1) throw Error('请填写完整邮箱或 accountId，以唯一确定金库账号')
+      replacements.set(slot.key, resolveAccountOption(result.items, value).value)
     }
+    // Canonicalize only known parameter ranges, never rewrite the static prompt.
+    let normalized = draft
+    for (const slot of slots.filter(s => !s.removed && !s.inactive).sort((a, b) => b.start - a.start)) {
+      const value = replacements.get(slot.key) ?? draft.slice(slot.start, slot.end).trim()
+      normalized = normalized.slice(0, slot.start) + value + normalized.slice(slot.end)
+    }
+    if (normalized !== draft) {
+      const restored = restoreSnippet(action, prefix, normalized)
+      slots = restored.slots; previous = normalized
+      input.setDraft(normalized); save()
+    }
+    return normalized
   }
   save()
   const frame = requestAnimationFrame(() => requestAnimationFrame(() => { if (filling) select(current); else if (active()) input.notify('info', '提示词已填入，可修改后发送。') }))

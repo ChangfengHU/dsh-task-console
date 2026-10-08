@@ -176,7 +176,7 @@ test('Task Actions use CAS independent storage and frozen fresh inputs; real sch
   assert.ok([...host.sessions.keys()].every(id => id.startsWith('task-')), 'only task-owned role sessions, no ordinary conversation')
   assert.equal(turn.origin?.intakeSessionId, undefined)
   creator.actions.save('T', [], catalog.revision)
-  assert.equal((await creator.launchAction(query)).batchId, first.batchId, 'accepted retry survives catalog edits')
+  assert.equal((await creator.launchAction(query, async () => { throw Error('must not re-resolve already accepted account') })).batchId, first.batchId, 'accepted retry survives catalog edits and account-provider downtime')
   await assert.rejects(creator.launchAction({ ...query, values: { ...query.values, ip: '192.0.2.31' } }), /同一提交/)
   await assert.rejects(creator.launchAction({ ...query, requestId: 'task-action-fixture-0002' }), /已更新/)
   assert.equal(store.s.batches.size, 1)

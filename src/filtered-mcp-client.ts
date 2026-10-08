@@ -31,6 +31,14 @@ export type Config = Partial<McpConfig> & {
 
 const MCP_CLIENT = '@deepseek-ai/dsh-mcp-client'
 
+/** Legacy host configs omitted the discriminant; the native MCP client does not infer it. */
+export function normalizeMcpTransport(config: Record<string, any>): McpConfig {
+  if (config.transport !== undefined) return { ...config } as McpConfig
+  if (typeof config.command === 'string' && config.command && !config.url) return { ...config, transport: 'stdio' } as McpConfig
+  if (typeof config.url === 'string' && config.url && !config.command) return { ...config, transport: 'streamable-http' } as McpConfig
+  throw Error('MCP transport 缺失或不明确；请检查宿主配置')
+}
+
 /** Resolve a safe preset reference back to the host-owned MCP config. */
 export function resolveSourceConfig(ctx: Context, sourceEntryId: string): McpConfig {
   const loader = (ctx as any).get?.('loader') ?? (ctx as any).loader
@@ -43,7 +51,7 @@ export function resolveSourceConfig(ctx: Context, sourceEntryId: string): McpCon
     // the authored preset.
     const taskConsole = (ctx as any).get?.('taskConsole')
     const inherited = taskConsole?.sourceMcpConfig?.(sourceEntryId)
-    if (inherited) return { ...inherited } as McpConfig
+    if (inherited) return normalizeMcpTransport(inherited)
     throw new Error(`filtered-mcp-client: source entry "${sourceEntryId}" is unavailable`)
   }
   if (entry?.options?.name !== MCP_CLIENT) throw new Error(`filtered-mcp-client: source entry "${sourceEntryId}" is not an official MCP client`)
@@ -54,7 +62,7 @@ export function resolveSourceConfig(ctx: Context, sourceEntryId: string): McpCon
   if (!config || typeof config !== 'object' || Array.isArray(config)) {
     throw new Error(`filtered-mcp-client: source entry "${sourceEntryId}" has no MCP config`)
   }
-  return { ...config } as McpConfig
+  return normalizeMcpTransport(config)
 }
 
 /** Must stay byte-for-byte compatible with dsh-mcp-client's public naming. */
@@ -155,7 +163,7 @@ export async function apply(ctx: Context, config: Config): Promise<void> {
   }
   // `inlineMcp` is accepted only for previously generated presets. All new
   // presets use sourceEntryId so auth remains owned by the host composition.
-  const sourceMcp = sourceEntryId ? resolveSourceConfig(ctx, sourceEntryId) : inlineMcp as McpConfig
+  const sourceMcp = sourceEntryId ? resolveSourceConfig(ctx, sourceEntryId) : normalizeMcpTransport(inlineMcp)
   const liveServerName = instanceServerName(stableServerName, randomUUID())
   const rawByInternal = new Map(allowedTools.map(tool => [publicToolName(liveServerName, tool), tool]))
 

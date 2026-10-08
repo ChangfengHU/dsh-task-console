@@ -53,7 +53,7 @@ import { basename, dirname, join, resolve, extname } from 'node:path'
 import { createRequire } from 'node:module'
 import { readActions, saveActions } from './agent-action-store.ts'
 import { renderAction, parameterVisible, type ActionCatalog } from './agent-actions.ts'
-import { optionPage, sourceTool, type ActionOptionQuery } from './action-options.ts'
+import { optionPage, resolveAccountOption, sourceTool, type ActionOptionQuery } from './action-options.ts'
 import { fleetActionOptions } from './fleet-action-options.ts'
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { SessionCapabilities } from './session-capabilities.ts'
@@ -69,6 +69,7 @@ import {
   type HostMcp,
 } from './presets.ts'
 import { TaskRunner } from './runner.ts'
+import { pendingOnboardOperation, onboardOperationOutcome } from './onboard-background.ts'
 import { EventStore, batchStatus, cardRun, foldTurns, nextFire, parseCron, validateTask, taskForBatch } from './tasks.ts'
 import { TaskIntakeCoordinator, type IntakeAgent } from './task-intake.ts'
 import { decideTaskSignalWithAgent } from './task-intake-agent.ts'
@@ -279,6 +280,7 @@ export class TaskConsoleService extends TypertRemoteService {
         if (!result.ok) return { kind: 'capability', reason: result.reason ?? 'blocked_quality_capability' }
       },
       beforeComplete: async input => {
+        if (await pendingOnboardOperation(input)) throw new Error('装机后台操作尚未结束，不能提交完成')
         const pendingImage = this.imageGeneration?.pending(input.sessionId)
         if (pendingImage) throw Error(`生图仍在运行，先用 image_generate_status 等待真实图片回执：${pendingImage}`)
         if(input.task.design?.extension)return this.workflowExtensions.beforeComplete(input)
@@ -344,19 +346,20 @@ export class TaskConsoleService extends TypertRemoteService {
         if (report?.summary && report.metadata) return { summary: report.summary, metadata: report.metadata }
       },
       beforeBlock: async input => {
+        if (await pendingOnboardOperation(input)) throw new Error('装机后台操作仍运行，不能提前阻塞；结束当前模型回合，由宿主等待原回执')
         if(new ProxyWorkflow(this.runner.store).pending(input))throw new Error('代理操作仍运行，请查询原回执；不能提前阻塞并遗弃操作')
         const operation = await validateWorkflowBlock(input)
         if (operation) return operation
         const report = await this.patrolEvidence(input)
         if (report?.failure) return { reason: report.failure, kind: 'capability' }
       },
-      pendingOperation: async input => this.imageGeneration?.pending(input.sessionId) ?? new ProxyWorkflow(this.runner.store).pending(input) ?? await pendingBrowserOperation(input),
+      pendingOperation: async input => this.imageGeneration?.pending(input.sessionId) ?? new ProxyWorkflow(this.runner.store).pending(input) ?? await pendingOnboardOperation(input) ?? await pendingBrowserOperation(input),
       afterBlock: async input => {
         if (input.task.design?.evidenceContract !== 'browser-patrol-v2' || !input.task.design.notifications?.agentId || input.card.role === 'notifier') return
         const report=(await this.patrolWorkflow(input)).snapshot(input)
         await this.runner.store.createNotification(input.task,input.batch,input.card,'blocked',report)
       },
-      operationOutcome: async input => new ProxyWorkflow(this.runner.store).pending(input) ?? (input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input)),
+      operationOutcome: async input => input.profileId === 'fleet-installer' ? onboardOperationOutcome : new ProxyWorkflow(this.runner.store).pending(input) ?? (input.card.role === 'proxy' ? '代理后台运行阶段已结束；调用原操作的 proxy_status 获取终态。全部计划节点明确终态后 task_complete 如实交接通过/未通过清单；宿主禁止未通过节点登录写入。不确定结果不能冒充明确失败或成功，应继续核对原回执或 task_block。' : await browserOperationOutcome(input)),
       scheduledTurn: (task, occurrenceId) => this.creator.scheduledTurn(task, occurrenceId),
       beforePlanRound: async (input, items, proxyItems) => {
         if(input.task.design?.extension)return this.workflowExtensions.beforePlanRound(input,items,proxyItems)
@@ -1252,7 +1255,21 @@ export class TaskConsoleService extends TypertRemoteService {
   }
   async launchTaskAction(payload: string): Promise<string> {
     await this.ready
-    return JSON.stringify(await this.creator.launchAction(JSON.parse(payload)))
+    return JSON.stringify(await this.creator.launchAction(JSON.parse(payload), async query => {
+      const catalog = this.creator.actions.read(query.taskId)
+      if (catalog.revision !== query.revision) throw Error('Task Action 已更新，请重新选择；草稿保留')
+      const action = catalog.actions.find(a => a.id === query.actionId && a.enabled !== false)
+      const values = { ...query.values }
+      for (const p of action?.parameters ?? []) {
+        if (p.source !== 'fleet.gemini-accounts' || !parameterVisible(p, values)) continue
+        const value = values[p.key]
+        if (typeof value !== 'string' || !value.trim() || value.includes('【')) throw Error('请填写指定金库账号的邮箱或 accountId')
+        const result = JSON.parse(await this.agentActionOptions(JSON.stringify({ ...query, parameter: p.key, values, search: value.trim(), page: 1 })))
+        if (result.pages > 1) throw Error('请填写完整邮箱或 accountId，以唯一确定金库账号')
+        values[p.key] = resolveAccountOption(result.items, value).value
+      }
+      return { ...query, values }
+    }))
   }
 
   /** Submit one generic, credential-free Signal; the Task Agent routes it asynchronously. */

@@ -610,7 +610,9 @@ export class TaskRunner {
     for (const d of [...prior.values()].sort((a, b) => a.index - b.index)) upstream.push({ agentName: await this.displayName(d.agentId), summary: d.summary ?? '' })
     const previousWait = this.store.kernel.db.prepare('SELECT reason,wake_at FROM dsh_task_wakeups WHERE card_id=?').get(card.id) as any
     const resumeFacts = [card.runIds.length ? await this.operationOutcome?.({task,batch,card,sessionId,profileId}) : undefined,task.design?.progressPolicy==='studio-bounded-v1'?studioProgressResume(this.store.kernel,card.id,task.cwd):undefined].filter(Boolean).join('\n')
-    const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}${resumeFacts ? '\n[RESUME FACTS]\n'+resumeFacts : ''}${previousWait ? `\n[RESUMED DURABLE WAIT]\nDue: ${new Date(previousWait.wake_at).toISOString()}\n${previousWait.reason}\nContinue verification; do not repeat completed side effects.` : ''}`
+    const background = ['browser-manager','fleet-installer'].includes(profileId) && this.pendingOperation
+      ? '\n[BACKGROUND OPERATIONS]\n后台操作返回 running 后，可用普通回复说明等待并结束当前模型回合；宿主会保留同一 Run、Session 和租约，等待真实终态后自动唤醒你读取原回执。不要调用 task_complete、task_block 或 task_wait 表示等待，不要在 Codex exec/setTimeout/sleep/wait 中长时间睡眠，也不要重复发起操作。宿主等待不是业务验收通过。\n' : ''
+    const text = `[DSH SESSION]\nCurrent sessionId: ${sessionId}\nUse this exact identity for scoped tools; never invent a standalone Agent session.\n${this.store.kernel.buildWorkerContext(card.id)}\n${cardMessage(task, card, batch.id, upstream)}${background}${resumeFacts ? '\n[RESUME FACTS]\n'+resumeFacts : ''}${previousWait ? `\n[RESUMED DURABLE WAIT]\nDue: ${new Date(previousWait.wake_at).toISOString()}\n${previousWait.reason}\nContinue verification; do not repeat completed side effects.` : ''}`
     const messageId = randomUUID()
     const claim = await this.store.claimCard(card.id, runId, sessionId, attempt, fromReview,()=>!this.stopped)
     if (!claim) return

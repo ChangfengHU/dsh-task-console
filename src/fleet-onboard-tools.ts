@@ -17,6 +17,7 @@ import { isAbsolute, join } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import { taskCredential } from './task-credentials.ts'
+import { observeOnboardBackground } from './onboard-background.ts'
 
 export const name = 'task-console-fleet-onboard-tools'
 export const inject = ['tools']
@@ -1649,6 +1650,14 @@ export class SubprocessFleetOnboardAdapter implements FleetOnboardHostAdapter {
           result.async_operation = { operation_id: operationId, stage, status: 'unknown', reason: 'cloud-status-unavailable' }
         }
       }
+      if (run?.status === 'running' && prior?.status === 'running' && isHostStage(stage) && this.config.executor) {
+        const operationId = stageOperationId(run, stage, Number(prior.attempt))
+        const live = await runJsonProcess(this.config.executor, [], { schema: 1, operation: 'poll', ip, operation_id: operationId },
+          safeEnvironment(this.config.environment), exec.signal, 10_000)
+        if (live.schema !== 1 || live.operation_id !== operationId || live.ip !== ip
+          || !['running','succeeded','noop','blocked','failed'].includes(String(live.status))) throw Error('host-poll-invalid')
+        result.async_operation = { operation_id: operationId, stage, status: live.status, observed_at: new Date().toISOString() }
+      }
       assertNoSecrets(result, 'tool-result')
       return result
     } catch { return blockedResult(operation, ip, 'central-ledger-unavailable') }
@@ -1722,7 +1731,23 @@ function strictTool(defineTool: (spec: any) => any, spec: any, allowed: readonly
 /** Read-only reviewers never register start/resume, even temporarily. */
 export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardHostAdapter = new UnavailableFleetAdapter(), readOnly = false): Promise<() => void> {
   const defineTool: (spec: any) => any = process.env.NODE_ENV === 'test' ? (spec => spec) : (await import('@deepseek-ai/dsh-tools')).defineTool
-  const register = (tool: any) => readOnly && !['fleet_onboard_status', 'fleet_onboard_report'].includes(tool.name) ? () => undefined : ctx.tools.register(tool)
+  const watchers = new Map<string, () => void>()
+  const register = (tool: any) => {
+    if (readOnly && !['fleet_onboard_status', 'fleet_onboard_report'].includes(tool.name)) return () => undefined
+    if (['fleet_onboard_start','fleet_onboard_resume'].includes(tool.name)) {
+      const execute = tool.execute
+      tool.execute = (args: any, exec: ToolExecutionLike) => Promise.resolve(execute(args, exec)).then(result => {
+        const sessionId = executionSessionId(exec)
+        if (sessionId) {
+          watchers.get(sessionId)?.(); watchers.delete(sessionId)
+          if (result.phase === 'running' && result.reason === 'operation-still-running' && typeof result.run_id === 'string')
+            watchers.set(sessionId, observeOnboardBackground(sessionId, result.run_id, () => adapter.status(requireIp(args.ip), { agent: exec.agent })))
+        }
+        return result
+      })
+    }
+    return ctx.tools.register(tool)
+  }
   const disposers = [
     register(strictTool(defineTool, {
       name: 'fleet_onboard_inspect',
@@ -1766,7 +1791,7 @@ export async function registerFleetOnboardTools(ctx: any, adapter: FleetOnboardH
       async execute(args: any, exec: ToolExecutionLike) { return baseCompletionScope(await adapter.report(requireIp(args.ip), exec)) },
     }, ['ip'])),
   ]
-  return () => { for (const dispose of disposers.reverse()) dispose() }
+  return () => { for (const dispose of watchers.values()) dispose(); for (const dispose of disposers.reverse()) dispose() }
 }
 
 export interface FleetOnboardPluginConfig { skillRoot?: string; readOnly?: boolean }

@@ -46,16 +46,36 @@ export function trackPendingSnippet(before: string, after: string, saved?: Snipp
   const at = saved.ranges.findIndex(r => !r.removed && start >= r.start && end <= r.end)
   const ranges = trackSnippetEdit(saved.ranges as SnippetSlot[], before, after, at < 0 ? saved.current : at)
   const edited = new Set(Array.isArray(saved.edited) ? saved.edited.filter(i=>Number.isInteger(i) && i>=0 && i<ranges.length) : [])
-  const touched = ranges.map((r,i) => !r.removed && before.slice(saved.ranges[i].start,saved.ranges[i].end) !== after.slice(r.start,r.end) ? i : -1).filter(i=>i>=0)
+  const touched = ranges.map((r,i) => !r.removed && before.slice(saved.ranges[i].start,saved.ranges[i].end).trim() !== after.slice(r.start,r.end).trim() ? i : -1).filter(i=>i>=0)
   touched.forEach(i=>edited.add(i))
   return { ...saved, fingerprint:fingerprint(after), ranges, current:touched[0] ?? saved.current, filling:touched.length ? true : saved.filling, edited:[...edited] }
 }
 export function restoreSnippet(action: AgentAction, prefix: string, text: string, saved?: SnippetProgress) {
   const original = makeActionSnippet(action, prefix)
-  if (saved?.fingerprint === fingerprint(text) && Array.isArray(saved.ranges) && saved.ranges.length === original.slots.length &&
+  if (saved?.fingerprint === fingerprint(text) && Array.isArray(saved.ranges) && saved.ranges.length === original.slots.length && saved.ranges.every(r => r?.removed !== true) &&
       Number.isInteger(saved.current) && saved.current >= 0 && saved.current < Math.max(1, saved.ranges.length) && typeof saved.filling === 'boolean' &&
       saved.ranges.every(r => r && Number.isInteger(r.start) && Number.isInteger(r.end) && (r.removed === true || r.start >= prefix.length && r.end >= r.start && r.end <= text.length))) {
     return { slots: original.slots.map((s, i) => { const { inactive: _inactive, removed: _removed, ...base } = s; const { start, end, removed, inactive } = saved.ranges[i]; return { ...base, start, end, ...(inactive === true ? { inactive } : {}), ...(removed === true ? { removed } : {}) } }), current: saved.current, filling: saved.filling }
+  }
+  // A pasted complete Action can recover coordinates only when every static
+  // segment still matches. Ambiguous adjacent/repeated fields remain fail-closed.
+  const tokens = [...action.template.matchAll(/\{\{([^{}]*)\}\}/g)]
+  if (new Set(tokens.map(m => m[1])).size === tokens.length && tokens.length && text.length <= 100000) {
+    const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    let pattern = '^' + escape(prefix), cursor = 0, bounded = true
+    for (const [i, token] of tokens.entries()) {
+      const literal = action.template.slice(cursor, token.index)
+      if (i && !literal) bounded = false
+      pattern += escape(literal) + '([\\s\\S]*?)'; cursor = token.index! + token[0].length
+    }
+    pattern += escape(action.template.slice(cursor)) + '$'
+    const match = bounded ? new RegExp(pattern, 'd').exec(text) : null
+    if (match) {
+      const values = Object.fromEntries(tokens.map((m, i) => [m[1], match[i + 1].trim()]))
+      const slots = original.slots.map((s, i) => ({ ...s, start: match.indices![i + 1][0], end: match.indices![i + 1][1], inactive: !parameterVisible(s.parameter, values) }))
+      const current = slots.findIndex(s => !s.inactive && text.slice(s.start, s.end) === s.marker)
+      return { slots, current: Math.max(0, current), filling: current >= 0 }
+    }
   }
   // Old native drafts have no range metadata. Recover remaining literal markers
   // without guessing where already-edited text fields end or rewriting the draft.

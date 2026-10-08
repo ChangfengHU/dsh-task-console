@@ -89,3 +89,19 @@ Regression run: 148 tests passed (runner, onboarding background/tools, Task
 Actions and workflow acceptance). The public Task remains unaccepted while the
 browser role is blocked; Runner has not executed. Do not call this full node
 acceptance. The separate stage-8 timeout suspicion was not changed in code.
+
+## Deployment boundary for follow-up `8766aa4`
+
+The follow-up resume correction is committed/pushed and built at
+`/tmp/dsh-onboard-continuation-mc4EWe/index.js`, but NOT activated yet. An unrelated
+native user session `flow-minute-20261008a` is running, so restarting the shared
+DSH service would interrupt it. Production still runs `65deb80` (the async
+continuation repair). Wait for a safe idle window, recheck zero native running
+sessions AND zero Task claims, deploy only the staged host index and then retry
+the blocked browser card through the Console. Do not rewrite the completed
+installer, skip acceptance, change account policy or operate the target directly.
+
+Temporary test-only `node_modules/@deepseek-ai/dsh-agent` and `dsh-llm` symlinks
+and `cf-read-status.py` are cleaned after tests/diagnosis. No package downloads
+were needed. Both host bundles (~2.8 MiB total) are intentionally retained for
+pending deployment/rollback; screenshots are acceptance evidence.

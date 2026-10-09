@@ -71,3 +71,53 @@ The role started `browser_login_acceptance` operation
 running, requiredMs=1200000, both instances awaiting initial samples. Continue
 observing this exact operation/Task; a single probe success is not full acceptance.
 Runner remains dependency-blocked (todo). Do not retry/restart this live operation.
+
+## Completed acceptance
+
+The same browser operation completed at 2026-10-09T13:36:39Z with `stable=true`,
+requiredMs=1200000, and 21/22 independent samples. Instance 1 observed 1201231ms;
+instance 2 observed 1256891ms. Both original identities were retained. The host
+recorded `operation_resumed` (event 23525), woke the same session automatically,
+validated its handoff and promoted Runner. No developer message or direct target
+operation was used to force that transition.
+
+Runner Run 1394 installed the missing service through its scoped tool, published
+the route and completed signed job `job-mv10hgnw-fcac041bfc26` at 13:39:16Z.
+The receipt reports signatureVerified, runnerCoverageHealthy and nodeHealthy all
+true, with all eight checks passing. Final host validation at 13:39:57Z recorded
+`fleet-base-v3`, scope `node-and-login`. All three cards are done; the public UI
+shows 3 completed, 0 incomplete and "已结束 · 已通过". Original failed executions
+remain unchanged.
+
+Public Fleet browser verification found the node online, continuous reachability
+initialized, hourly Runner verification, fresh host/five-target latency telemetry,
+both verified Gemini identities and real line probes. Desired line 100 passes;
+alternate line 92 still reports upstream rejection (previously accepted exclusion),
+while line 82 passes. Do not claim every alternative proxy is healthy. Evidence:
+`/tmp/fleet64-final-acceptance-20261009.png` and
+`/tmp/dsh64-completed-before-deploy-20261009.png`; both pages had no page errors.
+
+After native session.list reported zero running sessions and SQLite zero running
+claims, deployed startup patch `fa2292b` (SHA256 f431b68b096ce39ecfefe53b99db352726557649a7d0760c780668bc51d21baf).
+Only the host lib/index.js changed. Static script returned 200 11.07 seconds after
+restart; POST returned 405/no-store. Post-restart taskGraph retains all completed
+roles and the same events. The 150 targeted tests passed before deployment.
+
+Removed only obsolete intermediate build files `index.js` and
+`index.async-continuation.js` under `/tmp/dsh-onboard-continuation-mc4EWe` after
+verifying neither was open and production resolves outside that directory.
+Freed 2912256 allocated bytes. They can be rebuilt from pushed commits 8766aa4 and
+65deb80 using the existing host-only esbuild command. Retain the original/live
+rollback and final bundle until deployment verification is complete; screenshots
+and test TAP are acceptance evidence, not disposable caches.
+
+Post-restart browser recheck shows the same completed Task and all role names,
+with no page errors, failed requests or sidebar abort message. A first request
+during recovery transiently showed a sidebar abort; a fresh check recovered.
+Observed task-page readiness was 33.7s on this cold browser, so this is not a
+claim that all DSH startup latency is eliminated. Final screenshot:
+`/tmp/dsh64-final-verified-20261009.png`. Also removed the now-deployed
+`index.lazy-route.js` after matching the production hash and checking no open
+users; total temporary build cleanup is 4370432 allocated bytes (about 4.17 MiB).
+Retain `index.before.js` and `index.expiry-guard.js` as explicit deployment rollback
+copies until the next stable release supersedes this rollout; they are not caches.

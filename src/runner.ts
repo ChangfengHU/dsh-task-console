@@ -1251,6 +1251,11 @@ export class TaskRunner {
     const card = this.store.s.cards.get(cardId)
     if (card && this.store.s.batches.get(card.batchId)?.archivedAt) throw new Error('执行记录已归档；请新建执行重新检查，不改写历史阻塞')
     if (!card || card.status !== 'blocked') throw new Error('这张卡不在阻塞状态')
+    const existingBatch = this.store.s.batches.get(card.batchId), existingTemplate = this.store.tasks.get(card.taskId)
+    const existingTask = existingBatch && existingTemplate ? taskForBatch(existingTemplate, existingBatch) : undefined
+    if (existingBatch && existingTask?.workflowRecipe?.id === fullFleetRecipe
+      && this.clock() >= Date.parse(existingBatch.firedAt) + existingTask.timeoutSec * fleetRoles.length * 1000)
+      throw new Error('本次 Fleet 执行已超过总时限；请在同一 Task 新建执行，保留旧记录，不能解除阻塞后立即创建超时 Run')
     if (card.wakeAt && Date.parse(card.wakeAt) > this.clock()) throw new Error('定时等待尚未到期，不能提前当作复验完成')
     await this.assertRecoveryExecutionIdentity(cardId)
     const ok = await this.store.transition(

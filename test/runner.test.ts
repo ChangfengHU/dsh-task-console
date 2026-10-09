@@ -1356,6 +1356,23 @@ test('runner: task_block(needs_input) closes the run; unblock creates a fresh ru
   runner.stop()
 })
 
+test('expired Fleet batch cannot unblock, create a session or cancel its waiting successor', async () => {
+  let now = Date.now()
+  const { host, store, runner } = await setup({workflowRecipe:{id:'fleet-base-v3',login:'preserve'},timeoutSec:60}, {now:()=>now})
+  const batch=await runner.fire('T','manual'),session=[...host.sessions.keys()][0]
+  host.consumeFirst(session)
+  await host.callTool(session,'task_block',{reason:'needs adapter repair',kind:'capability'});host.endTurn(session);await tick()
+  const beforeRuns=store.kernel.listRuns(batch.cardIds[0]).length, beforeSessions=host.sessions.size
+  const successorStatus=store.s.cards.get(batch.cardIds[1])!.status
+  now=Date.parse(batch.firedAt)+180_000
+  await assert.rejects(runner.unblockCard(batch.cardIds[0]),/超过总时限.*同一 Task 新建执行/)
+  assert.equal(store.s.cards.get(batch.cardIds[0])!.status,'blocked')
+  assert.equal(store.kernel.listRuns(batch.cardIds[0]).length,beforeRuns)
+  assert.equal(host.sessions.size,beforeSessions)
+  assert.equal(store.s.cards.get(batch.cardIds[1])!.status,successorStatus)
+  runner.stop()
+})
+
 test('runner: explicit batch cancellation closes an orphaned claim without deleting history', async () => {
   const { host, store, runner } = await setup({ participants: [{ agentId: 'a' }] })
   const batch = await runner.fire('T', 'manual')

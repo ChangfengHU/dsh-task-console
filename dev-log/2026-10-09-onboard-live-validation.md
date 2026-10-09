@@ -55,3 +55,19 @@ exists without enabling any business operation. No UI redesign or CF config edit
 This follow-up is staged at `/tmp/dsh-onboard-continuation-mc4EWe/index.lazy-route.js`
 (SHA256 `f431b68b096ce39ecfefe53b99db352726557649a7d0760c780668bc51d21baf`), pending
 the next verified idle window; do not restart while current acceptance runs.
+
+Startup patch committed/pushed as `fa2292b`; 150 targeted tests passed including
+the actual deferred-ready startup regression. Production remains `fb28b2e` to
+avoid interrupting the current Task. Test-only dsh-agent/dsh-llm/dsh-scope symlinks
+were removed; no dependencies downloaded. Test TAP and screenshots remain evidence.
+
+Browser-manager session:
+`task-t-chat-b4c6fcb369f0c20a9739-b-chat-7dab101c8d552d55baf8-2`.
+Both provision receipts completed with `reused=true` and `loginVerified=true`:
+instance 1 `39d11c87d83eb731ab558253eee6b934`,
+instance 2 `e98e99ce23ef5af7f609cc0a9c69f638`. No new account copying in this run.
+The role started `browser_login_acceptance` operation
+`71434bf7662b035d9c43cc1332100777`; real MCP status at 2026-10-09T13:15:27Z reported
+running, requiredMs=1200000, both instances awaiting initial samples. Continue
+observing this exact operation/Task; a single probe success is not full acceptance.
+Runner remains dependency-blocked (todo). Do not retry/restart this live operation.

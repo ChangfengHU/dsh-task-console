@@ -67,6 +67,20 @@ export async function apply(ctx: Context, config: CapabilityPolicy & StudioConfi
   if(config.studioConfigPath!==undefined)await readStudioHostConfiguration(config.studioConfigPath)
   const bundled=await loadBundledWorkflowModules(new URL('../',import.meta.url))
   const workflowExtensions=[...bundled,...await loadWorkflowModules(config.workflowModules??[])]
+  // The UI asset must not wait for session/MCP recovery; otherwise a startup
+  // request can turn a temporary missing route into a cached public 404.
+  ctx.effect(() => (ctx as any).webServer.register({
+    kind: 'exact',
+    path: '/dsh-task-console/client-heavy.js',
+    handler: async (req: any, res: any) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405, { 'cache-control': 'no-store' }); res.end(); return }
+      try {
+        const body = await readFile(new URL('./client-heavy.js', import.meta.url))
+        res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=31536000, immutable' })
+        res.end(req.method === 'HEAD' ? undefined : body)
+      } catch { res.writeHead(404, { 'cache-control': 'no-store' }); res.end() }
+    },
+  }), 'task-console: lazy client bundle')
   await ctx.plugin(TaskConsoleService,{workflowExtensions,studioConfigPath:config.studioConfigPath})
   await (ctx as any).get('taskConsole').ready
   if (!(ctx as any).get('nativeImages')) await ctx.plugin(NativeImageHost,{codexImageProvider:config.codexImageProvider,codexImageModel:config.codexImageModel,geminiImagePoolDir:config.geminiImagePoolDir,geminiImageModel:config.geminiImageModel,geminiImageRoutes:config.geminiImageRoutes,geminiImageFallback:config.geminiImageFallback,imageConcurrency:config.imageConcurrency,visionProvider:config.visionProvider,visionModel:config.visionModel})
@@ -76,16 +90,4 @@ export async function apply(ctx: Context, config: CapabilityPolicy & StudioConfi
   ctx.effect(() => (ctx as any).get('taskConsole').capabilities.install(), 'task-console: session capability facts and progress guard')
   ctx.effect(() => registerPublicHtmlTool(ctx), 'task-console: public HTML publisher')
   ctx.effect(() => registerTaskSignalHttp(ctx), 'task-console: authenticated Task Signal API')
-  ctx.effect(() => (ctx as any).webServer.register({
-    kind: 'exact',
-    path: '/dsh-task-console/client-heavy.js',
-    handler: async (req: any, res: any) => {
-      if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); res.end(); return }
-      try {
-        const body = await readFile(new URL('./client-heavy.js', import.meta.url))
-        res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=31536000, immutable' })
-        res.end(req.method === 'HEAD' ? undefined : body)
-      } catch { res.writeHead(404); res.end() }
-    },
-  }), 'task-console: lazy client bundle')
 }

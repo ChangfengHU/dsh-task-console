@@ -35,3 +35,23 @@ Next: deploy this small guard during verified idleness, then use the public
 Console New Execution action for the same reviewed Task and explicit target.
 Preserve existing healthy logins; let the three roles collect fresh base,
 20-minute browser stability and signed Runner acceptance evidence.
+
+## Live execution and startup follow-up
+
+Expiry guard `fb28b2e` deployed with another zero-session/zero-claim check; live
+host bundle SHA256 `060b66d4c1caccc567d11b00323e99f6be9e6c6eae32c5e0338aee1c3403f051`.
+Browser clicked New Execution and accepted the native parameter prompt. New Batch
+`b-chat-7dab101c8d552d55baf8`; screenshot
+`/tmp/dsh64-fresh-execution-20261009.png`, no page errors. No alternate Task or
+extra role was created. Installer Run 1392 completed with a host-validated v3
+handoff: central run `onb-0535ec2e-a7c4-4e1b-83bf-74ecf8b939dd`, stages 1–8/10 reused,
+stage 9 repaired and independently passed. Browser-manager then started.
+
+The transient script 404 is reproducible during startup: route registration came
+after `taskConsole.ready`, which waits for runtime recovery. Moved only static
+route registration ahead of that wait; missing files and invalid methods now
+return `no-store`. Regression holds recovery pending and proves the route already
+exists without enabling any business operation. No UI redesign or CF config edit.
+This follow-up is staged at `/tmp/dsh-onboard-continuation-mc4EWe/index.lazy-route.js`
+(SHA256 `f431b68b096ce39ecfefe53b99db352726557649a7d0760c780668bc51d21baf`), pending
+the next verified idle window; do not restart while current acceptance runs.
